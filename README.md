@@ -1,4 +1,4 @@
-# GreenHome Kitchen System
+﻿# GreenHome Kitchen System
 
 GreenHome Kitchen System là hệ thống web hỗ trợ bán hàng trực tuyến cho các sản phẩm nhà bếp như dụng cụ nấu ăn, bộ đồ ăn, dụng cụ vệ sinh, phụ kiện lưu trữ và các sản phẩm liên quan đến không gian bếp.
 
