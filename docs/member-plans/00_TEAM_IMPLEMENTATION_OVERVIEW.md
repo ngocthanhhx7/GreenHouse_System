@@ -1,0 +1,204 @@
+# GreenHome Kitchen System - Team Implementation Overview
+
+## 1. Project Goal
+
+Mục tiêu của bộ plan này là chia rõ phần việc triển khai GreenHome Kitchen System cho 5 thành viên nhóm, để mỗi người đều có:
+
+- Module nghiệp vụ quan trọng.
+- Cả frontend và backend.
+- API, database/model, validation và test checklist rõ ràng.
+- Branch/PR riêng để mentor theo dõi tiến độ trên GitHub.
+- Demo script riêng để chứng minh phần mình làm có giá trị.
+
+Core workflow cần ưu tiên:
+
+`Product -> Cart -> Checkout -> Order -> Payment/COD -> Staff Processing -> Warehouse Stock -> Delivery -> Review/Return/Refund/Support -> Admin Reports/Audit`
+
+## 2. Team Member Ownership Matrix
+
+| Thành viên | Vai trò chính | Module sở hữu | Frontend chính | Backend chính | Flow mentor có thể kiểm tra |
+|---|---|---|---|---|---|
+| Nguyễn Ngọc Thành | Team lead, foundation, integration | Auth/RBAC, layout, shared API client, audit foundation, final merge | Login, Register, Profile, Role Guard, Layout | User, Role, Auth, JWT, Authorization, Audit helper | Guest register, user login, role redirect, forbidden access |
+| Phạm Thành Chung | Catalog owner | Product, Category, Public Catalog, Search/Filter | Home, Product Listing, Product Detail, Admin Product/Category | Product, Category, catalog APIs, admin product/category APIs | Guest browse/search/filter/view product, Admin manage product |
+| Nguyễn Quang Huy | Customer purchase owner | Cart, Checkout, Order, Payment, COD, Order History, Cancel | Cart, Checkout, Payment Result, Order History, Order Detail | Cart, CartItem, Order, OrderDetail, Payment | Customer add cart, COD/online checkout, cancel Pending unpaid order |
+| Nguyễn Hữu Anh Nhật | Staff operation owner | Staff Order Processing, Invoice, Order Status, Return/Refund handling | Staff Dashboard, Order Queue, Order Detail, Invoice, Refund Queue | Staff order APIs, order state machine, ReturnRefundRequest | Staff confirm order, request export, ship/deliver, approve/reject refund |
+| Lê Vũ Cường | Warehouse/admin closure owner | Inventory, Stock Export, Replenishment, Support, Review, Notification, Reports, Settings | Warehouse screens, Support, Review, Admin Reports/Settings | Inventory, Transaction, StockExport, Replenishment, Support, Review, Notification, Report, Setting | Warehouse export/adjust stock, low-stock replenishment, support/review/report |
+
+## 3. Phase Roadmap
+
+| Phase | Tên phase | Owner chính | Mục tiêu | Output cần pull lên GitHub |
+|---|---|---|---|---|
+| Phase 1 | Foundation/Auth/Layout/Role | Nguyễn Ngọc Thành | Tạo nền tảng app, auth, role guard, shared API/error format | PR auth + layout + middleware |
+| Phase 2 | Product/Catalog | Phạm Thành Chung | Tạo product/category và public catalog | PR product/category models/APIs/screens |
+| Phase 3 | Cart/Checkout/Order | Nguyễn Quang Huy | Customer mua hàng được từ cart tới order | PR cart/order models/APIs/screens |
+| Phase 4 | Payment/COD/Email | Nguyễn Quang Huy + Nguyễn Ngọc Thành + Lê Vũ Cường | COD/online payment mock, payment status, email/notification hook | PR payment + notification integration |
+| Phase 5 | Staff Processing | Nguyễn Hữu Anh Nhật | Staff xử lý order theo trạng thái hợp lệ | PR staff queue/detail/status/invoice |
+| Phase 6 | Warehouse/Inventory | Lê Vũ Cường | Warehouse xuất kho, điều chỉnh tồn, transaction, low-stock | PR inventory/export/replenishment |
+| Phase 7 | Return/Refund/Support/Review | Nguyễn Hữu Anh Nhật + Lê Vũ Cường | After-sale workflows hoạt động | PR refund/support/review |
+| Phase 8 | Admin Reports/Audit/Polish | Nguyễn Ngọc Thành + Lê Vũ Cường | Report, audit, settings, polish, testing | PR reports/audit/settings/final fixes |
+
+## 4. GitHub Workflow
+
+Branch format:
+
+| Thành viên | Branch gợi ý |
+|---|---|
+| Nguyễn Ngọc Thành | `feature/thanh-auth-rbac-foundation` |
+| Phạm Thành Chung | `feature/chung-product-catalog` |
+| Nguyễn Quang Huy | `feature/huy-cart-order-payment` |
+| Nguyễn Hữu Anh Nhật | `feature/nhat-staff-refund-flow` |
+| Lê Vũ Cường | `feature/cuong-warehouse-admin-after-sale` |
+
+Pull request format:
+
+```md
+## Module
+- Tên module:
+- Owner:
+- Phase:
+
+## Frontend files
+- `client/src/...`
+
+## Backend files
+- `server/src/...`
+
+## APIs
+- Method + endpoint + permission
+
+## Manual test evidence
+- Account used:
+- Steps tested:
+- Result:
+
+## Notes/Risks
+- Remaining dependency:
+- Known limitation:
+```
+
+PR rules:
+
+- Mỗi PR tập trung vào một phase/module, không gom quá lớn.
+- PR phải có frontend và backend nếu module có UI và API.
+- Không merge nếu phá role guard, auth hoặc core purchase flow.
+- Nếu một người làm thay phần của người khác, vẫn commit/branch theo ownership để mentor thấy tracking rõ.
+
+## 5. Dependency Map
+
+| Dependency | Vì sao quan trọng | Người cần phối hợp |
+|---|---|---|
+| Auth/RBAC trước tất cả private modules | Cart, staff, warehouse, admin đều cần JWT và role guard | Thành -> tất cả |
+| Product APIs trước Cart | Cart cần product active, price, stock visibility | Chung -> Huy |
+| Order APIs trước Staff Processing | Staff queue xử lý order đã tạo từ Customer | Huy -> Nhật |
+| Staff status trước Warehouse Export hoàn chỉnh | Warehouse export gắn với order đã Confirmed/StockExportRequested | Nhật -> Cường |
+| Inventory/Notification trước Admin report polish | Report cần order/payment/inventory/support/review data | Cường -> Thành |
+| Audit helper dùng chung | Mọi mutation quan trọng phải log | Thành -> tất cả |
+
+## 6. Definition of Done
+
+Một module được xem là hoàn thành khi có đủ:
+
+- [ ] Frontend screen/page hoặc component cần thiết.
+- [ ] Backend route/controller/service/model nếu module có dữ liệu.
+- [ ] API service ở frontend để gọi backend.
+- [ ] Validation input cơ bản.
+- [ ] Error handling rõ ràng.
+- [ ] Role guard ở frontend và backend.
+- [ ] Manual test checklist có kết quả.
+- [ ] Demo script cho mentor.
+- [ ] PR description ghi rõ files, APIs, test evidence.
+
+## 7. Phase Checklist
+
+### Phase 1 - Foundation/Auth/Layout/Role
+
+- [ ] User model.
+- [ ] Role model.
+- [ ] Register/login APIs.
+- [ ] JWT auth middleware.
+- [ ] Role authorization middleware.
+- [ ] React API client.
+- [ ] Login/Register/Profile screens.
+- [ ] Role-based route guard.
+
+### Phase 2 - Product/Catalog
+
+- [ ] Category model/API.
+- [ ] Product model/API.
+- [ ] Public product listing/search/filter.
+- [ ] Product detail.
+- [ ] Admin product/category screens.
+
+### Phase 3 - Cart/Checkout/Order
+
+- [ ] Cart/CartItem model/API.
+- [ ] Checkout stock validation.
+- [ ] Order/OrderDetail model/API.
+- [ ] Customer order history/detail.
+- [ ] Cancel Pending unpaid order.
+
+### Phase 4 - Payment/COD/Email
+
+- [ ] Payment model/API.
+- [ ] COD order payment status.
+- [ ] Online payment mock/callback.
+- [ ] Payment result page.
+- [ ] Notification/email hook.
+
+### Phase 5 - Staff Processing
+
+- [ ] Staff order queue.
+- [ ] Confirm order.
+- [ ] Request stock export.
+- [ ] Print invoice view.
+- [ ] Packed/Shipped/Delivered status update.
+
+### Phase 6 - Warehouse/Inventory
+
+- [ ] Inventory model/API.
+- [ ] Inventory transaction.
+- [ ] Stock export queue.
+- [ ] Warehouse approve/export stock.
+- [ ] Low-stock alert.
+- [ ] Replenishment request.
+
+### Phase 7 - Return/Refund/Support/Review
+
+- [ ] Customer return/refund request.
+- [ ] Staff approve/reject refund.
+- [ ] Support request and staff response.
+- [ ] Product review eligibility.
+
+### Phase 8 - Admin Reports/Audit/Polish
+
+- [ ] Audit log view/filter.
+- [ ] Revenue/order/product/inventory reports.
+- [ ] System settings.
+- [ ] Final integration test.
+- [ ] Final mentor demo script.
+
+## 8. Mentor Tracking Board
+
+| Member | Phase 1 | Phase 2 | Phase 3 | Phase 4 | Phase 5 | Phase 6 | Phase 7 | Phase 8 |
+|---|---|---|---|---|---|---|---|---|
+| Nguyễn Ngọc Thành | Auth/RBAC | Support product integration | Support order integration | Payment auth/email integration | Review staff permissions | Review warehouse permissions | Review after-sale permissions | Audit/final merge |
+| Phạm Thành Chung | Wait for auth | Product/catalog main | Product data support | Product display support | Product info support | Stock visibility support | Review display support | Product report support |
+| Nguyễn Quang Huy | Wait for auth | Need product APIs | Cart/order main | Payment main | Order data support | Stock export dependency | Refund order dependency | Order report support |
+| Nguyễn Hữu Anh Nhật | Wait for auth | Need product/order data later | Need order APIs | Need payment status | Staff main | Export dependency | Refund main | Staff report support |
+| Lê Vũ Cường | Wait for auth | Need product model | Need order model | Notification support | Need staff export request | Warehouse main | Support/review main | Report/settings main |
+
+## 9. Final Integration Demo Order
+
+1. Guest xem Home/Product Listing/Product Detail.
+2. Guest register account.
+3. Customer login.
+4. Customer add product to cart.
+5. Customer checkout COD.
+6. Staff confirm order and request stock export.
+7. Warehouse approve/export stock.
+8. Staff update Packed -> Shipped -> Delivered.
+9. Customer review product.
+10. Customer submit return/refund or support request.
+11. Staff process return/refund/support.
+12. Admin view reports and audit logs.
+
