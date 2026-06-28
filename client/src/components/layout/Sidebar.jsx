@@ -15,6 +15,8 @@ const ROLE_LINKS = {
   Admin: [
     { to: '/profile', label: 'Profile' },
     { to: '/admin', label: 'Admin Dashboard' },
+    { to: '/admin/products', label: 'Products' },
+    { to: '/admin/categories', label: 'Categories' },
   ],
 };
 

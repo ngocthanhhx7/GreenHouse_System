@@ -8,6 +8,11 @@ import UnauthorizedPage from './pages/errors/UnauthorizedPage.jsx';
 import LoginPage from './pages/auth/LoginPage.jsx';
 import RegisterPage from './pages/auth/RegisterPage.jsx';
 import ProfilePage from './pages/profile/ProfilePage.jsx';
+import HomePage from './pages/public/HomePage.jsx';
+import ProductListingPage from './pages/public/ProductListingPage.jsx';
+import ProductDetailPage from './pages/public/ProductDetailPage.jsx';
+import ProductManagementPage from './pages/admin/ProductManagementPage.jsx';
+import CategoryManagementPage from './pages/admin/CategoryManagementPage.jsx';
 
 function PlaceholderPage({ title, description }) {
   return (
@@ -21,6 +26,9 @@ function PlaceholderPage({ title, description }) {
 export default function App() {
   return (
     <Routes>
+      <Route path="/" element={<HomePage />} />
+      <Route path="/products" element={<ProductListingPage />} />
+      <Route path="/products/:id" element={<ProductDetailPage />} />
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
       <Route path="/unauthorized" element={<UnauthorizedPage />} />
@@ -34,7 +42,6 @@ export default function App() {
           </ProtectedRoute>
         }
       >
-        <Route index element={<Navigate to="/profile" replace />} />
         <Route path="profile" element={<ProfilePage />} />
         <Route
           path="staff"
@@ -57,6 +64,22 @@ export default function App() {
           element={
             <RoleRoute allowedRoles={['Admin']}>
               <PlaceholderPage title="Admin Dashboard" description="System management workspace for Admin." />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="admin/products"
+          element={
+            <RoleRoute allowedRoles={['Admin']}>
+              <ProductManagementPage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="admin/categories"
+          element={
+            <RoleRoute allowedRoles={['Admin']}>
+              <CategoryManagementPage />
             </RoleRoute>
           }
         />
