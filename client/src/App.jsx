@@ -17,6 +17,8 @@ import CartPage from './pages/customer/CartPage.jsx';
 import CheckoutPage from './pages/customer/CheckoutPage.jsx';
 import OrderHistoryPage from './pages/customer/OrderHistoryPage.jsx';
 import OrderDetailPage from './pages/customer/OrderDetailPage.jsx';
+import PaymentPage from './pages/customer/PaymentPage.jsx';
+import PaymentResultPage from './pages/customer/PaymentResultPage.jsx';
 
 function PlaceholderPage({ title, description }) {
   return (
@@ -76,6 +78,22 @@ export default function App() {
           element={
             <RoleRoute allowedRoles={['Customer']}>
               <OrderDetailPage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="orders/:id/payment"
+          element={
+            <RoleRoute allowedRoles={['Customer']}>
+              <PaymentPage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="payments/result/:id"
+          element={
+            <RoleRoute allowedRoles={['Customer']}>
+              <PaymentResultPage />
             </RoleRoute>
           }
         />

@@ -4,6 +4,7 @@ const authRoutes = require('./routes/auth.routes');
 const cartRoutes = require('./routes/cart.routes');
 const categoryRoutes = require('./routes/category.routes');
 const orderRoutes = require('./routes/order.routes');
+const paymentRoutes = require('./routes/payment.routes');
 const productRoutes = require('./routes/product.routes');
 const { notFound, errorHandler } = require('./middlewares/error.middleware');
 
@@ -20,6 +21,7 @@ function createApp() {
   app.use('/api', cartRoutes);
   app.use('/api', categoryRoutes);
   app.use('/api', orderRoutes);
+  app.use('/api', paymentRoutes);
   app.use('/api', productRoutes);
 
   app.use(notFound);

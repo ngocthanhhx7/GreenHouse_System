@@ -215,6 +215,13 @@ body {
   font-size: 18px;
 }
 
+.payment-panel {
+  border: 1px solid #dce5d8;
+  border-radius: 8px;
+  padding: 16px;
+  background: #f9fbf7;
+}
+
 @media (max-width: 768px) {
   .app-body {
     flex-direction: column;

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 
 import { orderService } from '../../services/orderService.js';
 
@@ -57,6 +57,13 @@ export default function OrderDetailPage() {
             ))}
           </ul>
           <strong>Total: ${Number(order.totalAmount).toFixed(2)}</strong>
+          {order.paymentMethod === 'ONLINE' && order.paymentStatus === 'Pending' && (
+            <div className="mt-3">
+              <Link className="btn btn-success" to={`/orders/${order.id}/payment`}>
+                Pay online
+              </Link>
+            </div>
+          )}
           {order.orderStatus === 'Pending' && order.paymentStatus === 'Pending' && (
             <div className="mt-3">
               <button className="btn btn-outline-danger" type="button" onClick={cancelOrder}>
