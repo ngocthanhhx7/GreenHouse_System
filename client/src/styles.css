@@ -1,0 +1,95 @@
+:root {
+  color: #1f2a24;
+  background: #f5f7f1;
+  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+body {
+  margin: 0;
+  background: #f5f7f1;
+}
+
+.auth-page,
+.page-center {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.auth-card,
+.surface {
+  width: min(100%, 420px);
+  background: #ffffff;
+  border: 1px solid #dce5d8;
+  border-radius: 8px;
+  padding: 24px;
+  box-shadow: 0 12px 30px rgba(31, 42, 36, 0.08);
+}
+
+.auth-card.wide {
+  width: min(100%, 520px);
+}
+
+.surface {
+  width: 100%;
+}
+
+.app-shell {
+  min-height: 100vh;
+}
+
+.app-header {
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  background: #ffffff;
+  border-bottom: 1px solid #dce5d8;
+}
+
+.app-body {
+  display: flex;
+  min-height: calc(100vh - 64px);
+}
+
+.app-sidebar {
+  width: 240px;
+  padding: 20px;
+  background: #edf4e8;
+  border-right: 1px solid #dce5d8;
+}
+
+.sidebar-title {
+  font-weight: 700;
+  margin-bottom: 12px;
+}
+
+.app-sidebar .nav-link {
+  color: #244232;
+  border-radius: 6px;
+}
+
+.app-sidebar .nav-link.active,
+.app-sidebar .nav-link:hover {
+  background: #d7ead1;
+}
+
+.app-content {
+  flex: 1;
+  padding: 24px;
+}
+
+@media (max-width: 768px) {
+  .app-body {
+    flex-direction: column;
+  }
+
+  .app-sidebar {
+    width: 100%;
+    border-right: 0;
+    border-bottom: 1px solid #dce5d8;
+  }
+}
