@@ -13,6 +13,10 @@ import ProductListingPage from './pages/public/ProductListingPage.jsx';
 import ProductDetailPage from './pages/public/ProductDetailPage.jsx';
 import ProductManagementPage from './pages/admin/ProductManagementPage.jsx';
 import CategoryManagementPage from './pages/admin/CategoryManagementPage.jsx';
+import CartPage from './pages/customer/CartPage.jsx';
+import CheckoutPage from './pages/customer/CheckoutPage.jsx';
+import OrderHistoryPage from './pages/customer/OrderHistoryPage.jsx';
+import OrderDetailPage from './pages/customer/OrderDetailPage.jsx';
 
 function PlaceholderPage({ title, description }) {
   return (
@@ -43,6 +47,38 @@ export default function App() {
         }
       >
         <Route path="profile" element={<ProfilePage />} />
+        <Route
+          path="cart"
+          element={
+            <RoleRoute allowedRoles={['Customer']}>
+              <CartPage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="checkout"
+          element={
+            <RoleRoute allowedRoles={['Customer']}>
+              <CheckoutPage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="orders"
+          element={
+            <RoleRoute allowedRoles={['Customer']}>
+              <OrderHistoryPage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="orders/:id"
+          element={
+            <RoleRoute allowedRoles={['Customer']}>
+              <OrderDetailPage />
+            </RoleRoute>
+          }
+        />
         <Route
           path="staff"
           element={

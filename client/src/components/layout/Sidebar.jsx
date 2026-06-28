@@ -3,7 +3,11 @@ import { NavLink } from 'react-router-dom';
 import useAuth from '../../hooks/useAuth.js';
 
 const ROLE_LINKS = {
-  Customer: [{ to: '/profile', label: 'Profile' }],
+  Customer: [
+    { to: '/profile', label: 'Profile' },
+    { to: '/cart', label: 'Cart' },
+    { to: '/orders', label: 'Orders' },
+  ],
   Staff: [
     { to: '/profile', label: 'Profile' },
     { to: '/staff', label: 'Staff Dashboard' },

@@ -184,6 +184,37 @@ body {
   font-size: 24px;
 }
 
+.quantity-input {
+  max-width: 96px;
+}
+
+.checkout-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) 360px;
+  gap: 24px;
+}
+
+.summary-box {
+  border: 1px solid #dce5d8;
+  border-radius: 8px;
+  padding: 16px;
+  background: #f9fbf7;
+}
+
+.summary-line,
+.summary-total {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 0;
+}
+
+.summary-total {
+  border-top: 1px solid #dce5d8;
+  margin-top: 8px;
+  font-size: 18px;
+}
+
 @media (max-width: 768px) {
   .app-body {
     flex-direction: column;
@@ -198,6 +229,7 @@ body {
   .catalog-filter,
   .admin-form,
   .admin-form.compact,
+  .checkout-grid,
   .product-detail {
     grid-template-columns: 1fr;
   }
