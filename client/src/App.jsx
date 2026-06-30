@@ -19,6 +19,10 @@ import OrderHistoryPage from './pages/customer/OrderHistoryPage.jsx';
 import OrderDetailPage from './pages/customer/OrderDetailPage.jsx';
 import PaymentPage from './pages/customer/PaymentPage.jsx';
 import PaymentResultPage from './pages/customer/PaymentResultPage.jsx';
+import StaffDashboardPage from './pages/staff/StaffDashboardPage.jsx';
+import StaffOrderQueuePage from './pages/staff/StaffOrderQueuePage.jsx';
+import StaffOrderDetailPage from './pages/staff/StaffOrderDetailPage.jsx';
+import InvoicePrintPage from './pages/staff/InvoicePrintPage.jsx';
 
 function PlaceholderPage({ title, description }) {
   return (
@@ -101,7 +105,31 @@ export default function App() {
           path="staff"
           element={
             <RoleRoute allowedRoles={['Staff']}>
-              <PlaceholderPage title="Staff Dashboard" description="Order processing workspace for Staff." />
+              <StaffDashboardPage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="staff/orders"
+          element={
+            <RoleRoute allowedRoles={['Staff']}>
+              <StaffOrderQueuePage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="staff/orders/:id"
+          element={
+            <RoleRoute allowedRoles={['Staff']}>
+              <StaffOrderDetailPage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="staff/orders/:id/invoice"
+          element={
+            <RoleRoute allowedRoles={['Staff']}>
+              <InvoicePrintPage />
             </RoleRoute>
           }
         />
