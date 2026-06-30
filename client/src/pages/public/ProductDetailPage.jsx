@@ -4,16 +4,21 @@ import { Link, useParams } from 'react-router-dom';
 import useAuth from '../../hooks/useAuth.js';
 import { cartService } from '../../services/cartService.js';
 import { productService } from '../../services/productService.js';
+import { reviewService } from '../../services/reviewService.js';
 
 export default function ProductDetailPage() {
   const { id } = useParams();
   const { user } = useAuth();
   const [product, setProduct] = useState(null);
+  const [reviews, setReviews] = useState({ items: [], total: 0, averageRating: 0 });
+  const [reviewForm, setReviewForm] = useState({ orderId: '', rating: 5, content: '' });
+  const [reviewError, setReviewError] = useState('');
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
 
   useEffect(() => {
     productService.getProduct(id).then(setProduct).catch((err) => setError(err.message));
+    reviewService.listProductReviews(id).then(setReviews).catch((err) => setReviewError(err.message));
   }, [id]);
 
   if (error) {
@@ -37,6 +42,24 @@ export default function ProductDetailPage() {
       setMessage('Product added to cart.');
     } catch (err) {
       setError(err.message);
+    }
+  }
+
+  async function submitReview(event) {
+    event.preventDefault();
+    setReviewError('');
+    setMessage('');
+    try {
+      await reviewService.createCustomerReview(product.id, {
+        orderId: reviewForm.orderId,
+        rating: Number(reviewForm.rating),
+        content: reviewForm.content,
+      });
+      setReviewForm({ orderId: '', rating: 5, content: '' });
+      setMessage('Review submitted.');
+      setReviews(await reviewService.listProductReviews(product.id));
+    } catch (err) {
+      setReviewError(err.message);
     }
   }
 
@@ -67,6 +90,65 @@ export default function ProductDetailPage() {
             </Link>
           </div>
         </div>
+      </div>
+      <div className="surface mt-4">
+        <div className="page-heading">
+          <h2>Reviews</h2>
+          <span className="text-secondary">
+            {reviews.total || 0} reviews / {Number(reviews.averageRating || 0).toFixed(1)} average
+          </span>
+        </div>
+        {reviewError && <div className="alert alert-danger">{reviewError}</div>}
+        <div className="mb-4">
+          {(reviews.items || []).map((review) => (
+            <div className="border-bottom py-2" key={review.id}>
+              <strong>{review.rating}/5</strong>
+              <p className="mb-0">{review.content}</p>
+            </div>
+          ))}
+          {!reviews.items?.length && <p className="text-secondary">No reviews yet.</p>}
+        </div>
+        {user?.role === 'Customer' && (
+          <form className="row g-3" onSubmit={submitReview}>
+            <div className="col-md-5">
+              <label className="form-label" htmlFor="reviewOrderId">Delivered order ID</label>
+              <input
+                id="reviewOrderId"
+                className="form-control"
+                value={reviewForm.orderId}
+                onChange={(event) => setReviewForm((current) => ({ ...current, orderId: event.target.value }))}
+                required
+              />
+            </div>
+            <div className="col-md-3">
+              <label className="form-label" htmlFor="reviewRating">Rating</label>
+              <select
+                id="reviewRating"
+                className="form-select"
+                value={reviewForm.rating}
+                onChange={(event) => setReviewForm((current) => ({ ...current, rating: event.target.value }))}
+              >
+                {[5, 4, 3, 2, 1].map((rating) => (
+                  <option key={rating} value={rating}>{rating}</option>
+                ))}
+              </select>
+            </div>
+            <div className="col-12">
+              <label className="form-label" htmlFor="reviewContent">Review</label>
+              <textarea
+                id="reviewContent"
+                className="form-control"
+                rows="3"
+                value={reviewForm.content}
+                onChange={(event) => setReviewForm((current) => ({ ...current, content: event.target.value }))}
+                required
+              />
+            </div>
+            <div className="col-12">
+              <button className="btn btn-success" type="submit">Submit review</button>
+            </div>
+          </form>
+        )}
       </div>
     </main>
   );
