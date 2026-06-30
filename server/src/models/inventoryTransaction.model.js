@@ -19,7 +19,7 @@ const inventoryTransactionSchema = new mongoose.Schema(
     },
     transactionType: {
       type: String,
-      enum: ['ADJUSTMENT', 'STOCK_EXPORT'],
+      enum: ['ADJUSTMENT', 'STOCK_EXPORT', 'REPLENISHMENT_RECEIVE'],
       required: true,
     },
     quantity: {

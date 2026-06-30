@@ -19,12 +19,14 @@ const ROLE_LINKS = {
     { to: '/warehouse/inventory', label: 'Inventory' },
     { to: '/warehouse/stock-exports', label: 'Stock Exports' },
     { to: '/warehouse/low-stock', label: 'Low Stock' },
+    { to: '/warehouse/replenishments', label: 'Replenishment' },
   ],
   Admin: [
     { to: '/profile', label: 'Profile' },
     { to: '/admin', label: 'Admin Dashboard' },
     { to: '/admin/products', label: 'Products' },
     { to: '/admin/categories', label: 'Categories' },
+    { to: '/admin/replenishments', label: 'Replenishments' },
   ],
 };
 

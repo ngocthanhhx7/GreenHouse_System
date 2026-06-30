@@ -14,6 +14,9 @@ export default function WarehouseDashboardPage() {
         <Link className="btn btn-outline-success" to="/warehouse/low-stock">
           Low stock
         </Link>
+        <Link className="btn btn-outline-success" to="/warehouse/replenishments">
+          Replenishment
+        </Link>
       </div>
     </div>
   );

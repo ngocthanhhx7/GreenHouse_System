@@ -28,6 +28,8 @@ import InventoryListPage from './pages/warehouse/InventoryListPage.jsx';
 import LowStockPage from './pages/warehouse/LowStockPage.jsx';
 import StockExportQueuePage from './pages/warehouse/StockExportQueuePage.jsx';
 import StockExportDetailPage from './pages/warehouse/StockExportDetailPage.jsx';
+import ReplenishmentPage from './pages/warehouse/ReplenishmentPage.jsx';
+import ReplenishmentAdminPage from './pages/admin/ReplenishmentAdminPage.jsx';
 
 function PlaceholderPage({ title, description }) {
   return (
@@ -179,6 +181,14 @@ export default function App() {
           }
         />
         <Route
+          path="warehouse/replenishments"
+          element={
+            <RoleRoute allowedRoles={['WarehouseManager']}>
+              <ReplenishmentPage />
+            </RoleRoute>
+          }
+        />
+        <Route
           path="admin"
           element={
             <RoleRoute allowedRoles={['Admin']}>
@@ -199,6 +209,14 @@ export default function App() {
           element={
             <RoleRoute allowedRoles={['Admin']}>
               <CategoryManagementPage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="admin/replenishments"
+          element={
+            <RoleRoute allowedRoles={['Admin']}>
+              <ReplenishmentAdminPage />
             </RoleRoute>
           }
         />
