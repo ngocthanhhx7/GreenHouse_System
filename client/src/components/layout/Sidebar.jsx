@@ -11,6 +11,7 @@ const ROLE_LINKS = {
   Staff: [
     { to: '/profile', label: 'Profile' },
     { to: '/staff', label: 'Staff Dashboard' },
+    { to: '/staff/orders', label: 'Order Queue' },
   ],
   WarehouseManager: [
     { to: '/profile', label: 'Profile' },
