@@ -8,6 +8,9 @@ export default function StaffDashboardPage() {
         <Link className="btn btn-success" to="/staff/orders">
           Open order queue
         </Link>
+        <Link className="btn btn-outline-success" to="/staff/return-refunds">
+          Return/refund queue
+        </Link>
       </div>
     </div>
   );

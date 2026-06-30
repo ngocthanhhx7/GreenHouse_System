@@ -12,6 +12,7 @@ const Order = require('../models/order.model');
 const OrderDetail = require('../models/orderDetail.model');
 const Payment = require('../models/payment.model');
 const StockExportRequest = require('../models/stockExportRequest.model');
+const ReturnRefundRequest = require('../models/returnRefundRequest.model');
 
 const DEMO_PASSWORD = 'GreenHome@123';
 
@@ -178,6 +179,14 @@ const DEMO_ORDER_SPECS = [
   },
 ];
 
+const DEMO_RETURN_REFUND_SPECS = [
+  {
+    orderCode: 'GH-DEMO-1004',
+    reason: 'Demo request: plate set arrived with one broken item.',
+    status: 'Pending',
+  },
+];
+
 async function upsertUsers(roleMap) {
   const passwordHash = await hashPassword(DEMO_PASSWORD);
   const users = {};
@@ -323,6 +332,35 @@ async function upsertDemoOrders(userMap, productMap) {
   return orders;
 }
 
+async function upsertReturnRefundRequests(userMap, orderMap) {
+  const customer = userMap.Customer;
+  const requests = [];
+
+  for (const requestSpec of DEMO_RETURN_REFUND_SPECS) {
+    const order = orderMap[requestSpec.orderCode];
+    if (!order) continue;
+    const request = await ReturnRefundRequest.findOneAndUpdate(
+      { orderId: order._id },
+      {
+        $set: {
+          orderId: order._id,
+          customerId: customer._id,
+          reason: requestSpec.reason,
+          status: requestSpec.status,
+          refundAmount: 0,
+          resolvedBy: null,
+          resolvedAt: null,
+          staffNote: '',
+        },
+      },
+      { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
+    );
+    requests.push(request);
+  }
+
+  return requests;
+}
+
 async function seedDemoData() {
   await seedRoles();
   const roles = await Role.find({ roleName: { $in: DEMO_USERS.map((user) => user.roleName) } }).lean();
@@ -334,12 +372,15 @@ async function seedDemoData() {
   const categoryMap = await upsertCategories();
   const productMap = await upsertProducts(categoryMap);
   const orders = await upsertDemoOrders(userMap, productMap);
+  const orderMap = Object.fromEntries(orders.map((order) => [order.orderCode, order]));
+  const returnRefunds = await upsertReturnRefundRequests(userMap, orderMap);
 
   return {
     users: DEMO_USERS.length,
     categories: DEMO_CATEGORIES.length,
     products: DEMO_PRODUCTS.length,
     orders: orders.length,
+    returnRefunds: returnRefunds.length,
     demoPassword: DEMO_PASSWORD,
   };
 }
@@ -353,6 +394,7 @@ async function runCli() {
     { type: 'Categories', count: result.categories },
     { type: 'Products', count: result.products },
     { type: 'Orders', count: result.orders },
+    { type: 'ReturnRefunds', count: result.returnRefunds },
   ]);
   console.log(`Demo password for all accounts: ${result.demoPassword}`);
   await mongoose.disconnect();
@@ -369,6 +411,7 @@ if (require.main === module) {
 module.exports = {
   DEMO_CATEGORIES,
   DEMO_ORDER_SPECS,
+  DEMO_RETURN_REFUND_SPECS,
   DEMO_PASSWORD,
   DEMO_PRODUCTS,
   DEMO_USERS,

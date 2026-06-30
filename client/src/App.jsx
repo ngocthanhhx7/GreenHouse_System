@@ -19,10 +19,13 @@ import OrderHistoryPage from './pages/customer/OrderHistoryPage.jsx';
 import OrderDetailPage from './pages/customer/OrderDetailPage.jsx';
 import PaymentPage from './pages/customer/PaymentPage.jsx';
 import PaymentResultPage from './pages/customer/PaymentResultPage.jsx';
+import ReturnRefundPage from './pages/customer/ReturnRefundPage.jsx';
 import StaffDashboardPage from './pages/staff/StaffDashboardPage.jsx';
 import StaffOrderQueuePage from './pages/staff/StaffOrderQueuePage.jsx';
 import StaffOrderDetailPage from './pages/staff/StaffOrderDetailPage.jsx';
 import InvoicePrintPage from './pages/staff/InvoicePrintPage.jsx';
+import ReturnRefundQueuePage from './pages/staff/ReturnRefundQueuePage.jsx';
+import ReturnRefundDetailPage from './pages/staff/ReturnRefundDetailPage.jsx';
 import WarehouseDashboardPage from './pages/warehouse/WarehouseDashboardPage.jsx';
 import InventoryListPage from './pages/warehouse/InventoryListPage.jsx';
 import LowStockPage from './pages/warehouse/LowStockPage.jsx';
@@ -109,6 +112,14 @@ export default function App() {
           }
         />
         <Route
+          path="return-refunds"
+          element={
+            <RoleRoute allowedRoles={['Customer']}>
+              <ReturnRefundPage />
+            </RoleRoute>
+          }
+        />
+        <Route
           path="staff"
           element={
             <RoleRoute allowedRoles={['Staff']}>
@@ -137,6 +148,22 @@ export default function App() {
           element={
             <RoleRoute allowedRoles={['Staff']}>
               <InvoicePrintPage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="staff/return-refunds"
+          element={
+            <RoleRoute allowedRoles={['Staff']}>
+              <ReturnRefundQueuePage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="staff/return-refunds/:id"
+          element={
+            <RoleRoute allowedRoles={['Staff']}>
+              <ReturnRefundDetailPage />
             </RoleRoute>
           }
         />

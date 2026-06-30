@@ -7,6 +7,7 @@ const packageJson = require('../../package.json');
 const {
   DEMO_CATEGORIES,
   DEMO_ORDER_SPECS,
+  DEMO_RETURN_REFUND_SPECS,
   DEMO_PRODUCTS,
   DEMO_USERS,
 } = require('./seedDemoData');
@@ -32,5 +33,7 @@ describe('demo data seed config', () => {
     assert.ok(DEMO_ORDER_SPECS.some((order) => order.orderStatus === 'Pending'));
     assert.ok(DEMO_ORDER_SPECS.some((order) => order.orderStatus === 'Confirmed'));
     assert.ok(DEMO_ORDER_SPECS.some((order) => order.orderStatus === 'StockExportRequested'));
+    assert.ok(DEMO_ORDER_SPECS.some((order) => order.orderStatus === 'Delivered'));
+    assert.ok(DEMO_RETURN_REFUND_SPECS.some((request) => request.orderCode === 'GH-DEMO-1004'));
   });
 });

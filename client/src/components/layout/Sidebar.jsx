@@ -7,11 +7,13 @@ const ROLE_LINKS = {
     { to: '/profile', label: 'Profile' },
     { to: '/cart', label: 'Cart' },
     { to: '/orders', label: 'Orders' },
+    { to: '/return-refunds', label: 'Return & Refund' },
   ],
   Staff: [
     { to: '/profile', label: 'Profile' },
     { to: '/staff', label: 'Staff Dashboard' },
     { to: '/staff/orders', label: 'Order Queue' },
+    { to: '/staff/return-refunds', label: 'Return/Refund' },
   ],
   WarehouseManager: [
     { to: '/profile', label: 'Profile' },
