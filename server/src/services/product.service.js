@@ -10,6 +10,7 @@ function toPlainProduct(product) {
     description: product.description || '',
     imageUrls: product.imageUrls || [],
     price: product.price,
+    stockQuantity: product.stockQuantity || 0,
     unit: product.unit,
     categoryId: String(product.categoryId && product.categoryId._id ? product.categoryId._id : product.categoryId),
     category: product.categoryId && product.categoryId.name ? { id: String(product.categoryId._id), name: product.categoryId.name } : undefined,
@@ -43,6 +44,9 @@ function createModelProductRepository() {
     async updateById(id, data) {
       return Product.findByIdAndUpdate(id, data, { new: true, runValidators: true }).populate('categoryId').lean();
     },
+    async findPublicById(id) {
+      return Product.findOne({ _id: id, status: 'Active' }).populate('categoryId').lean();
+    },
   };
 }
 
@@ -59,6 +63,7 @@ function validateProductInput(input) {
   if (!input.categoryId) throw new ApiError(400, 'Product category is required');
   if (!input.unit || !String(input.unit).trim()) throw new ApiError(400, 'Product unit is required');
   if (Number(input.price) <= 0) throw new ApiError(400, 'Product price must be greater than 0');
+  if (input.stockQuantity !== undefined && Number(input.stockQuantity) < 0) throw new ApiError(400, 'Product stock quantity cannot be negative');
 }
 
 function createProductService({
@@ -89,6 +94,12 @@ function createProductService({
       };
     },
 
+    async getPublicProductById(id) {
+      const product = await productRepository.findPublicById(id);
+      if (!product) throw new ApiError(404, 'Product not found');
+      return toPlainProduct(product);
+    },
+
     async listAdminProducts() {
       const products = await productRepository.list();
       return products.map(toPlainProduct);
@@ -103,6 +114,7 @@ function createProductService({
         description: String(input.description || '').trim(),
         imageUrls: Array.isArray(input.imageUrls) ? input.imageUrls : [],
         price: Number(input.price),
+        stockQuantity: input.stockQuantity !== undefined ? Number(input.stockQuantity) : 0,
         unit: String(input.unit).trim(),
         categoryId: input.categoryId,
         status: input.status || 'Active',
@@ -124,12 +136,16 @@ function createProductService({
       if (input.price !== undefined && Number(input.price) <= 0) {
         throw new ApiError(400, 'Product price must be greater than 0');
       }
+      if (input.stockQuantity !== undefined && Number(input.stockQuantity) < 0) {
+        throw new ApiError(400, 'Product stock quantity cannot be negative');
+      }
 
       const data = {};
       for (const field of ['name', 'description', 'unit', 'categoryId', 'status']) {
         if (input[field] !== undefined) data[field] = typeof input[field] === 'string' ? input[field].trim() : input[field];
       }
       if (input.price !== undefined) data.price = Number(input.price);
+      if (input.stockQuantity !== undefined) data.stockQuantity = Number(input.stockQuantity);
       if (input.imageUrls !== undefined) data.imageUrls = Array.isArray(input.imageUrls) ? input.imageUrls : [];
 
       const product = await productRepository.updateById(id, data);

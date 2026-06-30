@@ -11,7 +11,14 @@ async function createOnlinePayment(req, res, next) {
 
 async function callback(req, res, next) {
   try {
-    return sendSuccess(res, await paymentService.handlePaymentCallback(req.body), 'Payment callback processed');
+    return sendSuccess(
+      res,
+      await paymentService.handlePaymentCallback({
+        ...req.body,
+        callbackSecret: req.get('x-payment-callback-secret') || req.body.callbackSecret,
+      }),
+      'Payment callback processed'
+    );
   } catch (error) {
     return next(error);
   }

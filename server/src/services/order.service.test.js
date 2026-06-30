@@ -137,4 +137,44 @@ describe('order service', () => {
     assert.equal(cancelled.orderStatus, 'Cancelled');
     assert.equal(auditLogger.entries.at(-1).action, 'ORDER_CANCEL');
   });
+
+  it('generates unique order codes when orders are placed in the same millisecond', async () => {
+    const originalNow = Date.now;
+    Date.now = () => 1710000000000;
+    try {
+      const cartRepository = {
+        carts: [
+          { _id: 'cart-1', customerId: 'customer-1', status: 'Active' },
+          { _id: 'cart-2', customerId: 'customer-2', status: 'Active' },
+        ],
+        items: [
+          { _id: 'item-1', cartId: 'cart-1', productId: 'p1', productName: 'Green Pan', quantity: 1, unitPrice: 25 },
+          { _id: 'item-2', cartId: 'cart-2', productId: 'p1', productName: 'Green Pan', quantity: 1, unitPrice: 25 },
+        ],
+        async findActiveByCustomer(customerId) {
+          return this.carts.find((cart) => cart.customerId === customerId && cart.status === 'Active') || null;
+        },
+        async listItems(cartId) {
+          return this.items.filter((item) => item.cartId === cartId);
+        },
+        async markCheckedOut(cartId) {
+          const cart = this.carts.find((entry) => entry._id === cartId);
+          cart.status = 'CheckedOut';
+        },
+      };
+      orderService = createOrderService({
+        cartRepository,
+        productRepository: createProductRepository(),
+        orderRepository,
+        auditLogger,
+      });
+
+      const first = await orderService.placeOrder('customer-1', { shippingAddress: 'Ha Noi', paymentMethod: 'COD' });
+      const second = await orderService.placeOrder('customer-2', { shippingAddress: 'Da Nang', paymentMethod: 'COD' });
+
+      assert.notEqual(first.orderCode, second.orderCode);
+    } finally {
+      Date.now = originalNow;
+    }
+  });
 });

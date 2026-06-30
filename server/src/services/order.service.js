@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const ApiError = require('../utils/apiError');
 const Product = require('../models/product.model');
 const Cart = require('../models/cart.model');
@@ -20,6 +21,10 @@ function toOrderResponse(order, details = []) {
     details,
     createdAt: order.createdAt,
   };
+}
+
+function generateOrderCode() {
+  return `ORD-${Date.now()}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
 }
 
 function createModelCartRepository() {
@@ -111,7 +116,7 @@ function createOrderService({
       const lines = await buildOrderLines(cartItems);
       const totalAmount = lines.reduce((sum, line) => sum + line.subtotal, 0);
       const order = await orderRepository.createOrder({
-        orderCode: `ORD-${Date.now()}`,
+        orderCode: generateOrderCode(),
         customerId,
         totalAmount,
         paymentMethod,
