@@ -59,6 +59,9 @@ function createModelRepository() {
     async updateInventory(id, data) {
       return Inventory.findByIdAndUpdate(id, data, { new: true, runValidators: true }).populate('productId').lean();
     },
+    async updateProductStock(productId, stockQuantity) {
+      return Product.findByIdAndUpdate(productId, { stockQuantity }, { new: true, runValidators: true }).lean();
+    },
     async createTransaction(data) {
       return InventoryTransaction.create(data);
     },
@@ -169,6 +172,7 @@ function createInventoryService({
         stockQuantity: nextStock,
         lastUpdatedBy: userId,
       });
+      await repository.updateProductStock(toInventoryResponse(updated).productId, nextStock);
       await createTransaction(userId, inventory, {
         transactionType: 'ADJUSTMENT',
         quantity: delta,
@@ -232,6 +236,7 @@ function createInventoryService({
             stockQuantity: nextStock,
             lastUpdatedBy: userId,
           });
+          await repository.updateProductStock(toInventoryResponse(updatedInventory).productId, nextStock);
           await createTransaction(userId, inventory, {
             transactionType: 'STOCK_EXPORT',
             quantity: -Number(detail.quantity),

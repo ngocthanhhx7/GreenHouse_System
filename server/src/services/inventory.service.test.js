@@ -27,6 +27,7 @@ function createRepository() {
     },
   ];
   const transactions = [];
+  const productStocks = new Map(inventories.map((item) => [item.productId, item.stockQuantity]));
   const stockExports = [
     {
       _id: 'export-1',
@@ -65,6 +66,7 @@ function createRepository() {
     transactions,
     stockExports,
     orders,
+    productStocks,
     async listProducts() {
       return inventories.map((item) => ({
         _id: item.productId,
@@ -87,6 +89,9 @@ function createRepository() {
       if (!inventory) return null;
       Object.assign(inventory, data);
       return inventory;
+    },
+    async updateProductStock(productId, stockQuantity) {
+      productStocks.set(String(productId), stockQuantity);
     },
     async createTransaction(data) {
       const transaction = { _id: `txn-${transactions.length + 1}`, createdAt: new Date(), ...data };
@@ -152,6 +157,7 @@ describe('inventory service', () => {
     const result = await service.adjustInventory('warehouse-1', 'inv-1', { delta: -2, reason: 'Damaged item removed' });
 
     assert.equal(result.inventory.stockQuantity, 8);
+    assert.equal(repository.productStocks.get('product-1'), 8);
     assert.equal(repository.transactions.length, 1);
     assert.equal(repository.transactions[0].transactionType, 'ADJUSTMENT');
   });
@@ -170,6 +176,7 @@ describe('inventory service', () => {
     assert.equal(result.stockExport.status, 'Exported');
     assert.equal(result.order.orderStatus, 'Packed');
     assert.equal(repository.inventories[0].stockQuantity, 8);
+    assert.equal(repository.productStocks.get('product-1'), 8);
     assert.equal(repository.transactions.at(-1).transactionType, 'STOCK_EXPORT');
   });
 

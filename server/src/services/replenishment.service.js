@@ -1,6 +1,7 @@
 const ApiError = require('../utils/apiError');
 const Inventory = require('../models/inventory.model');
 const InventoryTransaction = require('../models/inventoryTransaction.model');
+const Product = require('../models/product.model');
 const ReplenishmentRequest = require('../models/replenishmentRequest.model');
 const { logAudit } = require('../utils/auditLogger');
 
@@ -40,6 +41,9 @@ function createModelRepository() {
     },
     async updateInventory(id, data) {
       return Inventory.findByIdAndUpdate(id, data, { new: true, runValidators: true }).populate('productId').lean();
+    },
+    async updateProductStock(productId, stockQuantity) {
+      return Product.findByIdAndUpdate(productId, { stockQuantity }, { new: true, runValidators: true }).lean();
     },
     async createRequest(data) {
       return ReplenishmentRequest.create(data);
@@ -133,12 +137,14 @@ function createReplenishmentService({
       const { request, inventory } = await getRequestWithInventory(id);
       if (request.status !== 'Approved') throw new ApiError(409, 'Only Approved replenishment requests can be received');
       const receivedQuantity = Number(input.receivedQuantity);
-      if (!Number.isFinite(receivedQuantity) || receivedQuantity <= 0) throw new ApiError(400, 'Received quantity must be greater than 0');
+      if (!Number.isInteger(receivedQuantity) || receivedQuantity <= 0) throw new ApiError(400, 'Received quantity must be a positive integer');
+      if (receivedQuantity > Number(request.quantity)) throw new ApiError(400, 'Received quantity cannot exceed requested quantity');
       const nextStock = Number(inventory.stockQuantity || 0) + receivedQuantity;
       const updatedInventory = await repository.updateInventory(inventory._id, {
         stockQuantity: nextStock,
         lastUpdatedBy: userId,
       });
+      await repository.updateProductStock(getProductId(updatedInventory), nextStock);
       await repository.createTransaction({
         productId: getProductId(inventory),
         orderId: null,

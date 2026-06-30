@@ -16,11 +16,13 @@ function createRepository() {
   ];
   const requests = [];
   const transactions = [];
+  const productStocks = new Map(inventories.map((item) => [item.productId, item.stockQuantity]));
 
   return {
     inventories,
     requests,
     transactions,
+    productStocks,
     async findInventoryById(id) {
       return inventories.find((item) => item._id === id) || null;
     },
@@ -31,6 +33,9 @@ function createRepository() {
       const inventory = inventories.find((item) => item._id === id);
       Object.assign(inventory, data);
       return inventory;
+    },
+    async updateProductStock(productId, stockQuantity) {
+      productStocks.set(String(productId), stockQuantity);
     },
     async createRequest(data) {
       const request = { _id: `rep-${requests.length + 1}`, status: 'Pending', ...data };
@@ -118,7 +123,22 @@ describe('replenishment service', () => {
 
     assert.equal(result.status, 'Received');
     assert.equal(repository.inventories[0].stockQuantity, 18);
+    assert.equal(repository.productStocks.get('product-1'), 18);
     assert.equal(repository.transactions[0].transactionType, 'REPLENISHMENT_RECEIVE');
+  });
+
+  it('rejects receiving more than the approved request quantity', async () => {
+    const request = await service.createRequest('warehouse-1', {
+      inventoryId: 'inv-1',
+      quantity: 20,
+      reason: 'Low stock demo restock',
+    });
+    await service.updateRequestStatus('admin-1', request.id, { status: 'Approved' });
+
+    await assert.rejects(
+      () => service.receiveRequest('warehouse-1', request.id, { receivedQuantity: 21 }),
+      /Received quantity cannot exceed requested quantity/
+    );
   });
 
   it('rejects receiving a request before admin approval', async () => {
