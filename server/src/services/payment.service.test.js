@@ -82,6 +82,7 @@ describe('payment service', () => {
       paymentRepository,
       auditLogger,
       notificationService,
+      callbackSecret: 'test-callback-secret',
     });
   });
 
@@ -100,6 +101,7 @@ describe('payment service', () => {
       transactionId: 'TXN-1',
       amount: 50,
       status: 'Paid',
+      callbackSecret: 'test-callback-secret',
     });
 
     assert.equal(result.paymentStatus, 'Paid');
@@ -117,8 +119,50 @@ describe('payment service', () => {
           transactionId: 'TXN-2',
           amount: 51,
           status: 'Paid',
+          callbackSecret: 'test-callback-secret',
         }),
       /Payment amount does not match order total/
+    );
+  });
+
+  it('rejects payment callbacks without the configured secret', async () => {
+    await assert.rejects(
+      () =>
+        paymentService.handlePaymentCallback({
+          orderId: 'order-online',
+          transactionId: 'TXN-3',
+          amount: 50,
+          status: 'Paid',
+        }),
+      /Invalid payment callback secret/
+    );
+  });
+
+  it('does not downgrade a paid payment when a later callback fails', async () => {
+    paymentRepository.orders[0].paymentStatus = 'Paid';
+    paymentRepository.orders[0].orderStatus = 'Pending';
+    paymentRepository.payments[0].paymentStatus = 'Paid';
+    paymentRepository.payments[0].paidAt = new Date();
+
+    const result = await paymentService.handlePaymentCallback({
+      orderId: 'order-online',
+      transactionId: 'TXN-FAIL-LATE',
+      amount: 50,
+      status: 'Failed',
+      callbackSecret: 'test-callback-secret',
+    });
+
+    assert.equal(result.paymentStatus, 'Paid');
+    assert.equal(paymentRepository.orders[0].paymentStatus, 'Paid');
+    assert.equal(paymentRepository.payments[0].paymentStatus, 'Paid');
+  });
+
+  it('rejects creating online payment request when order is not waiting for payment', async () => {
+    paymentRepository.orders[0].orderStatus = 'Cancelled';
+
+    await assert.rejects(
+      () => paymentService.createOnlinePaymentRequest('customer-1', 'order-online'),
+      /Order is not waiting for payment/
     );
   });
 });

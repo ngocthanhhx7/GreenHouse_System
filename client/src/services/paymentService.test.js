@@ -25,9 +25,11 @@ describe('client payment service', () => {
   it('submits mock callback result', async () => {
     const service = createPaymentService({
       baseUrl: 'http://api.test/api',
+      callbackSecret: 'test-callback-secret',
       fetcher: async (url, options) => {
         assert.equal(url, 'http://api.test/api/payments/callback');
         assert.equal(options.method, 'POST');
+        assert.equal(options.headers['x-payment-callback-secret'], 'test-callback-secret');
         return {
           ok: true,
           json: async () => ({ success: true, data: { paymentStatus: 'Paid' } }),

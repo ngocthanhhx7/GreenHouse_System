@@ -11,10 +11,7 @@ async function listPublic(req, res, next) {
 
 async function getPublicById(req, res, next) {
   try {
-    const result = await productService.listPublicProducts({});
-    const product = result.items.find((item) => item.id === req.params.id);
-    if (!product) return res.status(404).json({ success: false, message: 'Product not found', data: null, errors: [] });
-    return sendSuccess(res, product);
+    return sendSuccess(res, await productService.getPublicProductById(req.params.id));
   } catch (error) {
     return next(error);
   }

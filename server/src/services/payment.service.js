@@ -37,6 +37,7 @@ function createPaymentService({
   paymentRepository = createModelPaymentRepository(),
   auditLogger = { log: logAudit },
   notificationService = defaultNotificationService,
+  callbackSecret = process.env.PAYMENT_CALLBACK_SECRET,
 } = {}) {
   return {
     async createOnlinePaymentRequest(customerId, orderId) {
@@ -44,6 +45,7 @@ function createPaymentService({
       if (!order || String(order.customerId) !== String(customerId)) throw new ApiError(404, 'Order not found');
       if (order.paymentMethod !== 'ONLINE') throw new ApiError(400, 'Order is not an online payment order');
       if (order.paymentStatus === 'Paid') throw new ApiError(409, 'Order is already paid');
+      if (order.orderStatus !== 'WaitingForPayment') throw new ApiError(409, 'Order is not waiting for payment');
 
       const payment = await paymentRepository.findPaymentByOrder(orderId);
       if (!payment) throw new ApiError(404, 'Payment record not found');
@@ -54,6 +56,9 @@ function createPaymentService({
     },
 
     async handlePaymentCallback(input) {
+      if (!callbackSecret) throw new ApiError(503, 'Payment callback secret is not configured');
+      if (input.callbackSecret !== callbackSecret) throw new ApiError(401, 'Invalid payment callback secret');
+
       const order = await paymentRepository.findOrderById(input.orderId);
       if (!order) throw new ApiError(404, 'Order not found');
       if (Number(input.amount) !== Number(order.totalAmount)) {
@@ -63,7 +68,7 @@ function createPaymentService({
       const payment = await paymentRepository.findPaymentByOrder(input.orderId);
       if (!payment) throw new ApiError(404, 'Payment record not found');
 
-      if (payment.paymentStatus === 'Paid' && input.status === 'Paid') {
+      if (payment.paymentStatus === 'Paid') {
         return toPaymentResponse(order, payment);
       }
 

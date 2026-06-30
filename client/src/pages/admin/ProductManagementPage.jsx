@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { categoryService } from '../../services/categoryService.js';
 import { productService } from '../../services/productService.js';
 
-const emptyProduct = { name: '', description: '', imageUrls: '', price: '', unit: 'piece', categoryId: '', status: 'Active' };
+const emptyProduct = { name: '', description: '', imageUrls: '', price: '', stockQuantity: '', unit: 'piece', categoryId: '', status: 'Active' };
 
 export default function ProductManagementPage() {
   const [products, setProducts] = useState([]);
@@ -28,6 +28,7 @@ export default function ProductManagementPage() {
       await productService.createProduct({
         ...form,
         price: Number(form.price),
+        stockQuantity: Number(form.stockQuantity || 0),
         imageUrls: form.imageUrls ? [form.imageUrls] : [],
       });
       setForm(emptyProduct);
@@ -49,6 +50,7 @@ export default function ProductManagementPage() {
         <input className="form-control" placeholder="Product name" value={form.name} onChange={(event) => updateField('name', event.target.value)} required />
         <input className="form-control" placeholder="Image URL" value={form.imageUrls} onChange={(event) => updateField('imageUrls', event.target.value)} />
         <input className="form-control" type="number" min="0" placeholder="Price" value={form.price} onChange={(event) => updateField('price', event.target.value)} required />
+        <input className="form-control" type="number" min="0" placeholder="Stock quantity" value={form.stockQuantity} onChange={(event) => updateField('stockQuantity', event.target.value)} required />
         <input className="form-control" placeholder="Unit" value={form.unit} onChange={(event) => updateField('unit', event.target.value)} required />
         <select className="form-select" value={form.categoryId} onChange={(event) => updateField('categoryId', event.target.value)} required>
           <option value="">Select category</option>
@@ -69,6 +71,7 @@ export default function ProductManagementPage() {
             <tr>
               <th>Name</th>
               <th>Price</th>
+              <th>Stock</th>
               <th>Status</th>
             </tr>
           </thead>
@@ -77,6 +80,7 @@ export default function ProductManagementPage() {
               <tr key={product.id}>
                 <td>{product.name}</td>
                 <td>${Number(product.price).toFixed(2)}</td>
+                <td>{Number(product.stockQuantity || 0)}</td>
                 <td>{product.status}</td>
               </tr>
             ))}

@@ -44,6 +44,12 @@ function createCartRepository() {
       Object.assign(item, data);
       return item;
     },
+    async removeItem(id) {
+      const index = items.findIndex((entry) => entry._id === id);
+      if (index === -1) return null;
+      const [item] = items.splice(index, 1);
+      return item;
+    },
     async listItems(cartId) {
       return items.filter((item) => item.cartId === cartId);
     },
@@ -81,6 +87,35 @@ describe('cart service', () => {
     await assert.rejects(
       () => cartService.addItem('customer-1', { productId: 'p1', quantity: 6 }),
       /exceeds available stock/
+    );
+  });
+
+  it('rejects removing a cart item outside the customer active cart', async () => {
+    const cartRepository = createCartRepository();
+    const customerCart = await cartRepository.createCart('customer-1');
+    const otherCart = await cartRepository.createCart('customer-2');
+    await cartRepository.addItem({
+      cartId: customerCart._id,
+      productId: 'p1',
+      productName: 'Green Pan',
+      quantity: 1,
+      unitPrice: 25,
+    });
+    const otherItem = await cartRepository.addItem({
+      cartId: otherCart._id,
+      productId: 'p1',
+      productName: 'Green Pan',
+      quantity: 1,
+      unitPrice: 25,
+    });
+    cartService = createCartService({
+      productRepository: createProductRepository(),
+      cartRepository,
+    });
+
+    await assert.rejects(
+      () => cartService.removeItem('customer-1', otherItem._id),
+      /Cart item not found/
     );
   });
 });

@@ -42,6 +42,9 @@ function createProductRepository() {
       Object.assign(product, data);
       return product;
     },
+    async findPublicById(id) {
+      return products.find((item) => item._id === id && item.status === 'Active') || null;
+    },
   };
 }
 
@@ -76,6 +79,19 @@ describe('product service', () => {
     assert.equal(result.items.length, 1);
     assert.equal(result.items[0].name, 'Green Pan');
     assert.equal(result.items[0].status, 'Active');
+  });
+
+  it('gets one active public product by id without scanning the full catalog', async () => {
+    let listCalled = false;
+    productRepository.list = async () => {
+      listCalled = true;
+      return [];
+    };
+
+    const result = await productService.getPublicProductById('p1');
+
+    assert.equal(result.name, 'Green Pan');
+    assert.equal(listCalled, false);
   });
 
   it('creates a product when Admin provides an active category and valid price', async () => {

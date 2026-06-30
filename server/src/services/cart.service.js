@@ -120,6 +120,9 @@ function createCartService({
 
     async removeItem(customerId, itemId) {
       const cart = await getOrCreateCart(customerId);
+      const items = await cartRepository.listItems(cart._id);
+      const item = items.find((entry) => String(entry._id) === String(itemId));
+      if (!item) throw new ApiError(404, 'Cart item not found');
       await cartRepository.removeItem(itemId);
       return toCartResponse(cart, await cartRepository.listItems(cart._id));
     },
