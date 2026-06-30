@@ -23,6 +23,11 @@ import StaffDashboardPage from './pages/staff/StaffDashboardPage.jsx';
 import StaffOrderQueuePage from './pages/staff/StaffOrderQueuePage.jsx';
 import StaffOrderDetailPage from './pages/staff/StaffOrderDetailPage.jsx';
 import InvoicePrintPage from './pages/staff/InvoicePrintPage.jsx';
+import WarehouseDashboardPage from './pages/warehouse/WarehouseDashboardPage.jsx';
+import InventoryListPage from './pages/warehouse/InventoryListPage.jsx';
+import LowStockPage from './pages/warehouse/LowStockPage.jsx';
+import StockExportQueuePage from './pages/warehouse/StockExportQueuePage.jsx';
+import StockExportDetailPage from './pages/warehouse/StockExportDetailPage.jsx';
 
 function PlaceholderPage({ title, description }) {
   return (
@@ -137,7 +142,39 @@ export default function App() {
           path="warehouse"
           element={
             <RoleRoute allowedRoles={['WarehouseManager']}>
-              <PlaceholderPage title="Warehouse Dashboard" description="Inventory workspace for Warehouse Manager." />
+              <WarehouseDashboardPage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="warehouse/inventory"
+          element={
+            <RoleRoute allowedRoles={['WarehouseManager']}>
+              <InventoryListPage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="warehouse/low-stock"
+          element={
+            <RoleRoute allowedRoles={['WarehouseManager']}>
+              <LowStockPage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="warehouse/stock-exports"
+          element={
+            <RoleRoute allowedRoles={['WarehouseManager']}>
+              <StockExportQueuePage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="warehouse/stock-exports/:id"
+          element={
+            <RoleRoute allowedRoles={['WarehouseManager']}>
+              <StockExportDetailPage />
             </RoleRoute>
           }
         />

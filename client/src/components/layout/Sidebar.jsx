@@ -16,6 +16,9 @@ const ROLE_LINKS = {
   WarehouseManager: [
     { to: '/profile', label: 'Profile' },
     { to: '/warehouse', label: 'Warehouse Dashboard' },
+    { to: '/warehouse/inventory', label: 'Inventory' },
+    { to: '/warehouse/stock-exports', label: 'Stock Exports' },
+    { to: '/warehouse/low-stock', label: 'Low Stock' },
   ],
   Admin: [
     { to: '/profile', label: 'Profile' },

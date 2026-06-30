@@ -242,6 +242,11 @@ body {
   margin-top: 16px;
 }
 
+.table-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .invoice-total {
   font-size: 24px;
   margin: 16px 0;
