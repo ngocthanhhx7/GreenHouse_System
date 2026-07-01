@@ -154,6 +154,7 @@ Theo tài liệu yêu cầu hiện tại, hệ thống chưa bao gồm:
 
 - `docs/PROJECT_DESCRIPTION.md`: Bản mô tả dự án chi tiết.
 - `docs/PROJECT_DESCRIPTION.docx`: Bản mô tả dự án định dạng Word.
+- `docs/FINAL_DEMO_READINESS_PLAN.md`: Checklist chạy seed data, tài khoản demo, thứ tự demo theo role và trách nhiệm từng thành viên trước khi mentor review.
 
 ## Thành viên nhóm
 
@@ -164,4 +165,3 @@ Theo tài liệu yêu cầu hiện tại, hệ thống chưa bao gồm:
 | Nguyễn Quang Huy | HE186466 |
 | Nguyễn Hữu Anh Nhật | HE176402 |
 | Lê Vũ Cường | HE187396 |
-
