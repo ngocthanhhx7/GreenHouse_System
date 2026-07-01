@@ -1,5 +1,6 @@
 import { Outlet } from 'react-router-dom';
 
+import Footer from './Footer.jsx';
 import Header from './Header.jsx';
 import Sidebar from './Sidebar.jsx';
 
@@ -13,6 +14,7 @@ export default function AppLayout() {
           <Outlet />
         </main>
       </div>
+      <Footer />
     </div>
   );
 }

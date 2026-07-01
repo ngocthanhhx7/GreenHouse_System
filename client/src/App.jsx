@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 
 import AppLayout from './components/layout/AppLayout.jsx';
+import PublicLayout from './components/layout/PublicLayout.jsx';
 import ProtectedRoute from './components/auth/ProtectedRoute.jsx';
 import RoleRoute from './components/auth/RoleRoute.jsx';
 import ForbiddenPage from './pages/errors/ForbiddenPage.jsx';
@@ -44,9 +45,11 @@ import ReplenishmentAdminPage from './pages/admin/ReplenishmentAdminPage.jsx';
 export default function App() {
   return (
     <Routes>
-      <Route path="/" element={<HomePage />} />
-      <Route path="/products" element={<ProductListingPage />} />
-      <Route path="/products/:id" element={<ProductDetailPage />} />
+      <Route path="/" element={<PublicLayout />}>
+        <Route index element={<HomePage />} />
+        <Route path="products" element={<ProductListingPage />} />
+        <Route path="products/:id" element={<ProductDetailPage />} />
+      </Route>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
       <Route path="/unauthorized" element={<UnauthorizedPage />} />

@@ -49,7 +49,7 @@ describe('client auth service', () => {
   it('returns the default dashboard path for each role', () => {
     const service = createAuthService({ storage: createStorage() });
 
-    assert.equal(service.getDashboardPath('Customer'), '/profile');
+    assert.equal(service.getDashboardPath('Customer'), '/orders');
     assert.equal(service.getDashboardPath('Staff'), '/staff');
     assert.equal(service.getDashboardPath('WarehouseManager'), '/warehouse');
     assert.equal(service.getDashboardPath('Admin'), '/admin');
