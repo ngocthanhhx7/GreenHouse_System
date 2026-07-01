@@ -53,11 +53,10 @@ describe('notification service', () => {
     ];
     const service = createNotificationService({
       notificationRepository: {
-        async findById(id) {
-          return notifications.find((notification) => notification._id === id) || null;
-        },
-        async update(id, data) {
-          const notification = notifications.find((entry) => entry._id === id);
+        async markAsReadForUser(userId, id) {
+          const notification = notifications.find((entry) => entry._id === id && entry.userId === userId);
+          if (!notification) return null;
+          const data = { isRead: true };
           Object.assign(notification, data);
           return notification;
         },
@@ -67,5 +66,20 @@ describe('notification service', () => {
     const result = await service.markAsRead('customer-1', 'noti-1');
 
     assert.equal(result.isRead, true);
+  });
+
+  it('rejects marking another user notification as read', async () => {
+    const service = createNotificationService({
+      notificationRepository: {
+        async markAsReadForUser() {
+          return null;
+        },
+      },
+    });
+
+    await assert.rejects(
+      () => service.markAsRead('customer-1', 'noti-2'),
+      /Notification not found/
+    );
   });
 });

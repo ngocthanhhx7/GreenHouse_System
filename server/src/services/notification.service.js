@@ -24,11 +24,12 @@ function createModelNotificationRepository() {
     async listByUser(userId) {
       return Notification.find({ userId }).sort({ createdAt: -1 }).lean();
     },
-    async findById(id) {
-      return Notification.findById(id).lean();
-    },
-    async update(id, data) {
-      return Notification.findByIdAndUpdate(id, data, { new: true, runValidators: true }).lean();
+    async markAsReadForUser(userId, id) {
+      return Notification.findOneAndUpdate(
+        { _id: id, userId },
+        { $set: { isRead: true } },
+        { new: true, runValidators: true }
+      ).lean();
     },
   };
 }
@@ -74,11 +75,10 @@ function createNotificationService({
     },
 
     async markAsRead(userId, notificationId) {
-      const notification = await notificationRepository.findById(notificationId);
-      if (!notification || String(notification.userId) !== String(userId)) {
+      const updated = await notificationRepository.markAsReadForUser(userId, notificationId);
+      if (!updated) {
         throw new ApiError(404, 'Notification not found');
       }
-      const updated = await notificationRepository.update(notificationId, { isRead: true });
       return toPlainNotification(updated);
     },
   };
