@@ -13,6 +13,7 @@ import HomePage from './pages/public/HomePage.jsx';
 import ProductListingPage from './pages/public/ProductListingPage.jsx';
 import ProductDetailPage from './pages/public/ProductDetailPage.jsx';
 import AdminDashboardPage from './pages/admin/AdminDashboardPage.jsx';
+import AuditLogPage from './pages/admin/AuditLogPage.jsx';
 import ProductManagementPage from './pages/admin/ProductManagementPage.jsx';
 import CategoryManagementPage from './pages/admin/CategoryManagementPage.jsx';
 import SystemSettingsPage from './pages/admin/SystemSettingsPage.jsx';
@@ -250,6 +251,14 @@ export default function App() {
           element={
             <RoleRoute allowedRoles={['Admin']}>
               <ProductManagementPage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="admin/audit-logs"
+          element={
+            <RoleRoute allowedRoles={['Admin']}>
+              <AuditLogPage />
             </RoleRoute>
           }
         />

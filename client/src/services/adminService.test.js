@@ -33,4 +33,18 @@ describe('client admin service', () => {
 
     assert.equal(result.lowStockDefaultThreshold, 10);
   });
+
+  it('fetches admin audit logs with query filters', async () => {
+    const service = createAdminService({
+      baseUrl: 'http://api.test/api',
+      fetcher: async (url) => {
+        assert.equal(url, 'http://api.test/api/admin/audit-logs?action=ORDER_CREATE&userId=user-1');
+        return { ok: true, json: async () => ({ success: true, data: { total: 1, items: [{ id: 'audit-1' }] } }) };
+      },
+    });
+
+    const result = await service.listAuditLogs({ action: 'ORDER_CREATE', userId: 'user-1' });
+
+    assert.equal(result.total, 1);
+  });
 });

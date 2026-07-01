@@ -17,6 +17,7 @@ const SupportRequest = require('../models/supportRequest.model');
 const ProductReview = require('../models/productReview.model');
 const SystemSetting = require('../models/systemSetting.model');
 const Notification = require('../models/notification.model');
+const AuditLog = require('../models/auditLog.model');
 
 const DEMO_PASSWORD = 'GreenHome@123';
 
@@ -258,6 +259,29 @@ const DEMO_NOTIFICATION_SPECS = [
     content: 'Reports and system settings have demo records for mentor walkthrough.',
     deliveryStatus: 'Sent',
     isRead: true,
+  },
+];
+
+const DEMO_AUDIT_SPECS = [
+  {
+    roleName: 'Admin',
+    action: 'AUTH_LOGIN_SUCCESS',
+    targetEntity: 'User',
+    description: 'Demo admin logged in for mentor audit walkthrough',
+  },
+  {
+    roleName: 'Customer',
+    action: 'ORDER_CREATE',
+    targetEntity: 'Order',
+    targetId: 'GH-DEMO-1004',
+    description: 'Demo customer created delivered order GH-DEMO-1004',
+  },
+  {
+    roleName: 'Staff',
+    action: 'RETURN_REFUND_APPROVED',
+    targetEntity: 'ReturnRefundRequest',
+    targetId: 'GH-DEMO-1004',
+    description: 'Demo staff approved a return/refund request',
   },
 ];
 
@@ -539,6 +563,37 @@ async function upsertNotifications(userMap) {
   return notifications;
 }
 
+async function upsertAuditLogs(userMap) {
+  const auditLogs = [];
+
+  for (const auditSpec of DEMO_AUDIT_SPECS) {
+    const user = userMap[auditSpec.roleName];
+    const auditLog = await AuditLog.findOneAndUpdate(
+      {
+        userId: user._id,
+        action: auditSpec.action,
+        targetId: auditSpec.targetId || '',
+      },
+      {
+        $set: {
+          userId: user._id,
+          action: auditSpec.action,
+          targetEntity: auditSpec.targetEntity,
+          targetId: auditSpec.targetId || '',
+          description: auditSpec.description,
+          ip: '127.0.0.1',
+          userAgent: 'GreenHome demo seed',
+          timestamp: new Date(),
+        },
+      },
+      { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
+    );
+    auditLogs.push(auditLog);
+  }
+
+  return auditLogs;
+}
+
 async function seedDemoData() {
   await seedRoles();
   const roles = await Role.find({ roleName: { $in: DEMO_USERS.map((user) => user.roleName) } }).lean();
@@ -556,6 +611,7 @@ async function seedDemoData() {
   const productReviews = await upsertProductReviews(userMap, orderMap, productMap);
   const systemSettings = await upsertSystemSettings(userMap);
   const notifications = await upsertNotifications(userMap);
+  const auditLogs = await upsertAuditLogs(userMap);
 
   return {
     users: DEMO_USERS.length,
@@ -567,6 +623,7 @@ async function seedDemoData() {
     productReviews: productReviews.length,
     systemSettings: systemSettings.length,
     notifications: notifications.length,
+    auditLogs: auditLogs.length,
     demoPassword: DEMO_PASSWORD,
   };
 }
@@ -585,6 +642,7 @@ async function runCli() {
     { type: 'ProductReviews', count: result.productReviews },
     { type: 'SystemSettings', count: result.systemSettings },
     { type: 'Notifications', count: result.notifications },
+    { type: 'AuditLogs', count: result.auditLogs },
   ]);
   console.log(`Demo password for all accounts: ${result.demoPassword}`);
   await mongoose.disconnect();
@@ -599,6 +657,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  DEMO_AUDIT_SPECS,
   DEMO_CATEGORIES,
   DEMO_NOTIFICATION_SPECS,
   DEMO_ORDER_SPECS,

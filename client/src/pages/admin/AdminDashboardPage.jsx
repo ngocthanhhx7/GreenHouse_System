@@ -26,9 +26,14 @@ export default function AdminDashboardPage() {
     <div className="surface">
       <div className="page-heading">
         <h1>Admin Dashboard</h1>
-        <Link className="btn btn-outline-success" to="/admin/settings">
-          Settings
-        </Link>
+        <div className="table-actions">
+          <Link className="btn btn-outline-success" to="/admin/audit-logs">
+            Audit Logs
+          </Link>
+          <Link className="btn btn-outline-success" to="/admin/settings">
+            Settings
+          </Link>
+        </div>
       </div>
       {error && <div className="alert alert-danger">{error}</div>}
       {report && (
