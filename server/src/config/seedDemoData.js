@@ -14,6 +14,7 @@ const Payment = require('../models/payment.model');
 const StockExportRequest = require('../models/stockExportRequest.model');
 const SupportRequest = require('../models/supportRequest.model');
 const ProductReview = require('../models/productReview.model');
+const SystemSetting = require('../models/systemSetting.model');
 
 const DEMO_PASSWORD = 'GreenHome@123';
 
@@ -195,6 +196,19 @@ const DEMO_REVIEW_SPECS = [
     productName: 'Minimal Dinner Plate Set',
     rating: 5,
     content: 'Clean design and good quality for daily meals.',
+  },
+];
+
+const DEMO_SETTING_SPECS = [
+  {
+    key: 'lowStockDefaultThreshold',
+    value: 5,
+    description: 'Default low-stock threshold for new inventory records',
+  },
+  {
+    key: 'returnWindowDays',
+    value: 7,
+    description: 'Allowed customer return/refund window in days',
   },
 ];
 
@@ -399,6 +413,27 @@ async function upsertProductReviews(userMap, orderMap, productMap) {
   return reviews;
 }
 
+async function upsertSystemSettings(userMap) {
+  const admin = userMap.Admin;
+  const settings = [];
+
+  for (const settingSpec of DEMO_SETTING_SPECS) {
+    const setting = await SystemSetting.findOneAndUpdate(
+      { key: settingSpec.key },
+      {
+        $set: {
+          ...settingSpec,
+          updatedBy: admin._id,
+        },
+      },
+      { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
+    );
+    settings.push(setting);
+  }
+
+  return settings;
+}
+
 async function seedDemoData() {
   await seedRoles();
   const roles = await Role.find({ roleName: { $in: DEMO_USERS.map((user) => user.roleName) } }).lean();
@@ -413,6 +448,7 @@ async function seedDemoData() {
   const orderMap = Object.fromEntries(orders.map((order) => [order.orderCode, order]));
   const supportRequests = await upsertSupportRequests(userMap, orderMap);
   const productReviews = await upsertProductReviews(userMap, orderMap, productMap);
+  const systemSettings = await upsertSystemSettings(userMap);
 
   return {
     users: DEMO_USERS.length,
@@ -421,6 +457,7 @@ async function seedDemoData() {
     orders: orders.length,
     supportRequests: supportRequests.length,
     productReviews: productReviews.length,
+    systemSettings: systemSettings.length,
     demoPassword: DEMO_PASSWORD,
   };
 }
@@ -436,6 +473,7 @@ async function runCli() {
     { type: 'Orders', count: result.orders },
     { type: 'SupportRequests', count: result.supportRequests },
     { type: 'ProductReviews', count: result.productReviews },
+    { type: 'SystemSettings', count: result.systemSettings },
   ]);
   console.log(`Demo password for all accounts: ${result.demoPassword}`);
   await mongoose.disconnect();
@@ -455,6 +493,7 @@ module.exports = {
   DEMO_PASSWORD,
   DEMO_PRODUCTS,
   DEMO_REVIEW_SPECS,
+  DEMO_SETTING_SPECS,
   DEMO_SUPPORT_SPECS,
   DEMO_USERS,
   seedDemoData,

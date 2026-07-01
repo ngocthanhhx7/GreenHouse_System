@@ -234,6 +234,28 @@ body {
   max-width: 220px;
 }
 
+.metrics-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
+.metric-box {
+  background: #f9fbf7;
+  border: 1px solid #dce5d8;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 96px;
+  padding: 16px;
+}
+
+.metric-box strong {
+  color: #1f2a24;
+  font-size: 24px;
+}
+
 .action-row,
 .dashboard-actions {
   display: flex;

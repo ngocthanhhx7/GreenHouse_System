@@ -29,6 +29,7 @@ const ROLE_LINKS = {
     { to: '/admin/products', label: 'Products' },
     { to: '/admin/categories', label: 'Categories' },
     { to: '/admin/replenishments', label: 'Replenishments' },
+    { to: '/admin/settings', label: 'Settings' },
   ],
 };
 

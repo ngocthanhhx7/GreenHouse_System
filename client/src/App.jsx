@@ -11,8 +11,10 @@ import ProfilePage from './pages/profile/ProfilePage.jsx';
 import HomePage from './pages/public/HomePage.jsx';
 import ProductListingPage from './pages/public/ProductListingPage.jsx';
 import ProductDetailPage from './pages/public/ProductDetailPage.jsx';
+import AdminDashboardPage from './pages/admin/AdminDashboardPage.jsx';
 import ProductManagementPage from './pages/admin/ProductManagementPage.jsx';
 import CategoryManagementPage from './pages/admin/CategoryManagementPage.jsx';
+import SystemSettingsPage from './pages/admin/SystemSettingsPage.jsx';
 import CartPage from './pages/customer/CartPage.jsx';
 import CheckoutPage from './pages/customer/CheckoutPage.jsx';
 import OrderHistoryPage from './pages/customer/OrderHistoryPage.jsx';
@@ -33,15 +35,6 @@ import StockExportQueuePage from './pages/warehouse/StockExportQueuePage.jsx';
 import StockExportDetailPage from './pages/warehouse/StockExportDetailPage.jsx';
 import ReplenishmentPage from './pages/warehouse/ReplenishmentPage.jsx';
 import ReplenishmentAdminPage from './pages/admin/ReplenishmentAdminPage.jsx';
-
-function PlaceholderPage({ title, description }) {
-  return (
-    <div className="surface">
-      <h1>{title}</h1>
-      <p className="text-secondary mb-0">{description}</p>
-    </div>
-  );
-}
 
 export default function App() {
   return (
@@ -219,7 +212,7 @@ export default function App() {
           path="admin"
           element={
             <RoleRoute allowedRoles={['Admin']}>
-              <PlaceholderPage title="Admin Dashboard" description="System management workspace for Admin." />
+              <AdminDashboardPage />
             </RoleRoute>
           }
         />
@@ -244,6 +237,14 @@ export default function App() {
           element={
             <RoleRoute allowedRoles={['Admin']}>
               <ReplenishmentAdminPage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="admin/settings"
+          element={
+            <RoleRoute allowedRoles={['Admin']}>
+              <SystemSettingsPage />
             </RoleRoute>
           }
         />
