@@ -6,6 +6,7 @@ const { describe, it } = require('node:test');
 const packageJson = require('../../package.json');
 const {
   DEMO_CATEGORIES,
+  DEMO_NOTIFICATION_SPECS,
   DEMO_ORDER_SPECS,
   DEMO_PRODUCTS,
   DEMO_REVIEW_SPECS,
@@ -39,5 +40,13 @@ describe('demo data seed config', () => {
     assert.ok(DEMO_SUPPORT_SPECS.some((request) => request.orderCode === 'GH-DEMO-1004'));
     assert.ok(DEMO_REVIEW_SPECS.some((review) => review.productName === 'Minimal Dinner Plate Set'));
     assert.ok(DEMO_SETTING_SPECS.some((setting) => setting.key === 'lowStockDefaultThreshold'));
+  });
+
+  it('includes notification demo records for every signed-in role', () => {
+    const notificationRoles = DEMO_NOTIFICATION_SPECS.map((notification) => notification.roleName).sort();
+
+    assert.deepEqual(notificationRoles, ['Admin', 'Customer', 'Staff', 'WarehouseManager']);
+    assert.ok(DEMO_NOTIFICATION_SPECS.every((notification) => notification.channel === 'InApp'));
+    assert.ok(DEMO_NOTIFICATION_SPECS.every((notification) => notification.subject.trim()));
   });
 });

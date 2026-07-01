@@ -1,4 +1,5 @@
 const Notification = require('../models/notification.model');
+const ApiError = require('../utils/apiError');
 
 function toPlainNotification(notification) {
   return {
@@ -20,6 +21,16 @@ function createModelNotificationRepository() {
     async create(data) {
       return Notification.create(data);
     },
+    async listByUser(userId) {
+      return Notification.find({ userId }).sort({ createdAt: -1 }).lean();
+    },
+    async markAsReadForUser(userId, id) {
+      return Notification.findOneAndUpdate(
+        { _id: id, userId },
+        { $set: { isRead: true } },
+        { new: true, runValidators: true }
+      ).lean();
+    },
   };
 }
 
@@ -37,6 +48,38 @@ function createNotificationService({
         deliveryStatus: 'Pending',
       });
       return toPlainNotification(notification);
+    },
+
+    async createInAppNotification({ userId, type, subject, content }) {
+      const notification = await notificationRepository.create({
+        userId,
+        type,
+        channel: 'InApp',
+        subject,
+        content,
+        deliveryStatus: 'Sent',
+        isRead: false,
+        sentAt: new Date(),
+      });
+      return toPlainNotification(notification);
+    },
+
+    async listMyNotifications(userId) {
+      const notifications = await notificationRepository.listByUser(userId);
+      const items = notifications.map(toPlainNotification);
+      return {
+        items,
+        total: items.length,
+        unreadCount: items.filter((notification) => !notification.isRead).length,
+      };
+    },
+
+    async markAsRead(userId, notificationId) {
+      const updated = await notificationRepository.markAsReadForUser(userId, notificationId);
+      if (!updated) {
+        throw new ApiError(404, 'Notification not found');
+      }
+      return toPlainNotification(updated);
     },
   };
 }
