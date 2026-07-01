@@ -5,6 +5,7 @@ const { describe, it } = require('node:test');
 
 const packageJson = require('../../package.json');
 const {
+  DEMO_AUDIT_SPECS,
   DEMO_CATEGORIES,
   DEMO_NOTIFICATION_SPECS,
   DEMO_ORDER_SPECS,
@@ -50,5 +51,13 @@ describe('demo data seed config', () => {
     assert.deepEqual(notificationRoles, ['Admin', 'Customer', 'Staff', 'WarehouseManager']);
     assert.ok(DEMO_NOTIFICATION_SPECS.every((notification) => notification.channel === 'InApp'));
     assert.ok(DEMO_NOTIFICATION_SPECS.every((notification) => notification.subject.trim()));
+  });
+
+  it('includes audit demo records for mentor review', () => {
+    const actions = DEMO_AUDIT_SPECS.map((entry) => entry.action);
+
+    assert.ok(actions.includes('AUTH_LOGIN_SUCCESS'));
+    assert.ok(actions.includes('ORDER_CREATE'));
+    assert.ok(actions.includes('RETURN_REFUND_APPROVED'));
   });
 });

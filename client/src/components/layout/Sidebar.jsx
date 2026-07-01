@@ -32,6 +32,7 @@ const ROLE_LINKS = {
     { to: '/profile', label: 'Profile' },
     { to: '/notifications', label: 'Notifications' },
     { to: '/admin', label: 'Admin Dashboard' },
+    { to: '/admin/audit-logs', label: 'Audit Logs' },
     { to: '/admin/products', label: 'Products' },
     { to: '/admin/categories', label: 'Categories' },
     { to: '/admin/replenishments', label: 'Replenishments' },
