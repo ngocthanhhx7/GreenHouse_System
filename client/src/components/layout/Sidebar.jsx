@@ -8,6 +8,7 @@ const ROLE_LINKS = {
     { to: '/notifications', label: 'Notifications' },
     { to: '/cart', label: 'Cart' },
     { to: '/orders', label: 'Orders' },
+    { to: '/return-refunds', label: 'Return & Refund' },
     { to: '/support', label: 'Support' },
   ],
   Staff: [
@@ -15,6 +16,7 @@ const ROLE_LINKS = {
     { to: '/notifications', label: 'Notifications' },
     { to: '/staff', label: 'Staff Dashboard' },
     { to: '/staff/orders', label: 'Order Queue' },
+    { to: '/staff/return-refunds', label: 'Return/Refund' },
     { to: '/staff/support-requests', label: 'Support Queue' },
   ],
   WarehouseManager: [

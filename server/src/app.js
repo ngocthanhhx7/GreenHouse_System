@@ -9,6 +9,7 @@ const productRoutes = require('./routes/product.routes');
 const staffOrderRoutes = require('./routes/staffOrder.routes');
 const inventoryRoutes = require('./routes/inventory.routes');
 const replenishmentRoutes = require('./routes/replenishment.routes');
+const returnRefundRoutes = require('./routes/returnRefund.routes');
 const supportRoutes = require('./routes/support.routes');
 const reviewRoutes = require('./routes/review.routes');
 const reportRoutes = require('./routes/report.routes');
@@ -34,6 +35,7 @@ function createApp() {
   app.use('/api', staffOrderRoutes);
   app.use('/api', inventoryRoutes);
   app.use('/api', replenishmentRoutes);
+  app.use('/api', returnRefundRoutes);
   app.use('/api', supportRoutes);
   app.use('/api', reviewRoutes);
   app.use('/api', reportRoutes);
