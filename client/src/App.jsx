@@ -19,10 +19,13 @@ import OrderHistoryPage from './pages/customer/OrderHistoryPage.jsx';
 import OrderDetailPage from './pages/customer/OrderDetailPage.jsx';
 import PaymentPage from './pages/customer/PaymentPage.jsx';
 import PaymentResultPage from './pages/customer/PaymentResultPage.jsx';
+import SupportPage from './pages/customer/SupportPage.jsx';
 import StaffDashboardPage from './pages/staff/StaffDashboardPage.jsx';
 import StaffOrderQueuePage from './pages/staff/StaffOrderQueuePage.jsx';
 import StaffOrderDetailPage from './pages/staff/StaffOrderDetailPage.jsx';
 import InvoicePrintPage from './pages/staff/InvoicePrintPage.jsx';
+import SupportQueuePage from './pages/staff/SupportQueuePage.jsx';
+import SupportDetailPage from './pages/staff/SupportDetailPage.jsx';
 import WarehouseDashboardPage from './pages/warehouse/WarehouseDashboardPage.jsx';
 import InventoryListPage from './pages/warehouse/InventoryListPage.jsx';
 import LowStockPage from './pages/warehouse/LowStockPage.jsx';
@@ -109,6 +112,14 @@ export default function App() {
           }
         />
         <Route
+          path="support"
+          element={
+            <RoleRoute allowedRoles={['Customer']}>
+              <SupportPage />
+            </RoleRoute>
+          }
+        />
+        <Route
           path="staff"
           element={
             <RoleRoute allowedRoles={['Staff']}>
@@ -137,6 +148,22 @@ export default function App() {
           element={
             <RoleRoute allowedRoles={['Staff']}>
               <InvoicePrintPage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="staff/support-requests"
+          element={
+            <RoleRoute allowedRoles={['Staff']}>
+              <SupportQueuePage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="staff/support-requests/:id"
+          element={
+            <RoleRoute allowedRoles={['Staff']}>
+              <SupportDetailPage />
             </RoleRoute>
           }
         />

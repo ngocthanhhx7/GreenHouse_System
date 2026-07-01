@@ -9,6 +9,8 @@ const productRoutes = require('./routes/product.routes');
 const staffOrderRoutes = require('./routes/staffOrder.routes');
 const inventoryRoutes = require('./routes/inventory.routes');
 const replenishmentRoutes = require('./routes/replenishment.routes');
+const supportRoutes = require('./routes/support.routes');
+const reviewRoutes = require('./routes/review.routes');
 const { notFound, errorHandler } = require('./middlewares/error.middleware');
 
 function createApp() {
@@ -29,6 +31,8 @@ function createApp() {
   app.use('/api', staffOrderRoutes);
   app.use('/api', inventoryRoutes);
   app.use('/api', replenishmentRoutes);
+  app.use('/api', supportRoutes);
+  app.use('/api', reviewRoutes);
 
   app.use(notFound);
   app.use(errorHandler);

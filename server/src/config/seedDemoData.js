@@ -12,6 +12,8 @@ const Order = require('../models/order.model');
 const OrderDetail = require('../models/orderDetail.model');
 const Payment = require('../models/payment.model');
 const StockExportRequest = require('../models/stockExportRequest.model');
+const SupportRequest = require('../models/supportRequest.model');
+const ProductReview = require('../models/productReview.model');
 
 const DEMO_PASSWORD = 'GreenHome@123';
 
@@ -178,6 +180,24 @@ const DEMO_ORDER_SPECS = [
   },
 ];
 
+const DEMO_SUPPORT_SPECS = [
+  {
+    orderCode: 'GH-DEMO-1004',
+    subject: 'Demo support: damaged packaging',
+    content: 'The delivered package was open and needs staff follow-up.',
+    status: 'Open',
+  },
+];
+
+const DEMO_REVIEW_SPECS = [
+  {
+    orderCode: 'GH-DEMO-1004',
+    productName: 'Minimal Dinner Plate Set',
+    rating: 5,
+    content: 'Clean design and good quality for daily meals.',
+  },
+];
+
 async function upsertUsers(roleMap) {
   const passwordHash = await hashPassword(DEMO_PASSWORD);
   const users = {};
@@ -323,6 +343,62 @@ async function upsertDemoOrders(userMap, productMap) {
   return orders;
 }
 
+async function upsertSupportRequests(userMap, orderMap) {
+  const customer = userMap.Customer;
+  const requests = [];
+
+  for (const requestSpec of DEMO_SUPPORT_SPECS) {
+    const order = orderMap[requestSpec.orderCode];
+    const request = await SupportRequest.findOneAndUpdate(
+      { customerId: customer._id, subject: requestSpec.subject },
+      {
+        $set: {
+          customerId: customer._id,
+          orderId: order ? order._id : null,
+          subject: requestSpec.subject,
+          content: requestSpec.content,
+          status: requestSpec.status,
+          handledBy: null,
+          response: '',
+          respondedAt: null,
+        },
+      },
+      { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
+    );
+    requests.push(request);
+  }
+
+  return requests;
+}
+
+async function upsertProductReviews(userMap, orderMap, productMap) {
+  const customer = userMap.Customer;
+  const reviews = [];
+
+  for (const reviewSpec of DEMO_REVIEW_SPECS) {
+    const order = orderMap[reviewSpec.orderCode];
+    const product = productMap[reviewSpec.productName];
+    if (!order || !product) continue;
+    const review = await ProductReview.findOneAndUpdate(
+      { customerId: customer._id, orderId: order._id, productId: product._id },
+      {
+        $set: {
+          customerId: customer._id,
+          orderId: order._id,
+          productId: product._id,
+          rating: reviewSpec.rating,
+          content: reviewSpec.content,
+          status: 'Visible',
+        },
+      },
+      { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
+    );
+    reviews.push(review);
+  }
+
+  return reviews;
+}
+
 async function seedDemoData() {
   await seedRoles();
   const roles = await Role.find({ roleName: { $in: DEMO_USERS.map((user) => user.roleName) } }).lean();
@@ -334,12 +410,17 @@ async function seedDemoData() {
   const categoryMap = await upsertCategories();
   const productMap = await upsertProducts(categoryMap);
   const orders = await upsertDemoOrders(userMap, productMap);
+  const orderMap = Object.fromEntries(orders.map((order) => [order.orderCode, order]));
+  const supportRequests = await upsertSupportRequests(userMap, orderMap);
+  const productReviews = await upsertProductReviews(userMap, orderMap, productMap);
 
   return {
     users: DEMO_USERS.length,
     categories: DEMO_CATEGORIES.length,
     products: DEMO_PRODUCTS.length,
     orders: orders.length,
+    supportRequests: supportRequests.length,
+    productReviews: productReviews.length,
     demoPassword: DEMO_PASSWORD,
   };
 }
@@ -353,6 +434,8 @@ async function runCli() {
     { type: 'Categories', count: result.categories },
     { type: 'Products', count: result.products },
     { type: 'Orders', count: result.orders },
+    { type: 'SupportRequests', count: result.supportRequests },
+    { type: 'ProductReviews', count: result.productReviews },
   ]);
   console.log(`Demo password for all accounts: ${result.demoPassword}`);
   await mongoose.disconnect();
@@ -371,6 +454,8 @@ module.exports = {
   DEMO_ORDER_SPECS,
   DEMO_PASSWORD,
   DEMO_PRODUCTS,
+  DEMO_REVIEW_SPECS,
+  DEMO_SUPPORT_SPECS,
   DEMO_USERS,
   seedDemoData,
 };
