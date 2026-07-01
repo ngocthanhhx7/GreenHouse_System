@@ -5,14 +5,17 @@ import ProtectedRoute from './components/auth/ProtectedRoute.jsx';
 import RoleRoute from './components/auth/RoleRoute.jsx';
 import ForbiddenPage from './pages/errors/ForbiddenPage.jsx';
 import UnauthorizedPage from './pages/errors/UnauthorizedPage.jsx';
+import NotificationPage from './pages/notifications/NotificationPage.jsx';
 import LoginPage from './pages/auth/LoginPage.jsx';
 import RegisterPage from './pages/auth/RegisterPage.jsx';
 import ProfilePage from './pages/profile/ProfilePage.jsx';
 import HomePage from './pages/public/HomePage.jsx';
 import ProductListingPage from './pages/public/ProductListingPage.jsx';
 import ProductDetailPage from './pages/public/ProductDetailPage.jsx';
+import AdminDashboardPage from './pages/admin/AdminDashboardPage.jsx';
 import ProductManagementPage from './pages/admin/ProductManagementPage.jsx';
 import CategoryManagementPage from './pages/admin/CategoryManagementPage.jsx';
+import SystemSettingsPage from './pages/admin/SystemSettingsPage.jsx';
 import CartPage from './pages/customer/CartPage.jsx';
 import CheckoutPage from './pages/customer/CheckoutPage.jsx';
 import OrderHistoryPage from './pages/customer/OrderHistoryPage.jsx';
@@ -20,12 +23,15 @@ import OrderDetailPage from './pages/customer/OrderDetailPage.jsx';
 import PaymentPage from './pages/customer/PaymentPage.jsx';
 import PaymentResultPage from './pages/customer/PaymentResultPage.jsx';
 import ReturnRefundPage from './pages/customer/ReturnRefundPage.jsx';
+import SupportPage from './pages/customer/SupportPage.jsx';
 import StaffDashboardPage from './pages/staff/StaffDashboardPage.jsx';
 import StaffOrderQueuePage from './pages/staff/StaffOrderQueuePage.jsx';
 import StaffOrderDetailPage from './pages/staff/StaffOrderDetailPage.jsx';
 import InvoicePrintPage from './pages/staff/InvoicePrintPage.jsx';
 import ReturnRefundQueuePage from './pages/staff/ReturnRefundQueuePage.jsx';
 import ReturnRefundDetailPage from './pages/staff/ReturnRefundDetailPage.jsx';
+import SupportQueuePage from './pages/staff/SupportQueuePage.jsx';
+import SupportDetailPage from './pages/staff/SupportDetailPage.jsx';
 import WarehouseDashboardPage from './pages/warehouse/WarehouseDashboardPage.jsx';
 import InventoryListPage from './pages/warehouse/InventoryListPage.jsx';
 import LowStockPage from './pages/warehouse/LowStockPage.jsx';
@@ -33,15 +39,6 @@ import StockExportQueuePage from './pages/warehouse/StockExportQueuePage.jsx';
 import StockExportDetailPage from './pages/warehouse/StockExportDetailPage.jsx';
 import ReplenishmentPage from './pages/warehouse/ReplenishmentPage.jsx';
 import ReplenishmentAdminPage from './pages/admin/ReplenishmentAdminPage.jsx';
-
-function PlaceholderPage({ title, description }) {
-  return (
-    <div className="surface">
-      <h1>{title}</h1>
-      <p className="text-secondary mb-0">{description}</p>
-    </div>
-  );
-}
 
 export default function App() {
   return (
@@ -63,6 +60,7 @@ export default function App() {
         }
       >
         <Route path="profile" element={<ProfilePage />} />
+        <Route path="notifications" element={<NotificationPage />} />
         <Route
           path="cart"
           element={
@@ -120,6 +118,14 @@ export default function App() {
           }
         />
         <Route
+          path="support"
+          element={
+            <RoleRoute allowedRoles={['Customer']}>
+              <SupportPage />
+            </RoleRoute>
+          }
+        />
+        <Route
           path="staff"
           element={
             <RoleRoute allowedRoles={['Staff']}>
@@ -160,10 +166,26 @@ export default function App() {
           }
         />
         <Route
+          path="staff/support-requests"
+          element={
+            <RoleRoute allowedRoles={['Staff']}>
+              <SupportQueuePage />
+            </RoleRoute>
+          }
+        />
+        <Route
           path="staff/return-refunds/:id"
           element={
             <RoleRoute allowedRoles={['Staff']}>
               <ReturnRefundDetailPage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="staff/support-requests/:id"
+          element={
+            <RoleRoute allowedRoles={['Staff']}>
+              <SupportDetailPage />
             </RoleRoute>
           }
         />
@@ -219,7 +241,7 @@ export default function App() {
           path="admin"
           element={
             <RoleRoute allowedRoles={['Admin']}>
-              <PlaceholderPage title="Admin Dashboard" description="System management workspace for Admin." />
+              <AdminDashboardPage />
             </RoleRoute>
           }
         />
@@ -244,6 +266,14 @@ export default function App() {
           element={
             <RoleRoute allowedRoles={['Admin']}>
               <ReplenishmentAdminPage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="admin/settings"
+          element={
+            <RoleRoute allowedRoles={['Admin']}>
+              <SystemSettingsPage />
             </RoleRoute>
           }
         />

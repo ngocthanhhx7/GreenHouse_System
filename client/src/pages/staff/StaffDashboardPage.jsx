@@ -11,6 +11,9 @@ export default function StaffDashboardPage() {
         <Link className="btn btn-outline-success" to="/staff/return-refunds">
           Return/refund queue
         </Link>
+        <Link className="btn btn-outline-success" to="/staff/support-requests">
+          Support queue
+        </Link>
       </div>
     </div>
   );

@@ -55,7 +55,11 @@ function createRepository() {
       return request;
     },
     async listRequests(query = {}) {
-      return requests.filter((request) => !query.status || request.status === query.status);
+      return requests.filter((request) => {
+        if (query.customerId && request.customerId !== query.customerId) return false;
+        if (query.status && request.status !== query.status) return false;
+        return true;
+      });
     },
     async findRequestById(id) {
       return requests.find((request) => request._id === id) || null;
@@ -115,6 +119,27 @@ describe('return/refund service', () => {
       () => service.createCustomerRequest('customer-1', { orderId: 'order-2', reason: 'Need return' }),
       /Only Delivered orders can be returned/
     );
+  });
+
+  it('lists only return/refund requests owned by the current customer', async () => {
+    await service.createCustomerRequest('customer-1', {
+      orderId: 'order-1',
+      reason: 'Product arrived damaged',
+    });
+    repository.requests.push({
+      _id: 'refund-other',
+      orderId: 'order-1',
+      customerId: 'customer-2',
+      reason: 'Other customer request',
+      status: 'Pending',
+      refundAmount: 0,
+      createdAt: new Date(),
+    });
+
+    const result = await service.listMyRequests('customer-1');
+
+    assert.equal(result.total, 1);
+    assert.equal(result.items[0].customerId, 'customer-1');
   });
 
   it('lets staff approve a pending refund and marks order/payment refunded', async () => {

@@ -13,6 +13,10 @@ const OrderDetail = require('../models/orderDetail.model');
 const Payment = require('../models/payment.model');
 const StockExportRequest = require('../models/stockExportRequest.model');
 const ReturnRefundRequest = require('../models/returnRefundRequest.model');
+const SupportRequest = require('../models/supportRequest.model');
+const ProductReview = require('../models/productReview.model');
+const SystemSetting = require('../models/systemSetting.model');
+const Notification = require('../models/notification.model');
 
 const DEMO_PASSWORD = 'GreenHome@123';
 
@@ -184,6 +188,76 @@ const DEMO_RETURN_REFUND_SPECS = [
     orderCode: 'GH-DEMO-1004',
     reason: 'Demo request: plate set arrived with one broken item.',
     status: 'Pending',
+  },
+];
+
+const DEMO_SUPPORT_SPECS = [
+  {
+    orderCode: 'GH-DEMO-1004',
+    subject: 'Demo support: damaged packaging',
+    content: 'The delivered package was open and needs staff follow-up.',
+    status: 'Open',
+  },
+];
+
+const DEMO_REVIEW_SPECS = [
+  {
+    orderCode: 'GH-DEMO-1004',
+    productName: 'Minimal Dinner Plate Set',
+    rating: 5,
+    content: 'Clean design and good quality for daily meals.',
+  },
+];
+
+const DEMO_SETTING_SPECS = [
+  {
+    key: 'lowStockDefaultThreshold',
+    value: 5,
+    description: 'Default low-stock threshold for new inventory records',
+  },
+  {
+    key: 'returnWindowDays',
+    value: 7,
+    description: 'Allowed customer return/refund window in days',
+  },
+];
+
+const DEMO_NOTIFICATION_SPECS = [
+  {
+    roleName: 'Customer',
+    type: 'ORDER_STATUS',
+    channel: 'InApp',
+    subject: 'Demo order is ready to track',
+    content: 'Your demo order GH-DEMO-1002 has been confirmed and is waiting for stock export.',
+    deliveryStatus: 'Sent',
+    isRead: false,
+  },
+  {
+    roleName: 'Staff',
+    type: 'STAFF_QUEUE',
+    channel: 'InApp',
+    subject: 'Demo staff queue has pending work',
+    content: 'Review pending and stock-export-requested demo orders before warehouse processing.',
+    deliveryStatus: 'Sent',
+    isRead: false,
+  },
+  {
+    roleName: 'WarehouseManager',
+    type: 'LOW_STOCK',
+    channel: 'InApp',
+    subject: 'Demo warehouse stock export waiting',
+    content: 'Order GH-DEMO-1003 has a pending stock export request for warehouse confirmation.',
+    deliveryStatus: 'Sent',
+    isRead: false,
+  },
+  {
+    roleName: 'Admin',
+    type: 'REPORT_READY',
+    channel: 'InApp',
+    subject: 'Demo admin report data is available',
+    content: 'Reports and system settings have demo records for mentor walkthrough.',
+    deliveryStatus: 'Sent',
+    isRead: true,
   },
 ];
 
@@ -361,6 +435,110 @@ async function upsertReturnRefundRequests(userMap, orderMap) {
   return requests;
 }
 
+async function upsertSupportRequests(userMap, orderMap) {
+  const customer = userMap.Customer;
+  const requests = [];
+
+  for (const requestSpec of DEMO_SUPPORT_SPECS) {
+    const order = orderMap[requestSpec.orderCode];
+    const request = await SupportRequest.findOneAndUpdate(
+      { customerId: customer._id, subject: requestSpec.subject },
+      {
+        $set: {
+          customerId: customer._id,
+          orderId: order ? order._id : null,
+          subject: requestSpec.subject,
+          content: requestSpec.content,
+          status: requestSpec.status,
+          handledBy: null,
+          response: '',
+          respondedAt: null,
+        },
+      },
+      { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
+    );
+    requests.push(request);
+  }
+
+  return requests;
+}
+
+async function upsertProductReviews(userMap, orderMap, productMap) {
+  const customer = userMap.Customer;
+  const reviews = [];
+
+  for (const reviewSpec of DEMO_REVIEW_SPECS) {
+    const order = orderMap[reviewSpec.orderCode];
+    const product = productMap[reviewSpec.productName];
+    if (!order || !product) continue;
+    const review = await ProductReview.findOneAndUpdate(
+      { customerId: customer._id, orderId: order._id, productId: product._id },
+      {
+        $set: {
+          customerId: customer._id,
+          orderId: order._id,
+          productId: product._id,
+          rating: reviewSpec.rating,
+          content: reviewSpec.content,
+          status: 'Visible',
+        },
+      },
+      { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
+    );
+    reviews.push(review);
+  }
+
+  return reviews;
+}
+
+async function upsertSystemSettings(userMap) {
+  const admin = userMap.Admin;
+  const settings = [];
+
+  for (const settingSpec of DEMO_SETTING_SPECS) {
+    const setting = await SystemSetting.findOneAndUpdate(
+      { key: settingSpec.key },
+      {
+        $set: {
+          ...settingSpec,
+          updatedBy: admin._id,
+        },
+      },
+      { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
+    );
+    settings.push(setting);
+  }
+
+  return settings;
+}
+
+async function upsertNotifications(userMap) {
+  const notifications = [];
+
+  for (const notificationSpec of DEMO_NOTIFICATION_SPECS) {
+    const user = userMap[notificationSpec.roleName];
+    const notification = await Notification.findOneAndUpdate(
+      { userId: user._id, subject: notificationSpec.subject },
+      {
+        $set: {
+          userId: user._id,
+          type: notificationSpec.type,
+          channel: notificationSpec.channel,
+          subject: notificationSpec.subject,
+          content: notificationSpec.content,
+          deliveryStatus: notificationSpec.deliveryStatus,
+          isRead: notificationSpec.isRead,
+          sentAt: new Date(),
+        },
+      },
+      { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
+    );
+    notifications.push(notification);
+  }
+
+  return notifications;
+}
+
 async function seedDemoData() {
   await seedRoles();
   const roles = await Role.find({ roleName: { $in: DEMO_USERS.map((user) => user.roleName) } }).lean();
@@ -374,6 +552,10 @@ async function seedDemoData() {
   const orders = await upsertDemoOrders(userMap, productMap);
   const orderMap = Object.fromEntries(orders.map((order) => [order.orderCode, order]));
   const returnRefunds = await upsertReturnRefundRequests(userMap, orderMap);
+  const supportRequests = await upsertSupportRequests(userMap, orderMap);
+  const productReviews = await upsertProductReviews(userMap, orderMap, productMap);
+  const systemSettings = await upsertSystemSettings(userMap);
+  const notifications = await upsertNotifications(userMap);
 
   return {
     users: DEMO_USERS.length,
@@ -381,6 +563,10 @@ async function seedDemoData() {
     products: DEMO_PRODUCTS.length,
     orders: orders.length,
     returnRefunds: returnRefunds.length,
+    supportRequests: supportRequests.length,
+    productReviews: productReviews.length,
+    systemSettings: systemSettings.length,
+    notifications: notifications.length,
     demoPassword: DEMO_PASSWORD,
   };
 }
@@ -395,6 +581,10 @@ async function runCli() {
     { type: 'Products', count: result.products },
     { type: 'Orders', count: result.orders },
     { type: 'ReturnRefunds', count: result.returnRefunds },
+    { type: 'SupportRequests', count: result.supportRequests },
+    { type: 'ProductReviews', count: result.productReviews },
+    { type: 'SystemSettings', count: result.systemSettings },
+    { type: 'Notifications', count: result.notifications },
   ]);
   console.log(`Demo password for all accounts: ${result.demoPassword}`);
   await mongoose.disconnect();
@@ -410,10 +600,14 @@ if (require.main === module) {
 
 module.exports = {
   DEMO_CATEGORIES,
+  DEMO_NOTIFICATION_SPECS,
   DEMO_ORDER_SPECS,
   DEMO_RETURN_REFUND_SPECS,
   DEMO_PASSWORD,
   DEMO_PRODUCTS,
+  DEMO_REVIEW_SPECS,
+  DEMO_SETTING_SPECS,
+  DEMO_SUPPORT_SPECS,
   DEMO_USERS,
   seedDemoData,
 };
