@@ -33,4 +33,17 @@ describe('client review service', () => {
 
     assert.equal(result.rating, 5);
   });
+
+  it('filters delivered customer orders that contain the product for review selection', async () => {
+    const service = createReviewService();
+    const orders = [
+      { id: 'order-1', orderCode: 'GH-1', orderStatus: 'Delivered', details: [{ productId: 'product-1' }] },
+      { id: 'order-2', orderCode: 'GH-2', orderStatus: 'Shipped', details: [{ productId: 'product-1' }] },
+      { id: 'order-3', orderCode: 'GH-3', orderStatus: 'Delivered', details: [{ productId: 'product-2' }] },
+    ];
+
+    const result = service.filterReviewableOrders(orders, 'product-1');
+
+    assert.deepEqual(result.map((order) => order.id), ['order-1']);
+  });
 });

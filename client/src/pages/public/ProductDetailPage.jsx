@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 
 import useAuth from '../../hooks/useAuth.js';
 import { cartService } from '../../services/cartService.js';
+import { orderService } from '../../services/orderService.js';
 import { productService } from '../../services/productService.js';
 import { reviewService } from '../../services/reviewService.js';
 
@@ -11,6 +12,7 @@ export default function ProductDetailPage() {
   const { user } = useAuth();
   const [product, setProduct] = useState(null);
   const [reviews, setReviews] = useState({ items: [], total: 0, averageRating: 0 });
+  const [reviewableOrders, setReviewableOrders] = useState([]);
   const [reviewForm, setReviewForm] = useState({ orderId: '', rating: 5, content: '' });
   const [reviewError, setReviewError] = useState('');
   const [error, setError] = useState('');
@@ -20,6 +22,30 @@ export default function ProductDetailPage() {
     productService.getProduct(id).then(setProduct).catch((err) => setError(err.message));
     reviewService.listProductReviews(id).then(setReviews).catch((err) => setReviewError(err.message));
   }, [id]);
+
+  useEffect(() => {
+    if (user?.role !== 'Customer') return;
+    let isCurrent = true;
+
+    async function loadReviewableOrders() {
+      try {
+        const orders = await orderService.listMyOrders();
+        const deliveredOrders = orders.filter((order) => order.orderStatus === 'Delivered');
+        const detailedOrders = await Promise.all(deliveredOrders.map((order) => orderService.getOrder(order.id)));
+        const options = reviewService.filterReviewableOrders(detailedOrders, id);
+        if (!isCurrent) return;
+        setReviewableOrders(options);
+        setReviewForm((current) => ({ ...current, orderId: current.orderId || options[0]?.id || '' }));
+      } catch (err) {
+        if (isCurrent) setReviewError(err.message);
+      }
+    }
+
+    loadReviewableOrders();
+    return () => {
+      isCurrent = false;
+    };
+  }, [id, user?.role]);
 
   if (error) {
     return (
@@ -111,14 +137,21 @@ export default function ProductDetailPage() {
         {user?.role === 'Customer' && (
           <form className="row g-3" onSubmit={submitReview}>
             <div className="col-md-5">
-              <label className="form-label" htmlFor="reviewOrderId">Delivered order ID</label>
-              <input
+              <label className="form-label" htmlFor="reviewOrderId">Delivered order</label>
+              <select
                 id="reviewOrderId"
-                className="form-control"
+                className="form-select"
                 value={reviewForm.orderId}
                 onChange={(event) => setReviewForm((current) => ({ ...current, orderId: event.target.value }))}
                 required
-              />
+              >
+                <option value="">Select delivered order</option>
+                {reviewableOrders.map((order) => (
+                  <option key={order.id} value={order.id}>
+                    {order.orderCode}
+                  </option>
+                ))}
+              </select>
             </div>
             <div className="col-md-3">
               <label className="form-label" htmlFor="reviewRating">Rating</label>

@@ -14,6 +14,12 @@ export function createReviewService({ baseUrl = DEFAULT_BASE_URL, fetcher } = {}
     : apiRequest;
 
   return {
+    filterReviewableOrders(orders = [], productId) {
+      return orders.filter((order) => {
+        if (order.orderStatus !== 'Delivered') return false;
+        return (order.details || []).some((item) => String(item.productId) === String(productId));
+      });
+    },
     async listProductReviews(productId) {
       return request(`/products/${productId}/reviews`);
     },
