@@ -9,6 +9,7 @@ const {
   DEMO_ORDER_SPECS,
   DEMO_PRODUCTS,
   DEMO_REVIEW_SPECS,
+  DEMO_SETTING_SPECS,
   DEMO_SUPPORT_SPECS,
   DEMO_USERS,
 } = require('./seedDemoData');
@@ -37,5 +38,6 @@ describe('demo data seed config', () => {
     assert.ok(DEMO_ORDER_SPECS.some((order) => order.orderStatus === 'Delivered'));
     assert.ok(DEMO_SUPPORT_SPECS.some((request) => request.orderCode === 'GH-DEMO-1004'));
     assert.ok(DEMO_REVIEW_SPECS.some((review) => review.productName === 'Minimal Dinner Plate Set'));
+    assert.ok(DEMO_SETTING_SPECS.some((setting) => setting.key === 'lowStockDefaultThreshold'));
   });
 });

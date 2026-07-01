@@ -1,0 +1,32 @@
+import { DEFAULT_BASE_URL, apiRequest } from './apiClient.js';
+
+async function parseResponse(response) {
+  const payload = await response.json();
+  if (!response.ok || payload.success === false) {
+    throw new Error(payload.message || 'Admin request failed');
+  }
+  return payload.data;
+}
+
+export function createAdminService({ baseUrl = DEFAULT_BASE_URL, fetcher } = {}) {
+  const request = fetcher
+    ? async (path, options = {}) => parseResponse(await fetcher(`${baseUrl}${path}`, options))
+    : apiRequest;
+
+  return {
+    async getOverviewReport() {
+      return request('/admin/reports/overview');
+    },
+    async getSettings() {
+      return request('/admin/settings');
+    },
+    async updateSettings(input) {
+      return request('/admin/settings', {
+        method: 'PATCH',
+        body: JSON.stringify(input),
+      });
+    },
+  };
+}
+
+export const adminService = createAdminService();
