@@ -47,6 +47,13 @@ const returnRefundRequestSchema = new mongoose.Schema(
 
 returnRefundRequestSchema.index({ customerId: 1, createdAt: -1 });
 returnRefundRequestSchema.index({ status: 1, createdAt: -1 });
+returnRefundRequestSchema.index(
+  { orderId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { status: { $in: ['Pending', 'Approved'] } },
+  }
+);
 returnRefundRequestSchema.index({ orderId: 1, status: 1 });
 
 module.exports = mongoose.model('ReturnRefundRequest', returnRefundRequestSchema);

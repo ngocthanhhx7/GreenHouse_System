@@ -100,12 +100,20 @@ function createReturnRefundService({
       const existing = await repository.findOpenRequestByOrderId(order._id);
       if (existing) throw new ApiError(409, 'This order already has an open return/refund request');
 
-      const request = await repository.createRequest({
-        orderId: order._id,
-        customerId,
-        reason: String(input.reason).trim(),
-        status: 'Pending',
-      });
+      let request;
+      try {
+        request = await repository.createRequest({
+          orderId: order._id,
+          customerId,
+          reason: String(input.reason).trim(),
+          status: 'Pending',
+        });
+      } catch (error) {
+        if (error && error.code === 11000) {
+          throw new ApiError(409, 'This order already has an open return/refund request');
+        }
+        throw error;
+      }
       const details = await repository.listOrderDetails(order._id);
       await writeAudit(customerId, 'RETURN_REFUND_CREATE', request._id, `Return/refund requested for ${order.orderCode}`);
       return toResponse(request, order, details);

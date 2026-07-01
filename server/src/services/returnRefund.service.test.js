@@ -121,6 +121,28 @@ describe('return/refund service', () => {
     );
   });
 
+  it('returns a conflict when a concurrent request already exists for the order', async () => {
+    const duplicateRepository = createRepository();
+    duplicateRepository.findOpenRequestByOrderId = async () => null;
+    duplicateRepository.createRequest = async () => {
+      const error = new Error('duplicate key');
+      error.code = 11000;
+      throw error;
+    };
+    const duplicateService = createReturnRefundService({
+      repository: duplicateRepository,
+      auditLogger,
+    });
+
+    await assert.rejects(
+      () => duplicateService.createCustomerRequest('customer-1', {
+        orderId: 'order-1',
+        reason: 'Product arrived damaged',
+      }),
+      /This order already has an open return\/refund request/
+    );
+  });
+
   it('lists only return/refund requests owned by the current customer', async () => {
     await service.createCustomerRequest('customer-1', {
       orderId: 'order-1',
