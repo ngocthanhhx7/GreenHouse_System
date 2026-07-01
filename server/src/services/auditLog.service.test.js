@@ -9,7 +9,7 @@ describe('audit log service', () => {
     const logs = [
       {
         _id: 'audit-2',
-        userId: 'admin-1',
+        userId: '507f1f77bcf86cd799439011',
         action: 'AUTH_LOGIN_SUCCESS',
         targetEntity: 'User',
         targetId: 'admin-1',
@@ -18,7 +18,7 @@ describe('audit log service', () => {
       },
       {
         _id: 'audit-1',
-        userId: 'customer-1',
+        userId: '507f1f77bcf86cd799439012',
         action: 'ORDER_CREATE',
         targetEntity: 'Order',
         targetId: 'order-1',
@@ -37,7 +37,7 @@ describe('audit log service', () => {
 
     const result = await service.listAuditLogs({
       action: 'ORDER_CREATE',
-      userId: 'customer-1',
+      userId: '507f1f77bcf86cd799439012',
       from: '2026-07-01T00:00:00.000Z',
       to: '2026-07-02T00:00:00.000Z',
     });
@@ -45,7 +45,7 @@ describe('audit log service', () => {
     assert.equal(result.total, 2);
     assert.equal(result.items[0].id, 'audit-2');
     assert.equal(receivedFilters[0].action, 'ORDER_CREATE');
-    assert.equal(receivedFilters[0].userId, 'customer-1');
+    assert.equal(receivedFilters[0].userId, '507f1f77bcf86cd799439012');
     assert.ok(receivedFilters[0].from instanceof Date);
     assert.ok(receivedFilters[0].to instanceof Date);
   });
@@ -63,5 +63,23 @@ describe('audit log service', () => {
       () => service.listAuditLogs({ from: 'not-a-date' }),
       /Invalid audit date filter/
     );
+  });
+
+  it('rejects invalid audit user filters before querying database', async () => {
+    let queried = false;
+    const service = createAuditLogService({
+      repository: {
+        async list() {
+          queried = true;
+          return [];
+        },
+      },
+    });
+
+    await assert.rejects(
+      () => service.listAuditLogs({ userId: 'not-an-object-id' }),
+      /Invalid audit user filter/
+    );
+    assert.equal(queried, false);
   });
 });

@@ -1,5 +1,6 @@
 const ApiError = require('../utils/apiError');
 const AuditLog = require('../models/auditLog.model');
+const mongoose = require('mongoose');
 
 function toAuditResponse(entry) {
   return {
@@ -22,6 +23,13 @@ function parseDateFilter(value) {
   return date;
 }
 
+function parseUserFilter(value) {
+  if (!value) return undefined;
+  const userId = String(value).trim();
+  if (!mongoose.isValidObjectId(userId)) throw new ApiError(400, 'Invalid audit user filter');
+  return userId;
+}
+
 function createModelRepository() {
   return {
     async list(filters = {}) {
@@ -42,8 +50,8 @@ function createAuditLogService({ repository = createModelRepository() } = {}) {
   return {
     async listAuditLogs(query = {}) {
       const filters = {
-        action: query.action || undefined,
-        userId: query.userId || undefined,
+        action: query.action ? String(query.action).trim() : undefined,
+        userId: parseUserFilter(query.userId),
         from: parseDateFilter(query.from),
         to: parseDateFilter(query.to),
       };
