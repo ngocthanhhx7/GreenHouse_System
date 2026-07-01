@@ -5,6 +5,7 @@ import ProtectedRoute from './components/auth/ProtectedRoute.jsx';
 import RoleRoute from './components/auth/RoleRoute.jsx';
 import ForbiddenPage from './pages/errors/ForbiddenPage.jsx';
 import UnauthorizedPage from './pages/errors/UnauthorizedPage.jsx';
+import NotificationPage from './pages/notifications/NotificationPage.jsx';
 import LoginPage from './pages/auth/LoginPage.jsx';
 import RegisterPage from './pages/auth/RegisterPage.jsx';
 import ProfilePage from './pages/profile/ProfilePage.jsx';
@@ -56,6 +57,7 @@ export default function App() {
         }
       >
         <Route path="profile" element={<ProfilePage />} />
+        <Route path="notifications" element={<NotificationPage />} />
         <Route
           path="cart"
           element={
