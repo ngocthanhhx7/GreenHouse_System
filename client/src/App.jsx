@@ -49,11 +49,11 @@ export default function App() {
         <Route index element={<HomePage />} />
         <Route path="products" element={<ProductListingPage />} />
         <Route path="products/:id" element={<ProductDetailPage />} />
+        <Route path="login" element={<LoginPage />} />
+        <Route path="register" element={<RegisterPage />} />
+        <Route path="unauthorized" element={<UnauthorizedPage />} />
+        <Route path="forbidden" element={<ForbiddenPage />} />
       </Route>
-      <Route path="/login" element={<LoginPage />} />
-      <Route path="/register" element={<RegisterPage />} />
-      <Route path="/unauthorized" element={<UnauthorizedPage />} />
-      <Route path="/forbidden" element={<ForbiddenPage />} />
 
       <Route
         path="/"

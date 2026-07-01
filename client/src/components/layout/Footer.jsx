@@ -12,13 +12,10 @@ export default function Footer() {
         <div className="footer-brand">
           <Link to="/" className="brand-link footer-brand-link">
             <img src="/assets/logo/logo.png" alt="GreenHome Kitchen Logo" className="brand-logo" />
-            <span className="brand-copy">
-              <strong>GreenHome Kitchen</strong>
-              <small>Premium kitchen goods and responsible fulfillment.</small>
-            </span>
+            <strong className="brand-name">GreenHome Kitchen</strong>
           </Link>
           <p>
-            A demo-ready commerce system for cookware, tableware, smart storage, order processing, inventory, and after-sale support.
+            Your trusted source for premium kitchenware, cookware, and smart storage solutions.
           </p>
         </div>
 
@@ -39,11 +36,15 @@ export default function Footer() {
         </div>
 
         <div>
-          <h3>Business Contact</h3>
-          <span>greenhome.kitchen@example.com</span>
+          <h3>Contact</h3>
+          <span>contact@greenhomekitchen.com</span>
           <span>Hotline: 0900 000 004</span>
-          <span>GreenHome Demo Office, Ha Noi</span>
+          <span>GreenHome Kitchen Co., Ha Noi, Vietnam</span>
         </div>
+      </div>
+
+      <div className="footer-bottom">
+        <span>&copy; {new Date().getFullYear()} GreenHome Kitchen. All rights reserved.</span>
       </div>
     </footer>
   );
