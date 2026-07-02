@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 
 import { replenishmentService } from '../../services/replenishmentService.js';
+import { translateRequestStatus } from '../../utils/formatters.js';
 
 export default function ReplenishmentAdminPage() {
   const [requests, setRequests] = useState([]);
@@ -27,9 +28,9 @@ export default function ReplenishmentAdminPage() {
     try {
       await replenishmentService.updateAdminStatus(request.id, {
         status,
-        note: `${status} by admin`,
+        note: `${translateRequestStatus(status)} bởi quản trị viên`,
       });
-      setMessage(`${status} ${request.productName}.`);
+      setMessage(`${translateRequestStatus(status)} yêu cầu cho ${request.productName}.`);
       await loadRequests();
     } catch (err) {
       setError(err.message);
@@ -38,16 +39,16 @@ export default function ReplenishmentAdminPage() {
 
   return (
     <div className="surface">
-      <h1>Replenishment Approval</h1>
+      <h1>Duyệt bổ sung hàng</h1>
       {error && <div className="alert alert-danger">{error}</div>}
       {message && <div className="alert alert-success">{message}</div>}
       <div className="table-responsive">
         <table className="table">
           <thead>
             <tr>
-              <th>Product</th>
-              <th>Qty</th>
-              <th>Status</th>
+              <th>Sản phẩm</th>
+              <th>SL</th>
+              <th>Trạng thái</th>
               <th></th>
             </tr>
           </thead>
@@ -56,15 +57,15 @@ export default function ReplenishmentAdminPage() {
               <tr key={request.id}>
                 <td>{request.productName}</td>
                 <td>{request.quantity}</td>
-                <td>{request.status}</td>
+                <td>{translateRequestStatus(request.status)}</td>
                 <td className="table-actions">
                   {request.status === 'Pending' && (
                     <>
                       <button className="btn btn-outline-success btn-sm" type="button" onClick={() => decide(request, 'Approved')}>
-                        Approve
+                        Duyệt
                       </button>
                       <button className="btn btn-outline-danger btn-sm" type="button" onClick={() => decide(request, 'Rejected')}>
-                        Reject
+                        Từ chối
                       </button>
                     </>
                   )}

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 
 import { categoryService } from '../../services/categoryService.js';
+import { translateRequestStatus } from '../../utils/formatters.js';
 
 export default function CategoryManagementPage() {
   const [categories, setCategories] = useState([]);
@@ -29,26 +30,26 @@ export default function CategoryManagementPage() {
 
   return (
     <div className="surface">
-      <h1>Category Management</h1>
+      <h1>Quản lý danh mục</h1>
       {error && <div className="alert alert-danger">{error}</div>}
       <form className="admin-form compact" onSubmit={handleSubmit}>
-        <input className="form-control" placeholder="Category name" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required />
-        <input className="form-control" placeholder="Description" value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} />
+        <input className="form-control" placeholder="Tên danh mục" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required />
+        <input className="form-control" placeholder="Mô tả" value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} />
         <select className="form-select" value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value })}>
-          <option value="Active">Active</option>
-          <option value="Inactive">Inactive</option>
+          <option value="Active">Đang hoạt động</option>
+          <option value="Inactive">Ngừng hoạt động</option>
         </select>
         <button className="btn btn-success" type="submit">
-          Create category
+          Tạo danh mục
         </button>
       </form>
       <div className="table-responsive mt-4">
         <table className="table">
           <thead>
             <tr>
-              <th>Name</th>
-              <th>Description</th>
-              <th>Status</th>
+              <th>Tên</th>
+              <th>Mô tả</th>
+              <th>Trạng thái</th>
             </tr>
           </thead>
           <tbody>
@@ -56,7 +57,7 @@ export default function CategoryManagementPage() {
               <tr key={category.id}>
                 <td>{category.name}</td>
                 <td>{category.description}</td>
-                <td>{category.status}</td>
+                <td>{translateRequestStatus(category.status)}</td>
               </tr>
             ))}
           </tbody>

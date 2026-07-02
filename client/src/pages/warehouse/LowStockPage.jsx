@@ -15,15 +15,15 @@ export default function LowStockPage() {
 
   return (
     <div className="surface">
-      <h1>Low Stock Alerts</h1>
+      <h1>Cảnh báo sắp hết hàng</h1>
       {error && <div className="alert alert-danger">{error}</div>}
       <div className="table-responsive">
         <table className="table">
           <thead>
             <tr>
-              <th>Product</th>
-              <th>Stock</th>
-              <th>Threshold</th>
+              <th>Sản phẩm</th>
+              <th>Tồn hiện tại</th>
+              <th>Ngưỡng cảnh báo</th>
             </tr>
           </thead>
           <tbody>
@@ -34,6 +34,11 @@ export default function LowStockPage() {
                 <td>{item.lowStockThreshold}</td>
               </tr>
             ))}
+            {!items.length && (
+              <tr>
+                <td colSpan="3" className="text-center text-muted">Không có sản phẩm sắp hết hàng.</td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>

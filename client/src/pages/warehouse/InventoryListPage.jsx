@@ -27,9 +27,9 @@ export default function InventoryListPage() {
     try {
       await inventoryService.adjustInventory(item.id, {
         delta,
-        reason: delta > 0 ? 'Warehouse manual restock' : 'Warehouse manual adjustment',
+        reason: delta > 0 ? 'Nhập bù thủ công từ kho' : 'Điều chỉnh giảm thủ công từ kho',
       });
-      setMessage(`Updated ${item.productName}.`);
+      setMessage(`Đã cập nhật tồn kho cho ${item.productName}.`);
       await loadInventory();
     } catch (err) {
       setError(err.message);
@@ -39,7 +39,7 @@ export default function InventoryListPage() {
   return (
     <div className="surface">
       <div className="page-heading">
-        <h1>Inventory</h1>
+        <h1>Tồn kho</h1>
       </div>
       {error && <div className="alert alert-danger">{error}</div>}
       {message && <div className="alert alert-success">{message}</div>}
@@ -47,10 +47,10 @@ export default function InventoryListPage() {
         <table className="table">
           <thead>
             <tr>
-              <th>Product</th>
-              <th>Stock</th>
-              <th>Threshold</th>
-              <th>Status</th>
+              <th>Sản phẩm</th>
+              <th>Tồn</th>
+              <th>Ngưỡng cảnh báo</th>
+              <th>Trạng thái</th>
               <th></th>
             </tr>
           </thead>
@@ -60,14 +60,10 @@ export default function InventoryListPage() {
                 <td>{item.productName}</td>
                 <td>{item.stockQuantity}</td>
                 <td>{item.lowStockThreshold}</td>
-                <td>{item.isLowStock ? 'Low stock' : 'Healthy'}</td>
+                <td>{item.isLowStock ? 'Sắp hết hàng' : 'Ổn định'}</td>
                 <td className="table-actions">
-                  <button className="btn btn-outline-success btn-sm" type="button" onClick={() => adjustStock(item, 1)}>
-                    +1
-                  </button>
-                  <button className="btn btn-outline-danger btn-sm" type="button" onClick={() => adjustStock(item, -1)}>
-                    -1
-                  </button>
+                  <button className="btn btn-outline-success btn-sm" type="button" onClick={() => adjustStock(item, 1)}>+1</button>
+                  <button className="btn btn-outline-danger btn-sm" type="button" onClick={() => adjustStock(item, -1)}>-1</button>
                 </td>
               </tr>
             ))}

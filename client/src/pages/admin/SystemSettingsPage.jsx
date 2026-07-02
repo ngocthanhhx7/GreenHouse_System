@@ -21,7 +21,7 @@ export default function SystemSettingsPage() {
         returnWindowDays: Number(form.returnWindowDays),
       });
       setForm(result);
-      setMessage('System settings updated.');
+      setMessage('Đã cập nhật cấu hình hệ thống.');
     } catch (err) {
       setError(err.message);
     }
@@ -29,12 +29,12 @@ export default function SystemSettingsPage() {
 
   return (
     <div className="surface">
-      <h1>System Settings</h1>
+      <h1>Cấu hình hệ thống</h1>
       {message && <div className="alert alert-success">{message}</div>}
       {error && <div className="alert alert-danger">{error}</div>}
       <form className="row g-3" onSubmit={submitSettings}>
         <div className="col-md-6">
-          <label className="form-label" htmlFor="lowStockDefaultThreshold">Low-stock default threshold</label>
+          <label className="form-label" htmlFor="lowStockDefaultThreshold">Ngưỡng cảnh báo tồn kho mặc định</label>
           <input
             id="lowStockDefaultThreshold"
             className="form-control"
@@ -45,7 +45,7 @@ export default function SystemSettingsPage() {
           />
         </div>
         <div className="col-md-6">
-          <label className="form-label" htmlFor="returnWindowDays">Return window days</label>
+          <label className="form-label" htmlFor="returnWindowDays">Số ngày cho phép đổi trả</label>
           <input
             id="returnWindowDays"
             className="form-control"
@@ -56,7 +56,7 @@ export default function SystemSettingsPage() {
           />
         </div>
         <div className="col-12">
-          <button className="btn btn-success" type="submit">Save settings</button>
+          <button className="btn btn-success" type="submit">Lưu cấu hình</button>
         </div>
       </form>
     </div>

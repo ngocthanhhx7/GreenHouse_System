@@ -4,7 +4,7 @@ import { notificationService } from '../../services/notificationService.js';
 
 function formatDate(value) {
   if (!value) return '-';
-  return new Intl.DateTimeFormat('en', {
+  return new Intl.DateTimeFormat('vi-VN', {
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(new Date(value));
@@ -36,7 +36,7 @@ export default function NotificationPage() {
     setError('');
     try {
       await notificationService.markAsRead(id);
-      setMessage('Notification marked as read.');
+      setMessage('Đã đánh dấu thông báo là đã đọc.');
       loadNotifications();
     } catch (err) {
       setError(err.message);
@@ -47,10 +47,10 @@ export default function NotificationPage() {
     <div className="surface">
       <div className="page-heading">
         <div>
-          <h1>Notifications</h1>
-          <p className="text-muted mb-0">{unreadCount} unread notification(s)</p>
+          <h1>Thông báo</h1>
+          <p className="text-muted mb-0">{unreadCount} thông báo chưa đọc</p>
         </div>
-        <button className="btn btn-outline-success" type="button" onClick={loadNotifications}>Refresh</button>
+        <button className="btn btn-outline-success" type="button" onClick={loadNotifications}>Làm mới</button>
       </div>
       {message && <div className="alert alert-success">{message}</div>}
       {error && <div className="alert alert-danger">{error}</div>}
@@ -58,12 +58,12 @@ export default function NotificationPage() {
         <table className="table align-middle">
           <thead>
             <tr>
-              <th>Subject</th>
-              <th>Type</th>
-              <th>Channel</th>
-              <th>Status</th>
-              <th>Created</th>
-              <th>Action</th>
+              <th>Tiêu đề</th>
+              <th>Loại</th>
+              <th>Kênh</th>
+              <th>Trạng thái</th>
+              <th>Ngày tạo</th>
+              <th>Thao tác</th>
             </tr>
           </thead>
           <tbody>
@@ -77,14 +77,14 @@ export default function NotificationPage() {
                 <td>{item.channel}</td>
                 <td>
                   <span className={`badge ${item.isRead ? 'text-bg-secondary' : 'text-bg-success'}`}>
-                    {item.isRead ? 'Read' : 'Unread'}
+                    {item.isRead ? 'Đã đọc' : 'Chưa đọc'}
                   </span>
                 </td>
                 <td>{formatDate(item.createdAt)}</td>
                 <td>
                   {!item.isRead ? (
                     <button className="btn btn-sm btn-success" type="button" onClick={() => markAsRead(item.id)}>
-                      Mark read
+                      Đánh dấu đã đọc
                     </button>
                   ) : '-'}
                 </td>
@@ -92,7 +92,7 @@ export default function NotificationPage() {
             ))}
             {!items.length && (
               <tr>
-                <td colSpan="6" className="text-center text-muted">No notifications yet.</td>
+                <td colSpan="6" className="text-center text-muted">Chưa có thông báo.</td>
               </tr>
             )}
           </tbody>

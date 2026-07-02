@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 
 import { returnRefundService } from '../../services/returnRefundService.js';
+import { formatCurrency, translateRequestStatus } from '../../utils/formatters.js';
 
 export default function ReturnRefundDetailPage() {
   const { id } = useParams();
@@ -35,43 +36,44 @@ export default function ReturnRefundDetailPage() {
         staffNote: form.staffNote,
       });
       setRequest(result);
-      setMessage(`Return/refund ${status.toLowerCase()}.`);
+      setMessage(`Đã ${status === 'Approved' ? 'duyệt' : 'từ chối'} yêu cầu đổi trả / hoàn tiền.`);
     } catch (err) {
       setError(err.message);
     }
   }
 
-  if (!request && !error) return <div className="page-center">Loading...</div>;
+  if (!request && !error) return <div className="page-center">Đang tải yêu cầu...</div>;
 
   return (
     <div className="surface">
-      <h1>Return & Refund Detail</h1>
+      <h1>Chi tiết đổi trả / hoàn tiền</h1>
       {message && <div className="alert alert-success">{message}</div>}
       {error && <div className="alert alert-danger">{error}</div>}
       {request && (
         <>
           <dl className="row">
-            <dt className="col-sm-3">Order</dt>
+            <dt className="col-sm-3">Đơn hàng</dt>
             <dd className="col-sm-9">{request.orderCode}</dd>
-            <dt className="col-sm-3">Status</dt>
-            <dd className="col-sm-9">{request.status}</dd>
-            <dt className="col-sm-3">Reason</dt>
+            <dt className="col-sm-3">Trạng thái</dt>
+            <dd className="col-sm-9">{translateRequestStatus(request.status)}</dd>
+            <dt className="col-sm-3">Lý do</dt>
             <dd className="col-sm-9">{request.reason}</dd>
-            <dt className="col-sm-3">Order total</dt>
-            <dd className="col-sm-9">${Number(request.order?.totalAmount || 0).toFixed(2)}</dd>
+            <dt className="col-sm-3">Tổng đơn</dt>
+            <dd className="col-sm-9">{formatCurrency(request.order?.totalAmount)}</dd>
           </dl>
-          <h2>Items</h2>
-          <ul>
+          <h2>Sản phẩm</h2>
+          <ul className="order-item-list">
             {(request.details || []).map((item) => (
               <li key={item._id || item.productId}>
-                {item.productNameSnapshot} x {item.quantity} - ${Number(item.subtotal || 0).toFixed(2)}
+                <span>{item.productNameSnapshot} x {item.quantity}</span>
+                <strong>{formatCurrency(item.subtotal)}</strong>
               </li>
             ))}
           </ul>
           {request.status === 'Pending' && (
             <div className="row g-3 mt-1">
               <div className="col-md-4">
-                <label className="form-label" htmlFor="refundAmount">Refund amount</label>
+                <label className="form-label" htmlFor="refundAmount">Số tiền hoàn</label>
                 <input
                   id="refundAmount"
                   className="form-control"
@@ -82,7 +84,7 @@ export default function ReturnRefundDetailPage() {
                 />
               </div>
               <div className="col-md-8">
-                <label className="form-label" htmlFor="staffNote">Staff note</label>
+                <label className="form-label" htmlFor="staffNote">Ghi chú nhân viên</label>
                 <input
                   id="staffNote"
                   className="form-control"
@@ -91,12 +93,8 @@ export default function ReturnRefundDetailPage() {
                 />
               </div>
               <div className="col-12 d-flex gap-2">
-                <button className="btn btn-success" type="button" onClick={() => decide('Approved')}>
-                  Approve
-                </button>
-                <button className="btn btn-outline-danger" type="button" onClick={() => decide('Rejected')}>
-                  Reject
-                </button>
+                <button className="btn btn-success" type="button" onClick={() => decide('Approved')}>Duyệt hoàn tiền</button>
+                <button className="btn btn-outline-danger" type="button" onClick={() => decide('Rejected')}>Từ chối</button>
               </div>
             </div>
           )}

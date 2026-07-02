@@ -7,7 +7,7 @@ export default function ProtectedRoute({ children }) {
   const location = useLocation();
 
   if (loading) {
-    return <div className="page-center">Loading...</div>;
+    return <div className="page-center">Đang kiểm tra phiên đăng nhập...</div>;
   }
 
   if (!isAuthenticated) {

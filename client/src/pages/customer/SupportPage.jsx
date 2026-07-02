@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 
 import { supportService } from '../../services/supportService.js';
+import { translateRequestStatus } from '../../utils/formatters.js';
 
 export default function SupportPage() {
   const [items, setItems] = useState([]);
@@ -33,7 +34,7 @@ export default function SupportPage() {
         orderId: form.orderId || undefined,
       });
       setForm({ subject: '', content: '', orderId: '' });
-      setMessage('Support request submitted.');
+      setMessage('Đã gửi yêu cầu hỗ trợ.');
       loadRequests();
     } catch (err) {
       setError(err.message);
@@ -42,12 +43,17 @@ export default function SupportPage() {
 
   return (
     <div className="surface">
-      <h1>Support</h1>
+      <div className="page-heading">
+        <div>
+          <span className="eyebrow">Hỗ trợ khách hàng</span>
+          <h1>Gửi yêu cầu hỗ trợ</h1>
+        </div>
+      </div>
       {message && <div className="alert alert-success">{message}</div>}
       {error && <div className="alert alert-danger">{error}</div>}
       <form className="row g-3 mb-4" onSubmit={submitRequest}>
         <div className="col-md-6">
-          <label className="form-label" htmlFor="subject">Subject</label>
+          <label className="form-label" htmlFor="subject">Chủ đề</label>
           <input
             id="subject"
             className="form-control"
@@ -57,7 +63,7 @@ export default function SupportPage() {
           />
         </div>
         <div className="col-md-6">
-          <label className="form-label" htmlFor="orderId">Order ID</label>
+          <label className="form-label" htmlFor="orderId">Mã đơn hàng (nếu có)</label>
           <input
             id="orderId"
             className="form-control"
@@ -66,7 +72,7 @@ export default function SupportPage() {
           />
         </div>
         <div className="col-12">
-          <label className="form-label" htmlFor="content">Content</label>
+          <label className="form-label" htmlFor="content">Nội dung</label>
           <textarea
             id="content"
             className="form-control"
@@ -77,18 +83,18 @@ export default function SupportPage() {
           />
         </div>
         <div className="col-12">
-          <button className="btn btn-success" type="submit">Submit support request</button>
+          <button className="btn btn-success" type="submit">Gửi yêu cầu</button>
         </div>
       </form>
-      <h2>My Requests</h2>
+      <h2>Yêu cầu của tôi</h2>
       <div className="table-responsive">
         <table className="table">
           <thead>
             <tr>
-              <th>Subject</th>
-              <th>Order</th>
-              <th>Status</th>
-              <th>Response</th>
+              <th>Chủ đề</th>
+              <th>Đơn hàng</th>
+              <th>Trạng thái</th>
+              <th>Phản hồi</th>
             </tr>
           </thead>
           <tbody>
@@ -96,10 +102,15 @@ export default function SupportPage() {
               <tr key={item.id}>
                 <td>{item.subject}</td>
                 <td>{item.orderCode || '-'}</td>
-                <td>{item.status}</td>
+                <td>{translateRequestStatus(item.status)}</td>
                 <td>{item.response || '-'}</td>
               </tr>
             ))}
+            {!items.length && (
+              <tr>
+                <td colSpan="4" className="text-center text-muted">Chưa có yêu cầu hỗ trợ.</td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>

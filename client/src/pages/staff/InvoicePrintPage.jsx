@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
 import { staffOrderService } from '../../services/staffOrderService.js';
+import { formatCurrency } from '../../utils/formatters.js';
 
 export default function InvoicePrintPage() {
   const { id } = useParams();
@@ -16,29 +17,29 @@ export default function InvoicePrintPage() {
     return (
       <div className="surface">
         <div className="alert alert-danger">{error}</div>
-        <Link to={`/staff/orders/${id}`}>Back to order</Link>
+        <Link to={`/staff/orders/${id}`}>Quay lại đơn hàng</Link>
       </div>
     );
   }
 
-  if (!invoice) return <div className="page-center">Loading...</div>;
+  if (!invoice) return <div className="page-center">Đang tải hóa đơn...</div>;
 
   return (
     <div className="surface invoice-view">
       <div className="page-heading">
-        <h1>Invoice {invoice.order.orderCode}</h1>
+        <h1>Hóa đơn {invoice.order.orderCode}</h1>
         <button className="btn btn-success" type="button" onClick={() => window.print()}>
-          Print
+          In hóa đơn
         </button>
       </div>
-      <p>{invoice.order.shippingAddress}</p>
+      <p><strong>Địa chỉ giao hàng:</strong> {invoice.order.shippingAddress}</p>
       <table className="table">
         <thead>
           <tr>
-            <th>Product</th>
-            <th>Qty</th>
-            <th>Price</th>
-            <th>Subtotal</th>
+            <th>Sản phẩm</th>
+            <th>SL</th>
+            <th>Đơn giá</th>
+            <th>Tạm tính</th>
           </tr>
         </thead>
         <tbody>
@@ -46,15 +47,15 @@ export default function InvoicePrintPage() {
             <tr key={item._id || item.id}>
               <td>{item.productNameSnapshot}</td>
               <td>{item.quantity}</td>
-              <td>${Number(item.priceSnapshot || 0).toFixed(2)}</td>
-              <td>${Number(item.subtotal || 0).toFixed(2)}</td>
+              <td>{formatCurrency(item.priceSnapshot)}</td>
+              <td>{formatCurrency(item.subtotal)}</td>
             </tr>
           ))}
         </tbody>
       </table>
-      <h2 className="invoice-total">${Number(invoice.totalAmount || 0).toFixed(2)}</h2>
+      <h2 className="invoice-total">{formatCurrency(invoice.totalAmount)}</h2>
       <Link className="btn btn-outline-success" to={`/staff/orders/${id}`}>
-        Back to order
+        Quay lại đơn hàng
       </Link>
     </div>
   );

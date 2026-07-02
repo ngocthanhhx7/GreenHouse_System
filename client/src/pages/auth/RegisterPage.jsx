@@ -33,11 +33,11 @@ export default function RegisterPage() {
   return (
     <div className="auth-page">
       <form className="auth-card wide" onSubmit={handleSubmit}>
-        <h1>Register</h1>
-        <p className="text-secondary">Create a Customer account.</p>
+        <h1>Đăng ký</h1>
+        <p className="text-secondary">Tạo tài khoản khách hàng để đặt hàng và theo dõi đơn mua.</p>
         {error && <div className="alert alert-danger">{error}</div>}
         <label className="form-label">
-          Full name
+          Họ và tên
           <input className="form-control" value={form.fullName} onChange={(event) => updateField('fullName', event.target.value)} required />
         </label>
         <label className="form-label">
@@ -45,22 +45,22 @@ export default function RegisterPage() {
           <input className="form-control" type="email" value={form.email} onChange={(event) => updateField('email', event.target.value)} required />
         </label>
         <label className="form-label">
-          Phone
+          Số điện thoại
           <input className="form-control" value={form.phone} onChange={(event) => updateField('phone', event.target.value)} required />
         </label>
         <label className="form-label">
-          Password
+          Mật khẩu
           <input className="form-control" type="password" value={form.password} onChange={(event) => updateField('password', event.target.value)} required />
         </label>
         <label className="form-label">
-          Address
+          Địa chỉ
           <textarea className="form-control" value={form.address} onChange={(event) => updateField('address', event.target.value)} required />
         </label>
         <button className="btn btn-success w-100" type="submit">
-          Register
+          Đăng ký
         </button>
         <p className="text-center mt-3 mb-0">
-          Already have an account? <Link to="/login">Login</Link>
+          Đã có tài khoản? <Link to="/login">Đăng nhập</Link>
         </p>
       </form>
     </div>

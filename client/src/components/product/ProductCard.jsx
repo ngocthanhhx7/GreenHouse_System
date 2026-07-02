@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+
 import useAuth from '../../hooks/useAuth.js';
 import { cartService } from '../../services/cartService.js';
+import { formatCurrency } from '../../utils/formatters.js';
 
 export default function ProductCard({ product }) {
   const { user } = useAuth();
@@ -10,17 +12,17 @@ export default function ProductCard({ product }) {
   const [added, setAdded] = useState(false);
   const [error, setError] = useState('');
 
-  async function handleQuickAdd(e) {
-    e.preventDefault();
-    e.stopPropagation();
-    
+  async function handleQuickAdd(event) {
+    event.preventDefault();
+    event.stopPropagation();
+
     if (!user) {
       navigate('/login');
       return;
     }
-    
+
     if (user.role !== 'Customer') {
-      setError('Customers only');
+      setError('Chỉ tài khoản khách hàng mới thêm được giỏ hàng');
       setTimeout(() => setError(''), 2500);
       return;
     }
@@ -28,11 +30,11 @@ export default function ProductCard({ product }) {
     setLoading(true);
     setError('');
     try {
-      await cartService.addItem({ productId: product.id, quantity: 1 });
+      await cartService.addItem({ productId: product.id || product._id, quantity: 1 });
       setAdded(true);
       setTimeout(() => setAdded(false), 2000);
     } catch (err) {
-      setError(err.message || 'Failed to add');
+      setError(err.message || 'Không thể thêm sản phẩm');
       setTimeout(() => setError(''), 3000);
     } finally {
       setLoading(false);
@@ -45,30 +47,30 @@ export default function ProductCard({ product }) {
         {product.imageUrls?.[0] ? (
           <img src={product.imageUrls[0]} alt={product.name} className="product-img" />
         ) : (
-          <div className="product-no-img">No image available</div>
+          <div className="product-no-img">Chưa có ảnh</div>
         )}
-        <button 
+        <button
           className={`quick-add-btn ${added ? 'added' : ''}`}
           onClick={handleQuickAdd}
           disabled={loading}
-          aria-label="Quick add to cart"
+          aria-label="Thêm nhanh vào giỏ hàng"
         >
           {loading ? (
             <span className="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
           ) : added ? (
-            '✓'
+            'Đã thêm'
           ) : (
-            '+ Add'
+            '+ Thêm'
           )}
         </button>
       </div>
       <div className="product-body">
         <h3 className="product-title">{product.name}</h3>
-        <p className="product-category">{product.category?.name || 'Kitchen product'}</p>
+        <p className="product-category">{product.category?.name || 'Sản phẩm nhà bếp'}</p>
         <div className="product-footer">
-          <strong className="product-price">${Number(product.price || 0).toFixed(2)}</strong>
-          <Link className="btn-detail-link" to={`/products/${product.id}`}>
-            Details →
+          <strong className="product-price">{formatCurrency(product.price)}</strong>
+          <Link className="btn-detail-link" to={`/products/${product.id || product._id}`}>
+            Xem chi tiết
           </Link>
         </div>
         {error && <div className="product-card-error">{error}</div>}

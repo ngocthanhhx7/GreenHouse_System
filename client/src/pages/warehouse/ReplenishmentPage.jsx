@@ -2,11 +2,12 @@ import { useEffect, useState } from 'react';
 
 import { inventoryService } from '../../services/inventoryService.js';
 import { replenishmentService } from '../../services/replenishmentService.js';
+import { translateRequestStatus } from '../../utils/formatters.js';
 
 export default function ReplenishmentPage() {
   const [inventory, setInventory] = useState([]);
   const [requests, setRequests] = useState([]);
-  const [form, setForm] = useState({ inventoryId: '', quantity: 20, reason: 'Low stock replenishment' });
+  const [form, setForm] = useState({ inventoryId: '', quantity: 20, reason: 'Bổ sung hàng do tồn kho thấp' });
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
 
@@ -32,7 +33,7 @@ export default function ReplenishmentPage() {
         ...form,
         quantity: Number(form.quantity),
       });
-      setMessage('Replenishment request created.');
+      setMessage('Đã tạo yêu cầu bổ sung hàng.');
       await loadData();
     } catch (err) {
       setError(err.message);
@@ -44,7 +45,7 @@ export default function ReplenishmentPage() {
     setMessage('');
     try {
       await replenishmentService.receiveWarehouseRequest(request.id, { receivedQuantity: request.quantity });
-      setMessage(`Received replenishment for ${request.productName}.`);
+      setMessage(`Đã nhập bổ sung cho ${request.productName}.`);
       await loadData();
     } catch (err) {
       setError(err.message);
@@ -53,12 +54,12 @@ export default function ReplenishmentPage() {
 
   return (
     <div className="surface">
-      <h1>Replenishment</h1>
+      <h1>Bổ sung hàng</h1>
       {error && <div className="alert alert-danger">{error}</div>}
       {message && <div className="alert alert-success">{message}</div>}
       <form className="admin-form compact" onSubmit={createRequest}>
         <select className="form-select" value={form.inventoryId} onChange={(event) => setForm((current) => ({ ...current, inventoryId: event.target.value }))} required>
-          <option value="">Select low-stock product</option>
+          <option value="">Chọn sản phẩm sắp hết</option>
           {inventory.map((item) => (
             <option key={item.id} value={item.id}>
               {item.productName} ({item.stockQuantity}/{item.lowStockThreshold})
@@ -67,17 +68,15 @@ export default function ReplenishmentPage() {
         </select>
         <input className="form-control" type="number" min="1" value={form.quantity} onChange={(event) => setForm((current) => ({ ...current, quantity: event.target.value }))} required />
         <input className="form-control" value={form.reason} onChange={(event) => setForm((current) => ({ ...current, reason: event.target.value }))} required />
-        <button className="btn btn-success" type="submit">
-          Create request
-        </button>
+        <button className="btn btn-success" type="submit">Tạo yêu cầu</button>
       </form>
       <div className="table-responsive mt-4">
         <table className="table">
           <thead>
             <tr>
-              <th>Product</th>
-              <th>Qty</th>
-              <th>Status</th>
+              <th>Sản phẩm</th>
+              <th>SL</th>
+              <th>Trạng thái</th>
               <th></th>
             </tr>
           </thead>
@@ -86,11 +85,11 @@ export default function ReplenishmentPage() {
               <tr key={request.id}>
                 <td>{request.productName}</td>
                 <td>{request.quantity}</td>
-                <td>{request.status}</td>
+                <td>{translateRequestStatus(request.status)}</td>
                 <td>
                   {request.status === 'Approved' && (
                     <button className="btn btn-outline-success btn-sm" type="button" onClick={() => receiveRequest(request)}>
-                      Receive
+                      Nhập hàng
                     </button>
                   )}
                 </td>

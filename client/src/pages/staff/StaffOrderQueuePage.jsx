@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import { staffOrderService } from '../../services/staffOrderService.js';
+import { formatCurrency, translateOrderStatus, translatePaymentMethod, translatePaymentStatus } from '../../utils/formatters.js';
 
 const STATUS_OPTIONS = ['', 'Pending', 'Confirmed', 'StockExportRequested', 'Packed', 'Shipped', 'Delivered'];
 
@@ -33,11 +34,11 @@ export default function StaffOrderQueuePage() {
   return (
     <div className="surface">
       <div className="page-heading">
-        <h1>Staff Order Queue</h1>
+        <h1>Hàng đợi xử lý đơn</h1>
         <select className="form-select status-select" value={status} onChange={handleStatusChange}>
           {STATUS_OPTIONS.map((option) => (
             <option key={option || 'all'} value={option}>
-              {option || 'All statuses'}
+              {option ? translateOrderStatus(option) : 'Tất cả trạng thái'}
             </option>
           ))}
         </select>
@@ -47,10 +48,10 @@ export default function StaffOrderQueuePage() {
         <table className="table">
           <thead>
             <tr>
-              <th>Order</th>
-              <th>Payment</th>
-              <th>Status</th>
-              <th>Total</th>
+              <th>Đơn hàng</th>
+              <th>Thanh toán</th>
+              <th>Trạng thái</th>
+              <th>Tổng tiền</th>
               <th></th>
             </tr>
           </thead>
@@ -58,16 +59,21 @@ export default function StaffOrderQueuePage() {
             {orders.map((order) => (
               <tr key={order.id}>
                 <td>{order.orderCode}</td>
-                <td>{order.paymentMethod} / {order.paymentStatus}</td>
-                <td>{order.orderStatus}</td>
-                <td>${Number(order.totalAmount || 0).toFixed(2)}</td>
+                <td>{translatePaymentMethod(order.paymentMethod)} / {translatePaymentStatus(order.paymentStatus)}</td>
+                <td>{translateOrderStatus(order.orderStatus)}</td>
+                <td>{formatCurrency(order.totalAmount)}</td>
                 <td>
                   <Link className="btn btn-outline-success btn-sm" to={`/staff/orders/${order.id}`}>
-                    Open
+                    Mở đơn
                   </Link>
                 </td>
               </tr>
             ))}
+            {!orders.length && (
+              <tr>
+                <td colSpan="5" className="text-center text-muted">Không có đơn hàng trong trạng thái này.</td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>

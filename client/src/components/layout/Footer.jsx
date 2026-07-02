@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 
 import useAuth from '../../hooks/useAuth.js';
+import { translateRole } from '../../utils/formatters.js';
 
 export default function Footer() {
   const { user, getDashboardPath } = useAuth();
@@ -15,36 +16,37 @@ export default function Footer() {
             <strong className="brand-name">GreenHome Kitchen</strong>
           </Link>
           <p>
-            Your trusted source for premium kitchenware, cookware, and smart storage solutions.
+            GreenHome Kitchen cung cấp dụng cụ bếp, nồi chảo và giải pháp lưu trữ thông minh cho gia đình Việt hiện đại.
           </p>
         </div>
 
         <div>
-          <h3>Shop</h3>
-          <Link to="/products">Products</Link>
-          <Link to="/products?collection=best-sellers">Collections</Link>
-          <Link to="/cart">Cart</Link>
-          <Link to="/support">Support</Link>
+          <h3>Mua sắm</h3>
+          <Link to="/products">Tất cả sản phẩm</Link>
+          <Link to="/about">Về GreenHome</Link>
+          <Link to="/contact">Liên hệ</Link>
+          <Link to="/cart">Giỏ hàng</Link>
         </div>
 
         <div>
-          <h3>Account</h3>
-          <Link to={role ? getDashboardPath(role) : '/login'}>{role ? `${role} Dashboard` : 'Login'}</Link>
-          <Link to="/profile">Profile</Link>
-          <Link to="/notifications">Notifications</Link>
-          {role === 'Customer' && <Link to="/orders">Order History</Link>}
+          <h3>Tài khoản</h3>
+          <Link to={role ? getDashboardPath(role) : '/login'}>{role ? `Khu vực ${translateRole(role)}` : 'Đăng nhập'}</Link>
+          <Link to="/profile">Hồ sơ</Link>
+          <Link to="/notifications">Thông báo</Link>
+          <Link to="/support">Hỗ trợ khách hàng</Link>
+          {role === 'Customer' && <Link to="/orders">Lịch sử mua hàng</Link>}
         </div>
 
         <div>
-          <h3>Contact</h3>
-          <span>contact@greenhomekitchen.com</span>
+          <h3>Liên hệ</h3>
+          <span>greenhome.kitchen@example.com</span>
           <span>Hotline: 0900 000 004</span>
-          <span>GreenHome Kitchen Co., Ha Noi, Vietnam</span>
+          <span>GreenHome Kitchen, Hà Nội, Việt Nam</span>
         </div>
       </div>
 
       <div className="footer-bottom">
-        <span>&copy; {new Date().getFullYear()} GreenHome Kitchen. All rights reserved.</span>
+        <span>&copy; {new Date().getFullYear()} GreenHome Kitchen. Đã đăng ký bản quyền.</span>
       </div>
     </footer>
   );

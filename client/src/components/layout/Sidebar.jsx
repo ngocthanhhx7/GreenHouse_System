@@ -1,42 +1,43 @@
 import { NavLink } from 'react-router-dom';
 
 import useAuth from '../../hooks/useAuth.js';
+import { translateRole } from '../../utils/formatters.js';
 
 const ROLE_LINKS = {
   Customer: [
-    { to: '/profile', label: 'Profile' },
-    { to: '/notifications', label: 'Notifications' },
-    { to: '/cart', label: 'Cart' },
-    { to: '/orders', label: 'Orders' },
-    { to: '/return-refunds', label: 'Return & Refund' },
-    { to: '/support', label: 'Support' },
+    { to: '/profile', label: 'Hồ sơ' },
+    { to: '/notifications', label: 'Thông báo' },
+    { to: '/cart', label: 'Giỏ hàng' },
+    { to: '/orders', label: 'Đơn mua' },
+    { to: '/return-refunds', label: 'Đổi trả / hoàn tiền' },
+    { to: '/support', label: 'Hỗ trợ' },
   ],
   Staff: [
-    { to: '/profile', label: 'Profile' },
-    { to: '/notifications', label: 'Notifications' },
-    { to: '/staff', label: 'Staff Dashboard' },
-    { to: '/staff/orders', label: 'Order Queue' },
-    { to: '/staff/return-refunds', label: 'Return/Refund' },
-    { to: '/staff/support-requests', label: 'Support Queue' },
+    { to: '/profile', label: 'Hồ sơ' },
+    { to: '/notifications', label: 'Thông báo' },
+    { to: '/staff', label: 'Tổng quan xử lý đơn' },
+    { to: '/staff/orders', label: 'Hàng đợi đơn hàng' },
+    { to: '/staff/return-refunds', label: 'Đổi trả / hoàn tiền' },
+    { to: '/staff/support-requests', label: 'Yêu cầu hỗ trợ' },
   ],
   WarehouseManager: [
-    { to: '/profile', label: 'Profile' },
-    { to: '/notifications', label: 'Notifications' },
-    { to: '/warehouse', label: 'Warehouse Dashboard' },
-    { to: '/warehouse/inventory', label: 'Inventory' },
-    { to: '/warehouse/stock-exports', label: 'Stock Exports' },
-    { to: '/warehouse/low-stock', label: 'Low Stock' },
-    { to: '/warehouse/replenishments', label: 'Replenishment' },
+    { to: '/profile', label: 'Hồ sơ' },
+    { to: '/notifications', label: 'Thông báo' },
+    { to: '/warehouse', label: 'Tổng quan kho' },
+    { to: '/warehouse/inventory', label: 'Tồn kho' },
+    { to: '/warehouse/stock-exports', label: 'Phiếu xuất kho' },
+    { to: '/warehouse/low-stock', label: 'Cảnh báo sắp hết' },
+    { to: '/warehouse/replenishments', label: 'Bổ sung hàng' },
   ],
   Admin: [
-    { to: '/profile', label: 'Profile' },
-    { to: '/notifications', label: 'Notifications' },
-    { to: '/admin', label: 'Admin Dashboard' },
-    { to: '/admin/audit-logs', label: 'Audit Logs' },
-    { to: '/admin/products', label: 'Products' },
-    { to: '/admin/categories', label: 'Categories' },
-    { to: '/admin/replenishments', label: 'Replenishments' },
-    { to: '/admin/settings', label: 'Settings' },
+    { to: '/profile', label: 'Hồ sơ' },
+    { to: '/notifications', label: 'Thông báo' },
+    { to: '/admin', label: 'Tổng quan quản trị' },
+    { to: '/admin/audit-logs', label: 'Nhật ký hệ thống' },
+    { to: '/admin/products', label: 'Sản phẩm' },
+    { to: '/admin/categories', label: 'Danh mục' },
+    { to: '/admin/replenishments', label: 'Duyệt nhập hàng' },
+    { to: '/admin/settings', label: 'Cấu hình' },
   ],
 };
 
@@ -46,7 +47,7 @@ export default function Sidebar() {
 
   return (
     <aside className="app-sidebar">
-      <div className="sidebar-title">{user?.role || 'User'}</div>
+      <div className="sidebar-title">{translateRole(user?.role)}</div>
       <nav className="nav flex-column gap-1">
         {links.map((link) => (
           <NavLink key={link.to} className="nav-link" to={link.to}>
