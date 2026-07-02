@@ -4,19 +4,39 @@ import { Link } from 'react-router-dom';
 const GOOGLE_MAPS_URL = 'https://maps.app.goo.gl/DUDu37Cr5h13RsqFA';
 const GOOGLE_MAPS_EMBED_URL = 'https://www.google.com/maps?q=H%C3%A0%20N%E1%BB%99i%2C%20Vi%E1%BB%87t%20Nam&output=embed';
 
+const ContactIcons = {
+  pin: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="contact-icon-svg">
+      <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
+      <circle cx="12" cy="10" r="3" />
+    </svg>
+  ),
+  phone: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="contact-icon-svg">
+      <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" />
+    </svg>
+  ),
+  mail: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="contact-icon-svg">
+      <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
+      <polyline points="22,6 12,13 2,6" />
+    </svg>
+  ),
+};
+
 const contactItems = [
   {
-    icon: '⌖',
+    icon: 'pin',
     label: 'Địa chỉ cửa hàng',
     lines: ['GreenHome Kitchen, Hà Nội, Việt Nam'],
   },
   {
-    icon: '☎',
+    icon: 'phone',
     label: 'Điện thoại',
     lines: ['0856 464 980', 'Thứ 2 - Chủ nhật / 8:00 - 18:00'],
   },
   {
-    icon: '✉',
+    icon: 'mail',
     label: 'Email',
     lines: ['kitchennhas@greenhome.com'],
   },
@@ -48,7 +68,7 @@ export default function ContactPage() {
           <div className="contact-info-list">
             {contactItems.map((item) => (
               <article className="contact-info-item" key={item.label}>
-                <span className="contact-info-icon" aria-hidden="true">{item.icon}</span>
+                <span className="contact-info-icon" aria-hidden="true">{ContactIcons[item.icon]}</span>
                 <div>
                   <strong>{item.label}</strong>
                   {item.lines.map((line) => (
@@ -62,9 +82,15 @@ export default function ContactPage() {
           <div className="contact-socials">
             <span>Kết nối với chúng tôi</span>
             <div className="contact-social-row" aria-label="Kênh mạng xã hội">
-              <a href={GOOGLE_MAPS_URL} target="_blank" rel="noreferrer" aria-label="Mở vị trí GreenHome trên bản đồ">◎</a>
-              <a href="mailto:kitchennhas@greenhome.com" aria-label="Gửi email cho GreenHome">↗</a>
-              <a href="tel:0856464980" aria-label="Gọi GreenHome Kitchen">☎</a>
+              <a href={GOOGLE_MAPS_URL} target="_blank" rel="noreferrer" aria-label="Mở vị trí GreenHome trên bản đồ">
+                {ContactIcons.pin}
+              </a>
+              <a href="mailto:kitchennhas@greenhome.com" aria-label="Gửi email cho GreenHome">
+                {ContactIcons.mail}
+              </a>
+              <a href="tel:0856464980" aria-label="Gọi GreenHome Kitchen">
+                {ContactIcons.phone}
+              </a>
             </div>
           </div>
         </aside>
@@ -103,7 +129,7 @@ export default function ContactPage() {
             referrerPolicy="no-referrer-when-downgrade"
           />
           <div className="contact-map-card">
-            <span aria-hidden="true">⌖</span>
+            <span aria-hidden="true">{ContactIcons.pin}</span>
             <strong id="location-title">Hà Nội, Việt Nam</strong>
             <a href={GOOGLE_MAPS_URL} target="_blank" rel="noreferrer">Mở Google Maps</a>
           </div>

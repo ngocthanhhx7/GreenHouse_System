@@ -3046,6 +3046,11 @@ body {
   width: 54px;
 }
 
+.contact-info-icon svg {
+  height: 24px;
+  width: 24px;
+}
+
 .contact-info-item strong,
 .contact-socials span {
   color: #666f6b;
@@ -3084,6 +3089,11 @@ body {
   text-decoration: none;
   transition: background 160ms ease, border-color 160ms ease, transform 160ms ease;
   width: 42px;
+}
+
+.contact-social-row a svg {
+  height: 18px;
+  width: 18px;
 }
 
 .contact-social-row a:hover {
@@ -3197,9 +3207,18 @@ body {
 }
 
 .contact-map-card span {
+  align-items: center;
   color: #073d31;
-  font-size: 42px;
+  display: inline-flex;
+  height: 32px;
+  justify-content: center;
   line-height: 1;
+  width: 32px;
+}
+
+.contact-map-card span svg {
+  height: 28px;
+  width: 28px;
 }
 
 .contact-map-card strong {
