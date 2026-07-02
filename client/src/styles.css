@@ -4,6 +4,7 @@
   color: #1f2a24;
   background: #f5f7f1;
   font-family: Outfit, Nunito, Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-vietnamese-display: Outfit, "Segoe UI", Nunito, Arial, sans-serif;
   --green-950: #17281d;
   --green-900: #1f3f2b;
   --green-700: #2f6b42;
@@ -2840,6 +2841,399 @@ body {
   padding-top: 64px;
 }
 
+/* ========================================
+   About / Contact Story Pages
+   ======================================== */
+
+.about-story-page,
+.contact-story-page {
+  background: #fffdf8;
+  color: #073d31;
+  padding: 0;
+}
+
+.about-story-page h1,
+.about-story-page h2,
+.contact-story-page h1,
+.contact-story-page h2 {
+  color: #063d31;
+  font-family: var(--font-vietnamese-display);
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.about-story-page p,
+.contact-story-page p {
+  color: #5d6763;
+  line-height: 1.75;
+}
+
+.about-hero-grid {
+  align-items: center;
+  display: grid;
+  gap: clamp(34px, 7vw, 92px);
+  grid-template-columns: minmax(0, 0.92fr) minmax(320px, 1fr);
+  margin: 0 auto;
+  max-width: 1240px;
+  min-height: 560px;
+  padding: clamp(74px, 8vw, 128px) clamp(22px, 5vw, 64px);
+}
+
+.about-hero-copy h1,
+.contact-hero h1 {
+  font-size: clamp(42px, 5vw, 68px);
+  line-height: 1.06;
+  margin: 0 0 28px;
+}
+
+.about-hero-copy p,
+.contact-hero p {
+  font-size: 18px;
+  margin: 0;
+  max-width: 650px;
+}
+
+.about-hero-media,
+.about-mission-media {
+  border-radius: 6px;
+  margin: 0;
+  overflow: hidden;
+}
+
+.about-hero-media img,
+.about-mission-media img {
+  display: block;
+  height: 100%;
+  min-height: 420px;
+  object-fit: cover;
+  width: 100%;
+}
+
+.about-mission-section {
+  background: #fbf8f4;
+  padding: clamp(74px, 9vw, 132px) clamp(22px, 5vw, 64px);
+}
+
+.about-mission-grid {
+  align-items: center;
+  display: grid;
+  gap: clamp(42px, 8vw, 96px);
+  grid-template-columns: minmax(320px, 0.95fr) minmax(0, 0.85fr);
+  margin: 0 auto;
+  max-width: 1180px;
+}
+
+.about-mission-copy {
+  max-width: 560px;
+}
+
+.section-kicker {
+  background: #f5cf78;
+  display: block;
+  height: 3px;
+  margin: 0 0 28px;
+  width: 48px;
+}
+
+.about-mission-copy h2,
+.about-section-heading h2,
+.contact-info-panel h2,
+.contact-message-card h2,
+.contact-faq-cta h2 {
+  font-size: clamp(30px, 3vw, 44px);
+  line-height: 1.15;
+  margin: 0 0 24px;
+}
+
+.about-values-section {
+  padding: clamp(72px, 8vw, 120px) clamp(22px, 5vw, 64px);
+}
+
+.about-section-heading {
+  margin: 0 auto 54px;
+  max-width: 720px;
+  text-align: center;
+}
+
+.about-section-heading p {
+  margin: 0 auto;
+  max-width: 620px;
+}
+
+.about-values-grid {
+  display: grid;
+  gap: 32px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0 auto;
+  max-width: 1180px;
+}
+
+.about-value-card {
+  background: #ffffff;
+  border: 1px solid #e9e3dc;
+  border-radius: 4px;
+  min-height: 250px;
+  padding: 42px 34px;
+  text-align: center;
+}
+
+.about-value-icon {
+  align-items: center;
+  background: #f3f1ef;
+  border-radius: 10px;
+  color: #0b4f40;
+  display: inline-flex;
+  font-size: 24px;
+  height: 62px;
+  justify-content: center;
+  margin-bottom: 24px;
+  width: 62px;
+}
+
+.about-value-card h3 {
+  color: #073d31;
+  font-size: 22px;
+  margin: 0 0 14px;
+}
+
+.about-value-card p {
+  margin: 0;
+}
+
+.contact-hero {
+  margin: 0 auto;
+  max-width: 760px;
+  padding: clamp(76px, 10vw, 140px) 24px clamp(58px, 8vw, 98px);
+  text-align: center;
+}
+
+.contact-main-grid {
+  align-items: start;
+  display: grid;
+  gap: clamp(38px, 7vw, 96px);
+  grid-template-columns: minmax(300px, 0.85fr) minmax(360px, 1fr);
+  margin: 0 auto;
+  max-width: 1180px;
+  padding: 0 clamp(22px, 5vw, 64px) clamp(82px, 8vw, 128px);
+}
+
+.contact-info-panel {
+  padding-top: 8px;
+}
+
+.contact-info-list {
+  display: grid;
+  gap: 28px;
+  margin-top: 34px;
+}
+
+.contact-info-item {
+  align-items: flex-start;
+  display: grid;
+  gap: 20px;
+  grid-template-columns: 54px minmax(0, 1fr);
+}
+
+.contact-info-icon {
+  align-items: center;
+  background: #f2f0ed;
+  border-radius: 12px;
+  color: #073d31;
+  display: inline-flex;
+  font-size: 22px;
+  height: 54px;
+  justify-content: center;
+  width: 54px;
+}
+
+.contact-info-item strong,
+.contact-socials span {
+  color: #666f6b;
+  display: block;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+}
+
+.contact-info-item p {
+  color: #3e4844;
+  font-size: 17px;
+  margin: 2px 0;
+}
+
+.contact-socials {
+  margin-top: 48px;
+}
+
+.contact-social-row {
+  display: flex;
+  gap: 16px;
+  margin-top: 14px;
+}
+
+.contact-social-row a {
+  align-items: center;
+  border: 1px solid #d9d3cc;
+  color: #073d31;
+  display: inline-flex;
+  font-size: 19px;
+  height: 42px;
+  justify-content: center;
+  text-decoration: none;
+  transition: background 160ms ease, border-color 160ms ease, transform 160ms ease;
+  width: 42px;
+}
+
+.contact-social-row a:hover {
+  background: #eaf4ef;
+  border-color: #0b5d49;
+  transform: translateY(-2px);
+}
+
+.contact-message-card {
+  background: #ffffff;
+  box-shadow: 0 24px 60px rgba(44, 37, 30, 0.08);
+  padding: clamp(30px, 4vw, 58px);
+}
+
+.contact-form-grid {
+  display: grid;
+  gap: 24px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.contact-message-card label {
+  color: #646f6b;
+  display: grid;
+  font-size: 13px;
+  font-weight: 700;
+  gap: 8px;
+  margin-bottom: 24px;
+}
+
+.contact-message-card input,
+.contact-message-card textarea {
+  background: #faf8f6;
+  border: 0;
+  border-bottom: 1px solid #d8d3cc;
+  color: #173d33;
+  font: inherit;
+  min-height: 48px;
+  outline: none;
+  padding: 12px 0;
+  transition: border-color 160ms ease, background 160ms ease;
+  width: 100%;
+}
+
+.contact-message-card textarea {
+  min-height: 150px;
+  resize: vertical;
+}
+
+.contact-message-card input:focus,
+.contact-message-card textarea:focus {
+  background: #ffffff;
+  border-color: #073d31;
+}
+
+.contact-message-card button {
+  background: #073d31;
+  border: 0;
+  color: #ffffff;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  min-height: 52px;
+  padding: 0 34px;
+  text-transform: uppercase;
+}
+
+.contact-success {
+  background: #e8f5ee;
+  border-left: 4px solid #0d725c;
+  color: #0a4f3d;
+  margin: 20px 0 0;
+  padding: 12px 14px;
+}
+
+.contact-location-section {
+  background: #f5f3f1;
+  padding: clamp(76px, 9vw, 132px) clamp(22px, 5vw, 64px);
+}
+
+.contact-map-panel {
+  border-radius: 4px;
+  display: grid;
+  margin: 0 auto;
+  max-width: 1180px;
+  min-height: 360px;
+  overflow: hidden;
+  position: relative;
+}
+
+.contact-map-panel iframe {
+  border: 0;
+  filter: grayscale(18%) contrast(95%);
+  height: 100%;
+  min-height: 360px;
+  width: 100%;
+}
+
+.contact-map-card {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid #e2ddd6;
+  bottom: 28px;
+  box-shadow: 0 18px 40px rgba(8, 52, 42, 0.14);
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+  left: 50%;
+  min-width: 220px;
+  padding: 18px 20px;
+  position: absolute;
+  transform: translateX(-50%);
+}
+
+.contact-map-card span {
+  color: #073d31;
+  font-size: 42px;
+  line-height: 1;
+}
+
+.contact-map-card strong {
+  color: #314540;
+  font-size: 16px;
+}
+
+.contact-map-card a {
+  color: #0b5d49;
+  font-size: 13px;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.contact-faq-cta {
+  margin: 0 auto;
+  max-width: 760px;
+  padding: clamp(72px, 9vw, 122px) 24px;
+  text-align: center;
+}
+
+.contact-faq-cta p {
+  margin: 0 auto 28px;
+}
+
+.contact-faq-cta a {
+  color: #073d31;
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-decoration: none;
+  text-transform: uppercase;
+}
+
 @media (max-width: 1050px) {
   .header-inner,
   .premium-hero,
@@ -2870,6 +3264,17 @@ body {
 
   .premium-order-step:not(:last-child)::after {
     display: none;
+  }
+
+  .about-hero-grid,
+  .about-mission-grid,
+  .contact-main-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .about-mission-copy,
+  .contact-info-panel {
+    max-width: none;
   }
 }
 
@@ -2960,6 +3365,52 @@ body {
     margin: 26px auto 0;
     min-height: 0;
     padding: 22px;
+    width: calc(100% - 36px);
+  }
+
+  .about-hero-grid,
+  .about-mission-section,
+  .about-values-section,
+  .contact-main-grid,
+  .contact-location-section {
+    padding-left: 18px;
+    padding-right: 18px;
+  }
+
+  .about-hero-grid {
+    min-height: 0;
+    padding-top: 58px;
+  }
+
+  .about-hero-media img,
+  .about-mission-media img {
+    min-height: 280px;
+  }
+
+  .about-values-grid,
+  .contact-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .contact-hero {
+    padding-top: 58px;
+  }
+
+  .contact-info-item {
+    grid-template-columns: 46px minmax(0, 1fr);
+  }
+
+  .contact-info-icon {
+    height: 46px;
+    width: 46px;
+  }
+
+  .contact-message-card {
+    padding: 26px 20px;
+  }
+
+  .contact-map-card {
+    bottom: 18px;
     width: calc(100% - 36px);
   }
 }

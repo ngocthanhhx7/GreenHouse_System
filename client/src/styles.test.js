@@ -28,3 +28,12 @@ describe('premium storefront CTA styles', () => {
     assert.match(footerBlock, /padding-top:\s*64px/);
   });
 });
+
+describe('Vietnamese storefront typography', () => {
+  it('uses a Vietnamese-safe heading stack for About and Contact pages', () => {
+    const headingBlock = styles.match(/\.about-story-page h1,[\s\S]*?\.contact-story-page h2\s*\{[^}]+\}/)?.[0] || '';
+
+    assert.match(headingBlock, /font-family:\s*var\(--font-vietnamese-display\)/);
+    assert.doesNotMatch(headingBlock, /Georgia|Times New Roman/);
+  });
+});
