@@ -7,6 +7,21 @@ const notificationSchema = new mongoose.Schema(
       ref: 'User',
       required: true,
     },
+    targetCollection: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    targetId: {
+      type: mongoose.Schema.Types.ObjectId,
+      default: null,
+    },
+    recipientEmail: {
+      type: String,
+      default: '',
+      trim: true,
+      lowercase: true,
+    },
     type: {
       type: String,
       required: true,
@@ -39,6 +54,11 @@ const notificationSchema = new mongoose.Schema(
     sentAt: {
       type: Date,
       default: null,
+    },
+    providerMessageId: {
+      type: String,
+      default: '',
+      trim: true,
     },
   },
   { timestamps: true }

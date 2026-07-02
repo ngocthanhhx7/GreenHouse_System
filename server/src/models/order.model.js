@@ -17,6 +17,21 @@ const orderSchema = new mongoose.Schema(
       required: true,
       min: 0,
     },
+    subtotal: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    shippingFee: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    currency: {
+      type: String,
+      default: 'VND',
+      trim: true,
+    },
     paymentMethod: {
       type: String,
       enum: ['COD', 'ONLINE'],
@@ -37,10 +52,41 @@ const orderSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
+    receiverName: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    receiverPhone: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    customerNote: {
+      type: String,
+      default: '',
+      trim: true,
+    },
     cancelReason: {
       type: String,
       default: '',
       trim: true,
+    },
+    confirmedAt: {
+      type: Date,
+      default: null,
+    },
+    packedAt: {
+      type: Date,
+      default: null,
+    },
+    shippedAt: {
+      type: Date,
+      default: null,
+    },
+    deliveredAt: {
+      type: Date,
+      default: null,
     },
   },
   { timestamps: true }

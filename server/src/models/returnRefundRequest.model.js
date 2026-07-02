@@ -7,15 +7,29 @@ const returnRefundRequestSchema = new mongoose.Schema(
       ref: 'Order',
       required: true,
     },
+    requestCode: {
+      type: String,
+      default: '',
+      trim: true,
+    },
     customerId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
       required: true,
     },
+    paymentId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Payment',
+      default: null,
+    },
     reason: {
       type: String,
       required: true,
       trim: true,
+    },
+    evidenceImages: {
+      type: [String],
+      default: [],
     },
     status: {
       type: String,
@@ -33,6 +47,14 @@ const returnRefundRequestSchema = new mongoose.Schema(
       default: null,
     },
     resolvedAt: {
+      type: Date,
+      default: null,
+    },
+    requestedAt: {
+      type: Date,
+      default: Date.now,
+    },
+    handledAt: {
       type: Date,
       default: null,
     },
