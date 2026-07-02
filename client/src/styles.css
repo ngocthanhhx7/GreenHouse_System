@@ -2354,10 +2354,9 @@ body {
 
 .premium-hero-copy h1,
 .premium-heading h2,
-.premium-final-cta h2,
-.footer-cta h2 {
+.premium-final-cta h2 {
   color: #142f26;
-  font-family: Georgia, 'Times New Roman', serif;
+  font-family: 'Times New Roman', Georgia, serif;
   font-weight: 800;
   letter-spacing: 0;
   line-height: 1.05;
@@ -2786,15 +2785,13 @@ body {
   margin: 0;
 }
 
-.premium-final-cta div,
-.footer-cta div {
+.premium-final-cta div {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
 }
 
-.premium-final-cta .btn,
-.footer-cta .btn {
+.premium-final-cta .btn {
   border-radius: 999px;
   font-weight: 800;
   min-width: 126px;
@@ -2803,26 +2800,6 @@ body {
 .site-footer {
   background: #064f3c;
   margin-top: 0;
-  padding-top: 0;
-}
-
-.footer-cta {
-  align-items: center;
-  border: 1px solid rgba(255, 255, 255, 0.24);
-  border-radius: 12px;
-  display: flex;
-  gap: 18px;
-  justify-content: space-between;
-  margin: 0 auto 34px;
-  max-width: 1120px;
-  padding: 26px clamp(20px, 4vw, 58px);
-  transform: translateY(-28px);
-}
-
-.footer-cta h2 {
-  color: #ffffff;
-  font-size: clamp(26px, 3vw, 38px);
-  margin: 0;
 }
 
 @media (max-width: 1050px) {
@@ -2939,14 +2916,9 @@ body {
     flex: 0 0 210px;
   }
 
-  .premium-final-cta,
-  .footer-cta {
+  .premium-final-cta {
     align-items: flex-start;
     flex-direction: column;
-  }
-
-  .footer-cta {
-    transform: translateY(-18px);
   }
 }
 

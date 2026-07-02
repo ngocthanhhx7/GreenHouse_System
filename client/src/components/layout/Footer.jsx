@@ -1,24 +1,8 @@
 import { Link } from 'react-router-dom';
 
-import useAuth from '../../hooks/useAuth.js';
-import { translateRole } from '../../utils/formatters.js';
-
 export default function Footer() {
-  const { user, getDashboardPath } = useAuth();
-  const role = user?.role;
-
   return (
     <footer className="site-footer">
-      <div className="footer-cta">
-        <h2>Sẵn sàng nâng cấp căn bếp của bạn?</h2>
-        <div>
-          <Link className="btn btn-light" to="/products">Mua sắm ngay</Link>
-          <Link className="btn btn-outline-light" to={role ? getDashboardPath(role) : '/register'}>
-            {role ? `Khu vực ${translateRole(role)}` : 'Tạo tài khoản'}
-          </Link>
-        </div>
-      </div>
-
       <div className="footer-grid">
         <div className="footer-brand">
           <Link to="/" className="brand-link footer-brand-link">
@@ -45,7 +29,6 @@ export default function Footer() {
           <Link to="/contact">Liên hệ</Link>
           <Link to="/contact">Thanh toán và minh bạch</Link>
           <Link to="/products">Kệ Chén Đa Năng</Link>
-          {role === 'Customer' && <Link to="/orders">Lịch sử mua hàng</Link>}
         </div>
 
         <div>

@@ -15,7 +15,7 @@ describe('shared footer design contract', () => {
     assert.match(footer, /\/support/);
     assert.match(footer, /\/cart/);
     assert.match(footer, /kitchennhas@greenhome\.com/);
-    assert.match(footer, /footer-cta/);
-    assert.match(footer, /Sẵn sàng nâng cấp căn bếp của bạn/);
+    assert.doesNotMatch(footer, /footer-cta/);
+    assert.doesNotMatch(footer, /Sẵn sàng nâng cấp căn bếp của bạn/);
   });
 });
