@@ -28,4 +28,11 @@ describe('shared header design contract', () => {
     assert.match(header, /avatar-menu/);
     assert.match(header, /roleMenuLinks/);
   });
+
+  it('uses the premium storefront header structure without changing auth behavior', () => {
+    assert.match(header, /site-header-premium/);
+    assert.match(header, /header-inner/);
+    assert.match(header, /brand-mark/);
+    assert.match(header, /nav-pill/);
+  });
 });

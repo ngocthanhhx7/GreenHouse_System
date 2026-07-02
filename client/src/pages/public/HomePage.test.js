@@ -9,11 +9,23 @@ describe('home page premium commerce design contract', () => {
   it('uses Vietnamese commerce-first content without demo/internal workflow copy', () => {
     assert.match(home, /Căn bếp xanh/);
     assert.match(home, /Mua sắm ngay/);
-    assert.match(home, /Danh mục nổi bật/);
-    assert.match(home, /Sản phẩm bán chạy/);
-    assert.match(home, /Khách hàng nói gì/);
-    assert.match(home, /Cam kết xử lý đơn hàng/);
+    assert.match(home, /Chọn nhanh theo nhu cầu căn bếp/);
+    assert.match(home, /Lựa chọn được quan tâm trong tuần/);
+    assert.match(home, /Vì sao chọn GreenHome/);
+    assert.match(home, /Niềm tin đến từ trải nghiệm mua hàng rõ ràng/);
+    assert.match(home, /Sẵn sàng nâng cấp căn bếp của bạn/);
     assert.doesNotMatch(home, /Ready for demo|Business workflow preview|Staff Processing|Warehouse|Shop Now|Start Shopping|Category Showcase|Kitchen Collections|Newsletter/);
+  });
+
+  it('uses the uploaded visual assets and premium storefront sections from the reference', () => {
+    assert.match(home, /\/assets\/background\/cookware\.png/);
+    assert.match(home, /\/assets\/background\/kitchen_tools\.png/);
+    assert.match(home, /\/assets\/background\/tableware\.png/);
+    assert.match(home, /\/assets\/background\/smart_storage\.png/);
+    assert.match(home, /Deal của hôm nay/);
+    assert.match(home, /Đặt hàng/);
+    assert.match(home, /Đóng gói/);
+    assert.match(home, /Bồi đắp niềm tin/);
   });
 
   it('keeps GSAP scoped but removes heavy looping and tilt animation patterns', () => {

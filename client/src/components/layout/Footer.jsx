@@ -9,6 +9,16 @@ export default function Footer() {
 
   return (
     <footer className="site-footer">
+      <div className="footer-cta">
+        <h2>Sẵn sàng nâng cấp căn bếp của bạn?</h2>
+        <div>
+          <Link className="btn btn-light" to="/products">Mua sắm ngay</Link>
+          <Link className="btn btn-outline-light" to={role ? getDashboardPath(role) : '/register'}>
+            {role ? `Khu vực ${translateRole(role)}` : 'Tạo tài khoản'}
+          </Link>
+        </div>
+      </div>
+
       <div className="footer-grid">
         <div className="footer-brand">
           <Link to="/" className="brand-link footer-brand-link">
@@ -21,26 +31,28 @@ export default function Footer() {
         </div>
 
         <div>
-          <h3>Mua sắm</h3>
-          <Link to="/products">Tất cả sản phẩm</Link>
-          <Link to="/about">Về GreenHome</Link>
-          <Link to="/contact">Liên hệ</Link>
+          <h3>Sản phẩm</h3>
+          <Link to="/">Trang chủ</Link>
+          <Link to="/products">Sản phẩm</Link>
           <Link to="/cart">Giỏ hàng</Link>
+          <Link to="/products">Nồi chảo cao cấp</Link>
+          <Link to="/support">Hỗ trợ sau mua</Link>
         </div>
 
         <div>
-          <h3>Tài khoản</h3>
-          <Link to={role ? getDashboardPath(role) : '/login'}>{role ? `Khu vực ${translateRole(role)}` : 'Đăng nhập'}</Link>
-          <Link to="/profile">Hồ sơ</Link>
-          <Link to="/notifications">Thông báo</Link>
-          <Link to="/support">Hỗ trợ khách hàng</Link>
+          <h3>Về chúng tôi</h3>
+          <Link to="/about">Về GreenHome</Link>
+          <Link to="/contact">Liên hệ</Link>
+          <Link to="/contact">Thanh toán và minh bạch</Link>
+          <Link to="/products">Kệ Chén Đa Năng</Link>
           {role === 'Customer' && <Link to="/orders">Lịch sử mua hàng</Link>}
         </div>
 
         <div>
           <h3>Liên hệ</h3>
-          <span>greenhome.kitchen@example.com</span>
-          <span>Hotline: 0900 000 004</span>
+          <span>0856 464 980</span>
+          <span>0836 456 025</span>
+          <span>kitchennhas@greenhome.com</span>
           <span>GreenHome Kitchen, Hà Nội, Việt Nam</span>
         </div>
       </div>
