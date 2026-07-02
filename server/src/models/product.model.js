@@ -7,6 +7,11 @@ const productSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
+    sku: {
+      type: String,
+      default: '',
+      trim: true,
+    },
     description: {
       type: String,
       default: '',
@@ -46,6 +51,7 @@ const productSchema = new mongoose.Schema(
 );
 
 productSchema.index({ name: 'text', description: 'text' });
+productSchema.index({ sku: 1 }, { sparse: true });
 productSchema.index({ categoryId: 1, status: 1 });
 productSchema.index({ price: 1 });
 

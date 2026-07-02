@@ -17,6 +17,16 @@ const orderDetailSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
+    productImageSnapshot: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    skuSnapshot: {
+      type: String,
+      default: '',
+      trim: true,
+    },
     priceSnapshot: {
       type: Number,
       required: true,

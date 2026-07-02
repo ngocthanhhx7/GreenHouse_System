@@ -1,5 +1,7 @@
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 
+import { translatePaymentStatus } from '../../utils/formatters.js';
+
 export default function PaymentResultPage() {
   const { id } = useParams();
   const [params] = useSearchParams();
@@ -8,12 +10,12 @@ export default function PaymentResultPage() {
 
   return (
     <div className="surface">
-      <h1>Payment Result</h1>
+      <h1>Kết quả thanh toán</h1>
       <div className={`alert ${success ? 'alert-success' : 'alert-warning'}`}>
-        Payment status: <strong>{status}</strong>
+        Trạng thái thanh toán: <strong>{translatePaymentStatus(status)}</strong>
       </div>
       <Link className="btn btn-success" to={`/orders/${id}`}>
-        View order
+        Xem đơn hàng
       </Link>
     </div>
   );

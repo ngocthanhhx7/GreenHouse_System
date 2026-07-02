@@ -7,10 +7,30 @@ const supportRequestSchema = new mongoose.Schema(
       ref: 'User',
       required: true,
     },
+    ticketCode: {
+      type: String,
+      default: '',
+      trim: true,
+    },
     orderId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Order',
       default: null,
+    },
+    productId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Product',
+      default: null,
+    },
+    requestType: {
+      type: String,
+      enum: ['Order', 'Product', 'Payment', 'ReturnRefund', 'Other'],
+      default: 'Order',
+    },
+    priority: {
+      type: String,
+      enum: ['Low', 'Normal', 'High', 'Urgent'],
+      default: 'Normal',
     },
     subject: {
       type: String,
@@ -38,6 +58,10 @@ const supportRequestSchema = new mongoose.Schema(
       trim: true,
     },
     respondedAt: {
+      type: Date,
+      default: null,
+    },
+    closedAt: {
       type: Date,
       default: null,
     },

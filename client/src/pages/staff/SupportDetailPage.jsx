@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 
 import { supportService } from '../../services/supportService.js';
+import { translateRequestStatus } from '../../utils/formatters.js';
 
 export default function SupportDetailPage() {
   const { id } = useParams();
@@ -32,46 +33,46 @@ export default function SupportDetailPage() {
     try {
       const result = await supportService.respondToRequest(id, form);
       setRequest(result);
-      setMessage('Support response saved.');
+      setMessage('Đã lưu phản hồi hỗ trợ.');
     } catch (err) {
       setError(err.message);
     }
   }
 
-  if (!request && !error) return <div className="page-center">Loading...</div>;
+  if (!request && !error) return <div className="page-center">Đang tải yêu cầu hỗ trợ...</div>;
 
   return (
     <div className="surface">
-      <h1>Support Detail</h1>
+      <h1>Chi tiết hỗ trợ</h1>
       {message && <div className="alert alert-success">{message}</div>}
       {error && <div className="alert alert-danger">{error}</div>}
       {request && (
         <>
           <dl className="row">
-            <dt className="col-sm-3">Subject</dt>
+            <dt className="col-sm-3">Chủ đề</dt>
             <dd className="col-sm-9">{request.subject}</dd>
-            <dt className="col-sm-3">Order</dt>
+            <dt className="col-sm-3">Đơn hàng</dt>
             <dd className="col-sm-9">{request.orderCode || '-'}</dd>
-            <dt className="col-sm-3">Status</dt>
-            <dd className="col-sm-9">{request.status}</dd>
-            <dt className="col-sm-3">Content</dt>
+            <dt className="col-sm-3">Trạng thái</dt>
+            <dd className="col-sm-9">{translateRequestStatus(request.status)}</dd>
+            <dt className="col-sm-3">Nội dung</dt>
             <dd className="col-sm-9">{request.content}</dd>
           </dl>
           <form className="row g-3" onSubmit={submitResponse}>
             <div className="col-md-4">
-              <label className="form-label" htmlFor="supportStatus">Status</label>
+              <label className="form-label" htmlFor="supportStatus">Trạng thái</label>
               <select
                 id="supportStatus"
                 className="form-select"
                 value={form.status}
                 onChange={(event) => setForm((current) => ({ ...current, status: event.target.value }))}
               >
-                <option value="InProgress">In progress</option>
-                <option value="Resolved">Resolved</option>
+                <option value="InProgress">Đang xử lý</option>
+                <option value="Resolved">Đã giải quyết</option>
               </select>
             </div>
             <div className="col-12">
-              <label className="form-label" htmlFor="supportResponse">Response</label>
+              <label className="form-label" htmlFor="supportResponse">Phản hồi</label>
               <textarea
                 id="supportResponse"
                 className="form-control"
@@ -82,7 +83,7 @@ export default function SupportDetailPage() {
               />
             </div>
             <div className="col-12">
-              <button className="btn btn-success" type="submit">Save response</button>
+              <button className="btn btn-success" type="submit">Lưu phản hồi</button>
             </div>
           </form>
         </>

@@ -1,7 +1,7 @@
 import { DEFAULT_BASE_URL, TOKEN_KEY, apiRequest } from './apiClient.js';
 
 const DASHBOARD_BY_ROLE = {
-  Customer: '/profile',
+  Customer: '/orders',
   Staff: '/staff',
   WarehouseManager: '/warehouse',
   Admin: '/admin',

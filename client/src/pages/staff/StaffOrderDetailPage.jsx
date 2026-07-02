@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
 import { staffOrderService } from '../../services/staffOrderService.js';
+import { formatCurrency, translateOrderStatus, translatePaymentMethod, translatePaymentStatus } from '../../utils/formatters.js';
 
 export default function StaffOrderDetailPage() {
   const { id } = useParams();
@@ -34,7 +35,7 @@ export default function StaffOrderDetailPage() {
     }
   }
 
-  if (!order && !error) return <div className="page-center">Loading...</div>;
+  if (!order && !error) return <div className="page-center">Đang tải đơn hàng...</div>;
 
   return (
     <div className="surface">
@@ -44,28 +45,31 @@ export default function StaffOrderDetailPage() {
         <>
           <div className="page-heading">
             <div>
+              <span className="eyebrow">Xử lý đơn hàng</span>
               <h1>{order.orderCode}</h1>
-              <p className="text-secondary mb-0">{order.paymentMethod} / {order.paymentStatus} / {order.orderStatus}</p>
+              <p className="text-secondary mb-0">
+                {translatePaymentMethod(order.paymentMethod)} / {translatePaymentStatus(order.paymentStatus)} / {translateOrderStatus(order.orderStatus)}
+              </p>
             </div>
             <Link className="btn btn-outline-success" to={`/staff/orders/${order.id}/invoice`}>
-              Invoice
+              In hóa đơn
             </Link>
           </div>
-          <p>{order.shippingAddress}</p>
+          <p><strong>Địa chỉ giao hàng:</strong> {order.shippingAddress}</p>
           <div className="action-row">
             {order.orderStatus === 'Pending' && (
-              <button className="btn btn-success" type="button" onClick={() => runAction(() => staffOrderService.confirmOrder(order.id), 'Order confirmed.')}>
-                Confirm order
+              <button className="btn btn-success" type="button" onClick={() => runAction(() => staffOrderService.confirmOrder(order.id), 'Đã xác nhận đơn hàng.')}>
+                Xác nhận đơn
               </button>
             )}
             {order.orderStatus === 'Confirmed' && (
-              <button className="btn btn-success" type="button" onClick={() => runAction(() => staffOrderService.requestStockExport(order.id), 'Stock export requested.')}>
-                Request stock export
+              <button className="btn btn-success" type="button" onClick={() => runAction(() => staffOrderService.requestStockExport(order.id), 'Đã gửi yêu cầu xuất kho.')}>
+                Yêu cầu xuất kho
               </button>
             )}
             {(order.allowedNextStatuses || []).map((nextStatus) => (
-              <button key={nextStatus} className="btn btn-outline-success" type="button" onClick={() => runAction(() => staffOrderService.updateStatus(order.id, nextStatus), `Moved to ${nextStatus}.`)}>
-                Move to {nextStatus}
+              <button key={nextStatus} className="btn btn-outline-success" type="button" onClick={() => runAction(() => staffOrderService.updateStatus(order.id, nextStatus), `Đã chuyển sang ${translateOrderStatus(nextStatus)}.`)}>
+                Chuyển sang {translateOrderStatus(nextStatus)}
               </button>
             ))}
           </div>
@@ -73,10 +77,10 @@ export default function StaffOrderDetailPage() {
             <table className="table">
               <thead>
                 <tr>
-                  <th>Product</th>
-                  <th>Qty</th>
-                  <th>Price</th>
-                  <th>Subtotal</th>
+                  <th>Sản phẩm</th>
+                  <th>SL</th>
+                  <th>Đơn giá</th>
+                  <th>Tạm tính</th>
                 </tr>
               </thead>
               <tbody>
@@ -84,8 +88,8 @@ export default function StaffOrderDetailPage() {
                   <tr key={item._id || item.id}>
                     <td>{item.productNameSnapshot}</td>
                     <td>{item.quantity}</td>
-                    <td>${Number(item.priceSnapshot || 0).toFixed(2)}</td>
-                    <td>${Number(item.subtotal || 0).toFixed(2)}</td>
+                    <td>{formatCurrency(item.priceSnapshot)}</td>
+                    <td>{formatCurrency(item.subtotal)}</td>
                   </tr>
                 ))}
               </tbody>

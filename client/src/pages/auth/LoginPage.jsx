@@ -23,8 +23,8 @@ export default function LoginPage() {
   return (
     <div className="auth-page">
       <form className="auth-card" onSubmit={handleSubmit}>
-        <h1>Login</h1>
-        <p className="text-secondary">Access your GreenHome workspace.</p>
+        <h1>Đăng nhập</h1>
+        <p className="text-secondary">Truy cập tài khoản GreenHome Kitchen của bạn.</p>
         {error && <div className="alert alert-danger">{error}</div>}
         <label className="form-label">
           Email
@@ -37,7 +37,7 @@ export default function LoginPage() {
           />
         </label>
         <label className="form-label">
-          Password
+          Mật khẩu
           <input
             className="form-control"
             type="password"
@@ -47,10 +47,10 @@ export default function LoginPage() {
           />
         </label>
         <button className="btn btn-success w-100" type="submit">
-          Login
+          Đăng nhập
         </button>
         <p className="text-center mt-3 mb-0">
-          No account? <Link to="/register">Register</Link>
+          Chưa có tài khoản? <Link to="/register">Đăng ký</Link>
         </p>
       </form>
     </div>

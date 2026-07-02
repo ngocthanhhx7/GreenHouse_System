@@ -4,7 +4,7 @@ import { adminService } from '../../services/adminService.js';
 
 function formatDate(value) {
   if (!value) return '-';
-  return new Intl.DateTimeFormat('en', {
+  return new Intl.DateTimeFormat('vi-VN', {
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(new Date(value));
@@ -42,20 +42,20 @@ export default function AuditLogPage() {
   return (
     <div className="surface">
       <div className="page-heading">
-        <h1>Audit Logs</h1>
-        <button className="btn btn-outline-success" type="button" onClick={() => loadLogs(filters)}>Refresh</button>
+        <h1>Nhật ký hệ thống</h1>
+        <button className="btn btn-outline-success" type="button" onClick={() => loadLogs(filters)}>Làm mới</button>
       </div>
       {error && <div className="alert alert-danger">{error}</div>}
       <form className="admin-form compact mb-4" onSubmit={submitFilters}>
         <input
           className="form-control"
-          placeholder="Action"
+          placeholder="Hành động"
           value={filters.action}
           onChange={(event) => updateFilter('action', event.target.value)}
         />
         <input
           className="form-control"
-          placeholder="User ID"
+          placeholder="Mã người dùng"
           value={filters.userId}
           onChange={(event) => updateFilter('userId', event.target.value)}
         />
@@ -71,17 +71,17 @@ export default function AuditLogPage() {
           value={filters.to}
           onChange={(event) => updateFilter('to', event.target.value)}
         />
-        <button className="btn btn-success" type="submit">Filter</button>
+        <button className="btn btn-success" type="submit">Lọc</button>
       </form>
       <div className="table-responsive">
         <table className="table align-middle">
           <thead>
             <tr>
-              <th>Time</th>
-              <th>Action</th>
-              <th>User</th>
-              <th>Target</th>
-              <th>Description</th>
+              <th>Thời gian</th>
+              <th>Hành động</th>
+              <th>Người dùng</th>
+              <th>Đối tượng</th>
+              <th>Mô tả</th>
             </tr>
           </thead>
           <tbody>
@@ -96,7 +96,7 @@ export default function AuditLogPage() {
             ))}
             {!items.length && (
               <tr>
-                <td className="text-center text-muted" colSpan="5">No audit logs found.</td>
+                <td className="text-center text-muted" colSpan="5">Không tìm thấy nhật ký hệ thống.</td>
               </tr>
             )}
           </tbody>

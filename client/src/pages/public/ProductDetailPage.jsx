@@ -6,6 +6,7 @@ import { cartService } from '../../services/cartService.js';
 import { orderService } from '../../services/orderService.js';
 import { productService } from '../../services/productService.js';
 import { reviewService } from '../../services/reviewService.js';
+import { formatCurrency } from '../../utils/formatters.js';
 
 export default function ProductDetailPage() {
   const { id } = useParams();
@@ -24,7 +25,7 @@ export default function ProductDetailPage() {
   }, [id]);
 
   useEffect(() => {
-    if (user?.role !== 'Customer') return;
+    if (user?.role !== 'Customer') return undefined;
     let isCurrent = true;
 
     async function loadReviewableOrders() {
@@ -52,20 +53,20 @@ export default function ProductDetailPage() {
       <main className="public-page">
         <div className="surface">
           <div className="alert alert-danger">{error}</div>
-          <Link to="/products">Back to products</Link>
+          <Link to="/products">Quay lại danh sách sản phẩm</Link>
         </div>
       </main>
     );
   }
 
-  if (!product) return <div className="page-center">Loading...</div>;
+  if (!product) return <div className="page-center">Đang tải sản phẩm...</div>;
 
   async function addToCart() {
     setError('');
     setMessage('');
     try {
-      await cartService.addItem({ productId: product.id, quantity: 1 });
-      setMessage('Product added to cart.');
+      await cartService.addItem({ productId: product.id || product._id, quantity: 1 });
+      setMessage('Đã thêm sản phẩm vào giỏ hàng.');
     } catch (err) {
       setError(err.message);
     }
@@ -76,14 +77,14 @@ export default function ProductDetailPage() {
     setReviewError('');
     setMessage('');
     try {
-      await reviewService.createCustomerReview(product.id, {
+      await reviewService.createCustomerReview(product.id || product._id, {
         orderId: reviewForm.orderId,
         rating: Number(reviewForm.rating),
         content: reviewForm.content,
       });
       setReviewForm({ orderId: '', rating: 5, content: '' });
-      setMessage('Review submitted.');
-      setReviews(await reviewService.listProductReviews(product.id));
+      setMessage('Cảm ơn bạn đã gửi đánh giá.');
+      setReviews(await reviewService.listProductReviews(product.id || product._id));
     } catch (err) {
       setReviewError(err.message);
     }
@@ -93,35 +94,36 @@ export default function ProductDetailPage() {
     <main className="public-page">
       <div className="surface product-detail">
         <div className="product-image large">
-          {product.imageUrls?.[0] ? <img src={product.imageUrls[0]} alt={product.name} /> : <span>No image</span>}
+          {product.imageUrls?.[0] ? <img src={product.imageUrls[0]} alt={product.name} /> : <span>Chưa có ảnh</span>}
         </div>
         <div>
+          <span className="eyebrow">{product.category?.name || 'Sản phẩm nhà bếp'}</span>
           <h1>{product.name}</h1>
-          <p className="text-secondary">{product.category?.name}</p>
-          <p>{product.description}</p>
-          <strong className="price">${Number(product.price || 0).toFixed(2)}</strong>
+          <p>{product.description || 'Sản phẩm đang được GreenHome cập nhật mô tả chi tiết.'}</p>
+          <strong className="price">{formatCurrency(product.price)}</strong>
+          <p className="stock-note">Tồn kho: {Number(product.stockQuantity || 0)} {product.unit || 'sản phẩm'}</p>
           {message && <div className="alert alert-success mt-3">{message}</div>}
           <div className="mt-4">
             {user?.role === 'Customer' ? (
               <button className="btn btn-success me-2" type="button" onClick={addToCart}>
-                Add to cart
+                Thêm vào giỏ hàng
               </button>
             ) : (
               <Link className="btn btn-success me-2" to="/login">
-                Login to buy
+                Đăng nhập để mua
               </Link>
             )}
             <Link className="btn btn-outline-success" to="/products">
-              Back to catalog
+              Quay lại catalog
             </Link>
           </div>
         </div>
       </div>
       <div className="surface mt-4">
         <div className="page-heading">
-          <h2>Reviews</h2>
+          <h2>Đánh giá sản phẩm</h2>
           <span className="text-secondary">
-            {reviews.total || 0} reviews / {Number(reviews.averageRating || 0).toFixed(1)} average
+            {reviews.total || 0} đánh giá / {Number(reviews.averageRating || 0).toFixed(1)} điểm trung bình
           </span>
         </div>
         {reviewError && <div className="alert alert-danger">{reviewError}</div>}
@@ -132,12 +134,12 @@ export default function ProductDetailPage() {
               <p className="mb-0">{review.content}</p>
             </div>
           ))}
-          {!reviews.items?.length && <p className="text-secondary">No reviews yet.</p>}
+          {!reviews.items?.length && <p className="text-secondary">Chưa có đánh giá nào.</p>}
         </div>
         {user?.role === 'Customer' && (
           <form className="row g-3" onSubmit={submitReview}>
             <div className="col-md-5">
-              <label className="form-label" htmlFor="reviewOrderId">Delivered order</label>
+              <label className="form-label" htmlFor="reviewOrderId">Đơn hàng đã giao</label>
               <select
                 id="reviewOrderId"
                 className="form-select"
@@ -145,7 +147,7 @@ export default function ProductDetailPage() {
                 onChange={(event) => setReviewForm((current) => ({ ...current, orderId: event.target.value }))}
                 required
               >
-                <option value="">Select delivered order</option>
+                <option value="">Chọn đơn hàng</option>
                 {reviewableOrders.map((order) => (
                   <option key={order.id} value={order.id}>
                     {order.orderCode}
@@ -154,7 +156,7 @@ export default function ProductDetailPage() {
               </select>
             </div>
             <div className="col-md-3">
-              <label className="form-label" htmlFor="reviewRating">Rating</label>
+              <label className="form-label" htmlFor="reviewRating">Điểm đánh giá</label>
               <select
                 id="reviewRating"
                 className="form-select"
@@ -167,7 +169,7 @@ export default function ProductDetailPage() {
               </select>
             </div>
             <div className="col-12">
-              <label className="form-label" htmlFor="reviewContent">Review</label>
+              <label className="form-label" htmlFor="reviewContent">Nội dung đánh giá</label>
               <textarea
                 id="reviewContent"
                 className="form-control"
@@ -178,7 +180,7 @@ export default function ProductDetailPage() {
               />
             </div>
             <div className="col-12">
-              <button className="btn btn-success" type="submit">Submit review</button>
+              <button className="btn btn-success" type="submit">Gửi đánh giá</button>
             </div>
           </form>
         )}

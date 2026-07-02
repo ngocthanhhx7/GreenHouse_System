@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import { inventoryService } from '../../services/inventoryService.js';
+import { formatCurrency, translateRequestStatus } from '../../utils/formatters.js';
 
 export default function StockExportQueuePage() {
   const [items, setItems] = useState([]);
@@ -16,15 +17,15 @@ export default function StockExportQueuePage() {
 
   return (
     <div className="surface">
-      <h1>Stock Export Queue</h1>
+      <h1>Hàng đợi xuất kho</h1>
       {error && <div className="alert alert-danger">{error}</div>}
       <div className="table-responsive">
         <table className="table">
           <thead>
             <tr>
-              <th>Order</th>
-              <th>Status</th>
-              <th>Total</th>
+              <th>Đơn hàng</th>
+              <th>Trạng thái</th>
+              <th>Tổng tiền</th>
               <th></th>
             </tr>
           </thead>
@@ -32,15 +33,20 @@ export default function StockExportQueuePage() {
             {items.map((item) => (
               <tr key={item.id}>
                 <td>{item.order?.orderCode}</td>
-                <td>{item.status}</td>
-                <td>${Number(item.order?.totalAmount || 0).toFixed(2)}</td>
+                <td>{translateRequestStatus(item.status)}</td>
+                <td>{formatCurrency(item.order?.totalAmount)}</td>
                 <td>
                   <Link className="btn btn-outline-success btn-sm" to={`/warehouse/stock-exports/${item.id}`}>
-                    Open
+                    Mở phiếu
                   </Link>
                 </td>
               </tr>
             ))}
+            {!items.length && (
+              <tr>
+                <td colSpan="4" className="text-center text-muted">Chưa có phiếu xuất kho.</td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>

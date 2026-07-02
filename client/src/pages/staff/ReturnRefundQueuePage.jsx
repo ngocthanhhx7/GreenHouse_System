@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import { returnRefundService } from '../../services/returnRefundService.js';
+import { formatCurrency, translateRequestStatus } from '../../utils/formatters.js';
 
 const STATUS_OPTIONS = ['', 'Pending', 'Approved', 'Rejected'];
 
@@ -33,11 +34,11 @@ export default function ReturnRefundQueuePage() {
   return (
     <div className="surface">
       <div className="page-heading">
-        <h1>Return & Refund Queue</h1>
+        <h1>Hàng đợi đổi trả / hoàn tiền</h1>
         <select className="form-select status-select" value={status} onChange={handleStatusChange}>
           {STATUS_OPTIONS.map((option) => (
             <option key={option || 'all'} value={option}>
-              {option || 'All statuses'}
+              {option ? translateRequestStatus(option) : 'Tất cả trạng thái'}
             </option>
           ))}
         </select>
@@ -47,10 +48,10 @@ export default function ReturnRefundQueuePage() {
         <table className="table">
           <thead>
             <tr>
-              <th>Order</th>
-              <th>Status</th>
-              <th>Refund</th>
-              <th>Reason</th>
+              <th>Đơn hàng</th>
+              <th>Trạng thái</th>
+              <th>Số tiền hoàn</th>
+              <th>Lý do</th>
               <th></th>
             </tr>
           </thead>
@@ -58,16 +59,21 @@ export default function ReturnRefundQueuePage() {
             {items.map((item) => (
               <tr key={item.id}>
                 <td>{item.orderCode}</td>
-                <td>{item.status}</td>
-                <td>${Number(item.refundAmount || 0).toFixed(2)}</td>
+                <td>{translateRequestStatus(item.status)}</td>
+                <td>{formatCurrency(item.refundAmount)}</td>
                 <td>{item.reason}</td>
                 <td>
                   <Link className="btn btn-outline-success btn-sm" to={`/staff/return-refunds/${item.id}`}>
-                    Open
+                    Mở yêu cầu
                   </Link>
                 </td>
               </tr>
             ))}
+            {!items.length && (
+              <tr>
+                <td colSpan="5" className="text-center text-muted">Không có yêu cầu trong trạng thái này.</td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>

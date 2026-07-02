@@ -1,6 +1,8 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 
 import AppLayout from './components/layout/AppLayout.jsx';
+import CustomerLayout from './components/layout/CustomerLayout.jsx';
+import PublicLayout from './components/layout/PublicLayout.jsx';
 import ProtectedRoute from './components/auth/ProtectedRoute.jsx';
 import RoleRoute from './components/auth/RoleRoute.jsx';
 import ForbiddenPage from './pages/errors/ForbiddenPage.jsx';
@@ -12,6 +14,8 @@ import ProfilePage from './pages/profile/ProfilePage.jsx';
 import HomePage from './pages/public/HomePage.jsx';
 import ProductListingPage from './pages/public/ProductListingPage.jsx';
 import ProductDetailPage from './pages/public/ProductDetailPage.jsx';
+import AboutPage from './pages/public/AboutPage.jsx';
+import ContactPage from './pages/public/ContactPage.jsx';
 import AdminDashboardPage from './pages/admin/AdminDashboardPage.jsx';
 import AuditLogPage from './pages/admin/AuditLogPage.jsx';
 import ProductManagementPage from './pages/admin/ProductManagementPage.jsx';
@@ -44,19 +48,23 @@ import ReplenishmentAdminPage from './pages/admin/ReplenishmentAdminPage.jsx';
 export default function App() {
   return (
     <Routes>
-      <Route path="/" element={<HomePage />} />
-      <Route path="/products" element={<ProductListingPage />} />
-      <Route path="/products/:id" element={<ProductDetailPage />} />
-      <Route path="/login" element={<LoginPage />} />
-      <Route path="/register" element={<RegisterPage />} />
-      <Route path="/unauthorized" element={<UnauthorizedPage />} />
-      <Route path="/forbidden" element={<ForbiddenPage />} />
+      <Route path="/" element={<PublicLayout />}>
+        <Route index element={<HomePage />} />
+        <Route path="products" element={<ProductListingPage />} />
+        <Route path="products/:id" element={<ProductDetailPage />} />
+        <Route path="about" element={<AboutPage />} />
+        <Route path="contact" element={<ContactPage />} />
+        <Route path="login" element={<LoginPage />} />
+        <Route path="register" element={<RegisterPage />} />
+        <Route path="unauthorized" element={<UnauthorizedPage />} />
+        <Route path="forbidden" element={<ForbiddenPage />} />
+      </Route>
 
       <Route
         path="/"
         element={
           <ProtectedRoute>
-            <AppLayout />
+            <CustomerLayout />
           </ProtectedRoute>
         }
       >
@@ -126,6 +134,16 @@ export default function App() {
             </RoleRoute>
           }
         />
+      </Route>
+
+      <Route
+        path="/"
+        element={
+          <ProtectedRoute>
+            <AppLayout />
+          </ProtectedRoute>
+        }
+      >
         <Route
           path="staff"
           element={

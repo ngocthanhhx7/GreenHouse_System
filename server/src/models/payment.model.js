@@ -17,10 +17,20 @@ const paymentSchema = new mongoose.Schema(
       enum: ['COD', 'ONLINE'],
       required: true,
     },
+    paymentProvider: {
+      type: String,
+      default: '',
+      trim: true,
+    },
     amount: {
       type: Number,
       required: true,
       min: 0,
+    },
+    currency: {
+      type: String,
+      default: 'VND',
+      trim: true,
     },
     paymentStatus: {
       type: String,
@@ -34,6 +44,21 @@ const paymentSchema = new mongoose.Schema(
     rawResponse: {
       type: mongoose.Schema.Types.Mixed,
       default: null,
+    },
+    gatewayResponseCode: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    gatewayMessage: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    providerMessageId: {
+      type: String,
+      default: '',
+      trim: true,
     },
   },
   { timestamps: true }

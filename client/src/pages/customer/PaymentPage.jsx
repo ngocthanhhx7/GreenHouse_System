@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
 import { paymentService } from '../../services/paymentService.js';
+import { formatCurrency, translatePaymentStatus } from '../../utils/formatters.js';
 
 export default function PaymentPage() {
   const { id } = useParams();
@@ -30,24 +31,24 @@ export default function PaymentPage() {
 
   return (
     <div className="surface">
-      <h1>Online Payment</h1>
+      <h1>Thanh toán online</h1>
       {error && <div className="alert alert-danger">{error}</div>}
       {!payment ? (
-        <p className="text-secondary">Preparing payment request...</p>
+        <p className="text-secondary">Đang chuẩn bị yêu cầu thanh toán...</p>
       ) : (
         <div className="payment-panel">
-          <p>Order: <strong>{payment.orderCode}</strong></p>
-          <p>Amount: <strong>${Number(payment.amount).toFixed(2)}</strong></p>
-          <p>Status: {payment.paymentStatus}</p>
+          <p>Đơn hàng: <strong>{payment.orderCode}</strong></p>
+          <p>Số tiền: <strong>{formatCurrency(payment.amount)}</strong></p>
+          <p>Trạng thái: {translatePaymentStatus(payment.paymentStatus)}</p>
           <div className="d-flex gap-2">
             <button className="btn btn-success" type="button" onClick={() => submitStatus('Paid')}>
-              Simulate Paid
+              Mô phỏng thanh toán thành công
             </button>
             <button className="btn btn-outline-danger" type="button" onClick={() => submitStatus('Failed')}>
-              Simulate Failed
+              Mô phỏng thanh toán thất bại
             </button>
             <Link className="btn btn-outline-secondary" to={`/orders/${id}`}>
-              Back to order
+              Quay lại đơn hàng
             </Link>
           </div>
         </div>

@@ -3,12 +3,12 @@ export default function ProductFilter({ filters, categories, onChange, onSubmit 
     <form className="catalog-filter" onSubmit={onSubmit}>
       <input
         className="form-control"
-        placeholder="Search products"
+        placeholder="Tìm sản phẩm"
         value={filters.keyword}
         onChange={(event) => onChange({ ...filters, keyword: event.target.value })}
       />
       <select className="form-select" value={filters.categoryId} onChange={(event) => onChange({ ...filters, categoryId: event.target.value })}>
-        <option value="">All categories</option>
+        <option value="">Tất cả danh mục</option>
         {categories.map((category) => (
           <option key={category.id} value={category.id}>
             {category.name}
@@ -19,7 +19,7 @@ export default function ProductFilter({ filters, categories, onChange, onSubmit 
         className="form-control"
         type="number"
         min="0"
-        placeholder="Min price"
+        placeholder="Giá từ"
         value={filters.minPrice}
         onChange={(event) => onChange({ ...filters, minPrice: event.target.value })}
       />
@@ -27,12 +27,12 @@ export default function ProductFilter({ filters, categories, onChange, onSubmit 
         className="form-control"
         type="number"
         min="0"
-        placeholder="Max price"
+        placeholder="Giá đến"
         value={filters.maxPrice}
         onChange={(event) => onChange({ ...filters, maxPrice: event.target.value })}
       />
       <button className="btn btn-success" type="submit">
-        Filter
+        Lọc sản phẩm
       </button>
     </form>
   );
