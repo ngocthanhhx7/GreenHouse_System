@@ -12,3 +12,19 @@ describe('admin dashboard styles', () => {
     assert.match(styles, /grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(160px,\s*1fr\)\)/);
   });
 });
+
+describe('premium storefront CTA styles', () => {
+  it('keeps the Home CTA visually separate from the footer without letting the footer cover it', () => {
+    const ctaBlock = styles.match(/\.premium-final-cta\s*\{[^}]+\}/)?.[0] || '';
+    const footerBlock = styles.match(/\.site-footer\s*\{[^}]+\}/g)?.at(-1) || '';
+    const homeBlock = styles.match(/\.home-premium\s*\{[^}]+\}/)?.[0] || '';
+
+    assert.match(ctaBlock, /background:\s*#0d725c/);
+    assert.doesNotMatch(ctaBlock, /background:\s*#064f3c/);
+    assert.match(ctaBlock, /margin:\s*34px auto 0/);
+    assert.match(ctaBlock, /position:\s*relative/);
+    assert.match(ctaBlock, /z-index:\s*2/);
+    assert.match(footerBlock, /background:\s*#064f3c/);
+    assert.match(footerBlock, /padding-top:\s*64px/);
+  });
+});

@@ -34,19 +34,86 @@ const trustItems = [
   { label: 'Hỗ trợ đổi trả theo chính sách', icon: '03' },
 ];
 
+const BenefitIcons = {
+  award: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="benefit-icon-svg">
+      <circle cx="12" cy="8" r="7" />
+      <polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88" />
+      <polyline points="9 8 11 10 15 6" />
+    </svg>
+  ),
+  delivery: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="benefit-icon-svg">
+      <path d="M5 6h11v10H5z" />
+      <path d="M16 8h4l3 3v5h-7z" />
+      <circle cx="9" cy="18" r="2" />
+      <circle cx="19" cy="18" r="2" />
+      <path d="M1 9h2M0 12h3" />
+    </svg>
+  ),
+  card: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="benefit-icon-svg">
+      <rect x="2" y="5" width="20" height="14" rx="2" ry="2" />
+      <line x1="2" y1="10" x2="22" y2="10" />
+      <rect x="5" y="14" width="3" height="2" />
+    </svg>
+  ),
+  return: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="benefit-icon-svg">
+      <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+      <polyline points="3 3 3 8 8 8" />
+      <path d="M8 12l4-2 4 2-4 2-4-2zM8 12v4l4 2v-4M16 12v4l-4 2" />
+    </svg>
+  ),
+};
+
+const StepIcons = {
+  cart: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="step-icon-svg">
+      <circle cx="9" cy="21" r="1" />
+      <circle cx="20" cy="21" r="1" />
+      <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6" />
+    </svg>
+  ),
+  box: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="step-icon-svg">
+      <path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z" />
+      <path d="M3.27 6.96L12 12.01l8.73-5.05" />
+      <path d="M12 22.08V12" />
+    </svg>
+  ),
+  dollar: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="step-icon-svg">
+      <line x1="12" y1="1" x2="12" y2="23" />
+      <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+    </svg>
+  ),
+  user: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="step-icon-svg">
+      <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+      <circle cx="12" cy="7" r="4" />
+    </svg>
+  ),
+  support: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="step-icon-svg">
+      <path d="M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3" />
+    </svg>
+  ),
+};
+
 const benefits = [
-  { title: 'Sản phẩm chọn lọc chất lượng cao', icon: 'GH' },
-  { title: 'Giao hàng nhanh và chuyên nghiệp', icon: '24' },
-  { title: 'Thanh toán COD và trực tuyến an toàn', icon: 'VN' },
-  { title: 'Chính sách đổi trả minh bạch', icon: '7D' },
+  { title: 'Sản phẩm chọn lọc chất lượng cao', icon: 'award' },
+  { title: 'Giao hàng nhanh và chuyên nghiệp', icon: 'delivery' },
+  { title: 'Thanh toán COD và trực tuyến an toàn', icon: 'card' },
+  { title: 'Chính sách đổi trả minh bạch', icon: 'return' },
 ];
 
 const orderSteps = [
-  'Đặt hàng',
-  'Đóng gói',
-  'Thanh toán',
-  'Bồi đắp niềm tin',
-  'Hỗ trợ sau mua',
+  { label: 'Đặt hàng', icon: 'cart' },
+  { label: 'Đóng gói', icon: 'box' },
+  { label: 'Thanh toán', icon: 'dollar' },
+  { label: 'Bồi đắp niềm tin', icon: 'user' },
+  { label: 'Hỗ trợ sau mua', icon: 'support' },
 ];
 
 const reviews = [
@@ -269,16 +336,16 @@ export default function HomePage() {
         <div className="premium-benefit-grid home-reveal">
           {benefits.map((benefit) => (
             <article className="premium-benefit-card" key={benefit.title}>
-              <span>{benefit.icon}</span>
+              <span>{BenefitIcons[benefit.icon]}</span>
               <strong>{benefit.title}</strong>
             </article>
           ))}
         </div>
         <div className="premium-order-flow home-reveal">
-          {orderSteps.map((step) => (
-            <div className="premium-order-step" key={step}>
-              <span />
-              <strong>{step}</strong>
+          {orderSteps.map((step, index) => (
+            <div className={`premium-order-step ${index === 0 ? 'active' : ''}`} key={step.label}>
+              <span>{StepIcons[step.icon]}</span>
+              <strong>{step.label}</strong>
             </div>
           ))}
         </div>

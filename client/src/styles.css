@@ -2335,6 +2335,7 @@ body {
 .home-premium {
   background: #fffdf6;
   color: #133429;
+  isolation: isolate;
 }
 
 .premium-hero {
@@ -2670,11 +2671,14 @@ body {
   color: #064f3c;
   display: inline-flex;
   flex: 0 0 auto;
-  font-size: 12px;
-  font-weight: 900;
   height: 42px;
   justify-content: center;
   width: 42px;
+}
+
+.premium-benefit-card span svg {
+  height: 22px;
+  width: 22px;
 }
 
 .premium-order-flow {
@@ -2697,20 +2701,47 @@ body {
   background: #0f694e;
   content: '';
   height: 1px;
-  left: calc(50% + 30px);
+  left: calc(50% + 24px);
   position: absolute;
-  right: calc(-50% + 30px);
+  right: calc(-50% + 28px);
   top: 23px;
 }
 
+.premium-order-step:not(:last-child)::before {
+  border-bottom: 4px solid transparent;
+  border-left: 6px solid #0f694e;
+  border-top: 4px solid transparent;
+  content: '';
+  position: absolute;
+  right: calc(-50% + 22px);
+  top: 19px;
+  z-index: 2;
+}
+
 .premium-order-step span {
-  background: #064f3c;
-  border: 8px solid #e7f1e4;
+  align-items: center;
+  background: #edf4e8;
+  border: 1px solid #c8ddc7;
   border-radius: 999px;
+  box-sizing: border-box;
+  color: #064f3c;
+  display: inline-flex;
   height: 46px;
+  justify-content: center;
   position: relative;
   width: 46px;
   z-index: 1;
+}
+
+.premium-order-step.active span {
+  background: #064f3c;
+  border: 8px solid #e7f1e4;
+  color: #ffffff;
+}
+
+.premium-order-step span svg {
+  height: 20px;
+  width: 20px;
 }
 
 .premium-order-step strong {
@@ -2768,15 +2799,21 @@ body {
 
 .premium-final-cta {
   align-items: center;
-  background: #064f3c;
-  border-radius: 12px;
+  background: #0d725c;
+  border: 1px solid rgba(210, 239, 222, 0.42);
+  border-radius: 10px;
+  box-shadow: 0 18px 38px rgba(6, 79, 60, 0.18);
   color: #ffffff;
   display: flex;
   gap: 18px;
   justify-content: space-between;
-  margin: 30px auto 0;
+  margin: 34px auto 0;
   max-width: 1120px;
-  padding: 28px clamp(20px, 4vw, 58px);
+  min-height: 86px;
+  padding: 20px clamp(22px, 4vw, 54px);
+  position: relative;
+  width: min(1120px, calc(100% - 88px));
+  z-index: 2;
 }
 
 .premium-final-cta h2 {
@@ -2800,6 +2837,7 @@ body {
 .site-footer {
   background: #064f3c;
   margin-top: 0;
+  padding-top: 64px;
 }
 
 @media (max-width: 1050px) {
@@ -2919,6 +2957,10 @@ body {
   .premium-final-cta {
     align-items: flex-start;
     flex-direction: column;
+    margin: 26px auto 0;
+    min-height: 0;
+    padding: 22px;
+    width: calc(100% - 36px);
   }
 }
 
