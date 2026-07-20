@@ -10,6 +10,8 @@ router.get('/staff/orders/:id', authenticate, authorizeRoles('Staff'), staffOrde
 router.post('/staff/orders/:id/confirm', authenticate, authorizeRoles('Staff'), staffOrderController.confirmOrder);
 router.post('/staff/orders/:id/stock-export', authenticate, authorizeRoles('Staff'), staffOrderController.requestStockExport);
 router.patch('/staff/orders/:id/status', authenticate, authorizeRoles('Staff'), staffOrderController.updateStatus);
+router.post('/staff/orders/:id/cancel', authenticate, authorizeRoles('Staff'), staffOrderController.cancelOrder);
+router.post('/staff/orders/:id/cod-collected', authenticate, authorizeRoles('Staff'), staffOrderController.markCodCollected);
 router.get('/staff/orders/:id/invoice', authenticate, authorizeRoles('Staff'), staffOrderController.getInvoice);
 
 module.exports = router;

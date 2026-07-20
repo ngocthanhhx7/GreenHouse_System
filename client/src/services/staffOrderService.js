@@ -47,6 +47,18 @@ export function createStaffOrderService({ baseUrl = DEFAULT_BASE_URL, fetcher } 
         body: JSON.stringify({ nextStatus }),
       });
     },
+    async cancelOrder(id, input = {}) {
+      return request(`/staff/orders/${id}/cancel`, {
+        method: 'POST',
+        body: JSON.stringify(input),
+      });
+    },
+    async markCodCollected(id, input = {}) {
+      return request(`/staff/orders/${id}/cod-collected`, {
+        method: 'POST',
+        body: JSON.stringify(input),
+      });
+    },
     async getInvoice(id) {
       return request(`/staff/orders/${id}/invoice`);
     },

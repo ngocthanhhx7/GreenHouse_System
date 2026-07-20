@@ -15,6 +15,7 @@ function toResponse(request, order) {
     handledBy: request.handledBy ? String(request.handledBy) : null,
     response: request.response || '',
     respondedAt: request.respondedAt || null,
+    closedAt: request.closedAt || null,
     createdAt: request.createdAt,
   };
 }
@@ -75,7 +76,7 @@ function createSupportService({
         orderId: input.orderId || null,
         subject: String(input.subject).trim(),
         content: String(input.content).trim(),
-        status: 'Open',
+        status: 'New',
       });
       await writeAudit(customerId, 'SUPPORT_CREATE', request._id, `Support request created: ${request.subject}`);
       return toResponse(request, order);
@@ -109,12 +110,15 @@ function createSupportService({
       const request = await repository.findRequestById(id);
       if (!request) throw new ApiError(404, 'Support request not found');
       if (!String(input.response || '').trim()) throw new ApiError(400, 'Support response is required');
-      if (!['InProgress', 'Resolved'].includes(input.status)) throw new ApiError(400, 'Invalid support status');
+      const currentStatus = request.status === 'Open' ? 'New' : request.status;
+      const allowedStatuses = currentStatus === 'New' ? ['InProgress'] : currentStatus === 'InProgress' ? ['Resolved'] : [];
+      if (!allowedStatuses.includes(input.status)) throw new ApiError(409, 'Invalid support status transition');
       const updated = await repository.updateRequest(id, {
         status: input.status,
         response: String(input.response).trim(),
         handledBy: staffId,
         respondedAt: new Date(),
+        closedAt: input.status === 'Resolved' ? new Date() : null,
       });
       await writeAudit(staffId, 'SUPPORT_RESPOND', id, `Support request ${input.status}`);
       return toResponse(updated, await resolveOrderForRequest(updated));

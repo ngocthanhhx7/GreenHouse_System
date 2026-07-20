@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import { returnRefundService } from '../../services/returnRefundService.js';
 import { formatCurrency, translateRequestStatus } from '../../utils/formatters.js';
 
-const STATUS_OPTIONS = ['', 'Pending', 'Approved', 'Rejected'];
+const STATUS_OPTIONS = ['', 'Pending', 'AwaitingInspection', 'ReadyForRefund', 'Rejected', 'Completed'];
 
 export default function ReturnRefundQueuePage() {
   const [status, setStatus] = useState('Pending');

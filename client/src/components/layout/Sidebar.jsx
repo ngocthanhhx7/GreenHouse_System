@@ -26,6 +26,7 @@ const ROLE_LINKS = {
     { to: '/warehouse', label: 'Tổng quan kho' },
     { to: '/warehouse/inventory', label: 'Tồn kho' },
     { to: '/warehouse/stock-exports', label: 'Phiếu xuất kho' },
+    { to: '/warehouse/return-refunds', label: 'Kiểm hàng đổi trả' },
     { to: '/warehouse/low-stock', label: 'Cảnh báo sắp hết' },
     { to: '/warehouse/replenishments', label: 'Bổ sung hàng' },
   ],

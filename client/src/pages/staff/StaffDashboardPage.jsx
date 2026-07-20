@@ -33,13 +33,13 @@ export default function StaffDashboardPage() {
         const [orders, returns, support] = await Promise.all([
           staffOrderService.listOrders({ status: 'Pending', limit: 1 }),
           returnRefundService.listStaffRequests({ status: 'Pending', limit: 1 }),
-          supportService.listStaffRequests({ status: 'Open', limit: 1 }),
+          supportService.listStaffRequests({ status: 'New', limit: 1 }),
         ]);
         if (!cancelled) {
           setStats({
-            pendingOrders: Array.isArray(orders) ? orders.length : 0,
-            pendingReturns: Array.isArray(returns) ? returns.length : 0,
-            openSupport: Array.isArray(support) ? support.length : 0,
+            pendingOrders: Array.isArray(orders?.items) ? orders.items.length : 0,
+            pendingReturns: Array.isArray(returns?.items) ? returns.items.length : 0,
+            openSupport: Array.isArray(support?.items) ? support.items.length : 0,
           });
         }
       } catch (err) {

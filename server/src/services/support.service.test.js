@@ -13,7 +13,7 @@ function createRepository() {
       return orders.find((order) => order._id === id) || null;
     },
     async createRequest(data) {
-      const request = { _id: `support-${requests.length + 1}`, status: 'Open', createdAt: new Date(), ...data };
+      const request = { _id: `support-${requests.length + 1}`, status: 'New', createdAt: new Date(), ...data };
       requests.push(request);
       return request;
     },
@@ -60,7 +60,7 @@ describe('support service', () => {
       content: 'The box arrived open.',
     });
 
-    assert.equal(result.status, 'Open');
+    assert.equal(result.status, 'New');
     assert.equal(result.orderCode, 'GH-DEMO-1004');
     assert.equal(repository.requests.length, 1);
   });
@@ -72,20 +72,29 @@ describe('support service', () => {
     );
   });
 
-  it('lets staff respond and resolves the support request', async () => {
+  it('requires New/Open -> InProgress -> Resolved support progression and only closes on resolution', async () => {
     const request = await service.createCustomerRequest('customer-1', {
       orderId: 'order-1',
       subject: 'Delivery issue',
       content: 'The box arrived open.',
     });
 
-    const result = await service.respondToRequest('staff-1', request.id, {
+    await assert.rejects(
+      () => service.respondToRequest('staff-1', request.id, { response: 'We will arrange a replacement.', status: 'Resolved' }),
+      /Invalid support status transition/
+    );
+    const inProgress = await service.respondToRequest('staff-1', request.id, {
       response: 'We will arrange a replacement.',
+      status: 'InProgress',
+    });
+    assert.equal(inProgress.status, 'InProgress');
+    assert.equal(inProgress.closedAt, null);
+    const result = await service.respondToRequest('staff-1', request.id, {
+      response: 'Replacement has been arranged.',
       status: 'Resolved',
     });
-
     assert.equal(result.status, 'Resolved');
-    assert.equal(result.response, 'We will arrange a replacement.');
+    assert.ok(result.closedAt);
     assert.equal(result.handledBy, 'staff-1');
   });
 });

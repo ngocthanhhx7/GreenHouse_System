@@ -11,6 +11,8 @@ const RefundPending = require('./refundPending.model');
 const Product = require('./product.model');
 const ReturnRefundRequest = require('./returnRefundRequest.model');
 const SupportRequest = require('./supportRequest.model');
+const Invoice = require('./invoice.model');
+const ReturnItem = require('./returnItem.model');
 
 function assertPath(model, pathName) {
   assert.ok(model.schema.path(pathName), `${model.modelName}.${pathName} should exist`);
@@ -48,6 +50,15 @@ describe('schema alignment with ERD', () => {
     });
     ['ticketCode', 'requestType', 'priority', 'productId', 'closedAt'].forEach((field) => {
       assertPath(SupportRequest, field);
+    });
+  });
+
+  it('stores immutable invoice snapshots and warehouse return inspection records', () => {
+    ['orderId', 'invoiceCode', 'issuedBy', 'issuedAt', 'currency', 'subtotal', 'shippingFee', 'totalAmount', 'receiverName', 'receiverPhone', 'shippingAddress', 'items'].forEach((field) => {
+      assertPath(Invoice, field);
+    });
+    ['returnRefundRequestId', 'orderDetailId', 'productId', 'requestedQuantity', 'receivedQuantity', 'sellableQuantity', 'damagedQuantity', 'evidenceImages', 'warehouseNote', 'inspectedBy', 'inspectedAt'].forEach((field) => {
+      assertPath(ReturnItem, field);
     });
   });
 

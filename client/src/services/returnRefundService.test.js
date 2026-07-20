@@ -35,4 +35,21 @@ describe('client return/refund service', () => {
 
     assert.equal(result.status, 'Approved');
   });
+
+  it('uses warehouse inspection and staff completion endpoints separately', async () => {
+    const calls = [];
+    const service = createReturnRefundService({
+      baseUrl: 'http://api.test/api',
+      fetcher: async (url, options) => {
+        calls.push({ url, options });
+        return { ok: true, json: async () => ({ success: true, data: { status: 'ReadyForRefund' } }) };
+      },
+    });
+
+    await service.inspectRequest('refund-1', { items: [] });
+    await service.completeRefund('refund-1', { note: 'Da doi soat' });
+
+    assert.equal(calls[0].url, 'http://api.test/api/warehouse/return-refunds/refund-1/inspection');
+    assert.equal(calls[1].url, 'http://api.test/api/staff/return-refunds/refund-1/complete-refund');
+  });
 });

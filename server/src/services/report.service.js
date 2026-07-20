@@ -66,7 +66,7 @@ function createReportService({ repository = createModelRepository() } = {}) {
         },
         support: {
           total: supportRequests.length,
-          open: supportRequests.filter((request) => request.status === 'Open').length,
+          open: supportRequests.filter((request) => ['New', 'Open', 'InProgress'].includes(request.status)).length,
           resolved: supportRequests.filter((request) => request.status === 'Resolved').length,
         },
         reviews: {

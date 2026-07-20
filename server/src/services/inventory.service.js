@@ -247,7 +247,7 @@ function createInventoryService({
           });
           await logWarehouseAction(userId, 'INVENTORY_EXPORT', updatedInventory._id, `Exported ${detail.quantity} of ${updatedInventory.productId.name}`);
         }
-        await repository.updateOrder(order._id, { orderStatus: 'Packed' });
+        await repository.updateOrder(order._id, { orderStatus: 'Packed', packedAt: new Date() });
       }
 
       const updatedRequest = await repository.updateStockExport(id, {

@@ -44,8 +44,8 @@ const supportRequestSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['Open', 'InProgress', 'Resolved'],
-      default: 'Open',
+      enum: ['New', 'Open', 'InProgress', 'Resolved'],
+      default: 'New',
     },
     handledBy: {
       type: mongoose.Schema.Types.ObjectId,
