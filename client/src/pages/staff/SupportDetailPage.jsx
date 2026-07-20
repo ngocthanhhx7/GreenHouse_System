@@ -16,7 +16,7 @@ export default function SupportDetailPage() {
     try {
       const result = await supportService.getStaffRequest(id);
       setRequest(result);
-      setForm({ response: result.response || '', status: result.status === 'Resolved' ? 'Resolved' : 'InProgress' });
+      setForm({ response: result.response || '', status: result.status === 'InProgress' ? 'Resolved' : 'InProgress' });
     } catch (err) {
       setError(err.message);
     }
@@ -58,7 +58,7 @@ export default function SupportDetailPage() {
             <dt className="col-sm-3">Nội dung</dt>
             <dd className="col-sm-9">{request.content}</dd>
           </dl>
-          <form className="row g-3" onSubmit={submitResponse}>
+          {request.status !== 'Resolved' && <form className="row g-3" onSubmit={submitResponse}>
             <div className="col-md-4">
               <label className="form-label" htmlFor="supportStatus">Trạng thái</label>
               <select
@@ -67,8 +67,8 @@ export default function SupportDetailPage() {
                 value={form.status}
                 onChange={(event) => setForm((current) => ({ ...current, status: event.target.value }))}
               >
-                <option value="InProgress">Đang xử lý</option>
-                <option value="Resolved">Đã giải quyết</option>
+                {['New', 'Open'].includes(request.status) && <option value="InProgress">Đang xử lý</option>}
+                {request.status === 'InProgress' && <option value="Resolved">Đã giải quyết</option>}
               </select>
             </div>
             <div className="col-12">
@@ -85,7 +85,7 @@ export default function SupportDetailPage() {
             <div className="col-12">
               <button className="btn btn-success" type="submit">Lưu phản hồi</button>
             </div>
-          </form>
+          </form>}
         </>
       )}
     </div>

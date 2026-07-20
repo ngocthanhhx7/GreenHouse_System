@@ -60,12 +60,16 @@ export function translatePaymentMethod(method) {
 export function translateRequestStatus(status) {
   const labels = {
     Pending: 'Chờ xử lý',
+    AwaitingInspection: 'Chờ kiểm hàng',
+    ReadyForRefund: 'Sẵn sàng hoàn tiền',
+    Completed: 'Đã hoàn tất',
     Approved: 'Đã duyệt',
     Rejected: 'Đã từ chối',
     Processing: 'Đang xử lý',
     Exported: 'Đã xuất kho',
     Cancelled: 'Đã hủy',
     Received: 'Đã nhận hàng',
+    New: 'Mới',
     Open: 'Đang mở',
     InProgress: 'Đang xử lý',
     Resolved: 'Đã giải quyết',

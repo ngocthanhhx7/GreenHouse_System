@@ -188,6 +188,7 @@ const DEMO_ORDER_SPECS = [
 const DEMO_RETURN_REFUND_SPECS = [
   {
     orderCode: 'GH-DEMO-1004',
+    requestCode: 'RET-DEMO-1004',
     reason: 'Demo request: plate set arrived with one broken item.',
     status: 'Pending',
   },
@@ -198,7 +199,7 @@ const DEMO_SUPPORT_SPECS = [
     orderCode: 'GH-DEMO-1004',
     subject: 'Demo support: damaged packaging',
     content: 'The delivered package was open and needs staff follow-up.',
-    status: 'Open',
+    status: 'New',
   },
 ];
 
@@ -279,7 +280,7 @@ const DEMO_AUDIT_SPECS = [
   },
   {
     roleName: 'Staff',
-    action: 'RETURN_REFUND_APPROVED',
+    action: 'RETURN_REFUND_APPROVED_FOR_INSPECTION',
     targetEntity: 'ReturnRefundRequest',
     targetId: 'GH-DEMO-1004',
     description: 'Demo staff approved a return/refund request',
@@ -421,6 +422,7 @@ async function upsertDemoOrders(userMap, productMap) {
       {
         $set: {
           orderId: order._id,
+          requestCode: requestSpec.requestCode || '',
           transactionId: orderSpec.transactionId || '',
           paymentMethod: orderSpec.paymentMethod,
           amount: totalAmount,
@@ -474,6 +476,9 @@ async function upsertReturnRefundRequests(userMap, orderMap) {
           resolvedBy: null,
           resolvedAt: null,
           staffNote: '',
+          inspectionNote: '',
+          completedBy: null,
+          completedAt: null,
         },
       },
       { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
@@ -502,6 +507,7 @@ async function upsertSupportRequests(userMap, orderMap) {
           handledBy: null,
           response: '',
           respondedAt: null,
+          closedAt: null,
         },
       },
       { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }

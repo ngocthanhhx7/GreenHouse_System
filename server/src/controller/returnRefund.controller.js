@@ -41,10 +41,46 @@ async function decideRequest(req, res, next) {
   }
 }
 
+async function getWarehouseRequest(req, res, next) {
+  try {
+    return sendSuccess(res, await returnRefundService.getStaffRequest(req.params.id));
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function listWarehouseRequests(req, res, next) {
+  try {
+    return sendSuccess(res, await returnRefundService.listWarehouseRequests(req.query));
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function inspectRequest(req, res, next) {
+  try {
+    return sendSuccess(res, await returnRefundService.inspectRequest(req.user.id, req.params.id, req.body), 'Return/refund inspected');
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function completeRefund(req, res, next) {
+  try {
+    return sendSuccess(res, await returnRefundService.completeRefund(req.user.id, req.params.id, req.body), 'Refund completed');
+  } catch (error) {
+    return next(error);
+  }
+}
+
 module.exports = {
   createCustomerRequest,
   listMyRequests,
   listStaffRequests,
+  listWarehouseRequests,
   getStaffRequest,
+  getWarehouseRequest,
   decideRequest,
+  inspectRequest,
+  completeRefund,
 };

@@ -175,6 +175,7 @@ describe('inventory service', () => {
 
     assert.equal(result.stockExport.status, 'Exported');
     assert.equal(result.order.orderStatus, 'Packed');
+    assert.ok(repository.orders[0].packedAt);
     assert.equal(repository.inventories[0].stockQuantity, 8);
     assert.equal(repository.productStocks.get('product-1'), 8);
     assert.equal(repository.transactions.at(-1).transactionType, 'STOCK_EXPORT');

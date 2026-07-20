@@ -43,6 +43,8 @@ import LowStockPage from './pages/warehouse/LowStockPage.jsx';
 import StockExportQueuePage from './pages/warehouse/StockExportQueuePage.jsx';
 import StockExportDetailPage from './pages/warehouse/StockExportDetailPage.jsx';
 import ReplenishmentPage from './pages/warehouse/ReplenishmentPage.jsx';
+import WarehouseReturnRefundQueuePage from './pages/warehouse/ReturnRefundQueuePage.jsx';
+import ReturnRefundInspectionPage from './pages/warehouse/ReturnRefundInspectionPage.jsx';
 import ReplenishmentAdminPage from './pages/admin/ReplenishmentAdminPage.jsx';
 
 export default function App() {
@@ -253,6 +255,22 @@ export default function App() {
           element={
             <RoleRoute allowedRoles={['WarehouseManager']}>
               <ReplenishmentPage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="warehouse/return-refunds"
+          element={
+            <RoleRoute allowedRoles={['WarehouseManager']}>
+              <WarehouseReturnRefundQueuePage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="warehouse/return-refunds/:id"
+          element={
+            <RoleRoute allowedRoles={['WarehouseManager']}>
+              <ReturnRefundInspectionPage />
             </RoleRoute>
           }
         />

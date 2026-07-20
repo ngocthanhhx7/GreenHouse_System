@@ -1,6 +1,5 @@
 const ORDER_STATUS_TRANSITIONS = {
   Confirmed: ['StockExportRequested'],
-  StockExportRequested: ['Packed'],
   Packed: ['Shipped'],
   Shipped: ['Delivered'],
 };

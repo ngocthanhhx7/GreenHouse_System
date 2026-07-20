@@ -39,4 +39,22 @@ describe('client staff order service', () => {
 
     assert.equal(result.orderStatus, 'Confirmed');
   });
+
+  it('uses dedicated cancel and COD collection actions', async () => {
+    const calls = [];
+    const service = createStaffOrderService({
+      baseUrl: 'http://api.test/api',
+      fetcher: async (url, options) => {
+        calls.push({ url, options });
+        return { ok: true, json: async () => ({ success: true, data: { ok: true } }) };
+      },
+    });
+
+    await service.cancelOrder('order-1', { cancelReason: 'Khach doi lich giao' });
+    await service.markCodCollected('order-1', { note: 'Da thu tien' });
+
+    assert.equal(calls[0].url, 'http://api.test/api/staff/orders/order-1/cancel');
+    assert.deepEqual(JSON.parse(calls[0].options.body), { cancelReason: 'Khach doi lich giao' });
+    assert.equal(calls[1].url, 'http://api.test/api/staff/orders/order-1/cod-collected');
+  });
 });

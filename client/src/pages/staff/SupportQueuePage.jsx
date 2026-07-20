@@ -4,10 +4,10 @@ import { Link } from 'react-router-dom';
 import { supportService } from '../../services/supportService.js';
 import { translateRequestStatus } from '../../utils/formatters.js';
 
-const STATUS_OPTIONS = ['', 'Open', 'InProgress', 'Resolved'];
+const STATUS_OPTIONS = ['', 'New', 'Open', 'InProgress', 'Resolved'];
 
 export default function SupportQueuePage() {
-  const [status, setStatus] = useState('Open');
+  const [status, setStatus] = useState('New');
   const [items, setItems] = useState([]);
   const [error, setError] = useState('');
 

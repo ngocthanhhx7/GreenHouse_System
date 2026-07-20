@@ -41,9 +41,25 @@ async function updateStatus(req, res, next) {
   }
 }
 
+async function cancelOrder(req, res, next) {
+  try {
+    return sendSuccess(res, await staffOrderService.cancelOrder(req.user.id, req.params.id, req.body), 'Order cancelled');
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function markCodCollected(req, res, next) {
+  try {
+    return sendSuccess(res, await staffOrderService.markCodCollected(req.user.id, req.params.id, req.body), 'COD payment collected');
+  } catch (error) {
+    return next(error);
+  }
+}
+
 async function getInvoice(req, res, next) {
   try {
-    return sendSuccess(res, await staffOrderService.getInvoice(req.params.id));
+    return sendSuccess(res, await staffOrderService.getInvoice(req.user.id, req.params.id));
   } catch (error) {
     return next(error);
   }
@@ -55,5 +71,7 @@ module.exports = {
   confirmOrder,
   requestStockExport,
   updateStatus,
+  cancelOrder,
+  markCodCollected,
   getInvoice,
 };

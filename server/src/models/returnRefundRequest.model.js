@@ -33,7 +33,7 @@ const returnRefundRequestSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['Pending', 'Approved', 'Rejected'],
+      enum: ['Pending', 'AwaitingInspection', 'Rejected', 'ReadyForRefund', 'Completed'],
       default: 'Pending',
     },
     refundAmount: {
@@ -63,6 +63,20 @@ const returnRefundRequestSchema = new mongoose.Schema(
       default: '',
       trim: true,
     },
+    inspectionNote: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    completedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+    completedAt: {
+      type: Date,
+      default: null,
+    },
   },
   { timestamps: true }
 );
@@ -70,10 +84,14 @@ const returnRefundRequestSchema = new mongoose.Schema(
 returnRefundRequestSchema.index({ customerId: 1, createdAt: -1 });
 returnRefundRequestSchema.index({ status: 1, createdAt: -1 });
 returnRefundRequestSchema.index(
+  { requestCode: 1 },
+  { unique: true, partialFilterExpression: { requestCode: { $type: 'string', $gt: '' } } }
+);
+returnRefundRequestSchema.index(
   { orderId: 1 },
   {
     unique: true,
-    partialFilterExpression: { status: { $in: ['Pending', 'Approved'] } },
+    partialFilterExpression: { status: { $in: ['Pending', 'AwaitingInspection', 'ReadyForRefund'] } },
   }
 );
 returnRefundRequestSchema.index({ orderId: 1, status: 1 });

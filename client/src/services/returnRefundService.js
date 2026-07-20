@@ -35,12 +35,31 @@ export function createReturnRefundService({ baseUrl = DEFAULT_BASE_URL, fetcher 
       const query = buildQuery(params);
       return request(`/staff/return-refunds${query ? `?${query}` : ''}`);
     },
+    async listWarehouseRequests(params = {}) {
+      const query = buildQuery(params);
+      return request(`/warehouse/return-refunds${query ? `?${query}` : ''}`);
+    },
+    async getWarehouseRequest(id) {
+      return request(`/warehouse/return-refunds/${id}`);
+    },
     async getStaffRequest(id) {
       return request(`/staff/return-refunds/${id}`);
     },
     async decideRequest(id, input) {
       return request(`/staff/return-refunds/${id}/status`, {
         method: 'PATCH',
+        body: JSON.stringify(input),
+      });
+    },
+    async inspectRequest(id, input) {
+      return request(`/warehouse/return-refunds/${id}/inspection`, {
+        method: 'POST',
+        body: JSON.stringify(input),
+      });
+    },
+    async completeRefund(id, input) {
+      return request(`/staff/return-refunds/${id}/complete-refund`, {
+        method: 'POST',
         body: JSON.stringify(input),
       });
     },

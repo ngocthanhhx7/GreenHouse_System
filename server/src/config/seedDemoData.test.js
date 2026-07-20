@@ -58,6 +58,6 @@ describe('demo data seed config', () => {
 
     assert.ok(actions.includes('AUTH_LOGIN_SUCCESS'));
     assert.ok(actions.includes('ORDER_CREATE'));
-    assert.ok(actions.includes('RETURN_REFUND_APPROVED'));
+    assert.ok(actions.includes('RETURN_REFUND_APPROVED_FOR_INSPECTION'));
   });
 });
