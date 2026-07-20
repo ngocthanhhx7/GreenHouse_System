@@ -21,6 +21,12 @@ function toOrderResponse(order, details = []) {
     paymentStatus: order.paymentStatus,
     orderStatus: order.orderStatus,
     shippingAddress: order.shippingAddress,
+    receiverName: order.receiverName || '',
+    receiverPhone: order.receiverPhone || '',
+    customerNote: order.customerNote || '',
+    subtotal: Number(order.subtotal ?? order.totalAmount ?? 0),
+    shippingFee: Number(order.shippingFee || 0),
+    currency: order.currency || 'VND',
     cancelReason: order.cancelReason || '',
     details,
     createdAt: order.createdAt,
@@ -33,6 +39,24 @@ function generateOrderCode() {
 
 function generateAttemptCode() {
   return `PAY-${Date.now()}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
+}
+
+function normalizeDeliverySnapshot(input = {}) {
+  const receiverName = String(input.receiverName || '').trim();
+  const receiverPhone = String(input.receiverPhone || '').replace(/[.\s-]/g, '');
+  const shippingAddress = String(input.shippingAddress || '').trim();
+  const customerNote = String(input.customerNote || '').trim();
+
+  if (receiverName.length < 2) throw new ApiError(400, 'Vui lòng nhập tên người nhận');
+  if (!/^(?:\+84|0)(?:3|5|7|8|9)\d{8}$/.test(receiverPhone)) {
+    throw new ApiError(400, 'Số điện thoại người nhận không hợp lệ');
+  }
+  if (shippingAddress.length < 10 || shippingAddress.length > 500) {
+    throw new ApiError(400, 'Địa chỉ nhận hàng phải có từ 10 đến 500 ký tự');
+  }
+  if (customerNote.length > 500) throw new ApiError(400, 'Ghi chú đơn hàng không được vượt quá 500 ký tự');
+
+  return { receiverName, receiverPhone, shippingAddress, customerNote };
 }
 
 function withOptionalSession(query, session) {
@@ -216,9 +240,7 @@ function createOrderService({
 
   return {
     async placeOrder(customerId, input = {}) {
-      if (!input.shippingAddress || !String(input.shippingAddress).trim()) {
-        throw new ApiError(400, 'Shipping address is required');
-      }
+      const deliverySnapshot = normalizeDeliverySnapshot(input);
       const idempotencyKey = normalizeIdempotencyKey(input);
       const paymentMethod = input.paymentMethod || 'COD';
       if (!['COD', 'ONLINE'].includes(paymentMethod)) throw new ApiError(400, 'Invalid payment method');
@@ -253,10 +275,7 @@ function createOrderService({
               paymentMethod,
               paymentStatus: initialPaymentStatus,
               orderStatus: paymentMethod === 'ONLINE' ? 'WaitingForPayment' : 'Pending',
-              shippingAddress: String(input.shippingAddress).trim(),
-              receiverName: String(input.receiverName || '').trim(),
-              receiverPhone: String(input.receiverPhone || '').trim(),
-              customerNote: String(input.customerNote || '').trim(),
+              ...deliverySnapshot,
             },
             session
           );

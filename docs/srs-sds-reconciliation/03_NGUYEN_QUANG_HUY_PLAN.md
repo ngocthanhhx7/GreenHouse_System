@@ -58,6 +58,19 @@
 - [x] COD và online có initial state đúng.
 - [x] Customer chỉ xem/hủy Order của chính mình và chỉ hủy state hợp lệ.
 - [x] Hủy Order hoàn reservation đúng một lần trong cùng transaction.
+- [x] Checkout tự chọn địa chỉ mặc định từ Address Book.
+- [x] Customer có thể chọn địa chỉ đã lưu hoặc nhập địa chỉ mới dùng một lần.
+- [x] Địa chỉ mới chỉ được lưu khi Customer chủ động chọn, có tên gợi nhớ riêng.
+- [x] Order lưu snapshot bất biến gồm người nhận, số điện thoại, địa chỉ và ghi chú.
+- [x] Validation người nhận, số điện thoại Việt Nam và độ dài địa chỉ chạy trước khi reserve tồn kho.
+
+## Bổ sung hoàn thành - Checkout Address Book
+
+- Frontend tải song song giỏ hàng, hồ sơ và Address Book; tự chọn địa chỉ mặc định nhưng vẫn cho đổi sang địa chỉ khác.
+- Form địa chỉ mới dùng cấu trúc tỉnh/thành, quận/huyện, phường/xã và địa chỉ chi tiết; tên và số điện thoại được điền từ hồ sơ.
+- Customer có thể dùng địa chỉ mới một lần hoặc lưu vào Address Book với tên gợi nhớ; thao tác lưu không thay đổi snapshot của đơn cũ.
+- Backend chuẩn hóa và validate snapshot trước transaction đặt hàng, sau đó lưu trực tiếp vào Order để lịch sử giao nhận không phụ thuộc thay đổi hồ sơ tương lai.
+- Order Detail hiển thị lại người nhận, số điện thoại, địa chỉ và ghi chú của đúng thời điểm đặt hàng.
 
 ## Verification
 
@@ -69,9 +82,19 @@ npm test -- --runInBand src/services/cartService.test.js src/services/orderServi
 npm run build
 ```
 
+Kết quả thực tế trên nhánh `feature/huy-checkout-address-book`:
+
+- Server: `197/197` test đạt.
+- Client: `68/68` test đạt.
+- Production build đạt; còn cảnh báo bundle Vite lớn hơn 500 kB, không chặn chức năng.
+- Browser QA đạt tại `390x844` và `1440x1000`: không tràn ngang, địa chỉ mặc định được chọn đúng, chuyển sang địa chỉ mới hoạt động, console không có lỗi.
+
 ## Branch/commit
 
 ```text
 feature/huy-payment-order-reconciliation
 docs: align payment order reconciliation scope
+
+feature/huy-checkout-address-book
+feat: integrate address book into checkout
 ```

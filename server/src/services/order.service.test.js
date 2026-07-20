@@ -3,6 +3,16 @@ const { describe, it, beforeEach } = require('node:test');
 
 const { createOrderService } = require('./order.service');
 
+function checkoutInput(overrides = {}) {
+  return {
+    receiverName: 'Khách hàng Demo',
+    receiverPhone: '0900000001',
+    shippingAddress: '12 Nguyễn Trãi, Thanh Xuân, Hà Nội',
+    paymentMethod: 'COD',
+    ...overrides,
+  };
+}
+
 function createCartRepository() {
   const carts = [{ _id: 'cart-1', customerId: 'customer-1', status: 'Active' }];
   const items = [
@@ -141,15 +151,14 @@ describe('order service', () => {
   });
 
   it('creates a COD order from active customer cart with product snapshots', async () => {
-    const result = await orderService.placeOrder('customer-1', {
-      shippingAddress: 'Ha Noi',
-      paymentMethod: 'COD',
-      idempotencyKey: 'checkout-cod-001',
-    });
+    const result = await orderService.placeOrder('customer-1', checkoutInput({ idempotencyKey: 'checkout-cod-001' }));
 
     assert.equal(result.totalAmount, 50);
     assert.equal(result.orderStatus, 'Pending');
     assert.equal(result.paymentStatus, 'Unpaid');
+    assert.equal(result.receiverName, 'Khách hàng Demo');
+    assert.equal(result.receiverPhone, '0900000001');
+    assert.equal(result.shippingAddress, '12 Nguyễn Trãi, Thanh Xuân, Hà Nội');
     assert.equal(orderRepository.details[0].productNameSnapshot, 'Green Pan');
     assert.equal(orderRepository.details[0].productSkuSnapshot, 'PAN-001');
     assert.equal(orderRepository.details[0].unitSnapshot, 'piece');
@@ -177,17 +186,13 @@ describe('order service', () => {
     });
 
     await assert.rejects(
-      () => orderService.placeOrder('customer-1', { shippingAddress: 'Ha Noi', paymentMethod: 'COD', idempotencyKey: 'empty-001' }),
+      () => orderService.placeOrder('customer-1', checkoutInput({ idempotencyKey: 'empty-001' })),
       /Cart must have at least one item/
     );
   });
 
   it('cancels a Pending unpaid customer order', async () => {
-    const order = await orderService.placeOrder('customer-1', {
-      shippingAddress: 'Ha Noi',
-      paymentMethod: 'COD',
-      idempotencyKey: 'cancel-001',
-    });
+    const order = await orderService.placeOrder('customer-1', checkoutInput({ idempotencyKey: 'cancel-001' }));
 
     const cancelled = await orderService.cancelOrder('customer-1', order.id);
 
@@ -236,8 +241,8 @@ describe('order service', () => {
         auditLogger,
       });
 
-      const first = await orderService.placeOrder('customer-1', { shippingAddress: 'Ha Noi', paymentMethod: 'COD', idempotencyKey: 'unique-001' });
-      const second = await orderService.placeOrder('customer-2', { shippingAddress: 'Da Nang', paymentMethod: 'COD', idempotencyKey: 'unique-002' });
+      const first = await orderService.placeOrder('customer-1', checkoutInput({ idempotencyKey: 'unique-001' }));
+      const second = await orderService.placeOrder('customer-2', checkoutInput({ shippingAddress: '12 Bạch Đằng, Đà Nẵng', idempotencyKey: 'unique-002' }));
 
       assert.notEqual(first.orderCode, second.orderCode);
     } finally {
@@ -247,13 +252,13 @@ describe('order service', () => {
 
   it('requires a non-empty idempotency key for checkout', async () => {
     await assert.rejects(
-      () => orderService.placeOrder('customer-1', { shippingAddress: 'Ha Noi', paymentMethod: 'COD' }),
+      () => orderService.placeOrder('customer-1', checkoutInput()),
       /Idempotency-Key is required/
     );
   });
 
   it('returns the original order for a completed idempotency key without creating another order', async () => {
-    const input = { shippingAddress: 'Ha Noi', paymentMethod: 'COD', idempotencyKey: 'retry-001' };
+    const input = checkoutInput({ idempotencyKey: 'retry-001' });
     const first = await orderService.placeOrder('customer-1', input);
     const second = await orderService.placeOrder('customer-1', input);
 
@@ -290,7 +295,7 @@ describe('order service', () => {
     });
 
     await assert.rejects(
-      () => orderService.placeOrder('customer-1', { shippingAddress: 'Ha Noi', paymentMethod: 'COD', idempotencyKey: 'rollback-001' }),
+      () => orderService.placeOrder('customer-1', checkoutInput({ idempotencyKey: 'rollback-001' })),
       /reservation failed/
     );
     assert.deepEqual(calls, ['start', 'reserve:p1:2:session-1', 'rollback']);
@@ -298,16 +303,24 @@ describe('order service', () => {
   });
 
   it('persists a supplied cancel reason and rejects paid or confirmed orders', async () => {
-    const order = await orderService.placeOrder('customer-1', {
-      shippingAddress: 'Ha Noi',
-      paymentMethod: 'COD',
-      idempotencyKey: 'reason-001',
-    });
+    const order = await orderService.placeOrder('customer-1', checkoutInput({ idempotencyKey: 'reason-001' }));
     const cancelled = await orderService.cancelOrder('customer-1', order.id, { cancelReason: 'Đổi ý' });
     assert.equal(orderRepository.orders[0].cancelReason, 'Đổi ý');
     assert.equal(cancelled.orderStatus, 'Cancelled');
 
     orderRepository.orders[0].paymentStatus = 'Paid';
     await assert.rejects(() => orderService.cancelOrder('customer-1', order.id, {}), /Only unpaid pre-confirmation orders/);
+  });
+
+  it('validates receiver identity and Vietnamese phone before reserving stock', async () => {
+    await assert.rejects(
+      () => orderService.placeOrder('customer-1', checkoutInput({ receiverName: '', idempotencyKey: 'invalid-name-001' })),
+      /tên người nhận/
+    );
+    await assert.rejects(
+      () => orderService.placeOrder('customer-1', checkoutInput({ receiverPhone: '12345', idempotencyKey: 'invalid-phone-001' })),
+      /Số điện thoại người nhận không hợp lệ/
+    );
+    assert.equal(inventoryRepository.reservedQuantity, 0);
   });
 });
