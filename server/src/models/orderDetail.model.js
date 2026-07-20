@@ -22,7 +22,12 @@ const orderDetailSchema = new mongoose.Schema(
       default: '',
       trim: true,
     },
-    skuSnapshot: {
+    productSkuSnapshot: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    unitSnapshot: {
       type: String,
       default: '',
       trim: true,

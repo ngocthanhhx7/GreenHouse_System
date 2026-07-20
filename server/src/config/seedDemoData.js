@@ -8,6 +8,7 @@ const Role = require('../models/role.model');
 const User = require('../models/user.model');
 const Category = require('../models/category.model');
 const Product = require('../models/product.model');
+const Inventory = require('../models/inventory.model');
 const Order = require('../models/order.model');
 const OrderDetail = require('../models/orderDetail.model');
 const Payment = require('../models/payment.model');
@@ -349,6 +350,27 @@ async function upsertProducts(categoryMap) {
   return products;
 }
 
+async function upsertInventories(productMap) {
+  const inventories = {};
+  for (const product of Object.values(productMap)) {
+    const inventory = await Inventory.findOneAndUpdate(
+      { productId: product._id },
+      {
+        $set: {
+          productId: product._id,
+          stockQuantity: Number(product.stockQuantity || 0),
+          reservedQuantity: 0,
+          damagedQuantity: 0,
+          lowStockThreshold: 5,
+        },
+      },
+      { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
+    );
+    inventories[product.name] = inventory;
+  }
+  return inventories;
+}
+
 function buildOrderLines(orderSpec, productMap) {
   return orderSpec.items.map((item) => {
     const product = productMap[item.productName];
@@ -356,6 +378,9 @@ function buildOrderLines(orderSpec, productMap) {
     return {
       productId: product._id,
       productNameSnapshot: product.name,
+      productSkuSnapshot: product.sku || '',
+      unitSnapshot: product.unit || '',
+      productImageSnapshot: Array.isArray(product.imageUrls) ? product.imageUrls[0] || '' : '',
       priceSnapshot: product.price,
       quantity: item.quantity,
       subtotal,
@@ -604,6 +629,7 @@ async function seedDemoData() {
   const userMap = await upsertUsers(roleMap);
   const categoryMap = await upsertCategories();
   const productMap = await upsertProducts(categoryMap);
+  const inventoryMap = await upsertInventories(productMap);
   const orders = await upsertDemoOrders(userMap, productMap);
   const orderMap = Object.fromEntries(orders.map((order) => [order.orderCode, order]));
   const returnRefunds = await upsertReturnRefundRequests(userMap, orderMap);
@@ -617,6 +643,7 @@ async function seedDemoData() {
     users: DEMO_USERS.length,
     categories: DEMO_CATEGORIES.length,
     products: DEMO_PRODUCTS.length,
+    inventories: Object.keys(inventoryMap).length,
     orders: orders.length,
     returnRefunds: returnRefunds.length,
     supportRequests: supportRequests.length,
@@ -636,6 +663,7 @@ async function runCli() {
     { type: 'Users', count: result.users },
     { type: 'Categories', count: result.categories },
     { type: 'Products', count: result.products },
+    { type: 'Inventories', count: result.inventories },
     { type: 'Orders', count: result.orders },
     { type: 'ReturnRefunds', count: result.returnRefunds },
     { type: 'SupportRequests', count: result.supportRequests },

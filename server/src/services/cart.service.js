@@ -61,7 +61,17 @@ function createCartService({
 } = {}) {
   async function getOrCreateCart(customerId) {
     const existing = await cartRepository.findActiveByCustomer(customerId);
-    return existing || cartRepository.createCart(customerId);
+    if (existing) return existing;
+    try {
+      return await cartRepository.createCart(customerId);
+    } catch (error) {
+      // The partial unique index is the final concurrency guard for active carts.
+      if (error && error.code === 11000) {
+        const concurrentCart = await cartRepository.findActiveByCustomer(customerId);
+        if (concurrentCart) return concurrentCart;
+      }
+      throw error;
+    }
   }
 
   async function assertQuantity(product, quantity) {

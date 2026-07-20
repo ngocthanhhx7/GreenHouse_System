@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 
 import { cartService } from '../../services/cartService.js';
 import { orderService } from '../../services/orderService.js';
+import { createCheckoutIdempotencyKey } from '../../services/orderService.js';
 import { formatCurrency } from '../../utils/formatters.js';
 
 export default function CheckoutPage() {
@@ -10,6 +11,7 @@ export default function CheckoutPage() {
   const [cart, setCart] = useState({ items: [], totalAmount: 0 });
   const [form, setForm] = useState({ shippingAddress: '', paymentMethod: 'COD' });
   const [error, setError] = useState('');
+  const [checkoutIdempotencyKey] = useState(() => createCheckoutIdempotencyKey());
 
   useEffect(() => {
     cartService.getCart().then(setCart).catch((err) => setError(err.message));
@@ -19,7 +21,7 @@ export default function CheckoutPage() {
     event.preventDefault();
     setError('');
     try {
-      const order = await orderService.placeOrder(form);
+      const order = await orderService.placeOrder(form, { idempotencyKey: checkoutIdempotencyKey });
       navigate(`/orders/${order.id}`, { replace: true });
     } catch (err) {
       setError(err.message);
