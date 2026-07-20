@@ -37,4 +37,11 @@ describe('home page premium commerce design contract', () => {
     assert.doesNotMatch(home, /handleMouseMove/);
     assert.doesNotMatch(home, /ambient-blob/);
   });
+
+  it('renders product names and prices from the public catalog response', () => {
+    assert.doesNotMatch(home, /productShowcase/);
+    assert.match(home, /alt=\{product\.name\}/);
+    assert.match(home, /<strong>\{product\.name\}<\/strong>/);
+    assert.match(home, /formatCurrency\(product\.price\)/);
+  });
 });
