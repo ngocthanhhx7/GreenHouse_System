@@ -19,7 +19,9 @@ export default function PaymentPage() {
     try {
       const result = await paymentService.submitMockCallback({
         orderId: id,
+        paymentAttemptId: payment.attemptId,
         transactionId: `MOCK-${Date.now()}`,
+        providerMessageId: `MOCK-${Date.now()}`,
         amount: payment.amount,
         status,
       });

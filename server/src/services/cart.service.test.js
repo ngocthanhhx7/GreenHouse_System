@@ -118,4 +118,25 @@ describe('cart service', () => {
       /Cart item not found/
     );
   });
+
+  it('reuses the cart created by a concurrent request after an active-cart unique conflict', async () => {
+    const cartRepository = createCartRepository();
+    const originalCreate = cartRepository.createCart.bind(cartRepository);
+    let firstCreate = true;
+    cartRepository.createCart = async (customerId) => {
+      if (firstCreate) {
+        firstCreate = false;
+        await originalCreate(customerId);
+        const error = new Error('duplicate active cart');
+        error.code = 11000;
+        throw error;
+      }
+      return originalCreate(customerId);
+    };
+    cartService = createCartService({ productRepository: createProductRepository(), cartRepository });
+
+    const result = await cartService.getCart('customer-1');
+    assert.equal(result.id, 'cart-1');
+    assert.equal(cartRepository.carts.length, 1);
+  });
 });

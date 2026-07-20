@@ -97,7 +97,7 @@ export default function OrderDetailPage() {
               </Link>
             </div>
           )}
-          {order.orderStatus === 'Pending' && order.paymentStatus === 'Pending' && (
+          {['Pending', 'WaitingForPayment'].includes(order.orderStatus) && ['Unpaid', 'Pending', 'Failed'].includes(order.paymentStatus) && (
             <div className="mt-3">
               <button className="btn btn-outline-danger" type="button" onClick={cancelOrder}>
                 Hủy đơn hàng

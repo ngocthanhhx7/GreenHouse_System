@@ -5,6 +5,9 @@ const Notification = require('./notification.model');
 const Order = require('./order.model');
 const OrderDetail = require('./orderDetail.model');
 const Payment = require('./payment.model');
+const PaymentAttempt = require('./paymentAttempt.model');
+const PaymentCallbackEvent = require('./paymentCallbackEvent.model');
+const RefundPending = require('./refundPending.model');
 const Product = require('./product.model');
 const ReturnRefundRequest = require('./returnRefundRequest.model');
 const SupportRequest = require('./supportRequest.model');
@@ -28,7 +31,15 @@ describe('schema alignment with ERD', () => {
 
   it('stores product and order line snapshots for stable invoices', () => {
     assertPath(Product, 'sku');
-    ['productImageSnapshot', 'skuSnapshot'].forEach((field) => assertPath(OrderDetail, field));
+    ['productNameSnapshot', 'productSkuSnapshot', 'unitSnapshot', 'productImageSnapshot', 'priceSnapshot', 'quantity', 'subtotal'].forEach((field) => assertPath(OrderDetail, field));
+  });
+
+  it('stores payment attempts, append-only callback identity, and refund hand-off state', () => {
+    ['orderId', 'attemptCode', 'paymentProvider', 'paymentStatus'].forEach((field) => assertPath(PaymentAttempt, field));
+    ['orderId', 'paymentAttemptId', 'paymentProvider', 'providerMessageId', 'rawPayload'].forEach((field) => assertPath(PaymentCallbackEvent, field));
+    ['orderId', 'paymentAttemptId', 'status', 'reason'].forEach((field) => assertPath(RefundPending, field));
+    assert.ok(PaymentAttempt.schema.path('paymentStatus').enumValues.includes('Unpaid'));
+    assert.ok(PaymentAttempt.schema.path('paymentStatus').enumValues.includes('RefundPending'));
   });
 
   it('stores after-sale request codes and evidence fields', () => {

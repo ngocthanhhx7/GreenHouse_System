@@ -17,14 +17,20 @@ function authHeaders() {
   };
 }
 
+export function createCheckoutIdempotencyKey() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return `checkout-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
 export function createOrderService({ baseUrl = DEFAULT_BASE_URL, fetcher = fetch } = {}) {
   return {
-    async placeOrder(input) {
+    async placeOrder(input, { idempotencyKey = input?.idempotencyKey || createCheckoutIdempotencyKey() } = {}) {
+      const { idempotencyKey: _idempotencyKey, ...payload } = input;
       return parseResponse(
         await fetcher(`${baseUrl}/orders`, {
           method: 'POST',
-          headers: authHeaders(),
-          body: JSON.stringify(input),
+          headers: { ...authHeaders(), 'Idempotency-Key': idempotencyKey },
+          body: JSON.stringify(payload),
         })
       );
     },
@@ -34,10 +40,10 @@ export function createOrderService({ baseUrl = DEFAULT_BASE_URL, fetcher = fetch
     async getOrder(id) {
       return apiRequest(`/orders/${id}`);
     },
-    async cancelOrder(id) {
+    async cancelOrder(id, { cancelReason = '' } = {}) {
       return apiRequest(`/orders/${id}/cancel`, {
         method: 'PATCH',
-        body: JSON.stringify({}),
+        body: JSON.stringify({ cancelReason }),
       });
     },
   };

@@ -10,6 +10,7 @@ function createCartRepository() {
   ];
   return {
     carts,
+    items,
     async findActiveByCustomer(customerId) {
       return carts.find((cart) => cart.customerId === customerId && cart.status === 'Active') || null;
     },
@@ -20,6 +21,14 @@ function createCartRepository() {
       const cart = carts.find((entry) => entry._id === cartId);
       cart.status = 'CheckedOut';
     },
+    async clearExactCart(cartId) {
+      const cart = carts.find((entry) => entry._id === cartId);
+      cart.status = 'CheckedOut';
+      for (let index = items.length - 1; index >= 0; index -= 1) {
+        if (items[index].cartId === cartId) items.splice(index, 1);
+      }
+      return cart;
+    },
   };
 }
 
@@ -27,7 +36,16 @@ function createProductRepository() {
   return {
     async findSellableById(id) {
       if (id !== 'p1') return null;
-      return { _id: 'p1', name: 'Green Pan', price: 25, status: 'Active', stockQuantity: 5 };
+      return {
+        _id: 'p1',
+        name: 'Green Pan',
+        sku: 'PAN-001',
+        unit: 'piece',
+        imageUrls: ['https://cdn.test/pan.jpg'],
+        price: 25,
+        status: 'Active',
+        stockQuantity: 5,
+      };
     },
   };
 }
@@ -50,6 +68,13 @@ function createOrderRepository() {
     },
     async createPayment(data) {
       payments.push({ _id: `payment-${payments.length + 1}`, ...data });
+    },
+    async createPaymentAttempt(data) {
+      payments.push({ _id: `attempt-${payments.length + 1}`, ...data });
+      return payments.at(-1);
+    },
+    async findCompletedByIdempotencyKey(customerId, idempotencyKey) {
+      return orders.find((order) => order.customerId === customerId && order.idempotencyKey === idempotencyKey) || null;
     },
     async listByCustomer(customerId) {
       return orders.filter((order) => order.customerId === customerId);
@@ -79,13 +104,17 @@ describe('order service', () => {
   let orderService;
   let orderRepository;
   let auditLogger;
+  let cartRepository;
 
   beforeEach(() => {
     orderRepository = createOrderRepository();
     auditLogger = createAuditLogger();
+    cartRepository = createCartRepository();
     orderService = createOrderService({
-      cartRepository: createCartRepository(),
+      transactionManager: { async withTransaction(work) { return work({ id: 'test-session' }); } },
+      cartRepository,
       productRepository: createProductRepository(),
+      inventoryRepository: { async reserve() {} },
       orderRepository,
       auditLogger,
     });
@@ -95,18 +124,24 @@ describe('order service', () => {
     const result = await orderService.placeOrder('customer-1', {
       shippingAddress: 'Ha Noi',
       paymentMethod: 'COD',
+      idempotencyKey: 'checkout-cod-001',
     });
 
     assert.equal(result.totalAmount, 50);
     assert.equal(result.orderStatus, 'Pending');
-    assert.equal(result.paymentStatus, 'Pending');
+    assert.equal(result.paymentStatus, 'Unpaid');
     assert.equal(orderRepository.details[0].productNameSnapshot, 'Green Pan');
+    assert.equal(orderRepository.details[0].productSkuSnapshot, 'PAN-001');
+    assert.equal(orderRepository.details[0].unitSnapshot, 'piece');
+    assert.equal(orderRepository.details[0].productImageSnapshot, 'https://cdn.test/pan.jpg');
     assert.equal(orderRepository.payments[0].paymentMethod, 'COD');
+    assert.equal(cartRepository.items.length, 0);
     assert.equal(auditLogger.entries[0].action, 'ORDER_CREATE');
   });
 
   it('rejects checkout when customer cart is empty', async () => {
     orderService = createOrderService({
+      transactionManager: { async withTransaction(work) { return work({ id: 'test-session' }); } },
       cartRepository: {
         async findActiveByCustomer() {
           return { _id: 'empty-cart', customerId: 'customer-1', status: 'Active' };
@@ -116,12 +151,13 @@ describe('order service', () => {
         },
       },
       productRepository: createProductRepository(),
+      inventoryRepository: { async reserve() {} },
       orderRepository,
       auditLogger,
     });
 
     await assert.rejects(
-      () => orderService.placeOrder('customer-1', { shippingAddress: 'Ha Noi', paymentMethod: 'COD' }),
+      () => orderService.placeOrder('customer-1', { shippingAddress: 'Ha Noi', paymentMethod: 'COD', idempotencyKey: 'empty-001' }),
       /Cart must have at least one item/
     );
   });
@@ -130,6 +166,7 @@ describe('order service', () => {
     const order = await orderService.placeOrder('customer-1', {
       shippingAddress: 'Ha Noi',
       paymentMethod: 'COD',
+      idempotencyKey: 'cancel-001',
     });
 
     const cancelled = await orderService.cancelOrder('customer-1', order.id);
@@ -161,20 +198,93 @@ describe('order service', () => {
           const cart = this.carts.find((entry) => entry._id === cartId);
           cart.status = 'CheckedOut';
         },
+        async clearExactCart(cartId) {
+          const cart = this.carts.find((entry) => entry._id === cartId);
+          cart.status = 'CheckedOut';
+          return cart;
+        },
       };
-      orderService = createOrderService({
-        cartRepository,
-        productRepository: createProductRepository(),
+    orderService = createOrderService({
+      transactionManager: { async withTransaction(work) { return work({ id: 'test-session' }); } },
+      cartRepository,
+      productRepository: createProductRepository(),
+      inventoryRepository: { async reserve() {} },
         orderRepository,
         auditLogger,
       });
 
-      const first = await orderService.placeOrder('customer-1', { shippingAddress: 'Ha Noi', paymentMethod: 'COD' });
-      const second = await orderService.placeOrder('customer-2', { shippingAddress: 'Da Nang', paymentMethod: 'COD' });
+      const first = await orderService.placeOrder('customer-1', { shippingAddress: 'Ha Noi', paymentMethod: 'COD', idempotencyKey: 'unique-001' });
+      const second = await orderService.placeOrder('customer-2', { shippingAddress: 'Da Nang', paymentMethod: 'COD', idempotencyKey: 'unique-002' });
 
       assert.notEqual(first.orderCode, second.orderCode);
     } finally {
       Date.now = originalNow;
     }
+  });
+
+  it('requires a non-empty idempotency key for checkout', async () => {
+    await assert.rejects(
+      () => orderService.placeOrder('customer-1', { shippingAddress: 'Ha Noi', paymentMethod: 'COD' }),
+      /Idempotency-Key is required/
+    );
+  });
+
+  it('returns the original order for a completed idempotency key without creating another order', async () => {
+    const input = { shippingAddress: 'Ha Noi', paymentMethod: 'COD', idempotencyKey: 'retry-001' };
+    const first = await orderService.placeOrder('customer-1', input);
+    const second = await orderService.placeOrder('customer-1', input);
+
+    assert.equal(second.id, first.id);
+    assert.equal(orderRepository.orders.length, 1);
+    assert.equal(orderRepository.details.length, 1);
+  });
+
+  it('runs all checkout writes inside a transaction and does not audit when transaction rolls back', async () => {
+    const calls = [];
+    const failingRepository = createOrderRepository();
+    failingRepository.withTransaction = async (work) => {
+      calls.push('start');
+      await assert.rejects(() => work({ id: 'session-1' }), /reservation failed/);
+      calls.push('rollback');
+      throw new Error('reservation failed');
+    };
+
+    const transactionalCart = createCartRepository();
+    transactionalCart.clearExactCart = async (_cartId, session) => calls.push(`clear:${session.id}`);
+    const inventoryRepository = {
+      async reserve(productId, quantity, session) {
+        calls.push(`reserve:${productId}:${quantity}:${session.id}`);
+        throw new Error('reservation failed');
+      },
+    };
+    orderService = createOrderService({
+      transactionManager: failingRepository,
+      cartRepository: transactionalCart,
+      productRepository: createProductRepository(),
+      orderRepository: failingRepository,
+      inventoryRepository,
+      auditLogger,
+    });
+
+    await assert.rejects(
+      () => orderService.placeOrder('customer-1', { shippingAddress: 'Ha Noi', paymentMethod: 'COD', idempotencyKey: 'rollback-001' }),
+      /reservation failed/
+    );
+    assert.deepEqual(calls, ['start', 'reserve:p1:2:session-1', 'rollback']);
+    assert.equal(auditLogger.entries.length, 0);
+  });
+
+  it('persists a supplied cancel reason and rejects paid or confirmed orders', async () => {
+    const order = await orderService.placeOrder('customer-1', {
+      shippingAddress: 'Ha Noi',
+      paymentMethod: 'COD',
+      idempotencyKey: 'reason-001',
+    });
+    const cancelled = await orderService.cancelOrder('customer-1', order.id, { cancelReason: 'Đổi ý' });
+    assert.equal(orderRepository.orders[0].cancelReason, 'Đổi ý');
+    assert.equal(cancelled.orderStatus, 'Cancelled');
+
+    orderRepository.orders[0].paymentStatus = 'Paid';
+    await assert.rejects(() => orderService.cancelOrder('customer-1', order.id, {}), /Only unpaid pre-confirmation orders/);
   });
 });

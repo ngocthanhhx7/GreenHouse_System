@@ -30,6 +30,7 @@ export function translateOrderStatus(status) {
     Shipped: 'Đang giao',
     Delivered: 'Đã giao',
     Cancelled: 'Đã hủy',
+    Expired: 'Đã hết hạn thanh toán',
     Returned: 'Đã hoàn trả',
   };
   return labels[status] || status || 'Chưa xác định';
@@ -37,11 +38,13 @@ export function translateOrderStatus(status) {
 
 export function translatePaymentStatus(status) {
   const labels = {
+    Unpaid: 'Chưa thanh toán',
     Pending: 'Chờ thanh toán',
     Paid: 'Đã thanh toán',
     Failed: 'Thanh toán lỗi',
     Cancelled: 'Đã hủy',
     Refunded: 'Đã hoàn tiền',
+    RefundPending: 'Chờ hoàn tiền',
   };
   return labels[status] || status || 'Chưa xác định';
 }

@@ -12,6 +12,12 @@ const orderSchema = new mongoose.Schema(
       ref: 'User',
       required: true,
     },
+    idempotencyKey: {
+      type: String,
+      default: '',
+      trim: true,
+      maxlength: 128,
+    },
     totalAmount: {
       type: Number,
       required: true,
@@ -39,12 +45,12 @@ const orderSchema = new mongoose.Schema(
     },
     paymentStatus: {
       type: String,
-      enum: ['Pending', 'Paid', 'Failed', 'Cancelled', 'Refunded'],
+      enum: ['Unpaid', 'Pending', 'Paid', 'Failed', 'Cancelled', 'RefundPending', 'Refunded'],
       default: 'Pending',
     },
     orderStatus: {
       type: String,
-      enum: ['Pending', 'WaitingForPayment', 'Confirmed', 'StockExportRequested', 'Packed', 'Shipped', 'Delivered', 'Cancelled', 'Returned'],
+      enum: ['Pending', 'WaitingForPayment', 'Confirmed', 'StockExportRequested', 'Packed', 'Shipped', 'Delivered', 'Cancelled', 'Expired', 'Returned'],
       default: 'Pending',
     },
     shippingAddress: {
@@ -94,5 +100,13 @@ const orderSchema = new mongoose.Schema(
 
 orderSchema.index({ customerId: 1, createdAt: -1 });
 orderSchema.index({ orderStatus: 1, paymentStatus: 1 });
+orderSchema.index(
+  { customerId: 1, idempotencyKey: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { idempotencyKey: { $type: 'string', $gt: '' } },
+    name: 'order_checkout_idempotency_key',
+  }
+);
 
 module.exports = mongoose.model('Order', orderSchema);
