@@ -17,15 +17,18 @@ const systemSettingRoutes = require('./routes/systemSetting.routes');
 const notificationRoutes = require('./routes/notification.routes');
 const auditLogRoutes = require('./routes/auditLog.routes');
 const { notFound, errorHandler } = require('./middlewares/error.middleware');
+const { requestId } = require('./middlewares/requestId.middleware');
+const { sendSuccess } = require('./utils/apiResponse');
 
 function createApp() {
   const app = express();
 
+  app.use(requestId);
   app.use(cors());
   app.use(express.json());
 
   app.get('/api/health', (req, res) => {
-    res.json({ success: true, message: 'GreenHome API is running' });
+    return sendSuccess(res, null, 'GreenHome API is running');
   });
   app.use('/api/auth', authRoutes);
   app.use('/api', cartRoutes);
