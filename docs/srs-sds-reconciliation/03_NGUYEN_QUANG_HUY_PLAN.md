@@ -98,3 +98,9 @@ docs: align payment order reconciliation scope
 feature/huy-checkout-address-book
 feat: integrate address book into checkout
 ```
+
+## Trạng thái bàn giao
+
+- Commit của Nguyễn Quang Huy: `8ecd408`.
+- Nguyễn Ngọc Thành đã review scope, transaction/idempotency, validation, Order snapshot và kết quả regression.
+- Đã merge `--no-ff` vào `main` bằng merge commit `790f132`.

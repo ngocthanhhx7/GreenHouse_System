@@ -138,13 +138,13 @@ Nguồn tham khảo: [Shopify product media](https://help.shopify.com/en/manual/
 |---|---|---|---|
 | Nguyễn Ngọc Thành | Account, avatar, upload foundation, notification, Address Book | Hoàn thành, đã merge `main` | Backend 192/192; frontend 61/61; build pass; seed demo pass |
 | Phạm Thành Chung | Product Media và dữ liệu catalog production-like | Hoàn thành, đã merge `main` | Backend 196/196; frontend 65/65; build pass; upload-save-remove và desktop/mobile QA pass |
-| Nguyễn Quang Huy | Address Book tại Checkout và Order snapshot | Hoàn thành triển khai, chờ Thành review/merge | Backend 197/197; frontend 68/68; build pass; Checkout desktop/mobile QA và console pass |
+| Nguyễn Quang Huy | Address Book tại Checkout và Order snapshot | Hoàn thành, đã được Thành review/merge `main` | Backend 197/197; frontend 68/68; build pass; Checkout desktop/mobile QA và console pass; merge `790f132` |
 
 ## 10. Checklist pull/merge
 
-- [ ] Branch không có tiền tố `codex/`.
-- [ ] Commit author đúng owner được phân công.
-- [ ] PR mô tả files frontend/backend, API, migration, test evidence.
-- [ ] Thành review diff và kiểm tra không ảnh hưởng flow hiện có.
-- [ ] Thành merge `--no-ff` vào `main`.
-- [ ] Push `main`, xóa branch feature sau merge; chỉ giữ `main` và `BA`.
+- [x] Branch không có tiền tố `codex/`.
+- [x] Commit author đúng owner được phân công.
+- [x] Tài liệu bàn giao mô tả files frontend/backend, API và test evidence.
+- [x] Thành review diff và kiểm tra không ảnh hưởng flow hiện có.
+- [x] Thành merge `--no-ff` vào `main`.
+- [x] Push `main`, xóa branch feature sau merge; chỉ giữ `main` và `BA`.
