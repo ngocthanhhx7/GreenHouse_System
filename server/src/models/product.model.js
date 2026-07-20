@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { canonicalizeSku } = require('../utils/sku');
 
 const productSchema = new mongoose.Schema(
   {
@@ -10,7 +11,7 @@ const productSchema = new mongoose.Schema(
     sku: {
       type: String,
       default: '',
-      trim: true,
+      set: canonicalizeSku,
     },
     currency: {
       type: String,

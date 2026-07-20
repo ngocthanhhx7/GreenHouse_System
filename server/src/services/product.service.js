@@ -2,6 +2,7 @@ const ApiError = require('../utils/apiError');
 const Product = require('../models/product.model');
 const Category = require('../models/category.model');
 const { logAudit } = require('../utils/auditLogger');
+const { canonicalizeSku } = require('../utils/sku');
 
 const DEFAULT_CURRENCY = 'VND';
 
@@ -12,7 +13,7 @@ function normalizeCurrency(currency) {
 }
 
 function normalizeSku(sku) {
-  return sku === undefined || sku === null ? '' : String(sku).trim();
+  return canonicalizeSku(sku);
 }
 
 function isDuplicateSkuError(error) {

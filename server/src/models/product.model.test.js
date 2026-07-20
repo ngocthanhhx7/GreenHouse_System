@@ -43,4 +43,24 @@ describe('product model', () => {
     assert.equal(skuIndex[1].unique, true);
     assert.deepEqual(skuIndex[1].partialFilterExpression, { sku: { $type: 'string', $gt: '' } });
   });
+
+  it('canonicalizes SKU values as uppercase trimmed strings', () => {
+    const product = new Product({
+      name: 'SKU Product',
+      sku: ' sku-001 ',
+      price: 10,
+      unit: 'piece',
+      categoryId: new mongoose.Types.ObjectId(),
+    });
+    const blankProduct = new Product({
+      name: 'Blank SKU Product',
+      sku: '   ',
+      price: 10,
+      unit: 'piece',
+      categoryId: new mongoose.Types.ObjectId(),
+    });
+
+    assert.equal(product.sku, 'SKU-001');
+    assert.equal(blankProduct.sku, '');
+  });
 });

@@ -22,7 +22,7 @@ function createCategoryRepository() {
 function createProductRepository() {
   const activeCategory = { _id: 'cat-active', name: 'Cookware', status: 'Active' };
   const products = [
-    { _id: 'p1', name: 'Green Pan', price: 25, sku: 'GP-001', categoryId: activeCategory, status: 'Active' },
+    { _id: 'p1', name: 'Green Pan', price: 25, sku: 'gp-001', categoryId: activeCategory, status: 'Active' },
     { _id: 'p2', name: 'Hidden Plate', price: 10, categoryId: activeCategory, status: 'Inactive' },
     { _id: 'p3', name: 'Storage Box', price: 15, categoryId: activeCategory, status: 'Active' },
     { _id: 'p4', name: 'Inactive Category Product', price: 12, categoryId: { _id: 'cat-inactive', name: 'Old Category', status: 'Inactive' }, status: 'Active' },
@@ -119,7 +119,7 @@ describe('product service', () => {
     await assert.rejects(() => productService.getPublicProductById('p2'), (error) => error.statusCode === 404 && error.message === 'Product not found');
   });
 
-  it('serializes SKU and normalizes VND currency across create and update', async () => {
+  it('canonicalizes SKU and normalizes VND currency across create and update', async () => {
     const legacyDetail = await productService.getPublicProductById('p1');
     assert.equal(legacyDetail.sku, 'GP-001');
     assert.equal(legacyDetail.currency, 'VND');
@@ -127,7 +127,7 @@ describe('product service', () => {
     const created = await productService.createProduct(
       {
         name: 'Chef Knife',
-        sku: ' CK-001 ',
+        sku: ' ck-001 ',
         price: 30,
         unit: 'piece',
         categoryId: 'cat-active',
@@ -140,11 +140,23 @@ describe('product service', () => {
     assert.equal(created.sku, 'CK-001');
     assert.equal(created.currency, 'VND');
 
-    const updated = await productService.updateProduct('p1', { sku: ' GP-002 ', currency: ' vnd ' }, { id: 'admin-1' });
+    const updated = await productService.updateProduct('p1', { sku: ' gp-002 ', currency: ' vnd ' }, { id: 'admin-1' });
     assert.equal(productRepository.products[0].sku, 'GP-002');
     assert.equal(productRepository.products[0].currency, 'VND');
     assert.equal(updated.sku, 'GP-002');
     assert.equal(updated.currency, 'VND');
+  });
+
+  it('canonicalizes blank and missing SKU values to empty strings', async () => {
+    await productService.createProduct(
+      { name: 'No SKU Product', price: 20, unit: 'piece', categoryId: 'cat-active' },
+      { id: 'admin-1' }
+    );
+    assert.equal(productRepository.products.at(-1).sku, '');
+
+    const updated = await productService.updateProduct('p1', { sku: '   ' }, { id: 'admin-1' });
+    assert.equal(productRepository.products[0].sku, '');
+    assert.equal(updated.sku, '');
   });
 
   it('rejects unsupported currency on create and update', async () => {
