@@ -81,6 +81,8 @@ describe('product service', () => {
 
     assert.equal(result.items.length, 1);
     assert.equal(result.items[0].name, 'Green Pan');
+    assert.equal(result.items[0].sku, 'GP-001');
+    assert.equal(result.items[0].currency, 'VND');
     assert.equal(result.items[0].status, 'Active');
   });
 
@@ -106,6 +108,10 @@ describe('product service', () => {
   it('returns the existing 404 contract for active products with inactive or missing categories', async () => {
     await assert.rejects(() => productService.getPublicProductById('p4'), (error) => error.statusCode === 404 && error.message === 'Product not found');
     await assert.rejects(() => productService.getPublicProductById('p5'), (error) => error.statusCode === 404 && error.message === 'Product not found');
+  });
+
+  it('returns the existing 404 contract for an inactive product detail', async () => {
+    await assert.rejects(() => productService.getPublicProductById('p2'), (error) => error.statusCode === 404 && error.message === 'Product not found');
   });
 
   it('serializes SKU and normalizes VND currency across create and update', async () => {
