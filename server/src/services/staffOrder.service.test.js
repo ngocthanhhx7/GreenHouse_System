@@ -29,13 +29,26 @@ function createOrderRepository() {
   ];
   const refunds = [];
   const invoices = [];
+  let reservedQuantity = 2;
 
   return {
     orders, exports, payments, attempts, refunds, invoices,
+    get reservedQuantity() { return reservedQuantity; },
     async listOrders(query = {}) { return orders.filter((order) => !query.status || order.orderStatus === query.status); },
     async findOrderById(id) { return orders.find((order) => order._id === id) || null; },
     async listOrderDetails(orderId) { return details.filter((detail) => detail.orderId === orderId); },
     async updateOrder(id, data) { const order = orders.find((entry) => entry._id === id); Object.assign(order, data); return order; },
+    async claimStaffCancellation(id, expectedPaymentStatus, data) {
+      const order = orders.find((entry) => entry._id === id && ['Pending', 'Confirmed'].includes(entry.orderStatus) && entry.paymentStatus === expectedPaymentStatus);
+      if (!order) return null;
+      Object.assign(order, data);
+      return order;
+    },
+    async releaseReservation(productId, quantity) {
+      if (productId !== 'p1' || reservedQuantity < quantity) return null;
+      reservedQuantity -= quantity;
+      return { productId, reservedQuantity };
+    },
     async findOpenStockExportRequest(orderId) { return exports.find((entry) => entry.orderId === orderId && ['Pending', 'Approved', 'Processing'].includes(entry.status)) || null; },
     async createStockExportRequest(data) { const request = { _id: `export-${exports.length + 1}`, status: 'Pending', ...data }; exports.push(request); return request; },
     async findPaymentByOrderId(orderId) { return payments.find((payment) => payment.orderId === orderId) || null; },
@@ -61,7 +74,11 @@ describe('staff order service', () => {
   beforeEach(() => {
     orderRepository = createOrderRepository();
     auditLogger = createAuditLogger();
-    service = createStaffOrderService({ orderRepository, auditLogger });
+    service = createStaffOrderService({
+      orderRepository,
+      auditLogger,
+      transactionManager: { async withTransaction(work) { return work({ id: 'staff-test-session' }); } },
+    });
   });
 
   it('lists staff orders by status', async () => {
@@ -128,10 +145,23 @@ describe('staff order service', () => {
     const cancelled = await service.cancelOrder('staff-1', 'order-1', { cancelReason: 'Customer requested cancellation' });
     assert.equal(cancelled.orderStatus, 'Cancelled');
     assert.equal(cancelled.paymentStatus, 'RefundPending');
+    assert.equal(orderRepository.reservedQuantity, 0);
     assert.equal(orderRepository.refunds.length, 1);
     await assert.rejects(() => service.cancelOrder('staff-1', 'order-1', { cancelReason: 'Retry' }), /Only Pending or Confirmed orders can be cancelled/);
+    assert.equal(orderRepository.reservedQuantity, 0);
     assert.equal(orderRepository.refunds.length, 1);
     assert.equal(auditLogger.entries.filter((entry) => entry.action === 'STAFF_ORDER_CANCEL').length, 1);
+  });
+
+  it('releases a confirmed unpaid COD reservation without creating a refund', async () => {
+    orderRepository.orders[0].orderStatus = 'Confirmed';
+
+    const cancelled = await service.cancelOrder('staff-1', 'order-1', { cancelReason: 'Customer changed delivery date' });
+
+    assert.equal(cancelled.orderStatus, 'Cancelled');
+    assert.equal(cancelled.paymentStatus, 'Unpaid');
+    assert.equal(orderRepository.reservedQuantity, 0);
+    assert.equal(orderRepository.refunds.length, 0);
   });
 
   it('creates one immutable invoice snapshot without mutating fulfillment or payment', async () => {

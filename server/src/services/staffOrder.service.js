@@ -1,5 +1,7 @@
 const crypto = require('crypto');
+const mongoose = require('mongoose');
 const ApiError = require('../utils/apiError');
+const Inventory = require('../models/inventory.model');
 const Order = require('../models/order.model');
 const OrderDetail = require('../models/orderDetail.model');
 const StockExportRequest = require('../models/stockExportRequest.model');
@@ -12,6 +14,27 @@ const { canTransitionOrderStatus, getAllowedOrderStatusTransitions } = require('
 
 const INVOICE_ELIGIBLE_STATUSES = new Set(['Confirmed', 'StockExportRequested', 'Packed', 'Shipped', 'Delivered']);
 const COD_COLLECTION_STATUSES = new Set(['Packed', 'Shipped']);
+
+function withOptionalSession(query, session) {
+  return session ? query.session(session) : query;
+}
+
+function createModelTransactionManager() {
+  return {
+    async withTransaction(work) {
+      const session = await mongoose.startSession();
+      try {
+        let result;
+        await session.withTransaction(async () => {
+          result = await work(session);
+        });
+        return result;
+      } finally {
+        await session.endSession();
+      }
+    },
+  };
+}
 
 function toOrderSummary(order) {
   return {
@@ -68,26 +91,40 @@ function createModelOrderRepository() {
       }
       return Order.find(filter).sort({ createdAt: -1 }).lean();
     },
-    async findOrderById(id) { return Order.findById(id).lean(); },
-    async listOrderDetails(orderId) { return OrderDetail.find({ orderId }).lean(); },
-    async updateOrder(id, data) { return Order.findByIdAndUpdate(id, data, { new: true, runValidators: true }).lean(); },
+    async findOrderById(id, session) { return withOptionalSession(Order.findById(id), session).lean(); },
+    async listOrderDetails(orderId, session) { return withOptionalSession(OrderDetail.find({ orderId }), session).lean(); },
+    async updateOrder(id, data, session) { return withOptionalSession(Order.findByIdAndUpdate(id, data, { new: true, runValidators: true }), session).lean(); },
+    async claimStaffCancellation(id, expectedPaymentStatus, data, session) {
+      return withOptionalSession(Order.findOneAndUpdate(
+        { _id: id, orderStatus: { $in: ['Pending', 'Confirmed'] }, paymentStatus: expectedPaymentStatus },
+        { $set: data },
+        { new: true, runValidators: true }
+      ), session).lean();
+    },
+    async releaseReservation(productId, quantity, session) {
+      return withOptionalSession(Inventory.findOneAndUpdate(
+        { productId, reservedQuantity: { $gte: Number(quantity) } },
+        { $inc: { reservedQuantity: -Number(quantity) } },
+        { new: true, runValidators: true }
+      ), session).lean();
+    },
     async findOpenStockExportRequest(orderId) { return StockExportRequest.findOne({ orderId, status: { $in: ['Pending', 'Approved', 'Processing'] } }).lean(); },
     async createStockExportRequest(data) { return StockExportRequest.create(data); },
-    async findPaymentByOrderId(orderId) { return Payment.findOne({ orderId }).lean(); },
-    async updatePayment(id, data) { return Payment.findByIdAndUpdate(id, data, { new: true, runValidators: true }).lean(); },
-    async findLatestPaymentAttemptByOrder(orderId) { return PaymentAttempt.findOne({ orderId }).sort({ createdAt: -1 }).lean(); },
-    async updatePaymentAttempt(id, data) { return PaymentAttempt.findByIdAndUpdate(id, data, { new: true, runValidators: true }).lean(); },
-    async upsertRefundPending(data) {
-      return RefundPending.findOneAndUpdate({ orderId: data.orderId }, { $setOnInsert: data }, { new: true, upsert: true, runValidators: true }).lean();
+    async findPaymentByOrderId(orderId, session) { return withOptionalSession(Payment.findOne({ orderId }), session).lean(); },
+    async updatePayment(id, data, session) { return withOptionalSession(Payment.findByIdAndUpdate(id, data, { new: true, runValidators: true }), session).lean(); },
+    async findLatestPaymentAttemptByOrder(orderId, session) { return withOptionalSession(PaymentAttempt.findOne({ orderId }).sort({ createdAt: -1 }), session).lean(); },
+    async updatePaymentAttempt(id, data, session) { return withOptionalSession(PaymentAttempt.findByIdAndUpdate(id, data, { new: true, runValidators: true }), session).lean(); },
+    async upsertRefundPending(data, session) {
+      return withOptionalSession(RefundPending.findOneAndUpdate({ orderId: data.orderId }, { $setOnInsert: data }, { new: true, upsert: true, runValidators: true }), session).lean();
     },
     async findInvoiceByOrderId(orderId) { return Invoice.findOne({ orderId }).lean(); },
     async createInvoice(data) { return Invoice.create(data); },
   };
 }
 
-function createStaffOrderService({ orderRepository = createModelOrderRepository(), auditLogger = { log: logAudit } } = {}) {
-  async function getOrderOrThrow(orderId) {
-    const order = await orderRepository.findOrderById(orderId);
+function createStaffOrderService({ orderRepository = createModelOrderRepository(), auditLogger = { log: logAudit }, transactionManager = createModelTransactionManager() } = {}) {
+  async function getOrderOrThrow(orderId, session) {
+    const order = await orderRepository.findOrderById(orderId, session);
     if (!order) throw new ApiError(404, 'Order not found');
     return order;
   }
@@ -96,8 +133,8 @@ function createStaffOrderService({ orderRepository = createModelOrderRepository(
     await auditLogger.log({ userId: staffId, action, targetEntity: 'Order', targetId: String(order._id), description });
   }
 
-  async function buildRefundHandoff(order, reason) {
-    const attempt = await orderRepository.findLatestPaymentAttemptByOrder(order._id);
+  async function buildRefundHandoff(order, reason, session, paymentAttempt) {
+    const attempt = paymentAttempt || await orderRepository.findLatestPaymentAttemptByOrder(order._id, session);
     if (!attempt) throw new ApiError(409, 'A payment attempt is required before creating a refund hand-off');
     return orderRepository.upsertRefundPending({
       orderId: order._id,
@@ -107,7 +144,7 @@ function createStaffOrderService({ orderRepository = createModelOrderRepository(
       currency: order.currency || attempt.currency || 'VND',
       reason,
       status: 'RefundPending',
-    });
+    }, session);
   }
 
   return {
@@ -158,23 +195,38 @@ function createStaffOrderService({ orderRepository = createModelOrderRepository(
     },
 
     async cancelOrder(staffId, orderId, input = {}) {
-      const order = await getOrderOrThrow(orderId);
       const cancelReason = String(input.cancelReason || '').trim();
       if (!cancelReason) throw new ApiError(400, 'Cancel reason is required');
-      if (!['Pending', 'Confirmed'].includes(order.orderStatus)) throw new ApiError(409, 'Only Pending or Confirmed orders can be cancelled before stock export');
-      const isPaid = order.paymentStatus === 'Paid';
-      const payment = isPaid ? await orderRepository.findPaymentByOrderId(order._id) : null;
-      const attempt = isPaid ? await orderRepository.findLatestPaymentAttemptByOrder(order._id) : null;
-      if (isPaid && !attempt) throw new ApiError(409, 'A payment attempt is required before cancelling a paid order');
-      const nextPaymentStatus = isPaid ? 'RefundPending' : order.paymentStatus === 'Pending' ? 'Cancelled' : order.paymentStatus;
-      const updated = await orderRepository.updateOrder(orderId, { orderStatus: 'Cancelled', paymentStatus: nextPaymentStatus, cancelReason });
-      if (isPaid) {
-        if (payment) await orderRepository.updatePayment(payment._id, { paymentStatus: 'RefundPending' });
-        await orderRepository.updatePaymentAttempt(attempt._id, { paymentStatus: 'RefundPending' });
-        await buildRefundHandoff(order, `Staff cancellation: ${cancelReason}`);
-      }
-      await writeAudit(staffId, 'STAFF_ORDER_CANCEL', updated, `Staff cancelled ${updated.orderCode}: ${cancelReason}`);
-      return toOrderDetail(updated, await orderRepository.listOrderDetails(orderId));
+      const result = await transactionManager.withTransaction(async (session) => {
+        const order = await getOrderOrThrow(orderId, session);
+        if (!['Pending', 'Confirmed'].includes(order.orderStatus)) throw new ApiError(409, 'Only Pending or Confirmed orders can be cancelled before stock export');
+
+        const isPaid = order.paymentStatus === 'Paid';
+        const payment = isPaid ? await orderRepository.findPaymentByOrderId(order._id, session) : null;
+        const attempt = isPaid ? await orderRepository.findLatestPaymentAttemptByOrder(order._id, session) : null;
+        if (isPaid && !attempt) throw new ApiError(409, 'A payment attempt is required before cancelling a paid order');
+        const nextPaymentStatus = isPaid ? 'RefundPending' : order.paymentStatus === 'Pending' ? 'Cancelled' : order.paymentStatus;
+        const cancelData = { orderStatus: 'Cancelled', paymentStatus: nextPaymentStatus, cancelReason };
+        const updated = orderRepository.claimStaffCancellation
+          ? await orderRepository.claimStaffCancellation(orderId, order.paymentStatus, cancelData, session)
+          : await orderRepository.updateOrder(orderId, cancelData, session);
+        if (!updated) throw new ApiError(409, 'Order changed while cancellation was being processed');
+
+        if (isPaid) {
+          if (payment) await orderRepository.updatePayment(payment._id, { paymentStatus: 'RefundPending' }, session);
+          await orderRepository.updatePaymentAttempt(attempt._id, { paymentStatus: 'RefundPending' }, session);
+          await buildRefundHandoff(order, `Staff cancellation: ${cancelReason}`, session, attempt);
+        }
+
+        const details = await orderRepository.listOrderDetails(orderId, session);
+        for (const detail of details) {
+          const released = await orderRepository.releaseReservation(detail.productId, detail.quantity, session);
+          if (!released) throw new ApiError(409, 'Order reservation could not be released');
+        }
+        return { updated, details };
+      });
+      await writeAudit(staffId, 'STAFF_ORDER_CANCEL', result.updated, `Staff cancelled ${result.updated.orderCode}: ${cancelReason}`);
+      return toOrderDetail(result.updated, result.details);
     },
 
     async markCodCollected(staffId, orderId, input = {}) {
