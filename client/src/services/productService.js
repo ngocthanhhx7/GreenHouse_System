@@ -18,13 +18,11 @@ function buildQuery(params = {}) {
 }
 
 export function createProductService({ baseUrl = DEFAULT_BASE_URL, fetcher = fetch } = {}) {
-  function authHeaders() {
-    if (typeof window === 'undefined') return { 'Content-Type': 'application/json' };
+  function authHeaders({ json = true } = {}) {
+    const headers = json ? { 'Content-Type': 'application/json' } : {};
+    if (typeof window === 'undefined') return headers;
     const token = window.localStorage.getItem(TOKEN_KEY);
-    return {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    };
+    return { ...headers, ...(token ? { Authorization: `Bearer ${token}` } : {}) };
   }
 
   return {
@@ -57,6 +55,22 @@ export function createProductService({ baseUrl = DEFAULT_BASE_URL, fetcher = fet
         method: 'PATCH',
         body: JSON.stringify({ status }),
       });
+    },
+    async uploadImages(files) {
+      const body = new FormData();
+      Array.from(files || []).forEach((file) => body.append('images', file));
+      return parseResponse(await fetcher(`${baseUrl}/admin/uploads/products`, {
+        method: 'POST',
+        headers: authHeaders({ json: false }),
+        body,
+      }));
+    },
+    async deleteImage(url) {
+      return parseResponse(await fetcher(`${baseUrl}/admin/uploads/products`, {
+        method: 'DELETE',
+        headers: authHeaders(),
+        body: JSON.stringify({ url }),
+      }));
     },
   };
 }

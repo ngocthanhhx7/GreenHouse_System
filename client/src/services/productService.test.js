@@ -38,4 +38,40 @@ describe('client product service', () => {
 
     assert.equal(result.name, 'Chef Knife');
   });
+
+  it('uploads local product images as multipart form data', async () => {
+    const file = new Blob(['image'], { type: 'image/png' });
+    const service = createProductService({
+      baseUrl: 'http://api.test/api',
+      fetcher: async (url, options) => {
+        assert.equal(url, 'http://api.test/api/admin/uploads/products');
+        assert.equal(options.method, 'POST');
+        assert.ok(options.body instanceof FormData);
+        assert.equal(options.body.getAll('images').length, 1);
+        assert.equal(options.headers['Content-Type'], undefined);
+        return {
+          ok: true,
+          json: async () => ({ success: true, data: { items: [{ url: '/uploads/products/demo.png' }] } }),
+        };
+      },
+    });
+
+    const result = await service.uploadImages([file]);
+
+    assert.equal(result.items[0].url, '/uploads/products/demo.png');
+  });
+
+  it('deletes an unused managed product image', async () => {
+    const service = createProductService({
+      baseUrl: 'http://api.test/api',
+      fetcher: async (url, options) => {
+        assert.equal(url, 'http://api.test/api/admin/uploads/products');
+        assert.equal(options.method, 'DELETE');
+        assert.deepEqual(JSON.parse(options.body), { url: '/uploads/products/demo.png' });
+        return { ok: true, json: async () => ({ success: true, data: { deleted: true } }) };
+      },
+    });
+
+    assert.equal((await service.deleteImage('/uploads/products/demo.png')).deleted, true);
+  });
 });

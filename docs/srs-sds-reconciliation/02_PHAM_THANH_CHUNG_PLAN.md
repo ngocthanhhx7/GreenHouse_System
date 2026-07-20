@@ -68,3 +68,15 @@ npm run build
 feature/chung-catalog-schema-alignment
 docs: align catalog reconciliation scope
 ```
+
+## Trạng thái triển khai Product Media bổ sung
+
+- [x] Upload tối đa 5 ảnh JPEG/PNG/WebP từ máy local vào `server/uploads/products`.
+- [x] Preview, kéo thả, sắp xếp và chọn ảnh đầu tiên làm ảnh đại diện.
+- [x] Form Admin hỗ trợ tạo, chỉnh sửa, kích hoạt/ngừng bán sản phẩm.
+- [x] Chỉ xóa file media khi không còn Product hoặc OrderDetail snapshot tham chiếu.
+- [x] Product Card, Home và Product Detail hỗ trợ URL upload nội bộ và fallback khi ảnh lỗi.
+- [x] Seed catalog tiếng Việt có SKU ổn định, danh mục tiếng Việt và giá VND thực tế.
+- [x] Browser QA desktop/mobile, upload-save-remove thật và console sạch.
+- [x] Backend 196/196 tests, frontend 65/65 tests và production build pass.
+- [ ] Nguyễn Ngọc Thành review/merge vào `main`.

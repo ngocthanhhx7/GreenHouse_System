@@ -137,7 +137,7 @@ Nguồn tham khảo: [Shopify product media](https://help.shopify.com/en/manual/
 | Owner | Workstream | Trạng thái | Bằng chứng hiện tại |
 |---|---|---|---|
 | Nguyễn Ngọc Thành | Account, avatar, upload foundation, notification, Address Book | Hoàn thành, chờ merge | Backend 192/192; frontend 61/61; build pass; seed demo pass |
-| Phạm Thành Chung | Product Media và dữ liệu catalog production-like | Chưa bắt đầu | Thực hiện sau khi foundation của Thành vào `main` |
+| Phạm Thành Chung | Product Media và dữ liệu catalog production-like | Hoàn thành, chờ Thành review/merge | Backend 196/196; frontend 65/65; build pass; upload-save-remove và desktop/mobile QA pass |
 | Nguyễn Quang Huy | Address Book tại Checkout và Order snapshot | Chưa bắt đầu | Thực hiện sau Product Media hoặc song song từ `main` mới |
 
 ## 10. Checklist pull/merge

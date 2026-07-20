@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 
 import useAuth from '../../hooks/useAuth.js';
 import { cartService } from '../../services/cartService.js';
+import { resolveMediaUrl } from '../../services/apiClient.js';
 import { formatCurrency } from '../../utils/formatters.js';
 
 export default function ProductCard({ product }) {
@@ -11,6 +12,10 @@ export default function ProductCard({ product }) {
   const [loading, setLoading] = useState(false);
   const [added, setAdded] = useState(false);
   const [error, setError] = useState('');
+  const [imageError, setImageError] = useState(false);
+  const imageUrl = resolveMediaUrl(product.imageUrls?.[0]);
+
+  useEffect(() => setImageError(false), [imageUrl]);
 
   async function handleQuickAdd(event) {
     event.preventDefault();
@@ -44,8 +49,8 @@ export default function ProductCard({ product }) {
   return (
     <article className="product-card">
       <div className="product-image-container">
-        {product.imageUrls?.[0] ? (
-          <img src={product.imageUrls[0]} alt={product.name} className="product-img" />
+        {imageUrl && !imageError ? (
+          <img src={imageUrl} alt={product.name} className="product-img" onError={() => setImageError(true)} />
         ) : (
           <div className="product-no-img">Chưa có ảnh</div>
         )}

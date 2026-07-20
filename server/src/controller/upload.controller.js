@@ -1,5 +1,6 @@
 const ApiError = require('../utils/apiError');
 const { profileService } = require('../services/profile.service');
+const { productMediaService } = require('../services/productMedia.service');
 const { uploadService } = require('../services/upload.service');
 const { sendSuccess } = require('../utils/apiResponse');
 
@@ -37,8 +38,17 @@ async function deleteAvatar(req, res, next) {
   }
 }
 
+async function deleteProductImage(req, res, next) {
+  try {
+    return sendSuccess(res, await productMediaService.deleteUnusedImage(req.body.url), 'Product image deleted');
+  } catch (error) {
+    return next(error);
+  }
+}
+
 module.exports = {
   uploadProductImages,
   uploadAvatar,
   deleteAvatar,
+  deleteProductImage,
 };

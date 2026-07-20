@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 
 import useAuth from '../../hooks/useAuth.js';
 import { cartService } from '../../services/cartService.js';
+import { resolveMediaUrl } from '../../services/apiClient.js';
 import { orderService } from '../../services/orderService.js';
 import { productService } from '../../services/productService.js';
 import { reviewService } from '../../services/reviewService.js';
@@ -18,11 +19,18 @@ export default function ProductDetailPage() {
   const [reviewError, setReviewError] = useState('');
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
+  const [activeImageIndex, setActiveImageIndex] = useState(0);
+  const [imageError, setImageError] = useState(false);
 
   useEffect(() => {
     productService.getProduct(id).then(setProduct).catch((err) => setError(err.message));
     reviewService.listProductReviews(id).then(setReviews).catch((err) => setReviewError(err.message));
   }, [id]);
+
+  useEffect(() => {
+    setActiveImageIndex(0);
+    setImageError(false);
+  }, [product?.id]);
 
   useEffect(() => {
     if (user?.role !== 'Customer') return undefined;
@@ -61,6 +69,9 @@ export default function ProductDetailPage() {
 
   if (!product) return <div className="page-center">Đang tải sản phẩm...</div>;
 
+  const productImages = product.imageUrls || [];
+  const activeImage = resolveMediaUrl(productImages[activeImageIndex]);
+
   async function addToCart() {
     setError('');
     setMessage('');
@@ -93,8 +104,11 @@ export default function ProductDetailPage() {
   return (
     <main className="public-page">
       <div className="surface product-detail">
-        <div className="product-image large">
-          {product.imageUrls?.[0] ? <img src={product.imageUrls[0]} alt={product.name} /> : <span>Chưa có ảnh</span>}
+        <div className="product-gallery">
+          <div className="product-image large">
+            {activeImage && !imageError ? <img src={activeImage} alt={product.name} onError={() => setImageError(true)} /> : <span>Chưa có ảnh phù hợp</span>}
+          </div>
+          {productImages.length > 1 && <div className="product-gallery-thumbnails" aria-label="Chọn ảnh sản phẩm">{productImages.map((url, index) => <button className={index === activeImageIndex ? 'active' : ''} type="button" key={`${url}-${index}`} onClick={() => { setActiveImageIndex(index); setImageError(false); }} aria-label={`Xem ảnh ${index + 1}`}><img src={resolveMediaUrl(url)} alt="" /></button>)}</div>}
         </div>
         <div>
           <span className="eyebrow">{product.category?.name || 'Sản phẩm nhà bếp'}</span>
