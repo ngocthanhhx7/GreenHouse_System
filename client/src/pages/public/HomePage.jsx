@@ -7,6 +7,7 @@ import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import { productService } from '../../services/productService.js';
 import { resolveMediaUrl } from '../../services/apiClient.js';
 import { formatCurrency } from '../../utils/formatters.js';
+import { getHomeProductDisplay } from './homeProductDisplay.js';
 
 gsap.registerPlugin(useGSAP, ScrollTrigger);
 
@@ -141,18 +142,19 @@ const reviews = [
 function HomeProductTile({ product }) {
   const [imageError, setImageError] = useState(false);
   const id = product.id || product._id;
+  const display = getHomeProductDisplay(product);
 
   return (
     <Link className="home-product-tile" to={`/products/${id}`}>
       <div className="home-product-image">
         {product.imageUrls?.[0] && !imageError ? (
-          <img src={resolveMediaUrl(product.imageUrls[0])} alt={product.name} loading="lazy" onError={() => setImageError(true)} />
+          <img src={resolveMediaUrl(product.imageUrls[0])} alt={display.name} loading="lazy" onError={() => setImageError(true)} />
         ) : (
           <span>Chưa có ảnh</span>
         )}
       </div>
-      <strong>{product.name}</strong>
-      <span>{formatCurrency(product.price)}</span>
+      <strong>{display.name}</strong>
+      <span>{formatCurrency(display.price)}</span>
       <small>Xem chi tiết</small>
     </Link>
   );

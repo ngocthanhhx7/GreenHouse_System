@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 const home = readFileSync(join(process.cwd(), 'src/pages/public/HomePage.jsx'), 'utf8');
+const { getHomeProductDisplay } = await import('./homeProductDisplay.js').catch(() => ({}));
 
 describe('home page premium commerce design contract', () => {
   it('uses Vietnamese commerce-first content without demo/internal workflow copy', () => {
@@ -38,10 +39,19 @@ describe('home page premium commerce design contract', () => {
     assert.doesNotMatch(home, /ambient-blob/);
   });
 
-  it('renders product names and prices from the public catalog response', () => {
+  it('wires product tiles to the catalog display adapter without local overrides', () => {
     assert.doesNotMatch(home, /productShowcase/);
-    assert.match(home, /alt=\{product\.name\}/);
-    assert.match(home, /<strong>\{product\.name\}<\/strong>/);
-    assert.match(home, /formatCurrency\(product\.price\)/);
+    assert.match(home, /getHomeProductDisplay\(product\)/);
+    assert.match(home, /alt=\{display\.name\}/);
+    assert.match(home, /<strong>\{display\.name\}<\/strong>/);
+    assert.match(home, /formatCurrency\(display\.price\)/);
+  });
+
+  it('preserves the name and price received from the public catalog at runtime', () => {
+    assert.equal(typeof getHomeProductDisplay, 'function');
+    assert.deepEqual(
+      getHomeProductDisplay({ name: 'Stackable Food Container Set', price: 329000 }),
+      { name: 'Stackable Food Container Set', price: 329000 }
+    );
   });
 });
