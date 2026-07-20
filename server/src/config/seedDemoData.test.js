@@ -15,6 +15,7 @@ const {
   DEMO_SETTING_SPECS,
   DEMO_SUPPORT_SPECS,
   DEMO_USERS,
+  DEMO_USER_ADDRESS_SPECS,
 } = require('./seedDemoData');
 
 describe('demo data seed config', () => {
@@ -29,6 +30,8 @@ describe('demo data seed config', () => {
 
     assert.deepEqual(roles, ['Admin', 'Customer', 'Staff', 'WarehouseManager']);
     assert.ok(DEMO_USERS.every((user) => user.email.endsWith('@greenhome.test')));
+    assert.ok(DEMO_USER_ADDRESS_SPECS.length >= 2);
+    assert.equal(DEMO_USER_ADDRESS_SPECS.filter((address) => address.isDefault).length, 1);
   });
 
   it('includes catalog and staff order demo records', () => {
@@ -43,6 +46,10 @@ describe('demo data seed config', () => {
     assert.ok(DEMO_SUPPORT_SPECS.some((request) => request.orderCode === 'GH-DEMO-1004'));
     assert.ok(DEMO_REVIEW_SPECS.some((review) => review.productName === 'Minimal Dinner Plate Set'));
     assert.ok(DEMO_SETTING_SPECS.some((setting) => setting.key === 'lowStockDefaultThreshold'));
+    const scriptSource = readFileSync(path.join(__dirname, 'seedDemoData.js'), 'utf8');
+    assert.doesNotMatch(scriptSource, /requestSpec\.requestCode/);
+    assert.match(scriptSource, /let inventory = await Inventory\.findOne/);
+    assert.match(scriptSource, /await inventory\.save\(\)/);
   });
 
   it('includes notification demo records for every signed-in role', () => {
@@ -51,6 +58,7 @@ describe('demo data seed config', () => {
     assert.deepEqual(notificationRoles, ['Admin', 'Customer', 'Staff', 'WarehouseManager']);
     assert.ok(DEMO_NOTIFICATION_SPECS.every((notification) => notification.channel === 'InApp'));
     assert.ok(DEMO_NOTIFICATION_SPECS.every((notification) => notification.subject.trim()));
+    assert.ok(DEMO_NOTIFICATION_SPECS.every((notification) => Array.isArray(notification.legacySubjects)));
   });
 
   it('includes audit demo records for mentor review', () => {

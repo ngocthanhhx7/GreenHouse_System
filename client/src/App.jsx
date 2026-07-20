@@ -2,12 +2,14 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 
 import AppLayout from './components/layout/AppLayout.jsx';
 import CustomerLayout from './components/layout/CustomerLayout.jsx';
+import AccountLayout from './components/layout/AccountLayout.jsx';
 import PublicLayout from './components/layout/PublicLayout.jsx';
 import ProtectedRoute from './components/auth/ProtectedRoute.jsx';
 import RoleRoute from './components/auth/RoleRoute.jsx';
 import ForbiddenPage from './pages/errors/ForbiddenPage.jsx';
 import UnauthorizedPage from './pages/errors/UnauthorizedPage.jsx';
 import NotificationPage from './pages/notifications/NotificationPage.jsx';
+import NotificationDetailPage from './pages/notifications/NotificationDetailPage.jsx';
 import LoginPage from './pages/auth/LoginPage.jsx';
 import RegisterPage from './pages/auth/RegisterPage.jsx';
 import ProfilePage from './pages/profile/ProfilePage.jsx';
@@ -66,12 +68,23 @@ export default function App() {
         path="/"
         element={
           <ProtectedRoute>
-            <CustomerLayout />
+            <AccountLayout />
           </ProtectedRoute>
         }
       >
         <Route path="profile" element={<ProfilePage />} />
         <Route path="notifications" element={<NotificationPage />} />
+        <Route path="notifications/:id" element={<NotificationDetailPage />} />
+      </Route>
+
+      <Route
+        path="/"
+        element={
+          <ProtectedRoute>
+            <CustomerLayout />
+          </ProtectedRoute>
+        }
+      >
         <Route
           path="cart"
           element={

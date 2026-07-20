@@ -19,37 +19,61 @@ const ProductReview = require('../models/productReview.model');
 const SystemSetting = require('../models/systemSetting.model');
 const Notification = require('../models/notification.model');
 const AuditLog = require('../models/auditLog.model');
+const UserAddress = require('../models/userAddress.model');
 
 const DEMO_PASSWORD = 'GreenHome@123';
 
 const DEMO_USERS = [
   {
     roleName: 'Customer',
-    fullName: 'Demo Customer',
+    fullName: 'Khách hàng Demo',
     email: 'customer@greenhome.test',
     phone: '0900000001',
-    address: '12 Nguyen Trai, Ha Noi',
+    address: '12 Nguyễn Trãi, Hà Nội',
   },
   {
     roleName: 'Staff',
-    fullName: 'Demo Staff Nguyen Huu Anh Nhat',
+    fullName: 'Nhân viên Demo Nguyễn Hữu Anh Nhật',
     email: 'staff@greenhome.test',
     phone: '0900000002',
-    address: 'GreenHome Staff Office',
+    address: 'Văn phòng nhân viên GreenHome',
   },
   {
     roleName: 'WarehouseManager',
-    fullName: 'Demo Warehouse Le Vu Cuong',
+    fullName: 'Quản lý kho Demo Lê Vũ Cường',
     email: 'warehouse@greenhome.test',
     phone: '0900000003',
-    address: 'GreenHome Warehouse',
+    address: 'Kho hàng GreenHome',
   },
   {
     roleName: 'Admin',
-    fullName: 'Demo Admin Nguyen Ngoc Thanh',
+    fullName: 'Quản trị viên Demo Nguyễn Ngọc Thành',
     email: 'admin@greenhome.test',
     phone: '0900000004',
-    address: 'GreenHome Admin Office',
+    address: 'Văn phòng quản trị GreenHome',
+  },
+];
+
+const DEMO_USER_ADDRESS_SPECS = [
+  {
+    label: 'Nhà riêng',
+    receiverName: 'Khách hàng Demo',
+    phoneNumber: '0900000001',
+    province: 'Hà Nội',
+    district: 'Thanh Xuân',
+    ward: 'Thượng Đình',
+    addressLine: '12 Nguyễn Trãi',
+    isDefault: true,
+  },
+  {
+    label: 'Văn phòng',
+    receiverName: 'Khách hàng Demo',
+    phoneNumber: '0900000001',
+    province: 'Hà Nội',
+    district: 'Cầu Giấy',
+    ward: 'Dịch Vọng',
+    addressLine: '1 đường Cầu Giấy',
+    isDefault: false,
   },
 ];
 
@@ -230,17 +254,20 @@ const DEMO_NOTIFICATION_SPECS = [
     roleName: 'Customer',
     type: 'ORDER_STATUS',
     channel: 'InApp',
-    subject: 'Demo order is ready to track',
-    content: 'Your demo order GH-DEMO-1002 has been confirmed and is waiting for stock export.',
+    subject: 'Đơn hàng mẫu đã sẵn sàng theo dõi',
+    legacySubjects: ['Demo order is ready to track'],
+    content: 'Đơn hàng GH-DEMO-1002 đã được xác nhận và đang chờ yêu cầu xuất kho.',
     deliveryStatus: 'Sent',
     isRead: false,
+    targetOrderCode: 'GH-DEMO-1002',
   },
   {
     roleName: 'Staff',
     type: 'STAFF_QUEUE',
     channel: 'InApp',
-    subject: 'Demo staff queue has pending work',
-    content: 'Review pending and stock-export-requested demo orders before warehouse processing.',
+    subject: 'Hàng đợi nhân viên có đơn cần xử lý',
+    legacySubjects: ['Demo staff queue has pending work'],
+    content: 'Vui lòng kiểm tra các đơn chờ xác nhận và yêu cầu xuất kho trước khi chuyển sang kho.',
     deliveryStatus: 'Sent',
     isRead: false,
   },
@@ -248,8 +275,9 @@ const DEMO_NOTIFICATION_SPECS = [
     roleName: 'WarehouseManager',
     type: 'LOW_STOCK',
     channel: 'InApp',
-    subject: 'Demo warehouse stock export waiting',
-    content: 'Order GH-DEMO-1003 has a pending stock export request for warehouse confirmation.',
+    subject: 'Kho có phiếu xuất đang chờ duyệt',
+    legacySubjects: ['Demo warehouse stock export waiting'],
+    content: 'Đơn hàng GH-DEMO-1003 có yêu cầu xuất kho đang chờ xác nhận.',
     deliveryStatus: 'Sent',
     isRead: false,
   },
@@ -257,8 +285,9 @@ const DEMO_NOTIFICATION_SPECS = [
     roleName: 'Admin',
     type: 'REPORT_READY',
     channel: 'InApp',
-    subject: 'Demo admin report data is available',
-    content: 'Reports and system settings have demo records for mentor walkthrough.',
+    subject: 'Dữ liệu báo cáo quản trị đã sẵn sàng',
+    legacySubjects: ['Demo admin report data is available'],
+    content: 'Báo cáo và cấu hình hệ thống đã có dữ liệu mẫu để trình bày với mentor.',
     deliveryStatus: 'Sent',
     isRead: true,
   },
@@ -300,6 +329,7 @@ async function upsertUsers(roleMap) {
           fullName: user.fullName,
           email: user.email,
           phone: user.phone,
+          phoneNumber: user.phone,
           address: user.address,
           passwordHash,
           roleId: role._id,
@@ -312,6 +342,21 @@ async function upsertUsers(roleMap) {
   }
 
   return users;
+}
+
+async function upsertUserAddresses(userMap) {
+  const customer = userMap.Customer;
+  await UserAddress.updateMany({ userId: customer._id }, { $set: { isDefault: false } });
+  const addresses = [];
+  for (const addressSpec of DEMO_USER_ADDRESS_SPECS) {
+    const address = await UserAddress.findOneAndUpdate(
+      { userId: customer._id, label: addressSpec.label },
+      { $set: { userId: customer._id, ...addressSpec } },
+      { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
+    );
+    addresses.push(address);
+  }
+  return addresses;
 }
 
 async function upsertCategories() {
@@ -354,19 +399,13 @@ async function upsertProducts(categoryMap) {
 async function upsertInventories(productMap) {
   const inventories = {};
   for (const product of Object.values(productMap)) {
-    const inventory = await Inventory.findOneAndUpdate(
-      { productId: product._id },
-      {
-        $set: {
-          productId: product._id,
-          stockQuantity: Number(product.stockQuantity || 0),
-          reservedQuantity: 0,
-          damagedQuantity: 0,
-          lowStockThreshold: 5,
-        },
-      },
-      { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
-    );
+    let inventory = await Inventory.findOne({ productId: product._id });
+    if (!inventory) inventory = new Inventory({ productId: product._id });
+    inventory.stockQuantity = Number(product.stockQuantity || 0);
+    inventory.reservedQuantity = 0;
+    inventory.damagedQuantity = 0;
+    inventory.lowStockThreshold = 5;
+    await inventory.save();
     inventories[product.name] = inventory;
   }
   return inventories;
@@ -422,7 +461,7 @@ async function upsertDemoOrders(userMap, productMap) {
       {
         $set: {
           orderId: order._id,
-          requestCode: requestSpec.requestCode || '',
+          requestCode: orderSpec.requestCode || '',
           transactionId: orderSpec.transactionId || '',
           paymentMethod: orderSpec.paymentMethod,
           amount: totalAmount,
@@ -567,13 +606,21 @@ async function upsertSystemSettings(userMap) {
   return settings;
 }
 
-async function upsertNotifications(userMap) {
+async function upsertNotifications(userMap, orderMap) {
   const notifications = [];
 
   for (const notificationSpec of DEMO_NOTIFICATION_SPECS) {
     const user = userMap[notificationSpec.roleName];
+    const providerMessageId = `demo-seed:${notificationSpec.roleName}:${notificationSpec.type}`;
+
+    await Notification.deleteMany({
+      userId: user._id,
+      subject: { $in: [notificationSpec.subject, ...(notificationSpec.legacySubjects || [])] },
+      providerMessageId: { $ne: providerMessageId },
+    });
+
     const notification = await Notification.findOneAndUpdate(
-      { userId: user._id, subject: notificationSpec.subject },
+      { userId: user._id, providerMessageId },
       {
         $set: {
           userId: user._id,
@@ -582,7 +629,12 @@ async function upsertNotifications(userMap) {
           subject: notificationSpec.subject,
           content: notificationSpec.content,
           deliveryStatus: notificationSpec.deliveryStatus,
+          providerMessageId,
           isRead: notificationSpec.isRead,
+          readAt: notificationSpec.isRead ? new Date() : null,
+          deletedAt: null,
+          targetCollection: notificationSpec.targetOrderCode ? 'Order' : '',
+          targetId: notificationSpec.targetOrderCode ? orderMap[notificationSpec.targetOrderCode]?._id || null : null,
           sentAt: new Date(),
         },
       },
@@ -633,6 +685,7 @@ async function seedDemoData() {
   if (missingRole) throw new Error(`Missing role: ${missingRole.roleName}`);
 
   const userMap = await upsertUsers(roleMap);
+  const userAddresses = await upsertUserAddresses(userMap);
   const categoryMap = await upsertCategories();
   const productMap = await upsertProducts(categoryMap);
   const inventoryMap = await upsertInventories(productMap);
@@ -642,11 +695,12 @@ async function seedDemoData() {
   const supportRequests = await upsertSupportRequests(userMap, orderMap);
   const productReviews = await upsertProductReviews(userMap, orderMap, productMap);
   const systemSettings = await upsertSystemSettings(userMap);
-  const notifications = await upsertNotifications(userMap);
+  const notifications = await upsertNotifications(userMap, orderMap);
   const auditLogs = await upsertAuditLogs(userMap);
 
   return {
     users: DEMO_USERS.length,
+    userAddresses: userAddresses.length,
     categories: DEMO_CATEGORIES.length,
     products: DEMO_PRODUCTS.length,
     inventories: Object.keys(inventoryMap).length,
@@ -667,6 +721,7 @@ async function runCli() {
   console.log('GreenHome demo data seeded successfully.');
   console.table([
     { type: 'Users', count: result.users },
+    { type: 'UserAddresses', count: result.userAddresses },
     { type: 'Categories', count: result.categories },
     { type: 'Products', count: result.products },
     { type: 'Inventories', count: result.inventories },
@@ -702,5 +757,6 @@ module.exports = {
   DEMO_SETTING_SPECS,
   DEMO_SUPPORT_SPECS,
   DEMO_USERS,
+  DEMO_USER_ADDRESS_SPECS,
   seedDemoData,
 };

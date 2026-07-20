@@ -24,7 +24,8 @@ describe('shared header design contract', () => {
     assert.match(header, /showCart/);
     assert.match(header, /to="\/login"/);
     assert.match(header, /to="\/register"/);
-    assert.match(header, /to="\/notifications"/);
+    assert.match(header, /<NotificationBell/);
+    assert.match(header, /to: '\/notifications'/);
     assert.match(header, /avatar-menu/);
     assert.match(header, /roleMenuLinks/);
   });

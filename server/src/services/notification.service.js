@@ -6,6 +6,13 @@ const ApiError = require('../utils/apiError');
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 50;
 const VALID_STATUSES = new Set(['all', 'unread']);
+const PAYMENT_STATUS_LABELS = {
+  Paid: 'đã thanh toán',
+  Failed: 'thất bại',
+  Pending: 'đang chờ xử lý',
+  Refunded: 'đã hoàn tiền',
+  RefundPending: 'đang chờ hoàn tiền',
+};
 
 function toPlainNotification(notification) {
   return {
@@ -142,12 +149,13 @@ function createNotificationService({
 
   return {
     async notifyPaymentStatus({ userId, orderCode, paymentStatus }) {
+      const statusLabel = PAYMENT_STATUS_LABELS[paymentStatus] || String(paymentStatus || '').toLowerCase();
       const notification = await notificationRepository.create({
         userId,
         type: 'PAYMENT_STATUS',
         channel: 'Email',
-        subject: `Payment ${paymentStatus} for order ${orderCode}`,
-        content: `Your payment status for order ${orderCode} is ${paymentStatus}.`,
+        subject: `Thanh toán đơn ${orderCode} ${statusLabel}`,
+        content: `Trạng thái thanh toán của đơn hàng ${orderCode}: ${statusLabel}.`,
         deliveryStatus: 'Pending',
       });
       return toPlainNotification(notification);

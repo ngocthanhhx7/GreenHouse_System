@@ -14,13 +14,24 @@ export function createNotificationService({ baseUrl = DEFAULT_BASE_URL, fetcher 
     : apiRequest;
 
   return {
-    async listMyNotifications() {
-      return request('/notifications');
+    async listMyNotifications({ status, limit, cursor } = {}) {
+      const params = new URLSearchParams();
+      if (status) params.set('status', status);
+      if (limit) params.set('limit', String(limit));
+      if (cursor) params.set('cursor', cursor);
+      const query = params.toString();
+      return request(`/notifications${query ? `?${query}` : ''}`);
+    },
+    async getNotification(id) {
+      return request(`/notifications/${id}`);
     },
     async markAsRead(id) {
       return request(`/notifications/${id}/read`, {
         method: 'PATCH',
       });
+    },
+    async deleteNotification(id) {
+      return request(`/notifications/${id}`, { method: 'DELETE' });
     },
   };
 }
