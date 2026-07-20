@@ -41,6 +41,6 @@ describe('product model', () => {
 
     assert.ok(skuIndex);
     assert.equal(skuIndex[1].unique, true);
-    assert.deepEqual(skuIndex[1].partialFilterExpression, { sku: { $type: 'string', $ne: '' } });
+    assert.deepEqual(skuIndex[1].partialFilterExpression, { sku: { $type: 'string', $gt: '' } });
   });
 });

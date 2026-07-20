@@ -62,7 +62,7 @@ productSchema.index(
   { sku: 1 },
   {
     unique: true,
-    partialFilterExpression: { sku: { $type: 'string', $ne: '' } },
+    partialFilterExpression: { sku: { $type: 'string', $gt: '' } },
   }
 );
 productSchema.index({ categoryId: 1, status: 1 });
