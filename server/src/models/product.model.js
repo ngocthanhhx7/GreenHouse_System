@@ -55,7 +55,11 @@ const productSchema = new mongoose.Schema(
       default: 'Active',
     },
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+    // Run npm run migrate:product-sku-index before rollout to create/canonicalize indexes.
+    autoIndex: false,
+  }
 );
 
 productSchema.index({ name: 'text', description: 'text' });

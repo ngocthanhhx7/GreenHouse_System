@@ -5,6 +5,10 @@ const mongoose = require('mongoose');
 const Product = require('./product.model');
 
 describe('product model', () => {
+  it('defers product index creation to the SKU migration', () => {
+    assert.equal(Product.schema.options.autoIndex, false);
+  });
+
   it('stores stock quantity for cart and order stock validation', () => {
     const path = Product.schema.path('stockQuantity');
 
