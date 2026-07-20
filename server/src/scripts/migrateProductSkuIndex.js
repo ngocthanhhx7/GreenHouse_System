@@ -39,11 +39,11 @@ function hasIndexKey(index, key) {
   return JSON.stringify(index?.key) === JSON.stringify(key);
 }
 
-function hasMatchingEntries(actual, expected) {
-  const actualEntries = Object.entries(actual || {});
-  const expectedEntries = Object.entries(expected || {});
+function hasMatchingKeys(actual, expected) {
+  const actualKeys = Object.keys(actual || {}).sort();
+  const expectedKeys = Object.keys(expected || {}).sort();
 
-  return actualEntries.length === expectedEntries.length && actualEntries.every(([key, value]) => expected[key] === value);
+  return actualKeys.length === expectedKeys.length && actualKeys.every((key, index) => key === expectedKeys[index]);
 }
 
 function isTextIndexDefinition([key]) {
@@ -51,8 +51,7 @@ function isTextIndexDefinition([key]) {
 }
 
 function hasTextIndex(index, key) {
-  const weights = Object.fromEntries(Object.keys(key).map((field) => [field, 1]));
-  return index?.key?._fts === 'text' && index.key?._ftsx === 1 && hasMatchingEntries(index.weights, weights);
+  return index?.key?._fts === 'text' && index.key?._ftsx === 1 && hasMatchingKeys(index.weights, key);
 }
 
 function hasSupportingProductIndex(indexes, definition) {

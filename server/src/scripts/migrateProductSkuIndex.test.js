@@ -149,6 +149,19 @@ describe('migrateProductSkuIndex', () => {
     assert.deepEqual(collection.calls.dropIndex, []);
   });
 
+  it('does not recreate an existing weighted text index with the expected name and description fields', async () => {
+    const collection = createCollection({
+      products: [{ _id: 'product-1', sku: 'SKU-001' }],
+      indexes: schemaIndexMetadata({ textWeights: { description: 1, name: 10 } }),
+      duplicateChecks: [[], []],
+    });
+
+    await migrateProductSkuIndex({ collection });
+
+    assert.deepEqual(collection.calls.createIndex, []);
+    assert.deepEqual(collection.calls.dropIndex, []);
+  });
+
   it('builds a bounded null-safe canonical SKU duplicate aggregation pipeline', () => {
     assert.deepEqual(buildCanonicalSkuExpression(), {
       $toUpper: {
