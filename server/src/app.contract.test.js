@@ -62,7 +62,7 @@ describe('API error contract app integration', () => {
     assert.equal(body.stack, undefined);
   });
 
-  it('returns a generic traceable 500 for malformed JSON without leaking parser details', async () => {
+  it('returns a generic traceable 400 for malformed JSON without leaking parser details', async () => {
     const { res, body } = await request(
       server,
       {
@@ -76,10 +76,11 @@ describe('API error contract app integration', () => {
       '{'
     );
 
-    assert.equal(res.statusCode, 500);
-    assert.equal(body.errorCode, 'INTERNAL_ERROR');
+    assert.equal(res.statusCode, 400);
+    assert.equal(body.errorCode, 'VALIDATION_ERROR');
     assert.equal(body.requestId, 'integration-parser-error');
-    assert.equal(body.message, 'Internal server error');
+    assert.equal(body.message, 'Invalid request body');
     assert.equal(body.stack, undefined);
+    assert.equal(body.message.includes('Unexpected end'), false);
   });
 });

@@ -42,6 +42,16 @@ describe('error middleware', () => {
     assert.equal(res.body.requestId, 'legacy-api-error-request');
   });
 
+  it('maps a legacy ApiError 503 to SERVICE_UNAVAILABLE', () => {
+    const res = createResponse('service-unavailable-request');
+
+    errorHandler(new ApiError(503, 'Gateway unavailable'), {}, res, () => {});
+
+    assert.equal(res.statusCode, 503);
+    assert.equal(res.body.errorCode, 'SERVICE_UNAVAILABLE');
+    assert.equal(res.body.requestId, 'service-unavailable-request');
+  });
+
   it('uses a generic 500 contract without leaking the original stack or message', () => {
     const res = createResponse('internal-request');
     const error = new Error('database password leaked');

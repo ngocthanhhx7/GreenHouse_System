@@ -51,6 +51,7 @@ describe('API response helpers', () => {
       403: 'FORBIDDEN',
       404: 'NOT_FOUND',
       409: 'CONFLICT',
+      503: 'SERVICE_UNAVAILABLE',
     };
 
     for (const [statusCode, errorCode] of Object.entries(expectedCodes)) {

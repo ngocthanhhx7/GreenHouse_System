@@ -4,6 +4,7 @@ const ERROR_CODES = {
   403: 'FORBIDDEN',
   404: 'NOT_FOUND',
   409: 'CONFLICT',
+  503: 'SERVICE_UNAVAILABLE',
 };
 
 function getRequestId(res, req) {
