@@ -7,6 +7,7 @@ import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import { productService } from '../../services/productService.js';
 import { resolveMediaUrl } from '../../services/apiClient.js';
 import { formatCurrency } from '../../utils/formatters.js';
+import { getHomeProductDisplay } from './homeProductDisplay.js';
 
 gsap.registerPlugin(useGSAP, ScrollTrigger);
 
@@ -138,35 +139,22 @@ const reviews = [
   },
 ];
 
-const productShowcase = {
-  'Green Ceramic Frying Pan': { name: 'Bộ 3 Nồi Chảo Gốm', price: 2499000 },
-  'Stainless Sauce Pot': { name: 'Nồi Inox Đáy Dày', price: 1250000 },
-  'Minimal Dinner Plate Set': { name: 'Bộ Bàn Ăn Gốm Tối Giản', price: 890000 },
-  'Glass Storage Jar': { name: 'Hũ Thủy Tinh Lưu Trữ', price: 150000 },
-  'Bamboo Cutting Board': { name: 'Thớt Gỗ Sồi', price: 320000 },
-  'Chef Knife 8 Inch': { name: 'Bộ Dao 7 Món', price: 1800000 },
-  'Eco Dish Soap': { name: 'Nước Rửa Chén Sinh Học', price: 79000 },
-  'Stackable Food Container Set': { name: 'Set 5 Hộp Thủy Tinh', price: 450000 },
-};
-
 function HomeProductTile({ product }) {
   const [imageError, setImageError] = useState(false);
   const id = product.id || product._id;
-  const showcase = productShowcase[product.name] || {};
-  const name = showcase.name || product.name;
-  const price = showcase.price || product.price;
+  const display = getHomeProductDisplay(product);
 
   return (
     <Link className="home-product-tile" to={`/products/${id}`}>
       <div className="home-product-image">
         {product.imageUrls?.[0] && !imageError ? (
-          <img src={resolveMediaUrl(product.imageUrls[0])} alt={name} loading="lazy" onError={() => setImageError(true)} />
+          <img src={resolveMediaUrl(product.imageUrls[0])} alt={display.name} loading="lazy" onError={() => setImageError(true)} />
         ) : (
           <span>Chưa có ảnh</span>
         )}
       </div>
-      <strong>{name}</strong>
-      <span>{formatCurrency(price)}</span>
+      <strong>{display.name}</strong>
+      <span>{formatCurrency(display.price)}</span>
       <small>Xem chi tiết</small>
     </Link>
   );
