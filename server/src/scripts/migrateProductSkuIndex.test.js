@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const { describe, it } = require('node:test');
+const Product = require('../models/product.model');
 
 const {
   CANONICAL_SKU_INDEX,
@@ -9,6 +10,27 @@ const {
   canonicalizeSku,
   migrateProductSkuIndex,
 } = require('./migrateProductSkuIndex');
+
+const PRODUCT_SCHEMA_INDEXES = Product.schema.indexes();
+
+function indexName(key) {
+  return Object.entries(key)
+    .map(([field, direction]) => `${field}_${direction}`)
+    .join('_');
+}
+
+function schemaIndexMetadata() {
+  return PRODUCT_SCHEMA_INDEXES.map(([key, options]) => ({
+    key,
+    name: options.name || indexName(key),
+    ...options,
+  }));
+}
+
+function schemaIndexCreateCalls() {
+  const skuIndex = PRODUCT_SCHEMA_INDEXES.find(([key]) => key.sku === 1);
+  return [skuIndex, ...PRODUCT_SCHEMA_INDEXES.filter(([key]) => key.sku !== 1)].map(([key, options]) => ({ key, options }));
+}
 
 function asyncCursor(items, nextError) {
   return {
@@ -55,6 +77,31 @@ function createCollection({ products = [], indexes = [], duplicateChecks = [], a
 }
 
 describe('migrateProductSkuIndex', () => {
+  it('provisions every Product schema index on a fresh collection', async () => {
+    const collection = createCollection({
+      products: [{ _id: 'product-1', sku: 'SKU-001' }],
+      duplicateChecks: [[], []],
+    });
+
+    await migrateProductSkuIndex({ collection });
+
+    assert.deepEqual(collection.calls.createIndex, schemaIndexCreateCalls());
+    assert.deepEqual(collection.calls.dropIndex, []);
+  });
+
+  it('leaves existing Product schema supporting indexes and unrelated indexes intact', async () => {
+    const collection = createCollection({
+      products: [{ _id: 'product-1', sku: 'SKU-001' }],
+      indexes: [...schemaIndexMetadata(), { name: 'unrelated_1', key: { stockQuantity: 1 } }],
+      duplicateChecks: [[], []],
+    });
+
+    await migrateProductSkuIndex({ collection });
+
+    assert.deepEqual(collection.calls.createIndex, []);
+    assert.deepEqual(collection.calls.dropIndex, []);
+  });
+
   it('builds a bounded null-safe canonical SKU duplicate aggregation pipeline', () => {
     assert.deepEqual(buildCanonicalSkuExpression(), {
       $toUpper: {
@@ -112,7 +159,7 @@ describe('migrateProductSkuIndex', () => {
       { allowDiskUse: true },
       { allowDiskUse: true },
     ]);
-    assert.deepEqual(collection.calls.createIndex, [{ key: { sku: 1 }, options: CANONICAL_SKU_INDEX }]);
+    assert.deepEqual(collection.calls.createIndex, schemaIndexCreateCalls());
     assert.deepEqual(result, {
       scanned: CANONICAL_SKU_BATCH_SIZE + 1,
       canonicalized: CANONICAL_SKU_BATCH_SIZE + 1,
@@ -161,9 +208,10 @@ describe('migrateProductSkuIndex', () => {
 
     const result = await migrateProductSkuIndex({ collection });
 
-    assert.deepEqual(collection.calls.createIndex, [{ key: { sku: 1 }, options: CANONICAL_SKU_INDEX }]);
+    assert.deepEqual(collection.calls.createIndex, schemaIndexCreateCalls());
     assert.deepEqual(collection.calls.dropIndex, ['sku_1']);
-    assert.deepEqual(collection.calls.events, ['createIndex', 'dropIndex']);
+    assert.equal(collection.calls.events[0], 'createIndex');
+    assert.equal(collection.calls.events.at(-1), 'dropIndex');
     assert.deepEqual(result, {
       scanned: 1,
       canonicalized: 0,
@@ -191,7 +239,7 @@ describe('migrateProductSkuIndex', () => {
       products: [{ _id: 'product-1', sku: 'SKU-001' }],
       indexes: [
         { name: 'sku_1', key: { sku: 1 }, sparse: true },
-        { name: 'product_sku_unique_v2', key: { sku: 1 }, ...CANONICAL_SKU_INDEX },
+        ...schemaIndexMetadata(),
         { name: 'unrelated_1', key: { categoryId: 1 } },
       ],
       duplicateChecks: [[], []],
@@ -225,10 +273,10 @@ describe('migrateProductSkuIndex', () => {
     assert.deepEqual(collection.calls.dropIndex, []);
   });
 
-  it('is idempotent when only the correct versioned index exists', async () => {
+  it('is idempotent when every Product schema index exists', async () => {
     const collection = createCollection({
       products: [{ _id: 'product-1', sku: 'SKU-001' }],
-      indexes: [{ name: 'product_sku_unique_v2', key: { sku: 1 }, ...CANONICAL_SKU_INDEX }],
+      indexes: schemaIndexMetadata(),
       duplicateChecks: [[], []],
     });
 

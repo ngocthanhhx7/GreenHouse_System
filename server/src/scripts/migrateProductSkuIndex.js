@@ -1,14 +1,14 @@
 const mongoose = require('mongoose');
 const { connectDatabase } = require('../config/database');
+const Product = require('../models/product.model');
 const { canonicalizeSku } = require('../utils/sku');
 
 const CANONICAL_SKU_BATCH_SIZE = 500;
 const LEGACY_SKU_INDEX_NAME = 'sku_1';
-const CANONICAL_SKU_INDEX = Object.freeze({
-  unique: true,
-  partialFilterExpression: { sku: { $type: 'string', $gt: '' } },
-  name: 'product_sku_unique_v2',
-});
+const PRODUCT_SCHEMA_INDEXES = Product.schema.indexes();
+const CANONICAL_SKU_INDEX = Object.freeze(
+  PRODUCT_SCHEMA_INDEXES.find(([key, options]) => key.sku === 1 && options.name === 'product_sku_unique_v2')[1]
+);
 
 function buildCanonicalSkuExpression() {
   return {
@@ -33,6 +33,34 @@ function buildDuplicateCanonicalSkuPipeline() {
 
 function hasSkuKey(index) {
   return JSON.stringify(index?.key) === JSON.stringify({ sku: 1 });
+}
+
+function hasIndexKey(index, key) {
+  return JSON.stringify(index?.key) === JSON.stringify(key);
+}
+
+function isTextIndexDefinition([key]) {
+  return Object.values(key).includes('text');
+}
+
+function hasTextIndex(index, key) {
+  const weights = Object.fromEntries(Object.keys(key).map((field) => [field, 1]));
+  return JSON.stringify(index?.weights) === JSON.stringify(weights);
+}
+
+function hasSupportingProductIndex(indexes, definition) {
+  const [key] = definition;
+  return indexes.some((index) => hasIndexKey(index, key) || (isTextIndexDefinition(definition) && hasTextIndex(index, key)));
+}
+
+async function ensureSupportingProductIndexes(collection, indexes) {
+  const supportingIndexes = PRODUCT_SCHEMA_INDEXES.filter(([key]) => key.sku !== 1);
+
+  for (const [key, options] of supportingIndexes) {
+    if (!hasSupportingProductIndex(indexes, [key, options])) {
+      await collection.createIndex(key, options);
+    }
+  }
 }
 
 function isCanonicalSkuIndex(index) {
@@ -106,6 +134,8 @@ async function migrateProductSkuIndex({ collection }) {
     indexCreated = true;
   }
 
+  await ensureSupportingProductIndexes(collection, indexes);
+
   if (legacySkuIndex) {
     await collection.dropIndex(LEGACY_SKU_INDEX_NAME);
     legacyIndexDropped = true;
@@ -140,10 +170,12 @@ if (require.main === module) {
 module.exports = {
   CANONICAL_SKU_BATCH_SIZE,
   CANONICAL_SKU_INDEX,
+  PRODUCT_SCHEMA_INDEXES,
   buildCanonicalSkuExpression,
   buildDuplicateCanonicalSkuPipeline,
   canonicalizeSku,
   duplicateSkuError,
+  ensureSupportingProductIndexes,
   findFirstCanonicalSkuDuplicate,
   isCanonicalSkuIndex,
   isLegacySkuIndex,
