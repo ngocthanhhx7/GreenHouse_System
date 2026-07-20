@@ -12,6 +12,16 @@ const inventoryTransactionSchema = new mongoose.Schema(
       ref: 'Order',
       default: null,
     },
+    relatedCollection: {
+      type: String,
+      enum: ['', 'Inventory', 'StockExportRequest', 'ReplenishmentRequest', 'DamageReport'],
+      default: '',
+      trim: true,
+    },
+    relatedId: {
+      type: mongoose.Schema.Types.ObjectId,
+      default: null,
+    },
     performedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
@@ -19,22 +29,25 @@ const inventoryTransactionSchema = new mongoose.Schema(
     },
     transactionType: {
       type: String,
-      enum: ['ADJUSTMENT', 'STOCK_EXPORT', 'REPLENISHMENT_RECEIVE'],
+      enum: ['ADJUSTMENT', 'STOCK_EXPORT', 'REPLENISHMENT_RECEIVE', 'DAMAGE_CONFIRMED'],
       required: true,
     },
     quantity: {
       type: Number,
       required: true,
+      validate: { validator: Number.isInteger, message: 'quantity must be an integer' },
     },
     beforeQuantity: {
       type: Number,
       required: true,
       min: 0,
+      validate: { validator: Number.isInteger, message: 'beforeQuantity must be a non-negative integer' },
     },
     afterQuantity: {
       type: Number,
       required: true,
       min: 0,
+      validate: { validator: Number.isInteger, message: 'afterQuantity must be a non-negative integer' },
     },
     reason: {
       type: String,
@@ -47,5 +60,6 @@ const inventoryTransactionSchema = new mongoose.Schema(
 
 inventoryTransactionSchema.index({ productId: 1, createdAt: -1 });
 inventoryTransactionSchema.index({ orderId: 1, createdAt: -1 });
+inventoryTransactionSchema.index({ relatedCollection: 1, relatedId: 1, createdAt: -1 });
 
 module.exports = mongoose.model('InventoryTransaction', inventoryTransactionSchema);

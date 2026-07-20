@@ -82,4 +82,34 @@ describe('notification service', () => {
       /Notification not found/
     );
   });
+
+  it('creates only one in-app notification for the same business event', async () => {
+    const notifications = [];
+    const service = createNotificationService({
+      notificationRepository: {
+        async createIdempotent(data) {
+          const existing = notifications.find((item) => item.userId === data.userId && item.eventId === data.eventId);
+          if (existing) return existing;
+          const notification = { _id: `noti-${notifications.length + 1}`, ...data };
+          notifications.push(notification);
+          return notification;
+        },
+      },
+    });
+
+    const first = await service.createInAppNotification({
+      userId: 'customer-1', type: 'STOCK_EXPORT', subject: 'Exported', content: 'Done', eventId: 'stock-export:export-1',
+    });
+    const replay = await service.createInAppNotification({
+      userId: 'customer-1', type: 'STOCK_EXPORT', subject: 'Exported', content: 'Done', eventId: 'stock-export:export-1',
+    });
+    const secondRecipient = await service.createInAppNotification({
+      userId: 'customer-2', type: 'STOCK_EXPORT', subject: 'Exported', content: 'Done', eventId: 'stock-export:export-1',
+    });
+
+    assert.equal(first.id, replay.id);
+    assert.notEqual(first.id, secondRecipient.id);
+    assert.equal(first.eventId, 'stock-export:export-1');
+    assert.equal(notifications.length, 2);
+  });
 });

@@ -26,16 +26,23 @@ const replenishmentRequestSchema = new mongoose.Schema(
       type: Number,
       required: true,
       min: 1,
+      validate: { validator: Number.isInteger, message: 'quantity must be a positive integer' },
     },
     receivedQuantity: {
       type: Number,
       default: 0,
       min: 0,
+      validate: { validator: Number.isInteger, message: 'receivedQuantity must be a non-negative integer' },
+    },
+    receivedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
     },
     status: {
       type: String,
-      enum: ['Pending', 'Approved', 'Rejected', 'Received'],
-      default: 'Pending',
+      enum: ['PendingApproval', 'Approved', 'Rejected', 'Receiving', 'Received'],
+      default: 'PendingApproval',
     },
     reason: {
       type: String,

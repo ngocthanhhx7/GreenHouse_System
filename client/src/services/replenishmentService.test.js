@@ -12,14 +12,14 @@ describe('client replenishment service', () => {
         assert.equal(options.method, 'POST');
         return {
           ok: true,
-          json: async () => ({ success: true, data: { status: 'Pending' } }),
+          json: async () => ({ success: true, data: { status: 'PendingApproval' } }),
         };
       },
     });
 
     const result = await service.createWarehouseRequest({ inventoryId: 'inv-1', quantity: 20, reason: 'Low stock' });
 
-    assert.equal(result.status, 'Pending');
+    assert.equal(result.status, 'PendingApproval');
   });
 
   it('updates admin replenishment decisions', async () => {

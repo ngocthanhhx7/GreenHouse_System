@@ -10,14 +10,20 @@ export default function ReplenishmentPage() {
   const [form, setForm] = useState({ inventoryId: '', quantity: 20, reason: 'Bổ sung hàng do tồn kho thấp' });
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
+  const [loading, setLoading] = useState(true);
 
   async function loadData() {
-    const [inventoryData, requestData] = await Promise.all([
-      inventoryService.listLowStock(),
-      replenishmentService.listWarehouseRequests(),
-    ]);
-    setInventory(inventoryData.items || []);
-    setRequests(requestData.items || []);
+    setLoading(true);
+    try {
+      const [inventoryData, requestData] = await Promise.all([
+        inventoryService.listLowStock(),
+        replenishmentService.listWarehouseRequests(),
+      ]);
+      setInventory(inventoryData.items || []);
+      setRequests(requestData.items || []);
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
@@ -62,7 +68,7 @@ export default function ReplenishmentPage() {
           <option value="">Chọn sản phẩm sắp hết</option>
           {inventory.map((item) => (
             <option key={item.id} value={item.id}>
-              {item.productName} ({item.stockQuantity}/{item.lowStockThreshold})
+              {item.productName} ({item.availableQuantity} khả dụng / ngưỡng {item.lowStockThreshold})
             </option>
           ))}
         </select>
@@ -95,6 +101,8 @@ export default function ReplenishmentPage() {
                 </td>
               </tr>
             ))}
+            {!loading && !requests.length && <tr><td colSpan="4" className="text-center text-muted">Chưa có yêu cầu bổ sung hàng.</td></tr>}
+            {loading && <tr><td colSpan="4" className="text-center text-muted">Đang tải yêu cầu bổ sung...</td></tr>}
           </tbody>
         </table>
       </div>

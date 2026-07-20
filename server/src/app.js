@@ -16,6 +16,7 @@ const reportRoutes = require('./routes/report.routes');
 const systemSettingRoutes = require('./routes/systemSetting.routes');
 const notificationRoutes = require('./routes/notification.routes');
 const auditLogRoutes = require('./routes/auditLog.routes');
+const damageReportRoutes = require('./routes/damageReport.routes');
 const { notFound, errorHandler } = require('./middlewares/error.middleware');
 const { requestId } = require('./middlewares/requestId.middleware');
 const { sendSuccess } = require('./utils/apiResponse');
@@ -46,6 +47,7 @@ function createApp() {
   app.use('/api', systemSettingRoutes);
   app.use('/api', notificationRoutes);
   app.use('/api', auditLogRoutes);
+  app.use('/api', damageReportRoutes);
 
   app.use(notFound);
   app.use(errorHandler);

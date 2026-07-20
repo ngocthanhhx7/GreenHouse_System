@@ -63,8 +63,11 @@ describe('schema alignment with ERD', () => {
   });
 
   it('stores notification targeting and provider fields', () => {
-    ['targetCollection', 'targetId', 'recipientEmail', 'providerMessageId'].forEach((field) => {
+    ['targetCollection', 'targetId', 'recipientEmail', 'providerMessageId', 'eventId'].forEach((field) => {
       assertPath(Notification, field);
     });
+    const eventIndex = Notification.schema.indexes().find(([fields]) => fields.userId === 1 && fields.eventId === 1);
+    assert.equal(eventIndex[1].unique, true);
+    assert.ok(eventIndex[1].partialFilterExpression);
   });
 });

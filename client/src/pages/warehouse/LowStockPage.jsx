@@ -5,12 +5,14 @@ import { inventoryService } from '../../services/inventoryService.js';
 export default function LowStockPage() {
   const [items, setItems] = useState([]);
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     inventoryService
       .listLowStock()
       .then((result) => setItems(result.items || []))
-      .catch((err) => setError(err.message));
+      .catch((err) => setError(err.message))
+      .finally(() => setLoading(false));
   }, []);
 
   return (
@@ -22,7 +24,9 @@ export default function LowStockPage() {
           <thead>
             <tr>
               <th>Sản phẩm</th>
-              <th>Tồn hiện tại</th>
+              <th>Tồn</th>
+              <th>Đã giữ</th>
+              <th>Khả dụng</th>
               <th>Ngưỡng cảnh báo</th>
             </tr>
           </thead>
@@ -31,12 +35,14 @@ export default function LowStockPage() {
               <tr key={item.id}>
                 <td>{item.productName}</td>
                 <td>{item.stockQuantity}</td>
+                <td>{item.reservedQuantity}</td>
+                <td>{item.availableQuantity}</td>
                 <td>{item.lowStockThreshold}</td>
               </tr>
             ))}
             {!items.length && (
               <tr>
-                <td colSpan="3" className="text-center text-muted">Không có sản phẩm sắp hết hàng.</td>
+                <td colSpan="5" className="text-center text-muted">{loading ? 'Đang tải cảnh báo tồn kho...' : 'Không có sản phẩm sắp hết hàng.'}</td>
               </tr>
             )}
           </tbody>

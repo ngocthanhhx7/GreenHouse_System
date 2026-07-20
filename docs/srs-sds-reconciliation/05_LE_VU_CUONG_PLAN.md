@@ -5,7 +5,7 @@
 - Họ tên: Lê Vũ Cường
 - Mã sinh viên: `HE187396`
 - Email commit: `levucuong0319@gmail.com`
-- Vai trò: Warehouse Inventory, Stock Export, Replenishment, Notification, Reports và System Settings owner.
+- Vai trò: Warehouse Inventory, Stock Export, Replenishment, Reports, System Settings và warehouse notification event owner.
 
 ## Goal
 
@@ -32,6 +32,10 @@
 - `server/src/services/notification.service.js`
 - `server/src/services/report.service.js`
 - `server/src/services/systemSetting.service.js`
+- `server/src/models/damageReport.model.js`
+- `server/src/services/damageReport.service.js`
+- `server/src/controller/damageReport.controller.js`
+- `server/src/routes/damageReport.routes.js`
 - `client/src/pages/warehouse/InventoryListPage.jsx`
 - `client/src/pages/warehouse/StockExportQueuePage.jsx`
 - `client/src/pages/warehouse/ReplenishmentPage.jsx`
@@ -46,28 +50,29 @@
 3. Damage report do Staff tạo không đổi tồn; Warehouse confirm mới giảm sellable stock, tăng DamagedQuantity và tạo transaction.
 4. Replenishment flow: Warehouse tạo `PendingApproval`, Admin approve/reject, Warehouse ghi nhận đúng một receipt đầy đủ; không cộng tồn khi approve.
 5. Low-stock alert dùng `AvailableQuantity <= LowStockThreshold`, có refresh/clear state.
-6. Notification phải có recipient, type, related target, delivery status, failure info và không tạo duplicate cùng business event.
+6. Event kho phải có recipient, type, related target, không tạo duplicate cùng business event và không rollback nghiệp vụ khi Notification service lỗi. Delivery/retry/read/delete thuộc ownership dùng chung của Nguyễn Ngọc Thành theo addendum ngày 20/07/2026.
 7. Report dùng Delivered + Paid cho gross sales, Refund completed trong kỳ cho refund, net = gross - refund; không tính pending/cancelled.
 8. System settings phải validate `PAYMENT_TIMEOUT_MINUTES`, `RETURN_WINDOW_DAYS`, low-stock threshold và audit thay đổi.
 9. Cập nhật SDS schema/sequence/query cho inventory, stock export, replenishment, notification, report và settings.
 
 ## Acceptance checklist
 
-- [ ] Stock export duplicate không trừ kho hai lần.
-- [ ] Inventory transaction ghi before/after, actor, reason, related entity và timestamp.
-- [ ] Admin là actor duyệt replenishment; Warehouse là actor receipt.
-- [ ] Partial/excess/duplicate receipt bị từ chối.
-- [ ] Email failure không rollback business operation và có retry evidence.
-- [ ] Report không tính unpaid/cancelled/failed payment.
-- [ ] Setting invalid không ghi đè giá trị hiện hành.
+- [x] Stock export duplicate không trừ kho hai lần.
+- [x] Inventory transaction ghi before/after, actor, reason, related entity và timestamp.
+- [x] Admin là actor duyệt replenishment; Warehouse là actor receipt.
+- [x] Partial/excess/duplicate receipt bị từ chối.
+- [x] Notification failure không rollback warehouse operation; cùng `eventId` không tạo duplicate.
+- [x] Damage Report chỉ đổi tồn khi Warehouse xác nhận qua API được bảo vệ bởi RBAC.
+- [x] Report không tính unpaid/cancelled/failed payment.
+- [x] Setting invalid không ghi đè giá trị hiện hành.
 
 ## Verification
 
 ```powershell
 cd server
-npm test -- --runInBand src/services/inventory.service.test.js src/services/replenishment.service.test.js src/services/notification.service.test.js src/services/report.service.test.js src/services/systemSetting.service.test.js
+npm test
 cd ..\client
-npm test -- --runInBand src/services/inventoryService.test.js src/services/replenishmentService.test.js src/services/notificationService.test.js
+npm test
 npm run build
 ```
 
@@ -75,5 +80,5 @@ npm run build
 
 ```text
 feature/cuong-warehouse-admin-reconciliation
-docs: align warehouse admin reconciliation scope
+feat: reconcile warehouse inventory and admin flows
 ```

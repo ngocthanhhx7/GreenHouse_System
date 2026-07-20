@@ -10,7 +10,7 @@ function createRepository() {
       productId: 'product-1',
       productName: 'Green Ceramic Frying Pan',
       stockQuantity: 10,
-      reservedQuantity: 0,
+      reservedQuantity: 2,
       damagedQuantity: 0,
       lowStockThreshold: 5,
       lastUpdatedBy: 'warehouse-1',
@@ -113,6 +113,18 @@ function createRepository() {
       Object.assign(exportRequest, data);
       return exportRequest;
     },
+    async claimExport(id, userId, note) {
+      const exportRequest = stockExports.find((item) => item._id === id && item.status === 'Approved');
+      if (!exportRequest) return null;
+      Object.assign(exportRequest, { status: 'Processing', processedBy: userId, note });
+      return exportRequest;
+    },
+    async completeExport(id) {
+      const exportRequest = stockExports.find((item) => item._id === id && item.status === 'Processing');
+      if (!exportRequest) return null;
+      Object.assign(exportRequest, { status: 'Exported', exportedAt: new Date() });
+      return exportRequest;
+    },
     async findOrderById(id) {
       return orders.find((item) => item._id === id) || null;
     },
@@ -120,6 +132,12 @@ function createRepository() {
       const order = orders.find((item) => item._id === id);
       if (!order) return null;
       Object.assign(order, data);
+      return order;
+    },
+    async markOrderPacked(id) {
+      const order = orders.find((item) => item._id === id && item.orderStatus === 'StockExportRequested');
+      if (!order) return null;
+      Object.assign(order, { orderStatus: 'Packed', packedAt: new Date() });
       return order;
     },
     async listOrderDetails(orderId) {
@@ -140,10 +158,17 @@ function createAuditLogger() {
 describe('inventory service', () => {
   let repository;
   let service;
+  let transactionCalls;
 
   beforeEach(() => {
     repository = createRepository();
-    service = createInventoryService({ repository, auditLogger: createAuditLogger() });
+    transactionCalls = 0;
+    service = createInventoryService({
+      repository,
+      auditLogger: createAuditLogger(),
+      transactionManager: { withTransaction: async (work) => { transactionCalls += 1; return work(null); } },
+      eventPublisher: null,
+    });
   });
 
   it('lists inventory with low-stock flags', async () => {
@@ -160,6 +185,8 @@ describe('inventory service', () => {
     assert.equal(repository.productStocks.get('product-1'), 8);
     assert.equal(repository.transactions.length, 1);
     assert.equal(repository.transactions[0].transactionType, 'ADJUSTMENT');
+    assert.equal(repository.transactions[0].relatedCollection, 'Inventory');
+    assert.equal(transactionCalls, 1);
   });
 
   it('rejects adjustments that would make stock negative', async () => {
@@ -169,7 +196,7 @@ describe('inventory service', () => {
     );
   });
 
-  it('approves and exports a stock export request while reducing stock', async () => {
+  it('captures the full reservation exactly once when exporting stock', async () => {
     await service.updateStockExportStatus('warehouse-1', 'export-1', { status: 'Approved', note: 'Approved by warehouse' });
     const result = await service.updateStockExportStatus('warehouse-1', 'export-1', { status: 'Exported', note: 'Handed to shipper' });
 
@@ -177,8 +204,20 @@ describe('inventory service', () => {
     assert.equal(result.order.orderStatus, 'Packed');
     assert.ok(repository.orders[0].packedAt);
     assert.equal(repository.inventories[0].stockQuantity, 8);
+    assert.equal(repository.inventories[0].reservedQuantity, 0);
     assert.equal(repository.productStocks.get('product-1'), 8);
     assert.equal(repository.transactions.at(-1).transactionType, 'STOCK_EXPORT');
+    assert.equal(repository.transactions.at(-1).relatedCollection, 'StockExportRequest');
+  });
+
+  it('rejects export when the order does not have a full reservation', async () => {
+    repository.inventories[0].reservedQuantity = 1;
+    await service.updateStockExportStatus('warehouse-1', 'export-1', { status: 'Approved' });
+
+    await assert.rejects(
+      () => service.updateStockExportStatus('warehouse-1', 'export-1', { status: 'Exported' }),
+      /full reservation/
+    );
   });
 
   it('rejects export when inventory is insufficient', async () => {
@@ -189,5 +228,20 @@ describe('inventory service', () => {
       () => service.updateStockExportStatus('warehouse-1', 'export-1', { status: 'Exported' }),
       /Insufficient stock for export/
     );
+  });
+
+  it('allows only one concurrent export claim and replays an exported request without another transaction', async () => {
+    await service.updateStockExportStatus('warehouse-1', 'export-1', { status: 'Approved' });
+    const results = await Promise.allSettled([
+      service.updateStockExportStatus('warehouse-1', 'export-1', { status: 'Exported' }),
+      service.updateStockExportStatus('warehouse-2', 'export-1', { status: 'Exported' }),
+    ]);
+
+    assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
+    assert.equal(repository.transactions.length, 1);
+    assert.equal(repository.inventories[0].stockQuantity, 8);
+    const replay = await service.updateStockExportStatus('warehouse-1', 'export-1', { status: 'Exported' });
+    assert.equal(replay.replay, true);
+    assert.equal(repository.transactions.length, 1);
   });
 });

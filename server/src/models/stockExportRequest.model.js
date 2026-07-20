@@ -22,6 +22,15 @@ const stockExportRequestSchema = new mongoose.Schema(
       default: '',
       trim: true,
     },
+    processedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+    exportedAt: {
+      type: Date,
+      default: null,
+    },
   },
   { timestamps: true }
 );

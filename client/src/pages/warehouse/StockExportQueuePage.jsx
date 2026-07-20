@@ -7,12 +7,14 @@ import { formatCurrency, translateRequestStatus } from '../../utils/formatters.j
 export default function StockExportQueuePage() {
   const [items, setItems] = useState([]);
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     inventoryService
       .listStockExports()
       .then((result) => setItems(result.items || []))
-      .catch((err) => setError(err.message));
+      .catch((err) => setError(err.message))
+      .finally(() => setLoading(false));
   }, []);
 
   return (
@@ -44,7 +46,7 @@ export default function StockExportQueuePage() {
             ))}
             {!items.length && (
               <tr>
-                <td colSpan="4" className="text-center text-muted">Chưa có phiếu xuất kho.</td>
+                <td colSpan="4" className="text-center text-muted">{loading ? 'Đang tải phiếu xuất kho...' : 'Chưa có phiếu xuất kho.'}</td>
               </tr>
             )}
           </tbody>
