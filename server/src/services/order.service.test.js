@@ -82,6 +82,20 @@ function createOrderRepository() {
     async findById(id) {
       return orders.find((order) => order._id === id) || null;
     },
+    async listDetails(orderId) {
+      return details.filter((detail) => detail.orderId === orderId);
+    },
+    async claimCustomerCancellation(customerId, id, data) {
+      const order = orders.find((entry) => (
+        entry._id === id
+        && entry.customerId === customerId
+        && ['Pending', 'WaitingForPayment'].includes(entry.orderStatus)
+        && ['Unpaid', 'Pending', 'Failed'].includes(entry.paymentStatus)
+      ));
+      if (!order) return null;
+      Object.assign(order, data);
+      return order;
+    },
     async updateOrder(id, data) {
       const order = orders.find((entry) => entry._id === id);
       Object.assign(order, data);
@@ -105,16 +119,22 @@ describe('order service', () => {
   let orderRepository;
   let auditLogger;
   let cartRepository;
+  let inventoryRepository;
 
   beforeEach(() => {
     orderRepository = createOrderRepository();
     auditLogger = createAuditLogger();
     cartRepository = createCartRepository();
+    inventoryRepository = {
+      reservedQuantity: 0,
+      async reserve(_productId, quantity) { this.reservedQuantity += quantity; },
+      async release(_productId, quantity) { this.reservedQuantity -= quantity; },
+    };
     orderService = createOrderService({
       transactionManager: { async withTransaction(work) { return work({ id: 'test-session' }); } },
       cartRepository,
       productRepository: createProductRepository(),
-      inventoryRepository: { async reserve() {} },
+      inventoryRepository,
       orderRepository,
       auditLogger,
     });
@@ -172,7 +192,10 @@ describe('order service', () => {
     const cancelled = await orderService.cancelOrder('customer-1', order.id);
 
     assert.equal(cancelled.orderStatus, 'Cancelled');
+    assert.equal(inventoryRepository.reservedQuantity, 0);
     assert.equal(auditLogger.entries.at(-1).action, 'ORDER_CANCEL');
+    await assert.rejects(() => orderService.cancelOrder('customer-1', order.id), /Only unpaid pre-confirmation orders/);
+    assert.equal(inventoryRepository.reservedQuantity, 0);
   });
 
   it('generates unique order codes when orders are placed in the same millisecond', async () => {

@@ -102,6 +102,18 @@ function createModelInventoryRepository() {
       if (!inventory) throw new ApiError(409, 'Insufficient available inventory for checkout');
       return inventory;
     },
+    async release(productId, quantity, session) {
+      const inventory = await withOptionalSession(
+        Inventory.findOneAndUpdate(
+          { productId, reservedQuantity: { $gte: Number(quantity) } },
+          { $inc: { reservedQuantity: -Number(quantity) } },
+          { new: true, runValidators: true }
+        ),
+        session
+      ).lean();
+      if (!inventory) throw new ApiError(409, 'Order reservation could not be released');
+      return inventory;
+    },
   };
 }
 
@@ -129,14 +141,29 @@ function createModelOrderRepository() {
     async listByCustomer(customerId) {
       return Order.find({ customerId }).sort({ createdAt: -1 }).lean();
     },
-    async findById(id) {
-      return Order.findById(id).lean();
+    async findById(id, session) {
+      return withOptionalSession(Order.findById(id), session).lean();
     },
-    async listDetails(orderId) {
-      return OrderDetail.find({ orderId }).lean();
+    async listDetails(orderId, session) {
+      return withOptionalSession(OrderDetail.find({ orderId }), session).lean();
     },
     async updateOrder(id, data) {
       return Order.findByIdAndUpdate(id, data, { new: true, runValidators: true }).lean();
+    },
+    async claimCustomerCancellation(customerId, id, data, session) {
+      return withOptionalSession(
+        Order.findOneAndUpdate(
+          {
+            _id: id,
+            customerId,
+            orderStatus: { $in: ['Pending', 'WaitingForPayment'] },
+            paymentStatus: { $in: ['Unpaid', 'Pending', 'Failed'] },
+          },
+          { $set: data },
+          { new: true, runValidators: true }
+        ),
+        session
+      ).lean();
     },
   };
 }
@@ -288,26 +315,39 @@ function createOrderService({
     },
 
     async cancelOrder(customerId, orderId, input = {}) {
-      const order = await orderRepository.findById(orderId);
-      if (!order || String(order.customerId) !== String(customerId)) throw new ApiError(404, 'Order not found');
-      const isPreConfirmation = ['Pending', 'WaitingForPayment'].includes(order.orderStatus);
-      const isUnpaid = ['Unpaid', 'Pending', 'Failed'].includes(order.paymentStatus);
-      if (!isPreConfirmation || !isUnpaid) {
-        throw new ApiError(409, 'Only unpaid pre-confirmation orders can be cancelled');
-      }
-      const cancelled = await orderRepository.updateOrder(orderId, {
-        orderStatus: 'Cancelled',
-        paymentStatus: order.paymentStatus === 'Pending' ? 'Cancelled' : order.paymentStatus,
-        cancelReason: String(input.cancelReason || '').trim(),
+      const result = await transactionManager.withTransaction(async (session) => {
+        const order = await orderRepository.findById(orderId, session);
+        if (!order || String(order.customerId) !== String(customerId)) throw new ApiError(404, 'Order not found');
+        const isPreConfirmation = ['Pending', 'WaitingForPayment'].includes(order.orderStatus);
+        const isUnpaid = ['Unpaid', 'Pending', 'Failed'].includes(order.paymentStatus);
+        if (!isPreConfirmation || !isUnpaid) {
+          throw new ApiError(409, 'Only unpaid pre-confirmation orders can be cancelled');
+        }
+
+        const cancelData = {
+          orderStatus: 'Cancelled',
+          paymentStatus: order.paymentStatus === 'Pending' ? 'Cancelled' : order.paymentStatus,
+          cancelReason: String(input.cancelReason || '').trim(),
+        };
+        const cancelled = orderRepository.claimCustomerCancellation
+          ? await orderRepository.claimCustomerCancellation(customerId, orderId, cancelData, session)
+          : await orderRepository.updateOrder(orderId, cancelData, session);
+        if (!cancelled) throw new ApiError(409, 'Only unpaid pre-confirmation orders can be cancelled');
+
+        const details = await orderRepository.listDetails(orderId, session);
+        for (const detail of details) {
+          await inventoryRepository.release(detail.productId, detail.quantity, session);
+        }
+        return { cancelled, orderCode: order.orderCode };
       });
       await auditLogger.log({
         userId: customerId,
         action: 'ORDER_CANCEL',
         targetEntity: 'Order',
         targetId: String(orderId),
-        description: `Order cancelled: ${order.orderCode}`,
+        description: `Order cancelled: ${result.orderCode}`,
       });
-      return toOrderResponse(cancelled);
+      return toOrderResponse(result.cancelled);
     },
   };
 }
