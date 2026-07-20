@@ -58,7 +58,13 @@ const productSchema = new mongoose.Schema(
 );
 
 productSchema.index({ name: 'text', description: 'text' });
-productSchema.index({ sku: 1 }, { sparse: true });
+productSchema.index(
+  { sku: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { sku: { $type: 'string', $ne: '' } },
+  }
+);
 productSchema.index({ categoryId: 1, status: 1 });
 productSchema.index({ price: 1 });
 

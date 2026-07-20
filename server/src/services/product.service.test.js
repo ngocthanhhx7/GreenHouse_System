@@ -27,12 +27,17 @@ function createProductRepository() {
     { _id: 'p3', name: 'Storage Box', price: 15, categoryId: activeCategory, status: 'Active' },
     { _id: 'p4', name: 'Inactive Category Product', price: 12, categoryId: { _id: 'cat-inactive', name: 'Old Category', status: 'Inactive' }, status: 'Active' },
     { _id: 'p5', name: 'Missing Category Product', price: 14, categoryId: null, status: 'Active' },
+    { _id: 'p6', name: 'Reactivation Inactive Category', price: 16, categoryId: { _id: 'cat-inactive', name: 'Old Category', status: 'Inactive' }, status: 'Inactive' },
+    { _id: 'p7', name: 'Reactivation Missing Category', price: 18, categoryId: null, status: 'Inactive' },
   ];
 
   return {
     products,
     async list() {
       return products;
+    },
+    async findById(id) {
+      return products.find((item) => item._id === id) || null;
     },
     async create(data) {
       const product = { _id: `p${products.length + 1}`, ...data };
@@ -148,6 +153,36 @@ describe('product service', () => {
       /Product currency must be VND/
     );
     await assert.rejects(() => productService.updateProduct('p1', { currency: 'USD' }), /Product currency must be VND/);
+  });
+
+  it('maps duplicate SKU errors from create and update to a clear 400 error', async () => {
+    const duplicateError = () => Object.assign(new Error('duplicate sku'), { code: 11000, keyPattern: { sku: 1 } });
+    productRepository.create = async () => {
+      throw duplicateError();
+    };
+    productRepository.updateById = async () => {
+      throw duplicateError();
+    };
+
+    await assert.rejects(
+      () => productService.createProduct({ name: 'Duplicate SKU', sku: 'GP-001', price: 10, unit: 'piece', categoryId: 'cat-active' }),
+      (error) => error.statusCode === 400 && error.message === 'Product SKU already exists'
+    );
+    await assert.rejects(
+      () => productService.updateProduct('p1', { sku: 'GP-001' }),
+      (error) => error.statusCode === 400 && error.message === 'Product SKU already exists'
+    );
+  });
+
+  it('rejects reactivation when the effective category is inactive or missing', async () => {
+    await assert.rejects(
+      () => productService.updateProduct('p6', { status: 'Active' }),
+      (error) => error.statusCode === 400 && error.message === 'Product category must be active'
+    );
+    await assert.rejects(
+      () => productService.updateProduct('p7', { status: 'Active' }),
+      (error) => error.statusCode === 400 && error.message === 'Product category does not exist'
+    );
   });
 
   it('creates a product when Admin provides an active category and valid price', async () => {

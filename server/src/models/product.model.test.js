@@ -35,4 +35,12 @@ describe('product model', () => {
     assert.equal(product.currency, 'VND');
     assert.match(invalidProduct.validateSync().errors.currency.message, /USD/);
   });
+
+  it('enforces uniqueness only for non-empty SKU values', () => {
+    const skuIndex = Product.schema.indexes().find(([key]) => key.sku === 1);
+
+    assert.ok(skuIndex);
+    assert.equal(skuIndex[1].unique, true);
+    assert.deepEqual(skuIndex[1].partialFilterExpression, { sku: { $type: 'string', $ne: '' } });
+  });
 });
