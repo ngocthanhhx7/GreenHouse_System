@@ -128,7 +128,7 @@ Nguồn tham khảo: [Shopify product media](https://help.shopify.com/en/manual/
 - [x] Avatar/profile/address sửa được và không làm đổi Order snapshot cũ.
 - [x] Bell có unread count, dropdown và deep-link detail.
 - [x] Notification chưa đọc không thể xóa; notification đã đọc có thể xóa.
-- [ ] Checkout chọn được địa chỉ lưu hoặc nhập mới.
+- [x] Checkout chọn được địa chỉ lưu hoặc nhập mới.
 - [x] Không có duplicate layout/sidebar/cart sai vai trò trong Workstream A.
 - [x] Workstream A đạt 192 server tests, 61 client tests và production build; đã kiểm tra mobile/desktop và console.
 
@@ -136,9 +136,9 @@ Nguồn tham khảo: [Shopify product media](https://help.shopify.com/en/manual/
 
 | Owner | Workstream | Trạng thái | Bằng chứng hiện tại |
 |---|---|---|---|
-| Nguyễn Ngọc Thành | Account, avatar, upload foundation, notification, Address Book | Hoàn thành, chờ merge | Backend 192/192; frontend 61/61; build pass; seed demo pass |
-| Phạm Thành Chung | Product Media và dữ liệu catalog production-like | Hoàn thành, chờ Thành review/merge | Backend 196/196; frontend 65/65; build pass; upload-save-remove và desktop/mobile QA pass |
-| Nguyễn Quang Huy | Address Book tại Checkout và Order snapshot | Chưa bắt đầu | Thực hiện sau Product Media hoặc song song từ `main` mới |
+| Nguyễn Ngọc Thành | Account, avatar, upload foundation, notification, Address Book | Hoàn thành, đã merge `main` | Backend 192/192; frontend 61/61; build pass; seed demo pass |
+| Phạm Thành Chung | Product Media và dữ liệu catalog production-like | Hoàn thành, đã merge `main` | Backend 196/196; frontend 65/65; build pass; upload-save-remove và desktop/mobile QA pass |
+| Nguyễn Quang Huy | Address Book tại Checkout và Order snapshot | Hoàn thành triển khai, chờ Thành review/merge | Backend 197/197; frontend 68/68; build pass; Checkout desktop/mobile QA và console pass |
 
 ## 10. Checklist pull/merge
 

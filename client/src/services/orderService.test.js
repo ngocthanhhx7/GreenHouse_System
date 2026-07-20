@@ -17,7 +17,12 @@ describe('client order service', () => {
       },
     });
 
-    const result = await service.placeOrder({ shippingAddress: 'Ha Noi', paymentMethod: 'COD' }, { idempotencyKey: 'checkout-test-001' });
+    const result = await service.placeOrder({
+      receiverName: 'Khách hàng Demo',
+      receiverPhone: '0900000001',
+      shippingAddress: '12 Nguyễn Trãi, Hà Nội',
+      paymentMethod: 'COD',
+    }, { idempotencyKey: 'checkout-test-001' });
 
     assert.equal(result.orderCode, 'ORD-1');
   });
@@ -31,6 +36,6 @@ describe('client order service', () => {
       },
     });
 
-    await service.placeOrder({ shippingAddress: 'Ha Noi', paymentMethod: 'COD' }, { idempotencyKey: 'checkout-header-001' });
+    await service.placeOrder({ receiverName: 'Khách hàng Demo', receiverPhone: '0900000001', shippingAddress: '12 Nguyễn Trãi, Hà Nội', paymentMethod: 'COD' }, { idempotencyKey: 'checkout-header-001' });
   });
 });

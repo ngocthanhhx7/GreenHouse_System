@@ -1,94 +1,177 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 
 import { cartService } from '../../services/cartService.js';
-import { orderService } from '../../services/orderService.js';
-import { createCheckoutIdempotencyKey } from '../../services/orderService.js';
+import { createCheckoutIdempotencyKey, orderService } from '../../services/orderService.js';
+import { profileService } from '../../services/profileService.js';
 import { formatCurrency } from '../../utils/formatters.js';
+
+const EMPTY_ADDRESS = {
+  label: 'Địa chỉ mới', receiverName: '', phoneNumber: '', province: '', district: '', ward: '', addressLine: '', isDefault: false,
+};
+
+export function formatShippingAddress(address) {
+  return [address.addressLine, address.ward, address.district, address.province]
+    .map((part) => String(part || '').trim())
+    .filter(Boolean)
+    .join(', ');
+}
 
 export default function CheckoutPage() {
   const navigate = useNavigate();
   const [cart, setCart] = useState({ items: [], totalAmount: 0 });
-  const [form, setForm] = useState({ shippingAddress: '', paymentMethod: 'COD' });
+  const [addresses, setAddresses] = useState([]);
+  const [selectedAddressId, setSelectedAddressId] = useState('');
+  const [addressMode, setAddressMode] = useState('new');
+  const [newAddress, setNewAddress] = useState(EMPTY_ADDRESS);
+  const [saveAddress, setSaveAddress] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState('COD');
+  const [customerNote, setCustomerNote] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [checkoutIdempotencyKey] = useState(() => createCheckoutIdempotencyKey());
 
   useEffect(() => {
-    cartService.getCart().then(setCart).catch((err) => setError(err.message));
+    let active = true;
+    async function loadCheckout() {
+      try {
+        const [cartResult, addressResult, profile] = await Promise.all([
+          cartService.getCart(),
+          profileService.listAddresses(),
+          profileService.getProfile(),
+        ]);
+        if (!active) return;
+        const savedAddresses = addressResult.items || [];
+        const defaultAddress = savedAddresses.find((address) => address.isDefault) || savedAddresses[0];
+        setCart(cartResult);
+        setAddresses(savedAddresses);
+        setSelectedAddressId(defaultAddress?.id || '');
+        setAddressMode(defaultAddress ? 'saved' : 'new');
+        setNewAddress((current) => ({
+          ...current,
+          receiverName: profile.fullName || '',
+          phoneNumber: profile.phoneNumber || '',
+          isDefault: savedAddresses.length === 0,
+        }));
+      } catch (requestError) {
+        if (active) setError(requestError.message);
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+    loadCheckout();
+    return () => { active = false; };
   }, []);
+
+  function updateNewAddress(field, value) {
+    setNewAddress((current) => ({ ...current, [field]: value }));
+  }
 
   async function handleSubmit(event) {
     event.preventDefault();
+    setSubmitting(true);
     setError('');
     try {
-      const order = await orderService.placeOrder(form, { idempotencyKey: checkoutIdempotencyKey });
+      let deliveryAddress;
+      if (addressMode === 'saved') {
+        deliveryAddress = addresses.find((address) => address.id === selectedAddressId);
+        if (!deliveryAddress) throw new Error('Vui lòng chọn một địa chỉ nhận hàng.');
+      } else {
+        deliveryAddress = newAddress;
+        if (saveAddress) {
+          const savedAddress = await profileService.createAddress(newAddress);
+          deliveryAddress = savedAddress;
+          setAddresses((current) => [savedAddress, ...current]);
+          setSelectedAddressId(savedAddress.id);
+          setAddressMode('saved');
+          setSaveAddress(false);
+        }
+      }
+
+      const order = await orderService.placeOrder({
+        receiverName: deliveryAddress.receiverName,
+        receiverPhone: deliveryAddress.phoneNumber,
+        shippingAddress: formatShippingAddress(deliveryAddress),
+        customerNote,
+        paymentMethod,
+      }, { idempotencyKey: checkoutIdempotencyKey });
       navigate(`/orders/${order.id}`, { replace: true });
-    } catch (err) {
-      setError(err.message);
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setSubmitting(false);
     }
   }
 
+  if (loading) return <div className="surface checkout-loading">Đang chuẩn bị thông tin thanh toán...</div>;
+
   return (
-    <div className="surface checkout-page">
-      <div className="page-heading">
-        <div>
-          <span className="eyebrow">Thanh toán</span>
-          <h1>Hoàn tất đơn hàng</h1>
-        </div>
+    <div className="checkout-page-v2">
+      <header className="checkout-heading">
+        <div><span className="eyebrow">Thanh toán an toàn</span><h1>Hoàn tất đơn hàng</h1><p>Kiểm tra địa chỉ nhận hàng và phương thức thanh toán trước khi xác nhận.</p></div>
+        <Link to="/cart">Quay lại giỏ hàng</Link>
+      </header>
+
+      <div className="checkout-steps" aria-label="Các bước thanh toán">
+        {['Địa chỉ nhận hàng', 'Phương thức thanh toán', 'Xác nhận đơn'].map((step, index) => <div className={`checkout-step ${index === 0 ? 'active' : ''}`} key={step}><span>{index + 1}</span><strong>{step}</strong></div>)}
       </div>
-      {error && <div className="alert alert-danger">{error}</div>}
-      <div className="checkout-steps">
-        {['Địa chỉ', 'Thanh toán', 'Xác nhận'].map((step, index) => (
-          <div className="checkout-step" key={step}>
-            <span>{index + 1}</span>
-            <strong>{step}</strong>
-          </div>
-        ))}
-      </div>
-      <div className="checkout-grid">
-        <form className="checkout-form" onSubmit={handleSubmit}>
-          <label className="form-label" htmlFor="shippingAddress">
-            Địa chỉ giao hàng
-          </label>
-          <textarea
-            id="shippingAddress"
-            className="form-control"
-            rows="4"
-            placeholder="Ví dụ: Nguyễn Ngọc Thành, 0900 000 004, Số nhà..., phường..., quận..., Hà Nội"
-            value={form.shippingAddress}
-            onChange={(event) => setForm({ ...form, shippingAddress: event.target.value })}
-            required
-          />
-          <label className="form-label mt-3" htmlFor="paymentMethod">
-            Phương thức thanh toán
-          </label>
-          <select
-            id="paymentMethod"
-            className="form-select"
-            value={form.paymentMethod}
-            onChange={(event) => setForm({ ...form, paymentMethod: event.target.value })}
-          >
-            <option value="COD">Thanh toán khi nhận hàng (COD)</option>
-            <option value="ONLINE">Thanh toán online</option>
-          </select>
-          <button className="btn btn-success mt-4" type="submit" disabled={!cart.items.length}>
-            Đặt hàng
-          </button>
-        </form>
-        <aside className="summary-box">
-          <h2>Tóm tắt đơn hàng</h2>
-          {cart.items.map((item) => (
-            <div className="summary-line" key={item.id}>
-              <span>{item.productName} x {item.quantity}</span>
-              <strong>{formatCurrency(item.subtotal)}</strong>
+
+      {error && <div className="alert alert-danger" role="alert">{error}</div>}
+
+      <form className="checkout-grid checkout-form-v2" onSubmit={handleSubmit}>
+        <div className="checkout-main-column">
+          <section className="checkout-panel">
+            <div className="checkout-panel-heading"><div><span>01</span><h2>Địa chỉ nhận hàng</h2></div><Link to="/profile">Quản lý sổ địa chỉ</Link></div>
+
+            {addresses.length > 0 && <div className="checkout-address-tabs" role="tablist" aria-label="Nguồn địa chỉ"><button className={addressMode === 'saved' ? 'active' : ''} type="button" role="tab" aria-selected={addressMode === 'saved'} onClick={() => setAddressMode('saved')}>Địa chỉ đã lưu</button><button className={addressMode === 'new' ? 'active' : ''} type="button" role="tab" aria-selected={addressMode === 'new'} onClick={() => setAddressMode('new')}>Địa chỉ mới</button></div>}
+
+            {addressMode === 'saved' && (
+              <div className="checkout-address-list">
+                {addresses.map((address) => (
+                  <label className={`checkout-address-card ${selectedAddressId === address.id ? 'selected' : ''}`} key={address.id}>
+                    <input type="radio" name="savedAddress" value={address.id} checked={selectedAddressId === address.id} onChange={() => setSelectedAddressId(address.id)} />
+                    <span className="checkout-address-content"><span><strong>{address.label}</strong>{address.isDefault && <small>Mặc định</small>}</span><b>{address.receiverName} · {address.phoneNumber}</b><span>{formatShippingAddress(address)}</span></span>
+                  </label>
+                ))}
+              </div>
+            )}
+
+            {addressMode === 'new' && (
+              <div className="checkout-address-form">
+                <label>Người nhận<input name="receiverName" autoComplete="shipping name" value={newAddress.receiverName} maxLength="120" required onChange={(event) => updateNewAddress('receiverName', event.target.value)} /></label>
+                <label>Số điện thoại<input name="receiverPhone" autoComplete="shipping tel" inputMode="tel" pattern="(?:\+84|0)(?:3|5|7|8|9)[0-9]{8}" value={newAddress.phoneNumber} required onChange={(event) => updateNewAddress('phoneNumber', event.target.value)} /></label>
+                <label>Tỉnh/Thành<input name="province" autoComplete="shipping address-level1" value={newAddress.province} required onChange={(event) => updateNewAddress('province', event.target.value)} /></label>
+                <label>Quận/Huyện<input name="district" autoComplete="shipping address-level2" value={newAddress.district} required onChange={(event) => updateNewAddress('district', event.target.value)} /></label>
+                <label>Phường/Xã<input name="ward" autoComplete="shipping address-level3" value={newAddress.ward} required onChange={(event) => updateNewAddress('ward', event.target.value)} /></label>
+                <label>Địa chỉ chi tiết<input name="addressLine" autoComplete="shipping street-address" value={newAddress.addressLine} maxLength="300" required onChange={(event) => updateNewAddress('addressLine', event.target.value)} /></label>
+                <label className="checkout-save-address"><input name="saveAddress" type="checkbox" checked={saveAddress} onChange={(event) => setSaveAddress(event.target.checked)} />Lưu địa chỉ này vào sổ địa chỉ</label>
+                {saveAddress && <label className="checkout-address-label">Tên gợi nhớ<input name="addressLabel" value={newAddress.label} maxLength="50" required onChange={(event) => updateNewAddress('label', event.target.value)} placeholder="Ví dụ: Nhà riêng, Văn phòng" /></label>}
+              </div>
+            )}
+          </section>
+
+          <section className="checkout-panel">
+            <div className="checkout-panel-heading"><div><span>02</span><h2>Phương thức thanh toán</h2></div></div>
+            <div className="checkout-payment-options">
+              <label className={paymentMethod === 'COD' ? 'selected' : ''}><input type="radio" name="paymentMethod" value="COD" checked={paymentMethod === 'COD'} onChange={(event) => setPaymentMethod(event.target.value)} /><span><strong>Thanh toán khi nhận hàng</strong><small>Thanh toán cho đơn vị giao hàng khi nhận sản phẩm.</small></span></label>
+              <label className={paymentMethod === 'ONLINE' ? 'selected' : ''}><input type="radio" name="paymentMethod" value="ONLINE" checked={paymentMethod === 'ONLINE'} onChange={(event) => setPaymentMethod(event.target.value)} /><span><strong>Thanh toán trực tuyến</strong><small>Chuyển sang bước thanh toán online sau khi tạo đơn.</small></span></label>
             </div>
-          ))}
-          <div className="summary-total">
-            <span>Tổng thanh toán</span>
-            <strong>{formatCurrency(cart.totalAmount)}</strong>
-          </div>
+            <label className="checkout-note">Ghi chú cho đơn hàng<textarea name="customerNote" rows="3" maxLength="500" value={customerNote} placeholder="Ví dụ: Giao giờ hành chính, gọi trước khi giao..." onChange={(event) => setCustomerNote(event.target.value)} /></label>
+          </section>
+        </div>
+
+        <aside className="summary-box checkout-summary">
+          <h2>Đơn hàng của bạn</h2>
+          <div className="checkout-summary-items">{cart.items.map((item) => <div className="summary-line" key={item.id}><span>{item.productName}<small>Số lượng: {item.quantity}</small></span><strong>{formatCurrency(item.subtotal)}</strong></div>)}</div>
+          <div className="summary-line"><span>Tạm tính</span><strong>{formatCurrency(cart.totalAmount)}</strong></div>
+          <div className="summary-line"><span>Phí vận chuyển</span><strong>Miễn phí</strong></div>
+          <div className="summary-total"><span>Tổng thanh toán</span><strong>{formatCurrency(cart.totalAmount)}</strong></div>
+          {!cart.items.length && <p className="checkout-empty-cart">Giỏ hàng của bạn đang trống.</p>}
+          <button className="btn btn-success checkout-submit" type="submit" disabled={!cart.items.length || submitting}>{submitting ? 'Đang tạo đơn...' : 'Đặt hàng'}</button>
+          <small className="checkout-confirm-note">Bằng việc đặt hàng, bạn xác nhận thông tin nhận hàng là chính xác.</small>
         </aside>
-      </div>
+      </form>
     </div>
   );
 }

@@ -79,6 +79,9 @@ export default function OrderDetailPage() {
             <dd className="col-sm-9">{translatePaymentMethod(order.paymentMethod)} / {translatePaymentStatus(order.paymentStatus)}</dd>
             <dt className="col-sm-3">Địa chỉ giao hàng</dt>
             <dd className="col-sm-9">{order.shippingAddress}</dd>
+            <dt className="col-sm-3">Người nhận</dt>
+            <dd className="col-sm-9">{order.receiverName || '-'} · {order.receiverPhone || '-'}</dd>
+            {order.customerNote && <><dt className="col-sm-3">Ghi chú</dt><dd className="col-sm-9">{order.customerNote}</dd></>}
           </dl>
           <h2>Sản phẩm trong đơn</h2>
           <ul className="order-item-list">

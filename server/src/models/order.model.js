@@ -57,21 +57,25 @@ const orderSchema = new mongoose.Schema(
       type: String,
       required: true,
       trim: true,
+      maxlength: 500,
     },
     receiverName: {
       type: String,
       default: '',
       trim: true,
+      maxlength: 120,
     },
     receiverPhone: {
       type: String,
       default: '',
       trim: true,
+      maxlength: 20,
     },
     customerNote: {
       type: String,
       default: '',
       trim: true,
+      maxlength: 500,
     },
     cancelReason: {
       type: String,
