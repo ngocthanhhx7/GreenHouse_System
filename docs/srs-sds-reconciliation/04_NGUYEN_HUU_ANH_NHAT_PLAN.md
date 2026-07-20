@@ -45,31 +45,33 @@
 4. Return flow: Customer tạo whole-order request; Staff approve/reject có reason; Warehouse inspect và phân loại; chỉ sellable quantity được RETURN_IN; Refund hoàn tất mới chuyển ReturnRequest Completed và Order Returned.
 5. Support chỉ New -> InProgress -> Resolved; chỉ Staff xử lý/respond/resolve.
 6. Invoice chỉ in cho Confirmed order, dùng OrderDetail snapshot và không thay đổi business state.
-7. Cập nhật SDS sequence/class/state diagram và test stale, backward, skipped, duplicate, missing reason/evidence.
+7. Staff hủy đơn `Pending/Confirmed` phải claim trạng thái và hoàn reservation trong cùng transaction; paid order đồng thời tạo đúng một refund hand-off.
+8. Cập nhật SDS sequence/class/state diagram và test stale, backward, skipped, duplicate, missing reason/evidence.
 
 ## Acceptance checklist
 
-- [ ] Không có transition `Pending -> Delivered` hoặc `Confirmed -> Delivered` trực tiếp.
-- [ ] Không cho Packed cancel.
-- [ ] Staff không trực tiếp mutate inventory.
-- [ ] Approval return chưa tạo refund/restock ngay.
-- [ ] Warehouse inspection là điều kiện trước refund.
-- [ ] Invoice không làm đổi Order/Payment/Inventory.
-- [ ] Support status và ownership đúng SRS.
+- [x] Không có transition `Pending -> Delivered` hoặc `Confirmed -> Delivered` trực tiếp.
+- [x] Không cho Packed cancel.
+- [x] Staff cancellation hoàn reservation đúng một lần; paid cancellation tạo đúng một refund hand-off.
+- [x] Staff không trực tiếp mutate inventory ngoài transaction cancellation contract dùng Inventory repository.
+- [x] Approval return chưa tạo refund/restock ngay.
+- [x] Warehouse inspection là điều kiện trước refund.
+- [x] Invoice không làm đổi Order/Payment/Inventory.
+- [x] Support status và ownership đúng SRS.
 
 ## Verification
 
 ```powershell
 cd server
-npm test -- --runInBand src/services/staffOrder.service.test.js src/services/returnRefund.service.test.js src/services/support.service.test.js src/utils/orderStateMachine.test.js
+npm test
 cd ..\client
-npm test -- --runInBand src/services/staffOrderService.test.js src/services/returnRefundService.test.js src/services/supportService.test.js
+npm test
 npm run build
 ```
 
 ## Branch/commit
 
 ```text
-feature/nhat-order-return-reconciliation
-docs: align staff return order scope
+feature/nhat-release-staff-reservations
+fix: release reservations on staff cancellation
 ```
