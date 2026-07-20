@@ -12,6 +12,13 @@ const productSchema = new mongoose.Schema(
       default: '',
       trim: true,
     },
+    currency: {
+      type: String,
+      enum: ['VND'],
+      default: 'VND',
+      uppercase: true,
+      trim: true,
+    },
     description: {
       type: String,
       default: '',

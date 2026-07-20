@@ -20,10 +20,13 @@ function createCategoryRepository() {
 }
 
 function createProductRepository() {
+  const activeCategory = { _id: 'cat-active', name: 'Cookware', status: 'Active' };
   const products = [
-    { _id: 'p1', name: 'Green Pan', price: 25, categoryId: 'cat-active', status: 'Active' },
-    { _id: 'p2', name: 'Hidden Plate', price: 10, categoryId: 'cat-active', status: 'Inactive' },
-    { _id: 'p3', name: 'Storage Box', price: 15, categoryId: 'cat-active', status: 'Active' },
+    { _id: 'p1', name: 'Green Pan', price: 25, sku: 'GP-001', categoryId: activeCategory, status: 'Active' },
+    { _id: 'p2', name: 'Hidden Plate', price: 10, categoryId: activeCategory, status: 'Inactive' },
+    { _id: 'p3', name: 'Storage Box', price: 15, categoryId: activeCategory, status: 'Active' },
+    { _id: 'p4', name: 'Inactive Category Product', price: 12, categoryId: { _id: 'cat-inactive', name: 'Old Category', status: 'Inactive' }, status: 'Active' },
+    { _id: 'p5', name: 'Missing Category Product', price: 14, categoryId: null, status: 'Active' },
   ];
 
   return {
@@ -81,6 +84,12 @@ describe('product service', () => {
     assert.equal(result.items[0].status, 'Active');
   });
 
+  it('hides active products whose populated category is inactive or missing', async () => {
+    const result = await productService.listPublicProducts();
+
+    assert.deepEqual(result.items.map((product) => product.id), ['p1', 'p3']);
+  });
+
   it('gets one active public product by id without scanning the full catalog', async () => {
     let listCalled = false;
     productRepository.list = async () => {
@@ -92,6 +101,47 @@ describe('product service', () => {
 
     assert.equal(result.name, 'Green Pan');
     assert.equal(listCalled, false);
+  });
+
+  it('returns the existing 404 contract for active products with inactive or missing categories', async () => {
+    await assert.rejects(() => productService.getPublicProductById('p4'), (error) => error.statusCode === 404 && error.message === 'Product not found');
+    await assert.rejects(() => productService.getPublicProductById('p5'), (error) => error.statusCode === 404 && error.message === 'Product not found');
+  });
+
+  it('serializes SKU and normalizes VND currency across create and update', async () => {
+    const legacyDetail = await productService.getPublicProductById('p1');
+    assert.equal(legacyDetail.sku, 'GP-001');
+    assert.equal(legacyDetail.currency, 'VND');
+
+    const created = await productService.createProduct(
+      {
+        name: 'Chef Knife',
+        sku: ' CK-001 ',
+        price: 30,
+        unit: 'piece',
+        categoryId: 'cat-active',
+        currency: 'vnd',
+      },
+      { id: 'admin-1' }
+    );
+    assert.equal(productRepository.products.at(-1).sku, 'CK-001');
+    assert.equal(productRepository.products.at(-1).currency, 'VND');
+    assert.equal(created.sku, 'CK-001');
+    assert.equal(created.currency, 'VND');
+
+    const updated = await productService.updateProduct('p1', { sku: ' GP-002 ', currency: ' vnd ' }, { id: 'admin-1' });
+    assert.equal(productRepository.products[0].sku, 'GP-002');
+    assert.equal(productRepository.products[0].currency, 'VND');
+    assert.equal(updated.sku, 'GP-002');
+    assert.equal(updated.currency, 'VND');
+  });
+
+  it('rejects unsupported currency on create and update', async () => {
+    await assert.rejects(
+      () => productService.createProduct({ name: 'USD Product', price: 10, unit: 'piece', categoryId: 'cat-active', currency: 'USD' }),
+      /Product currency must be VND/
+    );
+    await assert.rejects(() => productService.updateProduct('p1', { currency: 'USD' }), /Product currency must be VND/);
   });
 
   it('creates a product when Admin provides an active category and valid price', async () => {

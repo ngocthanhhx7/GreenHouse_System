@@ -1,9 +1,23 @@
-export function formatCurrency(value) {
+const DEFAULT_PRODUCT_CURRENCY = 'VND';
+
+export function formatCurrency(value, currency = DEFAULT_PRODUCT_CURRENCY) {
+  const normalizedCurrency = String(currency || DEFAULT_PRODUCT_CURRENCY).trim().toUpperCase();
+  const supportedCurrency = normalizedCurrency === DEFAULT_PRODUCT_CURRENCY ? normalizedCurrency : DEFAULT_PRODUCT_CURRENCY;
+
   return new Intl.NumberFormat('vi-VN', {
     style: 'currency',
-    currency: 'VND',
+    currency: supportedCurrency,
     maximumFractionDigits: 0,
   }).format(Number(value || 0));
+}
+
+export function formatProductCurrency(product = {}) {
+  return formatCurrency(product.price, product.currency || DEFAULT_PRODUCT_CURRENCY);
+}
+
+export function formatProductSku(sku) {
+  const normalizedSku = String(sku || '').trim();
+  return `SKU: ${normalizedSku || 'Chưa cập nhật'}`;
 }
 
 export function translateOrderStatus(status) {
