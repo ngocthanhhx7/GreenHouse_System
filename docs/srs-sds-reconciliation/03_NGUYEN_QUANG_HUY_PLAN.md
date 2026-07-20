@@ -45,17 +45,19 @@
 4. Tách PaymentAttempt khỏi PaymentCallbackEvent; callback phải lưu trước khi acknowledge và side effect chỉ chạy một lần theo provider event/transaction identity.
 5. Chốt COD: initial PaymentStatus `Unpaid`; online: `Pending`; không cho Staff confirm unpaid online order.
 6. Chốt late paid callback: không mở lại order đã timeout/cancel; tạo Refund/RefundPending theo business rule.
-7. Cập nhật SDS sequence/class/query design và test cho duplicate, stale price, inactive product, insufficient availability, invalid callback và retry.
+7. Customer hủy đơn unpaid/pre-confirmation phải claim trạng thái và hoàn toàn bộ reservation trong cùng transaction; retry không được hoàn tồn lần hai.
+8. Cập nhật SDS sequence/class/query design và test cho duplicate, stale price, inactive product, insufficient availability, invalid callback và retry.
 
 ## Acceptance checklist
 
-- [ ] Cart không reserve stock.
-- [ ] Checkout atomic và idempotent.
-- [ ] OrderDetail giữ snapshot name/SKU/unit/price/quantity.
-- [ ] Mỗi callback được lưu append-only.
-- [ ] Duplicate callback không nhân đôi Paid/Refund/Notification.
-- [ ] COD và online có initial state đúng.
-- [ ] Customer chỉ xem/hủy Order của chính mình và chỉ hủy state hợp lệ.
+- [x] Cart không reserve stock.
+- [x] Checkout atomic và idempotent.
+- [x] OrderDetail giữ snapshot name/SKU/unit/price/quantity.
+- [x] Mỗi callback được lưu append-only.
+- [x] Duplicate callback không nhân đôi Paid/Refund/Notification.
+- [x] COD và online có initial state đúng.
+- [x] Customer chỉ xem/hủy Order của chính mình và chỉ hủy state hợp lệ.
+- [x] Hủy Order hoàn reservation đúng một lần trong cùng transaction.
 
 ## Verification
 
