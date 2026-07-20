@@ -119,6 +119,12 @@ function createRepository() {
       Object.assign(exportRequest, { status: 'Processing', processedBy: userId, note });
       return exportRequest;
     },
+    async claimExportDecision(id, status, userId, note) {
+      const exportRequest = stockExports.find((item) => item._id === id && item.status === 'Pending');
+      if (!exportRequest) return null;
+      Object.assign(exportRequest, { status, processedBy: userId, note });
+      return exportRequest;
+    },
     async completeExport(id) {
       const exportRequest = stockExports.find((item) => item._id === id && item.status === 'Processing');
       if (!exportRequest) return null;
@@ -138,6 +144,12 @@ function createRepository() {
       const order = orders.find((item) => item._id === id && item.orderStatus === 'StockExportRequested');
       if (!order) return null;
       Object.assign(order, { orderStatus: 'Packed', packedAt: new Date() });
+      return order;
+    },
+    async reopenOrderAfterRejectedExport(id) {
+      const order = orders.find((item) => item._id === id && item.orderStatus === 'StockExportRequested');
+      if (!order) return null;
+      order.orderStatus = 'Confirmed';
       return order;
     },
     async listOrderDetails(orderId) {
@@ -208,6 +220,21 @@ describe('inventory service', () => {
     assert.equal(repository.productStocks.get('product-1'), 8);
     assert.equal(repository.transactions.at(-1).transactionType, 'STOCK_EXPORT');
     assert.equal(repository.transactions.at(-1).relatedCollection, 'StockExportRequest');
+  });
+
+  it('conditionally decides a pending export and reopens the order after rejection', async () => {
+    repository.updateStockExport = async () => {
+      throw new Error('unsafe unconditional decision');
+    };
+
+    const result = await service.updateStockExportStatus('warehouse-1', 'export-1', {
+      status: 'Rejected',
+      note: 'Packaging information must be corrected',
+    });
+
+    assert.equal(result.stockExport.status, 'Rejected');
+    assert.equal(result.order.orderStatus, 'Confirmed');
+    assert.equal(repository.inventories[0].reservedQuantity, 2);
   });
 
   it('rejects export when the order does not have a full reservation', async () => {

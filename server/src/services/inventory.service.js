@@ -75,6 +75,13 @@ function createModelRepository() {
     async listStockExports() { return StockExportRequest.find({}).sort({ createdAt: -1 }).lean(); },
     async findStockExportById(id, session) { return withOptionalSession(StockExportRequest.findById(id), session).lean(); },
     async updateStockExport(id, data, session) { return withOptionalSession(StockExportRequest.findByIdAndUpdate(id, data, { new: true, runValidators: true }), session).lean(); },
+    async claimExportDecision(id, status, userId, note, session) {
+      return withOptionalSession(StockExportRequest.findOneAndUpdate(
+        { _id: id, status: 'Pending' },
+        { $set: { status, processedBy: userId, note } },
+        { new: true, runValidators: true }
+      ), session).lean();
+    },
     async claimExport(id, userId, note, session) {
       return withOptionalSession(StockExportRequest.findOneAndUpdate(
         { _id: id, status: 'Approved' }, { $set: { status: 'Processing', processedBy: userId, note } }, { new: true, runValidators: true }
@@ -84,6 +91,13 @@ function createModelRepository() {
     async findOrderById(id, session) { return withOptionalSession(Order.findById(id), session).lean(); },
     async updateOrder(id, data, session) { return withOptionalSession(Order.findByIdAndUpdate(id, data, { new: true, runValidators: true }), session).lean(); },
     async markOrderPacked(id, session) { return withOptionalSession(Order.findOneAndUpdate({ _id: id, orderStatus: 'StockExportRequested' }, { $set: { orderStatus: 'Packed', packedAt: new Date() } }, { new: true, runValidators: true }), session).lean(); },
+    async reopenOrderAfterRejectedExport(id, session) {
+      return withOptionalSession(Order.findOneAndUpdate(
+        { _id: id, orderStatus: 'StockExportRequested' },
+        { $set: { orderStatus: 'Confirmed' } },
+        { new: true, runValidators: true }
+      ), session).lean();
+    },
     async listOrderDetails(orderId, session) { return withOptionalSession(OrderDetail.find({ orderId }), session).lean(); },
     async listProducts() { return Product.find({ status: 'Active' }).lean(); },
     async createInventory(data) { return Inventory.create(data); },
@@ -161,10 +175,28 @@ function createInventoryService({ repository = createModelRepository(), auditLog
       if (request.status === 'Rejected' || request.status === 'Exported') throw new ApiError(409, 'Stock export request is already closed');
       if (nextStatus !== 'Exported') {
         if (request.status !== 'Pending') throw new ApiError(409, 'Only Pending stock export requests can be decided');
-        const updatedRequest = await repository.updateStockExport(id, { status: nextStatus, note: input.note !== undefined ? String(input.note || '').trim() : request.note });
+        const decision = await transactionManager.withTransaction(async (session) => {
+          const note = input.note !== undefined ? String(input.note || '').trim() : request.note;
+          const updatedRequest = repository.claimExportDecision
+            ? await repository.claimExportDecision(id, nextStatus, userId, note, session)
+            : await repository.updateStockExport(id, { status: nextStatus, processedBy: userId, note }, session);
+          if (!updatedRequest) throw new ApiError(409, 'Stock export request was already decided');
+
+          let order = await repository.findOrderById(updatedRequest.orderId, session);
+          if (nextStatus === 'Rejected') {
+            order = repository.reopenOrderAfterRejectedExport
+              ? await repository.reopenOrderAfterRejectedExport(updatedRequest.orderId, session)
+              : await repository.updateOrder(updatedRequest.orderId, { orderStatus: 'Confirmed' }, session);
+            if (!order) throw new ApiError(409, 'Order changed while rejecting the stock export request');
+          }
+          return { updatedRequest, order };
+        });
         await auditLogger.log({ userId, action: `STOCK_EXPORT_${nextStatus.toUpperCase()}`, targetEntity: 'StockExportRequest', targetId: String(id), description: `${nextStatus} stock export request` });
         await emitEvent({ idempotencyKey: `stock-export-decision:${id}:${nextStatus}`, recipientId: request.requestedBy, type: `STOCK_EXPORT_${nextStatus.toUpperCase()}`, subject: `Phiếu xuất kho đã ${nextStatus === 'Approved' ? 'được duyệt' : 'bị từ chối'}`, content: `Phiếu xuất kho ${id} đã được xử lý.` });
-        return { stockExport: await this.getStockExport(updatedRequest._id), order: { id: String(request.orderId), orderStatus: (await repository.findOrderById(request.orderId)).orderStatus } };
+        return {
+          stockExport: await this.getStockExport(decision.updatedRequest._id),
+          order: { id: String(decision.order._id), orderStatus: decision.order.orderStatus },
+        };
       }
       if (request.status !== 'Approved') throw new ApiError(409, 'Stock export request must be approved before export');
       const result = await transactionManager.withTransaction(async (session) => {
