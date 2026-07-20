@@ -64,6 +64,7 @@ productSchema.index(
   {
     unique: true,
     partialFilterExpression: { sku: { $type: 'string', $gt: '' } },
+    name: 'product_sku_unique_v2',
   }
 );
 productSchema.index({ categoryId: 1, status: 1 });

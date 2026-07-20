@@ -2,69 +2,122 @@ const mongoose = require('mongoose');
 const { connectDatabase } = require('../config/database');
 const { canonicalizeSku } = require('../utils/sku');
 
+const CANONICAL_SKU_BATCH_SIZE = 500;
+const LEGACY_SKU_INDEX_NAME = 'sku_1';
 const CANONICAL_SKU_INDEX = Object.freeze({
   unique: true,
   partialFilterExpression: { sku: { $type: 'string', $gt: '' } },
-  name: 'sku_1',
+  name: 'product_sku_unique_v2',
 });
+
+function buildCanonicalSkuExpression() {
+  return {
+    $toUpper: {
+      $trim: {
+        input: { $convert: { input: '$sku', to: 'string', onError: '', onNull: '' } },
+      },
+    },
+  };
+}
+
+function buildDuplicateCanonicalSkuPipeline() {
+  return [
+    { $project: { _id: 1, canonicalSku: buildCanonicalSkuExpression() } },
+    { $match: { canonicalSku: { $gt: '' } } },
+    { $group: { _id: '$canonicalSku', productIds: { $push: '$_id' }, count: { $sum: 1 } } },
+    { $match: { count: { $gt: 1 } } },
+    { $project: { _id: 0, sku: '$_id', productIds: 1 } },
+    { $limit: 1 },
+  ];
+}
+
+function hasSkuKey(index) {
+  return JSON.stringify(index?.key) === JSON.stringify({ sku: 1 });
+}
 
 function isCanonicalSkuIndex(index) {
   return Boolean(
     index &&
       index.name === CANONICAL_SKU_INDEX.name &&
-      JSON.stringify(index.key) === JSON.stringify({ sku: 1 }) &&
+      hasSkuKey(index) &&
       index.unique === true &&
       index.sparse !== true &&
       JSON.stringify(index.partialFilterExpression) === JSON.stringify(CANONICAL_SKU_INDEX.partialFilterExpression)
   );
 }
 
-function findCanonicalSkuDuplicates(products) {
-  const productIdsBySku = new Map();
-
-  for (const product of products) {
-    const sku = canonicalizeSku(product.sku);
-    if (!sku) continue;
-    const ids = productIdsBySku.get(sku) || [];
-    ids.push(String(product._id));
-    productIdsBySku.set(sku, ids);
-  }
-
-  return [...productIdsBySku.entries()]
-    .filter(([, productIds]) => productIds.length > 1)
-    .map(([sku, productIds]) => ({ sku, productIds }));
+function isLegacySkuIndex(index) {
+  return Boolean(index && index.name === LEGACY_SKU_INDEX_NAME && hasSkuKey(index));
 }
 
-function duplicateSkuError(duplicates) {
-  const [duplicate] = duplicates;
-  return new Error(`Duplicate canonical product SKU "${duplicate.sku}" for product IDs: ${duplicate.productIds.join(', ')}`);
+function duplicateSkuError(duplicate) {
+  return new Error(
+    `Duplicate canonical product SKU "${duplicate.sku}" for product IDs: ${duplicate.productIds.map(String).join(', ')}`
+  );
+}
+
+async function findFirstCanonicalSkuDuplicate(collection) {
+  return collection.aggregate(buildDuplicateCanonicalSkuPipeline()).next();
+}
+
+async function canonicalizeProductSkus(collection) {
+  let scanned = 0;
+  let canonicalized = 0;
+  let operations = [];
+  const cursor = collection.find({}, { projection: { _id: 1, sku: 1 } });
+
+  for await (const product of cursor) {
+    scanned += 1;
+    const sku = canonicalizeSku(product.sku);
+    if (product.sku === sku) continue;
+
+    operations.push({ updateOne: { filter: { _id: product._id }, update: { $set: { sku } } } });
+    canonicalized += 1;
+
+    if (operations.length === CANONICAL_SKU_BATCH_SIZE) {
+      await collection.bulkWrite(operations, { ordered: true });
+      operations = [];
+    }
+  }
+
+  if (operations.length) await collection.bulkWrite(operations, { ordered: true });
+  return { scanned, canonicalized };
 }
 
 async function migrateProductSkuIndex({ collection }) {
   if (!collection) throw new Error('A products collection is required');
 
-  const products = await collection.find({}, { projection: { _id: 1, sku: 1 } }).toArray();
-  const duplicates = findCanonicalSkuDuplicates(products);
-  if (duplicates.length) throw duplicateSkuError(duplicates);
+  const initialDuplicate = await findFirstCanonicalSkuDuplicate(collection);
+  if (initialDuplicate) throw duplicateSkuError(initialDuplicate);
 
-  const operations = products.flatMap((product) => {
-    const sku = canonicalizeSku(product.sku);
-    return product.sku === sku
-      ? []
-      : [{ updateOne: { filter: { _id: product._id }, update: { $set: { sku } } } }];
-  });
-  if (operations.length) await collection.bulkWrite(operations, { ordered: true });
+  const { scanned, canonicalized } = await canonicalizeProductSkus(collection);
 
-  const skuIndex = (await collection.indexes()).find((index) => index.name === CANONICAL_SKU_INDEX.name);
-  if (isCanonicalSkuIndex(skuIndex)) {
-    return { scanned: products.length, canonicalized: operations.length, indexReplaced: false, indexCreated: false };
+  const postCanonicalizationDuplicate = await findFirstCanonicalSkuDuplicate(collection);
+  if (postCanonicalizationDuplicate) throw duplicateSkuError(postCanonicalizationDuplicate);
+
+  const indexes = await collection.indexes();
+  const canonicalSkuIndex = indexes.find(isCanonicalSkuIndex);
+  const legacySkuIndex = indexes.find(isLegacySkuIndex);
+  let indexCreated = false;
+  let legacyIndexDropped = false;
+
+  if (!canonicalSkuIndex) {
+    await collection.createIndex({ sku: 1 }, CANONICAL_SKU_INDEX);
+    indexCreated = true;
   }
 
-  const indexReplaced = Boolean(skuIndex);
-  if (skuIndex) await collection.dropIndex(CANONICAL_SKU_INDEX.name);
-  await collection.createIndex({ sku: 1 }, CANONICAL_SKU_INDEX);
+  if (legacySkuIndex) {
+    await collection.dropIndex(LEGACY_SKU_INDEX_NAME);
+    legacyIndexDropped = true;
+  }
 
-  return { scanned: products.length, canonicalized: operations.length, indexReplaced, indexCreated: true };
+  return {
+    scanned,
+    canonicalized,
+    duplicateChecks: 2,
+    indexCreated,
+    legacyIndexDropped,
+  };
 }
 
 async function runCli() {
@@ -85,10 +138,14 @@ if (require.main === module) {
 }
 
 module.exports = {
+  CANONICAL_SKU_BATCH_SIZE,
   CANONICAL_SKU_INDEX,
+  buildCanonicalSkuExpression,
+  buildDuplicateCanonicalSkuPipeline,
   canonicalizeSku,
   duplicateSkuError,
-  findCanonicalSkuDuplicates,
+  findFirstCanonicalSkuDuplicate,
   isCanonicalSkuIndex,
+  isLegacySkuIndex,
   migrateProductSkuIndex,
 };
