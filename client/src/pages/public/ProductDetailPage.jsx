@@ -6,7 +6,7 @@ import { cartService } from '../../services/cartService.js';
 import { orderService } from '../../services/orderService.js';
 import { productService } from '../../services/productService.js';
 import { reviewService } from '../../services/reviewService.js';
-import { formatCurrency } from '../../utils/formatters.js';
+import { formatProductCurrency, formatProductSku } from '../../utils/formatters.js';
 
 export default function ProductDetailPage() {
   const { id } = useParams();
@@ -99,8 +99,9 @@ export default function ProductDetailPage() {
         <div>
           <span className="eyebrow">{product.category?.name || 'Sản phẩm nhà bếp'}</span>
           <h1>{product.name}</h1>
+          <p className="product-sku">{formatProductSku(product.sku)}</p>
           <p>{product.description || 'Sản phẩm đang được GreenHome cập nhật mô tả chi tiết.'}</p>
-          <strong className="price">{formatCurrency(product.price)}</strong>
+          <strong className="price">{formatProductCurrency(product)}</strong>
           <p className="stock-note">Tồn kho: {Number(product.stockQuantity || 0)} {product.unit || 'sản phẩm'}</p>
           {message && <div className="alert alert-success mt-3">{message}</div>}
           <div className="mt-4">

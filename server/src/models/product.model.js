@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { canonicalizeSku } = require('../utils/sku');
 
 const productSchema = new mongoose.Schema(
   {
@@ -10,6 +11,13 @@ const productSchema = new mongoose.Schema(
     sku: {
       type: String,
       default: '',
+      set: canonicalizeSku,
+    },
+    currency: {
+      type: String,
+      enum: ['VND'],
+      default: 'VND',
+      uppercase: true,
       trim: true,
     },
     description: {
@@ -47,11 +55,22 @@ const productSchema = new mongoose.Schema(
       default: 'Active',
     },
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+    // Run npm run migrate:product-sku-index before rollout to create/canonicalize indexes.
+    autoIndex: false,
+  }
 );
 
 productSchema.index({ name: 'text', description: 'text' });
-productSchema.index({ sku: 1 }, { sparse: true });
+productSchema.index(
+  { sku: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { sku: { $type: 'string', $gt: '' } },
+    name: 'product_sku_unique_v2',
+  }
+);
 productSchema.index({ categoryId: 1, status: 1 });
 productSchema.index({ price: 1 });
 

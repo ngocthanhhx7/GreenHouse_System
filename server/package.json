@@ -5,6 +5,7 @@
   "main": "src/app.js",
   "scripts": {
     "test": "node --test",
+    "migrate:product-sku-index": "node src/scripts/migrateProductSkuIndex.js",
     "seed:demo": "node src/config/seedDemoData.js",
     "start": "node src/server.js"
   },
