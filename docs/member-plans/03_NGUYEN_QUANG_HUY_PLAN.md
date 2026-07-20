@@ -235,3 +235,11 @@
 - [ ] Cancel valid order complete.
 - [ ] Manual demo tested.
 
+## Ownership Addendum 2026-07-20
+
+Huy bổ sung **Checkout Address Book integration**:
+
+- Hiển thị địa chỉ đã lưu và địa chỉ mặc định trong Checkout.
+- Cho phép chọn nhanh, nhập địa chỉ mới dùng một lần hoặc lưu vào Address Book.
+- Validate thông tin người nhận, số điện thoại, tỉnh/thành, quận/huyện, phường/xã và địa chỉ chi tiết.
+- Gửi address payload chuẩn để backend tạo snapshot trong Order; không đọc lại địa chỉ hiện tại sau khi đặt đơn.

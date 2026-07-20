@@ -202,3 +202,14 @@ Một module được xem là hoàn thành khi có đủ:
 11. Staff process return/refund/support.
 12. Admin view reports and audit logs.
 
+## Ownership Addendum 2026-07-20
+
+| Thành viên | Phần phải thực hiện và bàn giao |
+|---|---|
+| Nguyễn Ngọc Thành | Homepage, layout tài khoản dùng chung, upload foundation, hồ sơ/avatar, Address Book API nền tảng, Notification API/UI và review/merge |
+| Phạm Thành Chung | Upload ảnh sản phẩm, preview/sắp xếp/chọn ảnh đại diện trong Product Management |
+| Nguyễn Quang Huy | Tích hợp địa chỉ đã lưu/mặc định và nhập địa chỉ mới vào Checkout; lưu snapshot địa chỉ trong Order |
+| Nguyễn Hữu Anh Nhật | Staff Order, Return/Refund, Support; phát event theo Notification contract của Thành |
+| Lê Vũ Cường | Warehouse, Reports, Settings; phát event tồn kho/replenishment, không sở hữu bell/read/delete notification |
+
+Không đưa Profile/Notifications vào dashboard nghiệp vụ. Header public/customer có bell dropdown; dashboard nội bộ dùng topbar vận hành và không có giỏ hàng.

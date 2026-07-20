@@ -294,3 +294,11 @@ Hoàn thiện phần vận hành kho và các nghiệp vụ sau bán hàng để
 - [ ] Admin reports/settings complete.
 - [ ] Manual demo tested.
 
+## Ownership Addendum 2026-07-20
+
+Cường giữ Warehouse/Reports/Settings và bổ sung integration boundary:
+
+- Phát domain event cho low-stock, replenishment, stock export và report anomaly theo payload thống nhất.
+- Gọi Notification service/contract của Thành; không tạo Notification model, unread rule hoặc bell riêng.
+- Kiểm thử event từ Warehouse/Reports đến notification dropdown bằng integration test.
+- Không sửa AccountLayout, Profile, Avatar, Address Book hay Checkout address selector.

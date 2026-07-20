@@ -94,3 +94,17 @@ Thành chỉ merge khi:
 - Return/refund có đủ Customer -> Staff -> Warehouse -> Refund flow.
 - API/error/role contract có thể dùng để viết test và triển khai.
 - `main` và `BA` là hai branch dài hạn; các branch feature chỉ tồn tại trong thời gian review rồi được xóa.
+
+## 10. Ownership Addendum - Account, Media, Notification, Address (2026-07-20)
+
+Các yêu cầu mới về upload ảnh, avatar, hồ sơ, thông báo và sổ địa chỉ được phân như sau và ưu tiên hơn bảng ownership cũ:
+
+| Thành viên | Ownership bổ sung |
+|---|---|
+| Nguyễn Ngọc Thành | Homepage, layout tài khoản dùng chung, upload foundation, User/avatar/profile, Address Book API nền tảng, Notification API + bell/dropdown/detail/read/delete, integration/review/merge |
+| Phạm Thành Chung | Product image upload UI, preview, featured image và Product media integration |
+| Nguyễn Quang Huy | Chọn địa chỉ đã lưu/mặc định hoặc nhập địa chỉ mới tại Checkout; Order address snapshot |
+| Nguyễn Hữu Anh Nhật | Staff Order, Return/Refund, Support; chỉ phát notification event theo contract của Thành |
+| Lê Vũ Cường | Warehouse, Reports, Settings; phát event tồn kho/replenishment và tích hợp Notification service của Thành |
+
+Chi tiết nằm tại `docs/srs-sds-reconciliation/06_ACCOUNT_MEDIA_NOTIFICATION_ADDRESS_PLAN.md`.

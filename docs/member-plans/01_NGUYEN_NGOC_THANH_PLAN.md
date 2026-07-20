@@ -215,3 +215,14 @@ Tạo nền tảng để mọi module khác hoạt động đúng quyền. Nếu
 - [ ] Demo accounts prepared.
 - [ ] Integration notes shared to team.
 
+## Ownership Addendum 2026-07-20
+
+Thành là owner chính của Homepage và các tài nguyên tài khoản dùng chung, bổ sung ngoài Auth/RBAC:
+
+- Hoàn thiện Homepage tiếng Việt, commerce-first và các layout dùng chung không làm hỏng luồng role.
+- Xây upload foundation cho product/avatar, gồm MIME/size/role validation và thư mục runtime `server/uploads`.
+- Tách AccountLayout; xây Profile chỉnh sửa được, avatar, đổi mật khẩu và Address Book API nền tảng.
+- Xây Notification API/UI: unread count, dropdown preview, detail route, read state và rule chỉ xóa notification đã đọc.
+- Review contract của Chung/Huy/Nhật/Cường, chạy regression test, commit/merge cuối bằng danh tính `Nguyễn Ngọc Thành <thanhnnhe186491@fpt.edu.vn>`.
+
+Chi tiết execution: `docs/srs-sds-reconciliation/06_ACCOUNT_MEDIA_NOTIFICATION_ADDRESS_PLAN.md`.

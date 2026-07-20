@@ -218,3 +218,11 @@ Tạo nền tảng sản phẩm để hệ thống bán hàng có dữ liệu đ
 - [ ] Inactive data hidden from public.
 - [ ] Manual demo tested.
 
+## Ownership Addendum 2026-07-20
+
+Chung phụ trách **Product Media integration**, không còn ownership Homepage:
+
+- File picker/drag-drop ảnh sản phẩm trong Admin Product Management.
+- Preview, progress, retry, MIME/size error và sắp xếp ảnh.
+- Chọn ảnh đầu tiên làm featured image, xóa ảnh không dùng và cập nhật `imageUrls`.
+- Tích hợp upload contract do Thành cung cấp; không tự sửa Notification, Avatar hoặc Header/Footer.
