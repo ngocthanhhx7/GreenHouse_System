@@ -24,9 +24,9 @@ function buildDuplicateCanonicalSkuPipeline() {
   return [
     { $project: { _id: 1, canonicalSku: buildCanonicalSkuExpression() } },
     { $match: { canonicalSku: { $gt: '' } } },
-    { $group: { _id: '$canonicalSku', productIds: { $push: '$_id' }, count: { $sum: 1 } } },
+    { $group: { _id: '$canonicalSku', firstProductId: { $first: '$_id' }, count: { $sum: 1 } } },
     { $match: { count: { $gt: 1 } } },
-    { $project: { _id: 0, sku: '$_id', productIds: 1 } },
+    { $project: { _id: 0, sku: '$_id', firstProductId: 1, count: 1 } },
     { $limit: 1 },
   ];
 }
@@ -52,12 +52,12 @@ function isLegacySkuIndex(index) {
 
 function duplicateSkuError(duplicate) {
   return new Error(
-    `Duplicate canonical product SKU "${duplicate.sku}" for product IDs: ${duplicate.productIds.map(String).join(', ')}`
+    `Duplicate canonical product SKU "${duplicate.sku}" (firstProductId: ${String(duplicate.firstProductId)}, count: ${duplicate.count})`
   );
 }
 
 async function findFirstCanonicalSkuDuplicate(collection) {
-  return collection.aggregate(buildDuplicateCanonicalSkuPipeline()).next();
+  return collection.aggregate(buildDuplicateCanonicalSkuPipeline(), { allowDiskUse: true }).next();
 }
 
 async function canonicalizeProductSkus(collection) {

@@ -10,9 +10,10 @@ const {
   migrateProductSkuIndex,
 } = require('./migrateProductSkuIndex');
 
-function asyncCursor(items) {
+function asyncCursor(items, nextError) {
   return {
     async next() {
+      if (nextError) throw nextError;
       return items.shift() || null;
     },
     async *[Symbol.asyncIterator]() {
@@ -21,14 +22,14 @@ function asyncCursor(items) {
   };
 }
 
-function createCollection({ products = [], indexes = [], duplicateChecks = [], createIndexError } = {}) {
+function createCollection({ products = [], indexes = [], duplicateChecks = [], aggregateErrors = [], createIndexError } = {}) {
   const calls = { events: [], aggregate: [], find: [], bulkWrite: [], createIndex: [], dropIndex: [] };
 
   return {
     calls,
-    aggregate(pipeline) {
-      calls.aggregate.push(pipeline);
-      return asyncCursor([...(duplicateChecks.shift() || [])]);
+    aggregate(pipeline, options) {
+      calls.aggregate.push({ pipeline, options });
+      return asyncCursor([...(duplicateChecks.shift() || [])], aggregateErrors.shift());
     },
     find(query, options) {
       calls.find.push({ query, options });
@@ -54,7 +55,7 @@ function createCollection({ products = [], indexes = [], duplicateChecks = [], c
 }
 
 describe('migrateProductSkuIndex', () => {
-  it('builds a null-safe canonical SKU aggregation expression', () => {
+  it('builds a bounded null-safe canonical SKU duplicate aggregation pipeline', () => {
     assert.deepEqual(buildCanonicalSkuExpression(), {
       $toUpper: {
         $trim: {
@@ -65,25 +66,27 @@ describe('migrateProductSkuIndex', () => {
     assert.deepEqual(buildDuplicateCanonicalSkuPipeline(), [
       { $project: { _id: 1, canonicalSku: buildCanonicalSkuExpression() } },
       { $match: { canonicalSku: { $gt: '' } } },
-      { $group: { _id: '$canonicalSku', productIds: { $push: '$_id' }, count: { $sum: 1 } } },
+      { $group: { _id: '$canonicalSku', firstProductId: { $first: '$_id' }, count: { $sum: 1 } } },
       { $match: { count: { $gt: 1 } } },
-      { $project: { _id: 0, sku: '$_id', productIds: 1 } },
+      { $project: { _id: 0, sku: '$_id', firstProductId: 1, count: 1 } },
       { $limit: 1 },
     ]);
+    assert.equal(JSON.stringify(buildDuplicateCanonicalSkuPipeline()).includes('$push'), false);
   });
 
   it('aborts an initial aggregate duplicate check before reads, writes, or index changes', async () => {
     const collection = createCollection({
       products: [{ _id: 'product-1', sku: 'SKU-002' }],
       indexes: [{ name: 'sku_1', key: { sku: 1 }, sparse: true }],
-      duplicateChecks: [[{ sku: 'SKU-001', productIds: ['product-1', 'product-2'] }]],
+      duplicateChecks: [[{ sku: 'SKU-001', firstProductId: 'product-1', count: 2 }]],
     });
 
     await assert.rejects(
       () => migrateProductSkuIndex({ collection }),
-      /Duplicate canonical product SKU "SKU-001" for product IDs: product-1, product-2/
+      /Duplicate canonical product SKU "SKU-001".*firstProductId: product-1.*count: 2/
     );
     assert.equal(collection.calls.aggregate.length, 1);
+    assert.deepEqual(collection.calls.aggregate.map(({ options }) => options), [{ allowDiskUse: true }]);
     assert.deepEqual(collection.calls.find, []);
     assert.deepEqual(collection.calls.bulkWrite, []);
     assert.deepEqual(collection.calls.createIndex, []);
@@ -105,6 +108,10 @@ describe('migrateProductSkuIndex', () => {
     ]);
     assert.equal(collection.calls.bulkWrite[0].operations[0].updateOne.update.$set.sku, 'SKU-0');
     assert.equal(collection.calls.aggregate.length, 2);
+    assert.deepEqual(collection.calls.aggregate.map(({ options }) => options), [
+      { allowDiskUse: true },
+      { allowDiskUse: true },
+    ]);
     assert.deepEqual(collection.calls.createIndex, [{ key: { sku: 1 }, options: CANONICAL_SKU_INDEX }]);
     assert.deepEqual(result, {
       scanned: CANONICAL_SKU_BATCH_SIZE + 1,
@@ -119,11 +126,28 @@ describe('migrateProductSkuIndex', () => {
     const collection = createCollection({
       products: [{ _id: 'product-1', sku: ' sku-001 ' }],
       indexes: [{ name: 'sku_1', key: { sku: 1 }, sparse: true }],
-      duplicateChecks: [[], [{ sku: 'SKU-001', productIds: ['product-1', 'product-2'] }]],
+      duplicateChecks: [[], [{ sku: 'SKU-001', firstProductId: 'product-1', count: 2 }]],
     });
 
     await assert.rejects(() => migrateProductSkuIndex({ collection }), /Duplicate canonical product SKU/);
     assert.equal(collection.calls.bulkWrite.length, 1);
+    assert.deepEqual(collection.calls.createIndex, []);
+    assert.deepEqual(collection.calls.dropIndex, []);
+  });
+
+  it('propagates a recheck aggregate failure before creating or dropping indexes', async () => {
+    const collection = createCollection({
+      products: [{ _id: 'product-1', sku: ' sku-001 ' }],
+      indexes: [{ name: 'sku_1', key: { sku: 1 }, sparse: true }],
+      duplicateChecks: [[], []],
+      aggregateErrors: [null, new Error('aggregate recheck failed')],
+    });
+
+    await assert.rejects(() => migrateProductSkuIndex({ collection }), /aggregate recheck failed/);
+    assert.deepEqual(collection.calls.aggregate.map(({ options }) => options), [
+      { allowDiskUse: true },
+      { allowDiskUse: true },
+    ]);
     assert.deepEqual(collection.calls.createIndex, []);
     assert.deepEqual(collection.calls.dropIndex, []);
   });
