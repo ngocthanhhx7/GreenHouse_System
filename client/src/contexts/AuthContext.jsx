@@ -4,6 +4,14 @@ import { authService } from '../services/authService.js';
 
 const AuthContext = createContext(null);
 
+function normalizeUser(user) {
+  if (!user) return null;
+  return {
+    ...user,
+    role: typeof user.role === 'string' ? user.role : user.role?.roleName,
+  };
+}
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [token, setToken] = useState(authService.getToken());
@@ -21,7 +29,7 @@ export function AuthProvider({ children }) {
     authService
       .me()
       .then((data) => {
-        if (active) setUser(data.user);
+        if (active) setUser(normalizeUser(data.user));
       })
       .catch(() => {
         authService.logout();
@@ -42,10 +50,7 @@ export function AuthProvider({ children }) {
   const login = useCallback(async (credentials) => {
     const result = await authService.login(credentials);
     setToken(result.token);
-    setUser({
-      ...result.user,
-      role: result.user.role.roleName,
-    });
+    setUser(normalizeUser(result.user));
     return result;
   }, []);
 
@@ -57,6 +62,17 @@ export function AuthProvider({ children }) {
     setUser(null);
   }, []);
 
+  const updateUser = useCallback((nextUser) => {
+    setUser((current) => normalizeUser({ ...current, ...nextUser }));
+  }, []);
+
+  const refreshUser = useCallback(async () => {
+    const data = await authService.me();
+    const nextUser = normalizeUser(data.user);
+    setUser(nextUser);
+    return nextUser;
+  }, []);
+
   const value = useMemo(
     () => ({
       user,
@@ -66,9 +82,11 @@ export function AuthProvider({ children }) {
       login,
       register,
       logout,
+      updateUser,
+      refreshUser,
       getDashboardPath: authService.getDashboardPath,
     }),
-    [loading, login, logout, register, token, user]
+    [loading, login, logout, refreshUser, register, token, updateUser, user]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

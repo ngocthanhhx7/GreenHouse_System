@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, NavLink } from 'react-router-dom';
 
 import useAuth from '../../hooks/useAuth.js';
+import NotificationBell from '../notifications/NotificationBell.jsx';
+import { resolveMediaUrl } from '../../services/apiClient.js';
 import { translateRole } from '../../utils/formatters.js';
 
 const PUBLIC_LINKS = [
@@ -130,15 +132,12 @@ export default function Header({ showCart = true }) {
 
           {isAuthenticated && (
             <>
-              <Link to="/notifications" className="header-icon-btn" aria-label="Thông báo">
-                <svg className="header-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
-                  <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
-                </svg>
-              </Link>
+              <NotificationBell />
               <div className="avatar-menu">
                 <button className="avatar-button" type="button" onClick={() => setMenuOpen((value) => !value)} aria-expanded={menuOpen}>
-                  <span className="avatar-circle">{getInitials(user)}</span>
+                  <span className="avatar-circle">
+                    {user?.avatarUrl ? <img src={resolveMediaUrl(user.avatarUrl)} alt="" /> : getInitials(user)}
+                  </span>
                   <span className="avatar-meta">
                     <strong>{user?.fullName || user?.email}</strong>
                     <small>{translateRole(userRole)}</small>

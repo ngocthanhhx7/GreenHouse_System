@@ -18,7 +18,12 @@ async function authenticate(req, res, next) {
 
     req.user = {
       id: String(user._id),
+      fullName: user.fullName,
       email: user.email,
+      phoneNumber: user.phoneNumber || user.phone || '',
+      address: user.address || '',
+      avatarUrl: user.avatarUrl || '',
+      status: user.status,
       role: user.roleId.roleName,
     };
     return next();

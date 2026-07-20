@@ -5,11 +5,31 @@
 - Họ tên: Nguyễn Ngọc Thành
 - Mã sinh viên: `HE186491`
 - Email commit: `thanhnnhe186491@fpt.edu.vn`
-- Vai trò: Team lead, baseline owner, API/RBAC/audit owner, reviewer và merge owner.
+- Vai trò: Team lead, Homepage owner, shared account/API/RBAC/audit owner, reviewer và merge owner.
 
 ## Goal
 
 Đóng baseline thống nhất giữa SRS và SDS, đặc tả rõ RBAC, API/error contract, audit và quy tắc tích hợp để bốn member còn lại triển khai theo cùng vocabulary.
+
+## Phạm vi bổ sung do Nguyễn Ngọc Thành phụ trách
+
+- Homepage tiếng Việt và các tài nguyên dùng chung của storefront; bảo đảm không làm lẫn luồng khách hàng với dashboard nội bộ.
+- Hồ sơ có thể chỉnh sửa, đổi mật khẩu, avatar upload từ máy local và Address Book của Customer.
+- `AccountLayout` dùng chung cho Hồ sơ/Thông báo, tách khỏi sidebar nghiệp vụ Staff/Admin/Warehouse.
+- Notification foundation: unread badge, dropdown trên header, trang danh sách/chi tiết, deep-link và quy tắc chỉ xóa thông báo đã đọc.
+- Upload foundation dùng chung cho avatar và ảnh sản phẩm; Chung sở hữu phần tích hợp upload vào Product Management.
+- Dữ liệu demo tài khoản, địa chỉ và thông báo để các thành viên clone dự án có cùng baseline kiểm thử.
+
+### Trạng thái triển khai phạm vi bổ sung
+
+- [x] Homepage và layout storefront dùng chung.
+- [x] Profile edit, đổi mật khẩu và avatar upload/remove.
+- [x] Customer Address Book API/UI và địa chỉ mặc định.
+- [x] Notification API/UI, dropdown, unread/read/delete guard và deep-link.
+- [x] Upload foundation có kiểm tra nội dung file, giới hạn kích thước và tên UUID.
+- [x] Seed demo dùng chung và regression test.
+- [ ] Review/merge Product Media của Phạm Thành Chung.
+- [ ] Review/merge Checkout Address của Nguyễn Quang Huy.
 
 ## Phạm vi discrepancy cần sửa
 

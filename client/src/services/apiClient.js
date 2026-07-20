@@ -8,10 +8,8 @@ function getStorage() {
 
 export async function apiRequest(path, options = {}) {
   const token = getStorage().getItem(TOKEN_KEY);
-  const headers = {
-    'Content-Type': 'application/json',
-    ...(options.headers || {}),
-  };
+  const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
+  const headers = { ...(isFormData ? {} : { 'Content-Type': 'application/json' }), ...(options.headers || {}) };
   if (token) {
     headers.Authorization = `Bearer ${token}`;
   }
@@ -25,6 +23,12 @@ export async function apiRequest(path, options = {}) {
     throw new Error(payload.message || 'API request failed');
   }
   return payload.data;
+}
+
+export function resolveMediaUrl(value) {
+  if (!value || /^https?:\/\//i.test(value) || /^data:/i.test(value)) return value || '';
+  const serverOrigin = DEFAULT_BASE_URL.replace(/\/api\/?$/, '');
+  return `${serverOrigin}${value.startsWith('/') ? value : `/${value}`}`;
 }
 
 export { TOKEN_KEY, DEFAULT_BASE_URL };
