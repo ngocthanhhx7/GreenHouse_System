@@ -23,6 +23,11 @@ const userSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
+    phoneNumber: {
+      type: String,
+      default: '',
+      trim: true,
+    },
     address: {
       type: String,
       required: true,
@@ -37,6 +42,15 @@ const userSchema = new mongoose.Schema(
       type: String,
       enum: ['Active', 'Disabled'],
       default: 'Active',
+    },
+    avatarUrl: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    lastLoginAt: {
+      type: Date,
+      default: null,
     },
   },
   { timestamps: true }

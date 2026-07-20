@@ -17,6 +17,9 @@ const systemSettingRoutes = require('./routes/systemSetting.routes');
 const notificationRoutes = require('./routes/notification.routes');
 const auditLogRoutes = require('./routes/auditLog.routes');
 const damageReportRoutes = require('./routes/damageReport.routes');
+const profileRoutes = require('./routes/profile.routes');
+const uploadRoutes = require('./routes/upload.routes');
+const path = require('node:path');
 const { notFound, errorHandler } = require('./middlewares/error.middleware');
 const { requestId } = require('./middlewares/requestId.middleware');
 const { sendSuccess } = require('./utils/apiResponse');
@@ -27,6 +30,14 @@ function createApp() {
   app.use(requestId);
   app.use(cors());
   app.use(express.json());
+  app.use('/uploads', express.static(path.resolve(__dirname, '../uploads'), {
+    dotfiles: 'deny',
+    index: false,
+    setHeaders(res) {
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+    },
+  }));
 
   app.get('/api/health', (req, res) => {
     return sendSuccess(res, null, 'GreenHome API is running');
@@ -48,6 +59,8 @@ function createApp() {
   app.use('/api', notificationRoutes);
   app.use('/api', auditLogRoutes);
   app.use('/api', damageReportRoutes);
+  app.use('/api', profileRoutes);
+  app.use('/api', uploadRoutes);
 
   app.use(notFound);
   app.use(errorHandler);

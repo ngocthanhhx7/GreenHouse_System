@@ -112,4 +112,84 @@ describe('notification service', () => {
     assert.equal(first.eventId, 'stock-export:export-1');
     assert.equal(notifications.length, 2);
   });
+
+  it('lists unread notifications with an opaque cursor and target metadata', async () => {
+    const service = createNotificationService({
+      notificationRepository: {
+        async listByUser(userId, options) {
+          assert.equal(userId, 'customer-1');
+          assert.equal(options.status, 'unread');
+          assert.equal(options.limit, 5);
+          return {
+            items: [{
+              _id: '507f1f77bcf86cd799439011', userId, type: 'ORDER_STATUS', channel: 'InApp', subject: 'Đã giao hàng',
+              content: 'Đơn hàng đã được giao.', deliveryStatus: 'Sent', isRead: false,
+              targetCollection: 'Order', targetId: '507f1f77bcf86cd799439012', createdAt: new Date('2026-07-20T00:00:00.000Z'),
+            }],
+            nextCursor: 'cursor-2',
+          };
+        },
+        async countUnread() { return 3; },
+      },
+      notificationIdValidator: () => true,
+    });
+
+    const result = await service.listMyNotifications('customer-1', { status: 'unread', limit: 5 });
+    assert.equal(result.items[0].targetCollection, 'Order');
+    assert.equal(result.items[0].targetId, '507f1f77bcf86cd799439012');
+    assert.equal(result.unreadCount, 3);
+    assert.equal(result.nextCursor, 'cursor-2');
+  });
+
+  it('returns notification detail only to its owner', async () => {
+    const service = createNotificationService({
+      notificationRepository: {
+        async findByIdForUser(userId, id) {
+          if (userId !== 'customer-1') return null;
+          return { _id: id, userId, type: 'ORDER_STATUS', channel: 'InApp', subject: 'Chi tiết', content: 'Nội dung', deliveryStatus: 'Sent', isRead: true };
+        },
+      },
+      notificationIdValidator: () => true,
+    });
+
+    assert.equal((await service.getNotification('customer-1', 'noti-1')).subject, 'Chi tiết');
+    await assert.rejects(() => service.getNotification('customer-2', 'noti-1'), /Notification not found/);
+  });
+
+  it('prevents deleting unread notifications with a stable business error code', async () => {
+    const service = createNotificationService({
+      notificationRepository: {
+        async findByIdForUser() {
+          return { _id: 'noti-1', userId: 'customer-1', isRead: false };
+        },
+      },
+      notificationIdValidator: () => true,
+    });
+
+    await assert.rejects(
+      () => service.deleteNotification('customer-1', 'noti-1'),
+      (error) => error.statusCode === 409 && error.errorCode === 'NOTIFICATION_UNREAD_CANNOT_DELETE'
+    );
+  });
+
+  it('soft deletes a read notification owned by the current user', async () => {
+    let deletedAt = null;
+    const notification = { _id: 'noti-1', userId: 'customer-1', type: 'ORDER_STATUS', channel: 'InApp', subject: 'Read', content: 'Read', deliveryStatus: 'Sent', isRead: true };
+    const service = createNotificationService({
+      notificationRepository: {
+        async findByIdForUser() { return notification; },
+        async softDeleteForUser(userId, id, date) {
+          assert.equal(userId, 'customer-1');
+          assert.equal(id, 'noti-1');
+          deletedAt = date;
+          return { ...notification, deletedAt: date };
+        },
+      },
+      notificationIdValidator: () => true,
+    });
+
+    const result = await service.deleteNotification('customer-1', 'noti-1');
+    assert.ok(deletedAt instanceof Date);
+    assert.ok(result.deletedAt);
+  });
 });

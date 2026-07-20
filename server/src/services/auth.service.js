@@ -17,7 +17,10 @@ function toPublicUser(user, role) {
     fullName: user.fullName,
     email: user.email,
     phone: user.phone,
+    phoneNumber: user.phoneNumber || user.phone,
     address: user.address,
+    avatarUrl: user.avatarUrl || '',
+    lastLoginAt: user.lastLoginAt || null,
     status: user.status,
     role: {
       id: String(role._id),
@@ -44,6 +47,9 @@ function createModelUserRepository() {
     async create(data) {
       const created = await User.create(data);
       return User.findById(created._id).populate('roleId').lean();
+    },
+    async updateLastLogin(id, lastLoginAt) {
+      return User.findByIdAndUpdate(id, { $set: { lastLoginAt } }, { new: true }).populate('roleId').lean();
     },
   };
 }
@@ -94,6 +100,7 @@ function createAuthService({
         fullName: String(input.fullName).trim(),
         email,
         phone: String(input.phone).trim(),
+        phoneNumber: String(input.phone).trim(),
         address: String(input.address).trim(),
         passwordHash,
         roleId: customerRole._id,
@@ -131,6 +138,11 @@ function createAuthService({
       }
 
       const role = resolveUserRole(user);
+      const loggedInAt = new Date();
+      if (userRepository.updateLastLogin) {
+        user.lastLoginAt = loggedInAt;
+        await userRepository.updateLastLogin(user._id, loggedInAt);
+      }
       const publicUser = toPublicUser(user, role);
       const token = signAuthToken({ ...user, role }, jwtSecret);
 

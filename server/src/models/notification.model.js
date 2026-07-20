@@ -51,6 +51,14 @@ const notificationSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    readAt: {
+      type: Date,
+      default: null,
+    },
+    deletedAt: {
+      type: Date,
+      default: null,
+    },
     sentAt: {
       type: Date,
       default: null,
@@ -70,6 +78,7 @@ const notificationSchema = new mongoose.Schema(
 );
 
 notificationSchema.index({ userId: 1, createdAt: -1 });
+notificationSchema.index({ userId: 1, deletedAt: 1, createdAt: -1 });
 notificationSchema.index({ deliveryStatus: 1 });
 notificationSchema.index(
   { userId: 1, eventId: 1 },
