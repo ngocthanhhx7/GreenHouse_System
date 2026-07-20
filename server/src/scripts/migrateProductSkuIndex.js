@@ -39,13 +39,20 @@ function hasIndexKey(index, key) {
   return JSON.stringify(index?.key) === JSON.stringify(key);
 }
 
+function hasMatchingEntries(actual, expected) {
+  const actualEntries = Object.entries(actual || {});
+  const expectedEntries = Object.entries(expected || {});
+
+  return actualEntries.length === expectedEntries.length && actualEntries.every(([key, value]) => expected[key] === value);
+}
+
 function isTextIndexDefinition([key]) {
   return Object.values(key).includes('text');
 }
 
 function hasTextIndex(index, key) {
   const weights = Object.fromEntries(Object.keys(key).map((field) => [field, 1]));
-  return JSON.stringify(index?.weights) === JSON.stringify(weights);
+  return index?.key?._fts === 'text' && index.key?._ftsx === 1 && hasMatchingEntries(index.weights, weights);
 }
 
 function hasSupportingProductIndex(indexes, definition) {
@@ -60,6 +67,15 @@ async function ensureSupportingProductIndexes(collection, indexes) {
     if (!hasSupportingProductIndex(indexes, [key, options])) {
       await collection.createIndex(key, options);
     }
+  }
+}
+
+async function listProductIndexes(collection) {
+  try {
+    return await collection.indexes();
+  } catch (error) {
+    if (error?.code === 26 || error?.codeName === 'NamespaceNotFound') return [];
+    throw error;
   }
 }
 
@@ -123,7 +139,7 @@ async function migrateProductSkuIndex({ collection }) {
   const postCanonicalizationDuplicate = await findFirstCanonicalSkuDuplicate(collection);
   if (postCanonicalizationDuplicate) throw duplicateSkuError(postCanonicalizationDuplicate);
 
-  const indexes = await collection.indexes();
+  const indexes = await listProductIndexes(collection);
   const canonicalSkuIndex = indexes.find(isCanonicalSkuIndex);
   const legacySkuIndex = indexes.find(isLegacySkuIndex);
   let indexCreated = false;
@@ -179,5 +195,6 @@ module.exports = {
   findFirstCanonicalSkuDuplicate,
   isCanonicalSkuIndex,
   isLegacySkuIndex,
+  listProductIndexes,
   migrateProductSkuIndex,
 };

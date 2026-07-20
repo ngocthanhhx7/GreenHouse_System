@@ -8,6 +8,7 @@ const {
   buildCanonicalSkuExpression,
   buildDuplicateCanonicalSkuPipeline,
   canonicalizeSku,
+  listProductIndexes,
   migrateProductSkuIndex,
 } = require('./migrateProductSkuIndex');
 
@@ -19,12 +20,23 @@ function indexName(key) {
     .join('_');
 }
 
-function schemaIndexMetadata() {
-  return PRODUCT_SCHEMA_INDEXES.map(([key, options]) => ({
-    key,
-    name: options.name || indexName(key),
-    ...options,
-  }));
+function schemaIndexMetadata({ textWeights } = {}) {
+  return PRODUCT_SCHEMA_INDEXES.map(([key, options]) => {
+    if (Object.values(key).includes('text')) {
+      return {
+        key: { _fts: 'text', _ftsx: 1 },
+        name: options.name || indexName(key),
+        weights: textWeights || Object.fromEntries(Object.keys(key).map((field) => [field, 1])),
+        ...options,
+      };
+    }
+
+    return {
+      key,
+      name: options.name || indexName(key),
+      ...options,
+    };
+  });
 }
 
 function schemaIndexCreateCalls() {
@@ -44,7 +56,7 @@ function asyncCursor(items, nextError) {
   };
 }
 
-function createCollection({ products = [], indexes = [], duplicateChecks = [], aggregateErrors = [], createIndexError } = {}) {
+function createCollection({ products = [], indexes = [], indexesError, duplicateChecks = [], aggregateErrors = [], createIndexError } = {}) {
   const calls = { events: [], aggregate: [], find: [], bulkWrite: [], createIndex: [], dropIndex: [] };
 
   return {
@@ -61,6 +73,7 @@ function createCollection({ products = [], indexes = [], duplicateChecks = [], a
       calls.bulkWrite.push({ operations, options });
     },
     async indexes() {
+      if (indexesError) throw indexesError;
       return indexes.map((index) => ({ ...index }));
     },
     async createIndex(key, options) {
@@ -77,9 +90,18 @@ function createCollection({ products = [], indexes = [], duplicateChecks = [], a
 }
 
 describe('migrateProductSkuIndex', () => {
-  it('provisions every Product schema index on a fresh collection', async () => {
+  it('treats a NamespaceNotFound code name as an empty product index list', async () => {
+    const collection = createCollection({
+      indexesError: Object.assign(new Error('ns does not exist'), { codeName: 'NamespaceNotFound' }),
+    });
+
+    assert.deepEqual(await listProductIndexes(collection), []);
+  });
+
+  it('provisions every Product schema index when products has not been created yet', async () => {
     const collection = createCollection({
       products: [{ _id: 'product-1', sku: 'SKU-001' }],
+      indexesError: Object.assign(new Error('ns does not exist'), { code: 26 }),
       duplicateChecks: [[], []],
     });
 
@@ -89,10 +111,35 @@ describe('migrateProductSkuIndex', () => {
     assert.deepEqual(collection.calls.dropIndex, []);
   });
 
+  it('propagates index-listing errors other than NamespaceNotFound', async () => {
+    const collection = createCollection({
+      products: [{ _id: 'product-1', sku: 'SKU-001' }],
+      indexesError: Object.assign(new Error('index listing unavailable'), { code: 13 }),
+      duplicateChecks: [[], []],
+    });
+
+    await assert.rejects(() => migrateProductSkuIndex({ collection }), /index listing unavailable/);
+    assert.deepEqual(collection.calls.createIndex, []);
+    assert.deepEqual(collection.calls.dropIndex, []);
+  });
+
   it('leaves existing Product schema supporting indexes and unrelated indexes intact', async () => {
     const collection = createCollection({
       products: [{ _id: 'product-1', sku: 'SKU-001' }],
       indexes: [...schemaIndexMetadata(), { name: 'unrelated_1', key: { stockQuantity: 1 } }],
+      duplicateChecks: [[], []],
+    });
+
+    await migrateProductSkuIndex({ collection });
+
+    assert.deepEqual(collection.calls.createIndex, []);
+    assert.deepEqual(collection.calls.dropIndex, []);
+  });
+
+  it('does not recreate a text index whose Mongo weights are returned in reverse field order', async () => {
+    const collection = createCollection({
+      products: [{ _id: 'product-1', sku: 'SKU-001' }],
+      indexes: schemaIndexMetadata({ textWeights: { description: 1, name: 1 } }),
       duplicateChecks: [[], []],
     });
 
