@@ -24,7 +24,7 @@ const DEMO_REPORT = {
     returned: 0,
     byStatus: {},
   },
-  revenue: { paid: 0, refunded: 0 },
+  revenue: { grossSales: 0, refunded: 0, netSales: 0 },
   products: { total: 0 },
   inventory: { totalRecords: 0, lowStock: 0 },
   support: { total: 0, open: 0, resolved: 0 },
@@ -73,9 +73,10 @@ export default function AdminDashboardPage() {
             />
             <StatBox
               label="Doanh thu đã thanh toán"
-              value={formatCurrency(report.revenue?.paid ?? 0)}
+              value={formatCurrency(report.revenue?.grossSales ?? 0)}
               icon={<svg className="metric-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>}
             />
+            <StatBox label="Doanh thu thuần" value={formatCurrency(report.revenue?.netSales ?? 0)} />
             <StatBox
               label="Đã hoàn tiền"
               value={formatCurrency(report.revenue?.refunded ?? 0)}

@@ -6,14 +6,18 @@ export default function InventoryListPage() {
   const [inventory, setInventory] = useState([]);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
+  const [loading, setLoading] = useState(true);
 
   async function loadInventory() {
     setError('');
+    setLoading(true);
     try {
       const result = await inventoryService.listInventory();
       setInventory(result.items || []);
     } catch (err) {
       setError(err.message);
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -49,6 +53,9 @@ export default function InventoryListPage() {
             <tr>
               <th>Sản phẩm</th>
               <th>Tồn</th>
+              <th>Đã giữ</th>
+              <th>Khả dụng</th>
+              <th>Hỏng</th>
               <th>Ngưỡng cảnh báo</th>
               <th>Trạng thái</th>
               <th></th>
@@ -59,6 +66,9 @@ export default function InventoryListPage() {
               <tr key={item.id}>
                 <td>{item.productName}</td>
                 <td>{item.stockQuantity}</td>
+                <td>{item.reservedQuantity}</td>
+                <td>{item.availableQuantity}</td>
+                <td>{item.damagedQuantity}</td>
                 <td>{item.lowStockThreshold}</td>
                 <td>{item.isLowStock ? 'Sắp hết hàng' : 'Ổn định'}</td>
                 <td className="table-actions">
@@ -67,6 +77,9 @@ export default function InventoryListPage() {
                 </td>
               </tr>
             ))}
+            {!loading && !inventory.length && (
+              <tr><td colSpan="8" className="text-center text-muted">Chưa có bản ghi tồn kho.</td></tr>
+            )}
           </tbody>
         </table>
       </div>

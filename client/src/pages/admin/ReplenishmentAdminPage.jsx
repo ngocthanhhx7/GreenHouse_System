@@ -7,14 +7,18 @@ export default function ReplenishmentAdminPage() {
   const [requests, setRequests] = useState([]);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
+  const [loading, setLoading] = useState(true);
 
   async function loadRequests() {
     setError('');
+    setLoading(true);
     try {
       const result = await replenishmentService.listAdminRequests();
       setRequests(result.items || []);
     } catch (err) {
       setError(err.message);
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -59,7 +63,7 @@ export default function ReplenishmentAdminPage() {
                 <td>{request.quantity}</td>
                 <td>{translateRequestStatus(request.status)}</td>
                 <td className="table-actions">
-                  {request.status === 'Pending' && (
+                  {request.status === 'PendingApproval' && (
                     <>
                       <button className="btn btn-outline-success btn-sm" type="button" onClick={() => decide(request, 'Approved')}>
                         Duyệt
@@ -72,6 +76,8 @@ export default function ReplenishmentAdminPage() {
                 </td>
               </tr>
             ))}
+            {!loading && !requests.length && <tr><td colSpan="4" className="text-center text-muted">Chưa có yêu cầu chờ duyệt.</td></tr>}
+            {loading && <tr><td colSpan="4" className="text-center text-muted">Đang tải yêu cầu bổ sung...</td></tr>}
           </tbody>
         </table>
       </div>

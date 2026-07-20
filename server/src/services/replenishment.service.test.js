@@ -43,7 +43,11 @@ function createRepository() {
       return request;
     },
     async listRequests(query = {}) {
-      return requests.filter((request) => !query.status || request.status === query.status);
+      return requests.filter((request) => {
+        if (!query.status) return true;
+        if (query.status === 'PendingApproval') return ['Pending', 'PendingApproval'].includes(request.status);
+        return request.status === query.status;
+      });
     },
     async findRequestById(id) {
       return requests.find((item) => item._id === id) || null;
@@ -52,6 +56,31 @@ function createRepository() {
       const request = requests.find((item) => item._id === id);
       Object.assign(request, data);
       return request;
+    },
+    async claimDecision(id, status, adminId, note) {
+      const request = requests.find((item) => item._id === id && ['Pending', 'PendingApproval'].includes(item.status));
+      if (!request) return null;
+      Object.assign(request, { status, approvedBy: adminId, adminNote: note });
+      return request;
+    },
+    async claimReceipt(id, receivedQuantity, userId) {
+      const request = requests.find((item) => item._id === id && item.status === 'Approved' && item.quantity === receivedQuantity && Number(item.receivedQuantity || 0) === 0);
+      if (!request) return null;
+      Object.assign(request, { status: 'Receiving', receivedQuantity, receivedBy: userId });
+      return request;
+    },
+    async completeReceipt(id) {
+      const request = requests.find((item) => item._id === id && item.status === 'Receiving');
+      if (!request) return null;
+      Object.assign(request, { status: 'Received', receivedAt: new Date() });
+      return request;
+    },
+    async addReceivedStock(id, quantity, userId) {
+      const inventory = inventories.find((item) => item._id === id);
+      if (!inventory) return null;
+      inventory.stockQuantity += quantity;
+      inventory.lastUpdatedBy = userId;
+      return inventory;
     },
     async createTransaction(data) {
       const transaction = { _id: `txn-${transactions.length + 1}`, ...data };
@@ -76,7 +105,12 @@ describe('replenishment service', () => {
 
   beforeEach(() => {
     repository = createRepository();
-    service = createReplenishmentService({ repository, auditLogger: createAuditLogger() });
+    service = createReplenishmentService({
+      repository,
+      auditLogger: createAuditLogger(),
+      transactionManager: { withTransaction: async (work) => work(null) },
+      eventPublisher: null,
+    });
   });
 
   it('creates a warehouse replenishment request for a positive quantity', async () => {
@@ -86,7 +120,7 @@ describe('replenishment service', () => {
       reason: 'Low stock demo restock',
     });
 
-    assert.equal(result.status, 'Pending');
+    assert.equal(result.status, 'PendingApproval');
     assert.equal(result.quantity, 20);
     assert.equal(repository.requests.length, 1);
   });
@@ -94,7 +128,7 @@ describe('replenishment service', () => {
   it('rejects invalid replenishment quantity', async () => {
     await assert.rejects(
       () => service.createRequest('warehouse-1', { inventoryId: 'inv-1', quantity: 0, reason: 'Bad' }),
-      /Replenishment quantity must be greater than 0/
+      /positive integer/
     );
   });
 
@@ -111,7 +145,7 @@ describe('replenishment service', () => {
     assert.equal(result.approvedBy, 'admin-1');
   });
 
-  it('receives approved replenishment and creates inventory transaction', async () => {
+  it('receives the exact approved replenishment once and creates an inventory transaction', async () => {
     const request = await service.createRequest('warehouse-1', {
       inventoryId: 'inv-1',
       quantity: 20,
@@ -119,12 +153,37 @@ describe('replenishment service', () => {
     });
     await service.updateRequestStatus('admin-1', request.id, { status: 'Approved' });
 
-    const result = await service.receiveRequest('warehouse-1', request.id, { receivedQuantity: 15 });
+    const result = await service.receiveRequest('warehouse-1', request.id, { receivedQuantity: 20 });
 
     assert.equal(result.status, 'Received');
-    assert.equal(repository.inventories[0].stockQuantity, 18);
-    assert.equal(repository.productStocks.get('product-1'), 18);
+    assert.equal(repository.inventories[0].stockQuantity, 23);
+    assert.equal(repository.productStocks.get('product-1'), 23);
     assert.equal(repository.transactions[0].transactionType, 'REPLENISHMENT_RECEIVE');
+  });
+
+  it('keeps legacy Pending requests actionable as PendingApproval', async () => {
+    const request = await service.createRequest('warehouse-1', {
+      inventoryId: 'inv-1', quantity: 20, reason: 'Legacy request',
+    });
+    repository.requests[0].status = 'Pending';
+
+    const listed = await service.listAdminRequests({ status: 'PendingApproval' });
+    const approved = await service.updateRequestStatus('admin-1', request.id, { status: 'Approved' });
+
+    assert.equal(listed.items[0].status, 'PendingApproval');
+    assert.equal(approved.status, 'Approved');
+  });
+
+  it('rejects a partial receipt', async () => {
+    const request = await service.createRequest('warehouse-1', {
+      inventoryId: 'inv-1', quantity: 20, reason: 'Low stock demo restock',
+    });
+    await service.updateRequestStatus('admin-1', request.id, { status: 'Approved' });
+
+    await assert.rejects(
+      () => service.receiveRequest('warehouse-1', request.id, { receivedQuantity: 15 }),
+      /must exactly match/
+    );
   });
 
   it('rejects receiving more than the approved request quantity', async () => {
@@ -137,7 +196,7 @@ describe('replenishment service', () => {
 
     await assert.rejects(
       () => service.receiveRequest('warehouse-1', request.id, { receivedQuantity: 21 }),
-      /Received quantity cannot exceed requested quantity/
+      /must exactly match/
     );
   });
 
@@ -151,6 +210,26 @@ describe('replenishment service', () => {
     await assert.rejects(
       () => service.receiveRequest('warehouse-1', request.id, { receivedQuantity: 10 }),
       /Only Approved replenishment requests can be received/
+    );
+  });
+
+  it('allows only one concurrent receipt and never increments inventory twice', async () => {
+    const request = await service.createRequest('warehouse-1', {
+      inventoryId: 'inv-1', quantity: 20, reason: 'Low stock demo restock',
+    });
+    await service.updateRequestStatus('admin-1', request.id, { status: 'Approved' });
+
+    const results = await Promise.allSettled([
+      service.receiveRequest('warehouse-1', request.id, { receivedQuantity: 20 }),
+      service.receiveRequest('warehouse-2', request.id, { receivedQuantity: 20 }),
+    ]);
+
+    assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
+    assert.equal(repository.inventories[0].stockQuantity, 23);
+    assert.equal(repository.transactions.length, 1);
+    await assert.rejects(
+      () => service.receiveRequest('warehouse-1', request.id, { receivedQuantity: 20 }),
+      /Only Approved replenishment requests can be received/,
     );
   });
 });

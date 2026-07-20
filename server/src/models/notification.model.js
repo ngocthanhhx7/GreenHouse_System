@@ -60,11 +60,20 @@ const notificationSchema = new mongoose.Schema(
       default: '',
       trim: true,
     },
+    eventId: {
+      type: String,
+      default: '',
+      trim: true,
+    },
   },
   { timestamps: true }
 );
 
 notificationSchema.index({ userId: 1, createdAt: -1 });
 notificationSchema.index({ deliveryStatus: 1 });
+notificationSchema.index(
+  { userId: 1, eventId: 1 },
+  { unique: true, partialFilterExpression: { eventId: { $type: 'string', $gt: '' } } }
+);
 
 module.exports = mongoose.model('Notification', notificationSchema);
