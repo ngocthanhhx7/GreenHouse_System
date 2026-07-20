@@ -78,85 +78,101 @@ const DEMO_USER_ADDRESS_SPECS = [
 ];
 
 const DEMO_CATEGORIES = [
-  { name: 'Cookware', description: 'Pots, pans, and daily cooking essentials' },
-  { name: 'Tableware', description: 'Bowls, plates, cups, and serving tools' },
-  { name: 'Kitchen Tools', description: 'Preparation tools for home cooking' },
-  { name: 'Cleaning Supplies', description: 'Safe kitchen cleaning products' },
-  { name: 'Smart Storage', description: 'Food storage and kitchen organization' },
+  { name: 'Nồi chảo', legacyName: 'Cookware', description: 'Nồi, chảo và dụng cụ nấu ăn chất lượng cao cho gia đình Việt.' },
+  { name: 'Bàn ăn và phục vụ', legacyName: 'Tableware', description: 'Bát, đĩa, cốc và bộ đồ dùng phục vụ bữa ăn.' },
+  { name: 'Dụng cụ sơ chế', legacyName: 'Kitchen Tools', description: 'Dao, thớt và dụng cụ chuẩn bị thực phẩm hằng ngày.' },
+  { name: 'Vệ sinh nhà bếp', legacyName: 'Cleaning Supplies', description: 'Sản phẩm vệ sinh nhà bếp an toàn và thân thiện.' },
+  { name: 'Lưu trữ thông minh', legacyName: 'Smart Storage', description: 'Giải pháp bảo quản thực phẩm và sắp xếp căn bếp.' },
 ];
 
 const DEMO_PRODUCTS = [
   {
-    name: 'Green Ceramic Frying Pan',
-    categoryName: 'Cookware',
-    description: 'Non-stick ceramic pan for daily cooking.',
+    name: 'Chảo gốm chống dính GreenHome',
+    legacyName: 'Green Ceramic Frying Pan',
+    sku: 'GH-NC-001',
+    categoryName: 'Nồi chảo',
+    description: 'Chảo phủ gốm chống dính, truyền nhiệt đều, phù hợp cho bữa cơm gia đình hằng ngày.',
     imageUrls: ['https://images.unsplash.com/photo-1556911220-bff31c812dba?auto=format&fit=crop&w=900&q=80'],
-    price: 32,
+    price: 649000,
     stockQuantity: 25,
-    unit: 'piece',
+    unit: 'cái',
   },
   {
-    name: 'Stainless Sauce Pot',
-    categoryName: 'Cookware',
-    description: 'Durable stainless pot for soups and sauces.',
-    imageUrls: ['https://images.unsplash.com/photo-1584990347449-a5d9f800a783?auto=format&fit=crop&w=900&q=80'],
-    price: 45,
+    name: 'Nồi inox đáy dày 24 cm',
+    legacyName: 'Stainless Sauce Pot',
+    sku: 'GH-NC-002',
+    categoryName: 'Nồi chảo',
+    description: 'Nồi inox bền chắc với đáy truyền nhiệt tốt, dùng cho món canh, hầm và nước sốt.',
+    imageUrls: ['https://images.unsplash.com/photo-1556911220-bff31c812dba?auto=format&fit=crop&w=900&q=80'],
+    price: 899000,
     stockQuantity: 18,
-    unit: 'piece',
+    unit: 'cái',
   },
   {
-    name: 'Minimal Dinner Plate Set',
-    categoryName: 'Tableware',
-    description: 'Four-piece ceramic plate set.',
+    name: 'Bộ đĩa gốm tối giản 4 món',
+    legacyName: 'Minimal Dinner Plate Set',
+    sku: 'GH-BA-001',
+    categoryName: 'Bàn ăn và phục vụ',
+    description: 'Bộ bốn đĩa gốm thanh lịch, dễ phối bàn ăn và phù hợp sử dụng hằng ngày.',
     imageUrls: ['https://images.unsplash.com/photo-1603199506016-b9a594b593c0?auto=format&fit=crop&w=900&q=80'],
-    price: 28,
+    price: 459000,
     stockQuantity: 40,
-    unit: 'set',
+    unit: 'bộ',
   },
   {
-    name: 'Glass Storage Jar',
-    categoryName: 'Smart Storage',
-    description: 'Airtight glass jar for grains and spices.',
+    name: 'Hũ thủy tinh nắp kín 1 lít',
+    legacyName: 'Glass Storage Jar',
+    sku: 'GH-LT-001',
+    categoryName: 'Lưu trữ thông minh',
+    description: 'Hũ thủy tinh kín khí giúp bảo quản ngũ cốc, gia vị và thực phẩm khô gọn gàng.',
     imageUrls: ['https://images.unsplash.com/photo-1610701596007-11502861dcfa?auto=format&fit=crop&w=900&q=80'],
-    price: 9,
+    price: 149000,
     stockQuantity: 80,
-    unit: 'piece',
+    unit: 'hũ',
   },
   {
-    name: 'Bamboo Cutting Board',
-    categoryName: 'Kitchen Tools',
-    description: 'Bamboo board with juice groove.',
+    name: 'Thớt tre rãnh chống tràn',
+    legacyName: 'Bamboo Cutting Board',
+    sku: 'GH-SC-001',
+    categoryName: 'Dụng cụ sơ chế',
+    description: 'Thớt tre chắc chắn với rãnh hứng nước, bề mặt rộng và dễ vệ sinh.',
     imageUrls: ['https://images.unsplash.com/photo-1593618998160-e34014e67546?auto=format&fit=crop&w=900&q=80'],
-    price: 16,
+    price: 289000,
     stockQuantity: 35,
-    unit: 'piece',
+    unit: 'cái',
   },
   {
-    name: 'Chef Knife 8 Inch',
-    categoryName: 'Kitchen Tools',
-    description: 'Balanced stainless chef knife.',
+    name: 'Dao bếp inox 8 inch',
+    legacyName: 'Chef Knife 8 Inch',
+    sku: 'GH-SC-002',
+    categoryName: 'Dụng cụ sơ chế',
+    description: 'Dao bếp inox cân bằng tốt, lưỡi sắc bền, hỗ trợ thái cắt thực phẩm chính xác.',
     imageUrls: ['https://images.unsplash.com/photo-1593618998160-e34014e67546?auto=format&fit=crop&w=900&q=80'],
-    price: 38,
+    price: 759000,
     stockQuantity: 22,
-    unit: 'piece',
+    unit: 'cái',
   },
   {
-    name: 'Eco Dish Soap',
-    categoryName: 'Cleaning Supplies',
-    description: 'Plant-based dish soap for kitchen cleaning.',
+    name: 'Nước rửa chén sinh học 500 ml',
+    legacyName: 'Eco Dish Soap',
+    sku: 'GH-VS-001',
+    categoryName: 'Vệ sinh nhà bếp',
+    description: 'Nước rửa chén nguồn gốc thực vật, làm sạch dầu mỡ và dịu nhẹ khi sử dụng.',
     imageUrls: ['https://images.unsplash.com/photo-1585421514738-01798e348b17?auto=format&fit=crop&w=900&q=80'],
-    price: 7,
+    price: 89000,
     stockQuantity: 120,
-    unit: 'bottle',
+    unit: 'chai',
   },
   {
-    name: 'Stackable Food Container Set',
-    categoryName: 'Smart Storage',
-    description: 'BPA-free containers for meal prep.',
+    name: 'Bộ hộp thực phẩm xếp chồng 5 món',
+    legacyName: 'Stackable Food Container Set',
+    sku: 'GH-LT-002',
+    categoryName: 'Lưu trữ thông minh',
+    description: 'Bộ hộp không chứa BPA, thiết kế xếp chồng tiết kiệm diện tích và tiện chuẩn bị bữa ăn.',
     imageUrls: ['https://images.unsplash.com/photo-1610701596007-11502861dcfa?auto=format&fit=crop&w=900&q=80'],
-    price: 24,
+    price: 329000,
     stockQuantity: 30,
-    unit: 'set',
+    unit: 'bộ',
   },
 ];
 
@@ -166,10 +182,10 @@ const DEMO_ORDER_SPECS = [
     paymentMethod: 'COD',
     paymentStatus: 'Pending',
     orderStatus: 'Pending',
-    shippingAddress: '12 Nguyen Trai, Ha Noi',
+    shippingAddress: '12 Nguyễn Trãi, Thanh Xuân, Hà Nội',
     items: [
-      { productName: 'Green Ceramic Frying Pan', quantity: 1 },
-      { productName: 'Eco Dish Soap', quantity: 2 },
+      { productName: 'Chảo gốm chống dính GreenHome', quantity: 1 },
+      { productName: 'Nước rửa chén sinh học 500 ml', quantity: 2 },
     ],
   },
   {
@@ -177,11 +193,11 @@ const DEMO_ORDER_SPECS = [
     paymentMethod: 'ONLINE',
     paymentStatus: 'Paid',
     orderStatus: 'Confirmed',
-    shippingAddress: '12 Nguyen Trai, Ha Noi',
+    shippingAddress: '12 Nguyễn Trãi, Thanh Xuân, Hà Nội',
     transactionId: 'DEMO-TXN-1002',
     items: [
-      { productName: 'Chef Knife 8 Inch', quantity: 1 },
-      { productName: 'Bamboo Cutting Board', quantity: 1 },
+      { productName: 'Dao bếp inox 8 inch', quantity: 1 },
+      { productName: 'Thớt tre rãnh chống tràn', quantity: 1 },
     ],
   },
   {
@@ -189,12 +205,12 @@ const DEMO_ORDER_SPECS = [
     paymentMethod: 'ONLINE',
     paymentStatus: 'Paid',
     orderStatus: 'StockExportRequested',
-    shippingAddress: '12 Nguyen Trai, Ha Noi',
+    shippingAddress: '12 Nguyễn Trãi, Thanh Xuân, Hà Nội',
     transactionId: 'DEMO-TXN-1003',
     stockExportStatus: 'Pending',
     items: [
-      { productName: 'Stackable Food Container Set', quantity: 1 },
-      { productName: 'Glass Storage Jar', quantity: 4 },
+      { productName: 'Bộ hộp thực phẩm xếp chồng 5 món', quantity: 1 },
+      { productName: 'Hũ thủy tinh nắp kín 1 lít', quantity: 4 },
     ],
   },
   {
@@ -202,9 +218,9 @@ const DEMO_ORDER_SPECS = [
     paymentMethod: 'COD',
     paymentStatus: 'Paid',
     orderStatus: 'Delivered',
-    shippingAddress: '12 Nguyen Trai, Ha Noi',
+    shippingAddress: '12 Nguyễn Trãi, Thanh Xuân, Hà Nội',
     items: [
-      { productName: 'Minimal Dinner Plate Set', quantity: 1 },
+      { productName: 'Bộ đĩa gốm tối giản 4 món', quantity: 1 },
     ],
   },
 ];
@@ -213,7 +229,7 @@ const DEMO_RETURN_REFUND_SPECS = [
   {
     orderCode: 'GH-DEMO-1004',
     requestCode: 'RET-DEMO-1004',
-    reason: 'Demo request: plate set arrived with one broken item.',
+    reason: 'Bộ đĩa nhận được có một sản phẩm bị vỡ.',
     status: 'Pending',
   },
 ];
@@ -221,8 +237,8 @@ const DEMO_RETURN_REFUND_SPECS = [
 const DEMO_SUPPORT_SPECS = [
   {
     orderCode: 'GH-DEMO-1004',
-    subject: 'Demo support: damaged packaging',
-    content: 'The delivered package was open and needs staff follow-up.',
+    subject: 'Kiện hàng bị hở bao bì',
+    content: 'Bao bì kiện hàng bị hở khi giao và cần nhân viên hỗ trợ kiểm tra.',
     status: 'New',
   },
 ];
@@ -230,9 +246,9 @@ const DEMO_SUPPORT_SPECS = [
 const DEMO_REVIEW_SPECS = [
   {
     orderCode: 'GH-DEMO-1004',
-    productName: 'Minimal Dinner Plate Set',
+    productName: 'Bộ đĩa gốm tối giản 4 món',
     rating: 5,
-    content: 'Clean design and good quality for daily meals.',
+    content: 'Thiết kế đẹp, chất lượng tốt và phù hợp cho bữa ăn hằng ngày.',
   },
 ];
 
@@ -363,8 +379,8 @@ async function upsertCategories() {
   const categories = {};
   for (const category of DEMO_CATEGORIES) {
     const saved = await Category.findOneAndUpdate(
-      { name: category.name },
-      { $set: { ...category, status: 'Active' } },
+      { name: { $in: [category.name, category.legacyName] } },
+      { $set: { name: category.name, description: category.description, status: 'Active' } },
       { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
     );
     categories[category.name] = saved;
@@ -376,10 +392,11 @@ async function upsertProducts(categoryMap) {
   const products = {};
   for (const product of DEMO_PRODUCTS) {
     const saved = await Product.findOneAndUpdate(
-      { name: product.name },
+      { $or: [{ sku: product.sku }, { name: { $in: [product.name, product.legacyName] } }] },
       {
         $set: {
           name: product.name,
+          sku: product.sku,
           description: product.description,
           imageUrls: product.imageUrls,
           price: product.price,

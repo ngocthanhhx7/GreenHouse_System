@@ -14,6 +14,12 @@ router.post(
   uploadProductImages,
   uploadController.uploadProductImages
 );
+router.delete(
+  '/admin/uploads/products',
+  authenticate,
+  authorizeRoles('Admin', 'Staff'),
+  uploadController.deleteProductImage
+);
 router.post('/profile/avatar', authenticate, uploadAvatar, uploadController.uploadAvatar);
 router.delete('/profile/avatar', authenticate, uploadController.deleteAvatar);
 

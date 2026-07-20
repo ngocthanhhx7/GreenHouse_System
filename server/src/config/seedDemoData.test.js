@@ -38,13 +38,16 @@ describe('demo data seed config', () => {
     assert.ok(DEMO_CATEGORIES.length >= 4);
     assert.ok(DEMO_PRODUCTS.length >= 8);
     assert.ok(DEMO_PRODUCTS.every((product) => product.stockQuantity > 0));
+    assert.equal(new Set(DEMO_PRODUCTS.map((product) => product.sku)).size, DEMO_PRODUCTS.length);
+    assert.ok(DEMO_PRODUCTS.every((product) => product.price >= 50000));
+    assert.ok(DEMO_PRODUCTS.every((product) => DEMO_CATEGORIES.some((category) => category.name === product.categoryName)));
     assert.ok(DEMO_ORDER_SPECS.some((order) => order.orderStatus === 'Pending'));
     assert.ok(DEMO_ORDER_SPECS.some((order) => order.orderStatus === 'Confirmed'));
     assert.ok(DEMO_ORDER_SPECS.some((order) => order.orderStatus === 'StockExportRequested'));
     assert.ok(DEMO_ORDER_SPECS.some((order) => order.orderStatus === 'Delivered'));
     assert.ok(DEMO_RETURN_REFUND_SPECS.some((request) => request.orderCode === 'GH-DEMO-1004'));
     assert.ok(DEMO_SUPPORT_SPECS.some((request) => request.orderCode === 'GH-DEMO-1004'));
-    assert.ok(DEMO_REVIEW_SPECS.some((review) => review.productName === 'Minimal Dinner Plate Set'));
+    assert.ok(DEMO_REVIEW_SPECS.every((review) => DEMO_PRODUCTS.some((product) => product.name === review.productName)));
     assert.ok(DEMO_SETTING_SPECS.some((setting) => setting.key === 'lowStockDefaultThreshold'));
     const scriptSource = readFileSync(path.join(__dirname, 'seedDemoData.js'), 'utf8');
     assert.doesNotMatch(scriptSource, /requestSpec\.requestCode/);

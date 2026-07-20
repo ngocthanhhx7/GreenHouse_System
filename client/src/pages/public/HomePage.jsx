@@ -5,6 +5,7 @@ import { useGSAP } from '@gsap/react';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
 
 import { productService } from '../../services/productService.js';
+import { resolveMediaUrl } from '../../services/apiClient.js';
 import { formatCurrency } from '../../utils/formatters.js';
 
 gsap.registerPlugin(useGSAP, ScrollTrigger);
@@ -149,6 +150,7 @@ const productShowcase = {
 };
 
 function HomeProductTile({ product }) {
+  const [imageError, setImageError] = useState(false);
   const id = product.id || product._id;
   const showcase = productShowcase[product.name] || {};
   const name = showcase.name || product.name;
@@ -157,8 +159,8 @@ function HomeProductTile({ product }) {
   return (
     <Link className="home-product-tile" to={`/products/${id}`}>
       <div className="home-product-image">
-        {product.imageUrls?.[0] ? (
-          <img src={product.imageUrls[0]} alt={name} loading="lazy" />
+        {product.imageUrls?.[0] && !imageError ? (
+          <img src={resolveMediaUrl(product.imageUrls[0])} alt={name} loading="lazy" onError={() => setImageError(true)} />
         ) : (
           <span>Chưa có ảnh</span>
         )}
