@@ -4,7 +4,8 @@ import { describe, it } from 'node:test';
 import { createInventoryService } from './inventoryService.js';
 
 describe('client inventory service', () => {
-  it('lists warehouse inventory', async () => {
+  it('returns the inventory envelope from the inventory endpoint', async () => {
+    const envelope = { items: [{ productName: 'Green Ceramic Frying Pan' }], total: 8 };
     const service = createInventoryService({
       baseUrl: 'http://api.test/api',
       fetcher: async (url, options = {}) => {
@@ -12,14 +13,52 @@ describe('client inventory service', () => {
         assert.equal(options.method || 'GET', 'GET');
         return {
           ok: true,
-          json: async () => ({ success: true, data: { items: [{ productName: 'Green Ceramic Frying Pan' }] } }),
+          json: async () => ({ success: true, data: envelope }),
         };
       },
     });
 
     const result = await service.listInventory();
 
-    assert.equal(result.items[0].productName, 'Green Ceramic Frying Pan');
+    assert.deepEqual(result, envelope);
+  });
+
+  it('returns the low-stock envelope from the low-stock endpoint', async () => {
+    const envelope = { items: [], total: 0 };
+    const service = createInventoryService({
+      baseUrl: 'http://api.test/api',
+      fetcher: async (url, options = {}) => {
+        assert.equal(url, 'http://api.test/api/warehouse/inventory/low-stock');
+        assert.equal(options.method || 'GET', 'GET');
+        return {
+          ok: true,
+          json: async () => ({ success: true, data: envelope }),
+        };
+      },
+    });
+
+    const result = await service.listLowStock();
+
+    assert.deepEqual(result, envelope);
+  });
+
+  it('returns the stock-export envelope from the stock-exports endpoint', async () => {
+    const envelope = { items: [{ id: 'export-1', status: 'Pending' }], total: 1 };
+    const service = createInventoryService({
+      baseUrl: 'http://api.test/api',
+      fetcher: async (url, options = {}) => {
+        assert.equal(url, 'http://api.test/api/warehouse/stock-exports');
+        assert.equal(options.method || 'GET', 'GET');
+        return {
+          ok: true,
+          json: async () => ({ success: true, data: envelope }),
+        };
+      },
+    });
+
+    const result = await service.listStockExports();
+
+    assert.deepEqual(result, envelope);
   });
 
   it('updates stock export request status', async () => {
