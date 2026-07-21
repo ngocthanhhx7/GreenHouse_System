@@ -103,7 +103,7 @@ describe('report service', () => {
         return [
           { _id: 'created-in', orderStatus: 'Pending', paymentStatus: 'Pending', totalAmount: 10, createdAt: new Date('2026-07-10') },
           { _id: 'completed-in', orderStatus: 'Delivered', paymentStatus: 'Paid', totalAmount: 100, createdAt: new Date('2026-07-01'), deliveredAt: new Date('2026-07-10') },
-          { _id: 'created-out-completed-in', orderStatus: 'Delivered', paymentStatus: 'Paid', totalAmount: 200, createdAt: new Date('2026-07-01'), updatedAt: new Date('2026-07-10') },
+          { _id: 'missing-delivered-at', orderStatus: 'Delivered', paymentStatus: 'Paid', totalAmount: 200, createdAt: new Date('2026-07-10'), updatedAt: new Date('2026-07-10') },
           { _id: 'created-in-completed-out', orderStatus: 'Delivered', paymentStatus: 'Paid', totalAmount: 300, createdAt: new Date('2026-07-10'), deliveredAt: new Date('2026-07-20') },
           { _id: 'outside', orderStatus: 'Returned', paymentStatus: 'Refunded', totalAmount: 400, createdAt: new Date('2026-07-20') },
         ];
@@ -111,7 +111,7 @@ describe('report service', () => {
       async listCompletedRefunds() {
         return [
           { refundAmount: 15, completedAt: new Date('2026-07-10') },
-          { refundAmount: 25, createdAt: new Date('2026-07-10'), updatedAt: new Date('2026-07-20') },
+          { refundAmount: 25, createdAt: new Date('2026-07-10'), updatedAt: new Date('2026-07-10') },
           { refundAmount: 35, completedAt: new Date('2026-07-20') },
         ];
       },
@@ -134,11 +134,11 @@ describe('report service', () => {
 
     const result = await createReportService({ repository }).getAdminOverview({ from: '2026-07-10', to: '2026-07-10' });
 
-    assert.equal(result.orders.total, 2);
-    assert.equal(result.orders.delivered, 1);
+    assert.equal(result.orders.total, 3);
+    assert.equal(result.orders.delivered, 2);
     assert.equal(result.orders.returned, 0);
-    assert.deepEqual(result.orders.byStatus, { Pending: 1, Delivered: 1 });
-    assert.equal(result.revenue.grossSales, 300);
+    assert.deepEqual(result.orders.byStatus, { Pending: 1, Delivered: 2 });
+    assert.equal(result.revenue.grossSales, 100);
     assert.equal(result.revenue.refunded, 15);
     assert.equal(result.support.total, 2);
     assert.equal(result.support.open, 1);
@@ -149,6 +149,11 @@ describe('report service', () => {
     assert.equal(result.inventory.lowStock, 1);
     assert.equal(result.period.from.toISOString(), '2026-07-09T17:00:00.000Z');
     assert.equal(result.period.to.toISOString(), '2026-07-10T16:59:59.999Z');
+
+    const allTimeResult = await createReportService({ repository }).getAdminOverview();
+
+    assert.equal(allTimeResult.revenue.grossSales, 600);
+    assert.equal(allTimeResult.revenue.refunded, 75);
   });
 
   it('uses fixed Vietnam day boundaries for period metrics', async () => {
