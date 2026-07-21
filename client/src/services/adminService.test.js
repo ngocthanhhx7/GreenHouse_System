@@ -4,7 +4,7 @@ import { describe, it } from 'node:test';
 import { createAdminService } from './adminService.js';
 
 describe('client admin service', () => {
-  it('fetches admin overview report', async () => {
+  it('fetches admin overview report without a query when no period is supplied', async () => {
     const service = createAdminService({
       baseUrl: 'http://api.test/api',
       fetcher: async (url) => {
@@ -16,6 +16,18 @@ describe('client admin service', () => {
     const result = await service.getOverviewReport();
 
     assert.equal(result.orders.total, 3);
+  });
+
+  it('fetches the admin overview report with encoded reporting dates', async () => {
+    const service = createAdminService({
+      baseUrl: 'http://api.test/api',
+      fetcher: async (url) => {
+        assert.equal(url, 'http://api.test/api/admin/reports/overview?from=2026-07-01&to=2026-07-31');
+        return { ok: true, json: async () => ({ success: true, data: { orders: { total: 3 } } }) };
+      },
+    });
+
+    await service.getOverviewReport({ from: '2026-07-01', to: '2026-07-31' });
   });
 
   it('updates admin system settings', async () => {
