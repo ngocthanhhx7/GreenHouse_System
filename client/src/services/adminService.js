@@ -22,8 +22,9 @@ export function createAdminService({ baseUrl = DEFAULT_BASE_URL, fetcher } = {})
     : apiRequest;
 
   return {
-    async getOverviewReport() {
-      return request('/admin/reports/overview');
+    async getOverviewReport(params = {}) {
+      const query = buildQuery(params);
+      return request(`/admin/reports/overview${query ? `?${query}` : ''}`);
     },
     async listAuditLogs(params = {}) {
       const query = buildQuery(params);

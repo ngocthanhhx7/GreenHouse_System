@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import { adminService } from '../../services/adminService.js';
 import { formatCurrency, translateOrderStatus } from '../../utils/formatters.js';
+import { buildAdminOverviewQuery } from './adminDashboardQuery.js';
 
 function StatBox({ label, value, icon }) {
   return (
@@ -34,15 +35,70 @@ const DEMO_REPORT = {
 export default function AdminDashboardPage() {
   const [report, setReport] = useState(null);
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [dates, setDates] = useState({ from: '', to: '' });
+  const [appliedPeriod, setAppliedPeriod] = useState({ from: '', to: '' });
+  const isMountedRef = useRef(false);
+  const requestSequenceRef = useRef(0);
 
-  useEffect(() => {
+  const loadReport = useCallback((period = {}) => {
+    const requestId = ++requestSequenceRef.current;
+    const params = buildAdminOverviewQuery(period) ? period : {};
+    setReport(null);
+    setError('');
+    setLoading(true);
     adminService
-      .getOverviewReport()
-      .then((data) => setReport(data || DEMO_REPORT))
-      .catch((err) => setError(err.message));
+      .getOverviewReport(params)
+      .then((data) => {
+        if (!isMountedRef.current || requestId !== requestSequenceRef.current) return;
+        setReport(data || DEMO_REPORT);
+      })
+      .catch((err) => {
+        if (!isMountedRef.current || requestId !== requestSequenceRef.current) return;
+        setError(err.message);
+      })
+      .finally(() => {
+        if (!isMountedRef.current || requestId !== requestSequenceRef.current) return;
+        setLoading(false);
+      });
   }, []);
 
-  if (!report && !error) return <div className="page-center">Đang tải báo cáo...</div>;
+  useEffect(() => {
+    isMountedRef.current = true;
+    loadReport();
+    return () => {
+      isMountedRef.current = false;
+      requestSequenceRef.current += 1;
+    };
+  }, [loadReport]);
+
+  function handleApply(event) {
+    event.preventDefault();
+    if (dates.from && dates.to && dates.from > dates.to) {
+      requestSequenceRef.current += 1;
+      setReport(null);
+      setError('Từ ngày phải trước hoặc bằng đến ngày.');
+      setLoading(false);
+      return;
+    }
+    setAppliedPeriod(dates);
+    loadReport(dates);
+  }
+
+  function handleClear() {
+    const allTime = { from: '', to: '' };
+    setDates(allTime);
+    setAppliedPeriod(allTime);
+    loadReport();
+  }
+
+  const appliedPeriodLabel = appliedPeriod.from && appliedPeriod.to
+    ? `Từ ${appliedPeriod.from} đến ${appliedPeriod.to}`
+    : appliedPeriod.from
+      ? `Từ ${appliedPeriod.from}`
+      : appliedPeriod.to
+        ? `Đến ${appliedPeriod.to}`
+        : '';
 
   return (
     <div className="surface">
@@ -57,8 +113,33 @@ export default function AdminDashboardPage() {
           </Link>
         </div>
       </div>
-      {error && <div className="alert alert-danger">{error}</div>}
-      {report && (
+      <form className="table-actions mb-3" onSubmit={handleApply}>
+        <label>
+          Từ ngày
+          <input
+            type="date"
+            className="form-control"
+            value={dates.from}
+            onChange={(event) => setDates((current) => ({ ...current, from: event.target.value }))}
+          />
+        </label>
+        <label>
+          Đến ngày
+          <input
+            type="date"
+            className="form-control"
+            value={dates.to}
+            onChange={(event) => setDates((current) => ({ ...current, to: event.target.value }))}
+          />
+        </label>
+        <button type="submit" className="btn btn-success">Áp dụng</button>
+        <button type="button" className="btn btn-outline-secondary" onClick={handleClear}>Xóa lọc</button>
+      </form>
+      {appliedPeriodLabel && <p className="text-secondary">Kỳ báo cáo: {appliedPeriodLabel}</p>}
+      <div aria-busy={loading}>
+        {loading && <div className="page-center" role="status" aria-live="polite">Đang tải báo cáo...</div>}
+        {error && <div className="alert alert-danger" role="alert">{error}</div>}
+        {report && !loading && (
         <>
           <div className="metrics-grid mb-4">
             <StatBox
@@ -83,12 +164,12 @@ export default function AdminDashboardPage() {
               icon={<svg className="metric-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7"/><polyline points="17 14 21 18 21 10"/><line x1="7" y1="14" x2="7.01" y2="14"/></svg>}
             />
             <StatBox
-              label="Sản phẩm"
+              label="Sản phẩm hiện có"
               value={report.products?.total ?? 0}
               icon={<svg className="metric-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>}
             />
             <StatBox
-              label="Sắp hết hàng"
+              label="Sắp hết hiện tại"
               value={report.inventory?.lowStock ?? 0}
               icon={<svg className="metric-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>}
             />
@@ -127,7 +208,8 @@ export default function AdminDashboardPage() {
             <p className="text-secondary">Chưa có đơn hàng. Hãy thêm sản phẩm và kiểm tra trải nghiệm catalog trước.</p>
           )}
         </>
-      )}
+        )}
+      </div>
     </div>
   );
 }

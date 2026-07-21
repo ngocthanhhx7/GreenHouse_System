@@ -77,6 +77,17 @@ describe('report service', () => {
     );
   });
 
+  it('rejects malformed and impossible reporting dates', async () => {
+    await assert.rejects(
+      () => service.getAdminOverview({ from: '2026-02-30' }),
+      /date range/
+    );
+    await assert.rejects(
+      () => service.getAdminOverview({ to: '2026/07/10' }),
+      /date range/
+    );
+  });
+
   it('does not infer refunds from returned orders without a completed refund request', async () => {
     const repository = createRepository();
     repository.listCompletedRefunds = async () => [];
@@ -84,5 +95,109 @@ describe('report service', () => {
 
     assert.equal(result.revenue.refunded, 0);
     assert.equal(result.revenue.netSales, result.revenue.grossSales);
+  });
+
+  it('filters period metrics by their reporting timestamps while keeping snapshots current', async () => {
+    const repository = {
+      async listOrders() {
+        return [
+          { _id: 'created-in', orderStatus: 'Pending', paymentStatus: 'Pending', totalAmount: 10, createdAt: new Date('2026-07-10') },
+          { _id: 'completed-in', orderStatus: 'Delivered', paymentStatus: 'Paid', totalAmount: 100, createdAt: new Date('2026-07-01'), deliveredAt: new Date('2026-07-10') },
+          { _id: 'created-out-completed-in', orderStatus: 'Delivered', paymentStatus: 'Paid', totalAmount: 200, createdAt: new Date('2026-07-01'), updatedAt: new Date('2026-07-10') },
+          { _id: 'created-in-completed-out', orderStatus: 'Delivered', paymentStatus: 'Paid', totalAmount: 300, createdAt: new Date('2026-07-10'), deliveredAt: new Date('2026-07-20') },
+          { _id: 'outside', orderStatus: 'Returned', paymentStatus: 'Refunded', totalAmount: 400, createdAt: new Date('2026-07-20') },
+        ];
+      },
+      async listCompletedRefunds() {
+        return [
+          { refundAmount: 15, completedAt: new Date('2026-07-10') },
+          { refundAmount: 25, createdAt: new Date('2026-07-10'), updatedAt: new Date('2026-07-20') },
+          { refundAmount: 35, completedAt: new Date('2026-07-20') },
+        ];
+      },
+      async countProducts() { return 7; },
+      async listInventory() { return [{ stockQuantity: 1, lowStockThreshold: 2 }, { stockQuantity: 10, lowStockThreshold: 2 }]; },
+      async listSupportRequests() {
+        return [
+          { status: 'New', createdAt: new Date('2026-07-10') },
+          { status: 'Resolved', createdAt: new Date('2026-07-10') },
+          { status: 'Open', createdAt: new Date('2026-07-20') },
+        ];
+      },
+      async listReviews() {
+        return [
+          { status: 'Visible', rating: 5, createdAt: new Date('2026-07-10') },
+          { status: 'Visible', rating: 1, createdAt: new Date('2026-07-20') },
+        ];
+      },
+    };
+
+    const result = await createReportService({ repository }).getAdminOverview({ from: '2026-07-10', to: '2026-07-10' });
+
+    assert.equal(result.orders.total, 2);
+    assert.equal(result.orders.delivered, 1);
+    assert.equal(result.orders.returned, 0);
+    assert.deepEqual(result.orders.byStatus, { Pending: 1, Delivered: 1 });
+    assert.equal(result.revenue.grossSales, 300);
+    assert.equal(result.revenue.refunded, 15);
+    assert.equal(result.support.total, 2);
+    assert.equal(result.support.open, 1);
+    assert.equal(result.support.resolved, 1);
+    assert.equal(result.reviews.total, 1);
+    assert.equal(result.reviews.averageRating, 5);
+    assert.equal(result.products.total, 7);
+    assert.equal(result.inventory.lowStock, 1);
+    assert.equal(result.period.from.toISOString(), '2026-07-09T17:00:00.000Z');
+    assert.equal(result.period.to.toISOString(), '2026-07-10T16:59:59.999Z');
+  });
+
+  it('uses fixed Vietnam day boundaries for period metrics', async () => {
+    const repository = {
+      async listOrders() {
+        return [
+          { _id: 'before', orderStatus: 'Delivered', paymentStatus: 'Paid', totalAmount: 10, createdAt: new Date('2026-07-09T16:59:59.999Z'), deliveredAt: new Date('2026-07-09T16:59:59.999Z') },
+          { _id: 'first', orderStatus: 'Delivered', paymentStatus: 'Paid', totalAmount: 20, createdAt: new Date('2026-07-09T17:00:00.000Z'), deliveredAt: new Date('2026-07-09T17:00:00.000Z') },
+          { _id: 'last', orderStatus: 'Delivered', paymentStatus: 'Paid', totalAmount: 30, createdAt: new Date('2026-07-10T16:59:59.999Z'), deliveredAt: new Date('2026-07-10T16:59:59.999Z') },
+          { _id: 'after', orderStatus: 'Delivered', paymentStatus: 'Paid', totalAmount: 40, createdAt: new Date('2026-07-10T17:00:00.000Z'), deliveredAt: new Date('2026-07-10T17:00:00.000Z') },
+        ];
+      },
+      async listCompletedRefunds() {
+        return [
+          { refundAmount: 1, completedAt: new Date('2026-07-09T16:59:59.999Z') },
+          { refundAmount: 2, completedAt: new Date('2026-07-09T17:00:00.000Z') },
+          { refundAmount: 3, completedAt: new Date('2026-07-10T16:59:59.999Z') },
+          { refundAmount: 4, completedAt: new Date('2026-07-10T17:00:00.000Z') },
+        ];
+      },
+      async countProducts() { return 0; },
+      async listInventory() { return []; },
+      async listSupportRequests() {
+        return [
+          { status: 'Open', createdAt: new Date('2026-07-09T16:59:59.999Z') },
+          { status: 'Open', createdAt: new Date('2026-07-09T17:00:00.000Z') },
+          { status: 'Resolved', createdAt: new Date('2026-07-10T16:59:59.999Z') },
+          { status: 'Open', createdAt: new Date('2026-07-10T17:00:00.000Z') },
+        ];
+      },
+      async listReviews() {
+        return [
+          { rating: 1, createdAt: new Date('2026-07-09T16:59:59.999Z') },
+          { rating: 4, createdAt: new Date('2026-07-09T17:00:00.000Z') },
+          { rating: 5, createdAt: new Date('2026-07-10T16:59:59.999Z') },
+          { rating: 1, createdAt: new Date('2026-07-10T17:00:00.000Z') },
+        ];
+      },
+    };
+
+    const result = await createReportService({ repository }).getAdminOverview({ from: '2026-07-10', to: '2026-07-10' });
+
+    assert.equal(result.orders.total, 2);
+    assert.equal(result.revenue.grossSales, 50);
+    assert.equal(result.revenue.refunded, 5);
+    assert.equal(result.support.total, 2);
+    assert.equal(result.support.open, 1);
+    assert.equal(result.support.resolved, 1);
+    assert.equal(result.reviews.total, 2);
+    assert.equal(result.reviews.averageRating, 4.5);
   });
 });
