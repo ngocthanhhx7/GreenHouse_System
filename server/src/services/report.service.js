@@ -49,10 +49,10 @@ function createReportService({ repository = createModelRepository() } = {}) {
       const [orders, completedRefunds, productCount, inventory, supportRequests, reviews] = await Promise.all([
         repository.listOrders(), repository.listCompletedRefunds ? repository.listCompletedRefunds() : Promise.resolve([]), repository.countProducts(), repository.listInventory(), repository.listSupportRequests(), repository.listReviews(),
       ]);
-      const grossSalesOrders = orders.filter((order) => order.orderStatus === 'Delivered' && order.paymentStatus === 'Paid' && isInRange(order.deliveredAt || order.updatedAt || order.createdAt, range));
+      const grossSalesOrders = orders.filter((order) => order.orderStatus === 'Delivered' && order.paymentStatus === 'Paid' && isInRange(order.deliveredAt, range));
       const periodOrders = orders.filter((order) => isInRange(order.createdAt, range));
       const refundRecords = completedRefunds.filter((refund) => (
-        isInRange(refund.completedAt || refund.updatedAt || refund.createdAt, range)
+        isInRange(refund.completedAt, range)
       ));
       const periodSupportRequests = supportRequests.filter((request) => isInRange(request.createdAt, range));
       const periodReviews = reviews.filter((review) => isInRange(review.createdAt, range));
