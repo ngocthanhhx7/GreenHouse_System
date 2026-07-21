@@ -6,6 +6,7 @@ dist/
 npm-debug.log*
 gsap-skills/
 .superpowers/
+.worktrees/
 server/uploads/avatars/*
 !server/uploads/avatars/.gitkeep
 server/uploads/products/*
