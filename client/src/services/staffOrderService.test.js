@@ -22,6 +22,18 @@ describe('client staff order service', () => {
     assert.equal(result.items[0].orderCode, 'ORD-1');
   });
 
+  it('keeps additional list parameters with the Pending status', async () => {
+    const service = createStaffOrderService({
+      baseUrl: 'http://api.test/api',
+      fetcher: async (url) => {
+        assert.equal(url, 'http://api.test/api/staff/orders?status=Pending&page=2');
+        return { ok: true, json: async () => ({ success: true, data: { items: [] } }) };
+      },
+    });
+
+    await service.listOrders({ status: 'Pending', page: 2 });
+  });
+
   it('confirms staff orders through the staff endpoint', async () => {
     const service = createStaffOrderService({
       baseUrl: 'http://api.test/api',

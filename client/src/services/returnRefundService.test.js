@@ -36,6 +36,18 @@ describe('client return/refund service', () => {
     assert.equal(result.status, 'Approved');
   });
 
+  it('lists pending staff requests without dropping other query parameters', async () => {
+    const service = createReturnRefundService({
+      baseUrl: 'http://api.test/api',
+      fetcher: async (url) => {
+        assert.equal(url, 'http://api.test/api/staff/return-refunds?status=Pending&page=2');
+        return { ok: true, json: async () => ({ success: true, data: { items: [] } }) };
+      },
+    });
+
+    await service.listStaffRequests({ status: 'Pending', page: 2 });
+  });
+
   it('uses warehouse inspection and staff completion endpoints separately', async () => {
     const calls = [];
     const service = createReturnRefundService({

@@ -35,4 +35,25 @@ describe('client support service', () => {
 
     assert.equal(result.status, 'Resolved');
   });
+
+  it('serializes New, Open, and InProgress staff queue statuses with other parameters', async () => {
+    const urls = [];
+    const service = createSupportService({
+      baseUrl: 'http://api.test/api',
+      fetcher: async (url) => {
+        urls.push(url);
+        return { ok: true, json: async () => ({ success: true, data: { items: [] } }) };
+      },
+    });
+
+    await service.listStaffRequests({ status: 'New', page: 2 });
+    await service.listStaffRequests({ status: 'Open', page: 2 });
+    await service.listStaffRequests({ status: 'InProgress', page: 3 });
+
+    assert.deepEqual(urls, [
+      'http://api.test/api/staff/support-requests?status=New&page=2',
+      'http://api.test/api/staff/support-requests?status=Open&page=2',
+      'http://api.test/api/staff/support-requests?status=InProgress&page=3',
+    ]);
+  });
 });

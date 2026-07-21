@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 import { staffOrderService } from '../../services/staffOrderService.js';
 import { returnRefundService } from '../../services/returnRefundService.js';
 import { supportService } from '../../services/supportService.js';
+import { toStaffDashboardStats } from './staffDashboardStats.js';
 
 function StatBox({ label, value, icon }) {
   return (
@@ -12,16 +13,16 @@ function StatBox({ label, value, icon }) {
         <span className="metric-label">{label}</span>
         {icon && <span className="metric-icon">{icon}</span>}
       </div>
-      <strong className="metric-value">{value}</strong>
+      <strong className="metric-value">{value ?? '—'}</strong>
     </div>
   );
 }
 
 export default function StaffDashboardPage() {
   const [stats, setStats] = useState({
-    pendingOrders: 0,
-    pendingReturns: 0,
-    openSupport: 0,
+    pendingOrders: null,
+    pendingReturns: null,
+    openSupport: null,
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -30,17 +31,15 @@ export default function StaffDashboardPage() {
     let cancelled = false;
     async function load() {
       try {
-        const [orders, returns, support] = await Promise.all([
-          staffOrderService.listOrders({ status: 'Pending', limit: 1 }),
-          returnRefundService.listStaffRequests({ status: 'Pending', limit: 1 }),
-          supportService.listStaffRequests({ status: 'New', limit: 1 }),
+        const [orders, returns, newSupport, openSupport, inProgressSupport] = await Promise.all([
+          staffOrderService.listOrders({ status: 'Pending' }),
+          returnRefundService.listStaffRequests({ status: 'Pending' }),
+          supportService.listStaffRequests({ status: 'New' }),
+          supportService.listStaffRequests({ status: 'Open' }),
+          supportService.listStaffRequests({ status: 'InProgress' }),
         ]);
         if (!cancelled) {
-          setStats({
-            pendingOrders: Array.isArray(orders?.items) ? orders.items.length : 0,
-            pendingReturns: Array.isArray(returns?.items) ? returns.items.length : 0,
-            openSupport: Array.isArray(support?.items) ? support.items.length : 0,
-          });
+          setStats(toStaffDashboardStats({ orders, returns, newSupport, openSupport, inProgressSupport }));
         }
       } catch (err) {
         if (!cancelled) {
