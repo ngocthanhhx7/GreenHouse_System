@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, NavLink } from 'react-router-dom';
+import { Link, NavLink, useNavigate } from 'react-router-dom';
 
 import useAuth from '../../hooks/useAuth.js';
 import NotificationBell from '../notifications/NotificationBell.jsx';
@@ -33,7 +33,6 @@ function roleMenuLinks(role, getWorkspacePath) {
   if (role === 'Customer') {
     return [
       ...baseLinks,
-      { to: '/orders', label: 'Lịch sử mua hàng' },
       { to: '/return-refunds', label: 'Đổi trả / hoàn tiền' },
       { to: '/support', label: 'Yêu cầu hỗ trợ' },
     ];
@@ -73,12 +72,18 @@ function roleMenuLinks(role, getWorkspacePath) {
 export default function Header({ showCart = true }) {
   const auth = useAuth();
   const { user, logout } = auth;
+  const navigate = useNavigate();
   const getWorkspacePath = auth['get' + 'Dash' + 'boardPath'];
   const [menuOpen, setMenuOpen] = useState(false);
   const dropdownRef = useRef(null);
   const userRole = user?.role;
   const isAuthenticated = Boolean(user);
   const canShowCart = showCart && userRole === 'Customer';
+
+  async function handleLogout() {
+    await logout();
+    navigate('/login', { replace: true });
+  }
 
   useEffect(() => {
     if (!menuOpen || !dropdownRef.current) return undefined;
@@ -150,7 +155,7 @@ export default function Header({ showCart = true }) {
                         {link.label}
                       </Link>
                     ))}
-                    <button className="avatar-dropdown-link logout" type="button" onClick={logout}>
+                    <button className="avatar-dropdown-link logout" type="button" onClick={handleLogout}>
                       Đăng xuất
                     </button>
                   </div>

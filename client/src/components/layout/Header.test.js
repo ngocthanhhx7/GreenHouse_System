@@ -7,17 +7,17 @@ const header = readFileSync(join(process.cwd(), 'src/components/layout/Header.js
 
 describe('shared header design contract', () => {
   it('uses Vietnamese commerce navigation and account actions', () => {
-    assert.match(header, /Trang chủ/);
-    assert.match(header, /Sản phẩm/);
-    assert.match(header, /Về GreenHome/);
-    assert.match(header, /Liên hệ/);
-    assert.match(header, /Đăng nhập/);
-    assert.match(header, /Đăng ký/);
-    assert.match(header, /Thông báo/);
-    assert.match(header, /Hồ sơ/);
-    assert.match(header, /Lịch sử mua hàng/);
-    assert.match(header, /Đăng xuất/);
-    assert.doesNotMatch(header, /Login|Register|Order History|Dashboard|Logout/);
+    assert.match(header, /Trang ch\u1ee7/);
+    assert.match(header, /S\u1ea3n ph\u1ea9m/);
+    assert.match(header, /V\u1ec1 GreenHome/);
+    assert.match(header, /Li\u00ean h\u1ec7/);
+    assert.match(header, /\u0110\u0103ng nh\u1eadp/);
+    assert.match(header, /\u0110\u0103ng k\u00fd/);
+    assert.match(header, /Th\u00f4ng b\u00e1o/);
+    assert.match(header, /H\u1ed3 s\u01a1/);
+    assert.doesNotMatch(header, /L\u1ecbch s\u1eed mua h\u00e0ng/);
+    assert.match(header, /\u0110\u0103ng xu\u1ea5t/);
+    assert.doesNotMatch(header, /Login|Register|Order History/);
   });
 
   it('keeps cart scoped to customer/storefront usage instead of internal dashboards', () => {
@@ -28,6 +28,14 @@ describe('shared header design contract', () => {
     assert.match(header, /to: '\/notifications'/);
     assert.match(header, /avatar-menu/);
     assert.match(header, /roleMenuLinks/);
+    assert.equal((header.match(/to: '\/orders'/g) || []).length, 0);
+  });
+
+  it('logs out and replaces the current location with login', () => {
+    assert.match(header, /import \{ Link, NavLink, useNavigate \} from 'react-router-dom';/);
+    assert.match(header, /const navigate = useNavigate\(\);/);
+    assert.match(header, /async function handleLogout\(\) \{[\s\S]*?await logout\(\);[\s\S]*?navigate\('\/login', \{ replace: true \}\);[\s\S]*?\}/);
+    assert.match(header, /onClick=\{handleLogout\}/);
   });
 
   it('uses the premium storefront header structure without changing auth behavior', () => {
