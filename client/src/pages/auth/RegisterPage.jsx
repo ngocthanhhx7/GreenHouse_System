@@ -14,15 +14,20 @@ export default function RegisterPage() {
     address: '',
   });
   const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
 
   async function handleSubmit(event) {
     event.preventDefault();
+    if (submitting) return;
     setError('');
+    setSubmitting(true);
     try {
       await register(form);
       navigate('/login', { replace: true });
     } catch (err) {
       setError(err.message);
+    } finally {
+      setSubmitting(false);
     }
   }
 
@@ -31,38 +36,55 @@ export default function RegisterPage() {
   }
 
   return (
-    <div className="auth-page">
-      <form className="auth-card wide" onSubmit={handleSubmit}>
-        <h1>Đăng ký</h1>
-        <p className="text-secondary">Tạo tài khoản khách hàng để đặt hàng và theo dõi đơn mua.</p>
-        {error && <div className="alert alert-danger">{error}</div>}
-        <label className="form-label">
-          Họ và tên
-          <input className="form-control" value={form.fullName} onChange={(event) => updateField('fullName', event.target.value)} required />
-        </label>
-        <label className="form-label">
-          Email
-          <input className="form-control" type="email" value={form.email} onChange={(event) => updateField('email', event.target.value)} required />
-        </label>
-        <label className="form-label">
-          Số điện thoại
-          <input className="form-control" value={form.phone} onChange={(event) => updateField('phone', event.target.value)} required />
-        </label>
-        <label className="form-label">
-          Mật khẩu
-          <input className="form-control" type="password" value={form.password} onChange={(event) => updateField('password', event.target.value)} required />
-        </label>
-        <label className="form-label">
-          Địa chỉ
-          <textarea className="form-control" value={form.address} onChange={(event) => updateField('address', event.target.value)} required />
-        </label>
-        <button className="btn btn-success w-100" type="submit">
-          Đăng ký
-        </button>
-        <p className="text-center mt-3 mb-0">
-          Đã có tài khoản? <Link to="/login">Đăng nhập</Link>
-        </p>
-      </form>
-    </div>
+    <main className="auth-page auth-page--register">
+      <div className="auth-page-shell">
+        <aside className="auth-brand-panel">
+          <img src="/assets/logo/logo.png" alt="" className="auth-brand-logo" />
+          <p className="auth-brand-kicker">GreenHome Kitchen</p>
+          <h2>Bắt đầu từ một căn bếp xanh.</h2>
+          <p>Tạo tài khoản khách hàng để mua sắm thuận tiện và theo dõi đơn hàng của bạn.</p>
+        </aside>
+
+        <form className="auth-form-panel" onSubmit={handleSubmit} aria-busy={submitting}>
+          <div className="auth-form-heading">
+            <p className="auth-eyebrow">Tài khoản GreenHome</p>
+            <h1>Đăng ký</h1>
+            <p>Tạo tài khoản khách hàng để đặt hàng và theo dõi đơn mua.</p>
+          </div>
+
+          <div className="auth-feedback" aria-live="polite">
+            {error && <div className="auth-alert" role="alert">{error}</div>}
+          </div>
+
+          <div className="auth-field-grid">
+            <label htmlFor="register-full-name">
+              Họ và tên
+              <input id="register-full-name" value={form.fullName} autoComplete="name" onChange={(event) => updateField('fullName', event.target.value)} required disabled={submitting} />
+            </label>
+            <label htmlFor="register-email">
+              Email
+              <input id="register-email" type="email" value={form.email} autoComplete="email" onChange={(event) => updateField('email', event.target.value)} required disabled={submitting} />
+            </label>
+            <label htmlFor="register-phone">
+              Số điện thoại
+              <input id="register-phone" type="tel" value={form.phone} autoComplete="tel" onChange={(event) => updateField('phone', event.target.value)} required disabled={submitting} />
+            </label>
+            <label htmlFor="register-password">
+              Mật khẩu
+              <input id="register-password" type="password" value={form.password} autoComplete="new-password" onChange={(event) => updateField('password', event.target.value)} required disabled={submitting} />
+            </label>
+            <label className="auth-field--full" htmlFor="register-address">
+              Địa chỉ
+              <textarea id="register-address" value={form.address} autoComplete="street-address" onChange={(event) => updateField('address', event.target.value)} required disabled={submitting} />
+            </label>
+          </div>
+
+          <button className="auth-submit" type="submit" disabled={submitting}>
+            {submitting ? 'Đang tạo tài khoản…' : 'Đăng ký'}
+          </button>
+          <p className="auth-cross-link">Đã có tài khoản? <Link to="/login">Đăng nhập</Link></p>
+        </form>
+      </div>
+    </main>
   );
 }
