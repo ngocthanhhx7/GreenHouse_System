@@ -212,4 +212,11 @@ Một module được xem là hoàn thành khi có đủ:
 | Nguyễn Hữu Anh Nhật | Staff Order, Return/Refund, Support; phát event theo Notification contract của Thành |
 | Lê Vũ Cường | Warehouse, Reports, Settings; phát event tồn kho/replenishment, không sở hữu bell/read/delete notification |
 
+### Addendum 2026-07-22 - Email Và Validation
+
+- Nguyễn Ngọc Thành sở hữu email delivery foundation, password reset, public contact email và delivery/retry/read status; Nguyễn Quang Huy phát sự kiện `ORDER_CREATED` idempotent sau khi transaction tạo đơn thành công.
+- Validation áp dụng cho toàn hệ thống ở cả frontend và backend. Thành sở hữu primitive validator, request-schema adapter và error envelope; mỗi module owner vẫn sở hữu rule trạng thái/invariant nghiệp vụ và test của module mình.
+- Mọi lỗi validation phải có thông báo tiếng Việt rõ ràng theo từng trường; backend là nguồn xác thực cuối cùng, frontend không được thay thế backend validation.
+- `docs/superpowers/` và `docs/ui-prompts/` là tài liệu làm việc local, không theo dõi hoặc push lên Git. Thay đổi ownership/scope chính thức phải được phản ánh trong `docs/member-plans/`.
+
 Không đưa Profile/Notifications vào dashboard nghiệp vụ. Header public/customer có bell dropdown; dashboard nội bộ dùng topbar vận hành và không có giỏ hàng.
