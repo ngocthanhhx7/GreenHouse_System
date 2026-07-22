@@ -20,7 +20,7 @@ const {
 
 describe('demo data seed config', () => {
   it('provides one runnable npm command for consistent demo data', () => {
-    assert.equal(packageJson.scripts['seed:demo'], 'node src/config/seedDemoData.js');
+    assert.equal(packageJson.scripts['seed:demo'], 'node src/demo-data/demoSeedCli.js');
     const scriptSource = readFileSync(path.join(__dirname, 'seedDemoData.js'), 'utf8');
     assert.match(scriptSource, /seedDemoData/);
   });

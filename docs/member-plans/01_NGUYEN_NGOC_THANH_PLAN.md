@@ -239,3 +239,16 @@ Nguyễn Ngọc Thành bổ sung vai trò owner nền tảng cho email delivery 
 - Mọi thay đổi scope/contract phải cập nhật `docs/member-plans` trước khi merge. Hai thư mục làm việc nội bộ `docs/superpowers/` và `docs/ui-prompts/` không được theo dõi hoặc push lên Git.
 
 Thông tin cần cấu hình ngoài Git cho email: provider, credentials, sender đã xác minh, inbox nhận liên hệ, public reset URL, CORS origin và rate-limit policy. Không ghi secret vào tài liệu hoặc commit.
+
+## Ownership Addendum 2026-07-22 - Bộ Dữ Liệu Demo Toàn Hệ Thống
+
+Nguyễn Ngọc Thành là owner nền tảng cho bộ dữ liệu demo có quan hệ đầy đủ, tách thành hai phase an toàn:
+
+- Phase 1 (đã đặc tả và kiểm thử offline): fixture graph tất định gồm 4 role, 13 tài khoản (10 Customer), 20 địa chỉ, 5 danh mục, 20 sản phẩm tiếng Việt và dữ liệu liên kết cho giỏ hàng, đơn hàng, thanh toán, callback, hóa đơn, kho, đổi trả, hoàn tiền, hỗ trợ, đánh giá, thông báo, cài đặt và audit log.
+- Mỗi collection dùng natural key ổn định; graph validator kiểm tra tham chiếu, tổng tiền, trạng thái nghiệp vụ, thời điểm báo cáo, quyền đánh giá và sự tham gia của cả 10 khách hàng trước mọi thao tác ghi.
+- Ảnh sản phẩm dùng manifest 20 file WebP 1600x1200, đường dẫn UUID-v4 tất định, giới hạn 350KB và SHA-256. Khi chưa tạo/duyệt đủ ảnh, asset preflight phải chặn apply/reset; seed không gọi upload service hoặc gửi email.
+- `npm run seed:demo -- --dry-run` chỉ kiểm tra offline, tuyệt đối không kết nối MongoDB. Luồng upsert/reset bị khóa cho đến Phase 2 và chỉ được mở sau khi người phụ trách xác nhận chính xác database demo.
+- Reset Phase 2 phải đồng thời thỏa `NODE_ENV != production`, `DEMO_SEED_ALLOW_RESET=true`, tên database thuộc `greenhouse_demo|greenhouse_test|greenhouse_e2e`, câu xác nhận `RESET:<databaseName>`, tiền kiểm graph/assets/indexes và MongoDB hỗ trợ transaction. Không dùng `dropDatabase`; chỉ xóa dữ liệu demo theo thứ tự phụ thuộc và không xóa collection Role dùng chung.
+- Phase 2 sẽ bổ sung direct-write adapter idempotent, transaction integration test trên database dùng một lần, tạo/duyệt ảnh và API smoke test cho toàn bộ role. Không dùng service nghiệp vụ trong seed để tránh side effect upload, notification hoặc email.
+
+Thông tin người dùng phải cung cấp ngoài Git trước Phase 2: tên database demo có thể xóa, xác nhận cho phép xóa toàn bộ dữ liệu trong database đó, `MONGODB_URI`, `DEMO_SEED_ALLOW_RESET=true` và mật khẩu demo. Không gửi URI, password hoặc secret qua chat.
