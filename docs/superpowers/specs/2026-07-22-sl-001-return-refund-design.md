@@ -8,7 +8,7 @@
 
 **Implementation baseline:** `2cd0b9518b42a6d1860951b20cdcfdfa2e398ca5`
 
-**SRS baseline:** Google Docs revision `AIroW34IkEb4_bfEHKNh6uUV4L6eEmGXjpcD_XB5s_Y9mRvt--JCx7QPau6BWsE-Ad57nyluADuNsXJTg8nK4oy8F75yDDXRDrfJVAKgtn8`; one tab `t.0`; read back 2026-07-23
+**SRS baseline:** Google Docs revision `AIroW372r8j-BncuGRhIEqFwCQa2PLXsnMT53H_cxn5r7E_t-NkRjh2gJg2UEves9dhsAFtoTr0qoSWM8Lt1qYAOQzSFBEWVaj2Ap2eXHQI`; one tab `t.0`; read back 2026-07-23
 
 ## 1. Scope and Gate Status
 
@@ -26,15 +26,15 @@ No unresolved business decision remains inside `SL-001`.
 
 | Source ID | Source and location | Revision/date | Evidence it can prove | Authority level | Owner | Conflicts |
 |---|---|---|---|---|---|---|
-| SRC-001 | [Google SRS](https://docs.google.com/document/d/1j_1Qg_DoFC6Dk5zk_UZcnMnjjqW2wjKPNAH1ZNxNwtE/edit?tab=t.0) | Google Docs revision `AIroW34IkEb4_bfEHKNh6uUV4L6eEmGXjpcD_XB5s_Y9mRvt--JCx7QPau6BWsE-Ad57nyluADuNsXJTg8nK4oy8F75yDDXRDrfJVAKgtn8`; one tab `t.0`; read back 2026-07-23 | Candidate UC-CS-12, FR-RR, BR-RR, state, and acceptance text plus the adopted CR-001 v2 addendum | Candidate source except where an approved decision adopts it; CR-001 v2 is normative for its bounded cross-slice rules | SRS contributors; Project Business Approver approves policy | Legacy paragraphs remain candidate; the normative CR-001 v2 addendum supersedes conflicting Return/COD wording |
+| SRC-001 | [Google SRS](https://docs.google.com/document/d/1j_1Qg_DoFC6Dk5zk_UZcnMnjjqW2wjKPNAH1ZNxNwtE/edit?tab=t.0) | Google Docs revision `AIroW372r8j-BncuGRhIEqFwCQa2PLXsnMT53H_cxn5r7E_t-NkRjh2gJg2UEves9dhsAFtoTr0qoSWM8Lt1qYAOQzSFBEWVaj2Ap2eXHQI`; one tab `t.0`; read back 2026-07-23 | Candidate UC-CS-12, FR-RR, BR-RR, state, and acceptance text plus the adopted CR-001 v2.1 addendum | Candidate source except where an approved decision adopts it; CR-001 v2.1 is normative for its bounded cross-slice rules | SRS contributors; Project Business Approver approves policy | Legacy paragraphs remain candidate; the normative v2.1 addendum supersedes conflicting Return/COD wording |
 | SRC-002 | Explicit approvals in this Codex task | 2026-07-22 | BD-001 through BD-005 | Normative business authority for the first SL-001 decisions | Project Business Approver | Approver display name is not recorded |
 | SRC-003 | Repository `D:\GreenHouse_System-main` | HEAD `2cd0b9518b42a6d1860951b20cdcfdfa2e398ca5`; inspected 2026-07-22 | Current Return/Refund routes, models, services, UI, and tests | `observed-behavior` only | Engineering team | Current inspection, Inventory, destination, payout, and amount-presentation behavior conflict with this design |
 | SRC-004 | `docs/RETURN_REFUND_RECONCILIATION.md` | Repository baseline above | Existing local implementation boundary | Historical design evidence only | Engineering team | Its no-Inventory-mutation inspection rule conflicts with BD-001 |
 | SRC-005 | [payOS API](https://payos.vn/docs/api/) and [Node SDK](https://payos.vn/docs/sdks/back-end/node/) | Accessed 2026-07-22 | Payout destination, idempotency, validation, processing, and reconciliation capabilities | Provider evidence, not GreenHouse business authority | payOS | Payout is not an assumed reversal to the original payer account |
 | SRC-006 | Archived SWR material, Hassan Gomaa Chapter 6 and SWR Chapter 17 | Local archive accessed 2026-07-22 | Actor/use-case structure and validation guidance | Method guidance only | SWR archive | Does not decide GreenHouse policy |
 | SRC-017 | Fast-track approvals of BD-006, BD-007, and BD-008 in this Codex task | 2026-07-22 | Staff discretion with reason/evidence, request and handoff deadlines, and secure-form timing | Normative business authority for the remaining SL-001 decisions | Project Business Approver | Supersedes the unresolved markers in `SL-001_RETURN_REFUND_G2_DRAFT.md` |
-| SRC-024 | Approved `SL-002 Exchange Design` and its explicit approval source SRC-012 | Commit `fbe9c57`; 2026-07-22 | BD-021 one-active-after-sales-case boundary shared with Return/Refund | Normative cross-slice authority for BR-RR-13 | Project Business Approver | The 2026-07-22 SRS snapshot lacked the shared guard; current SRC-001 contains the bounded CR-001 v2 closure |
-| SRC-055 | [`CR-001 v2`](2026-07-23-cr-001-cross-slice-business-closure-v2.md) | Approved 2026-07-23 | COD after-sales hold, Exchange conversion lineage, terminal-case resubmission, independent money obligations, and shared sensitive-data constraints | Normative cross-slice authority | Project Business Approver | Refines package handoffs without changing the normal paid whole-Order Return amount |
+| SRC-024 | Approved `SL-002 Exchange Design` and its explicit approval source SRC-012 | Commit `fbe9c57`; 2026-07-22 | BD-021 one-active-after-sales-case boundary shared with Return/Refund | Normative cross-slice authority for BR-RR-13 | Project Business Approver | The 2026-07-22 SRS snapshot lacked the shared guard; current SRC-001 contains the bounded CR-001 v2.1 closure |
+| SRC-055 | [`CR-001 v2.1`](2026-07-23-cr-001-cross-slice-business-closure-v2.md) | Approved 2026-07-23 | COD after-sales hold, separate Customer collection/Carrier settlement facts, Exchange conversion lineage, terminal-case resubmission, independent money obligations, and shared sensitive-data constraints | Normative cross-slice authority | Project Business Approver | Refines package handoffs without changing the normal paid whole-Order Return amount |
 
 ## 3. Approved Business Decision Log
 
@@ -72,7 +72,7 @@ Admin, engineering owners, and the Project Business Approver are not runtime act
 | Requirement ID | Approved requirement | Source |
 |---|---|---|
 | BR-RR-01 | Customer may create a request only for one owned `Delivered` Order at or before immutable `ReturnDeadlineAt = DeliveredAt + 5 days`. | BD-001, BD-007 |
-| BR-RR-02 | Normal paid-Return scope is the complete Order. Backend derives its whole-Order `RefundAmount = Order.TotalAmount`; no actor may choose or alter it. This whole-Order Return Refund is created only after verified full collection. CR `BR-107` separately governs a verified partial-COD recovery Refund equal to the collected balance after complete goods recovery; zero collection creates no Refund. | BD-001, BD-005, BD-110 |
+| BR-RR-02 | Normal paid-Return scope is the complete Order. Backend derives its whole-Order `RefundAmount = Order.TotalAmount`; no actor may choose or alter it. This whole-Order Return Refund is created only after verified full Customer collection. CR `BR-107` separately governs the exceptional COD-recovery Refund equal to verified `CustomerCollectedAmount` after complete goods recovery; a Carrier settlement delay or partial remittance is not a partial Customer collection and creates no Refund; zero Customer collection creates no Refund. | BD-001, BD-005, BD-110, BD-117 |
 | BR-RR-03 | Customer must provide a free-text reason and at least one successfully stored evidence attachment. System validates completeness, not substantive truth. | BD-006 |
 | BR-RR-04 | Staff alone approves or rejects with a recorded reason. Approval creates immutable `ShipByAt = ApprovedAt + 3 days`. Timely carrier/shop handoff proof satisfies the deadline; no proof expires the case without refund or Inventory change. | BD-006, BD-007 |
 | BR-RR-05 | Only after approval, System exposes the secure destination form to the authenticated owning Customer; it may be completed in parallel with shipping. | BD-003, BD-008 |
@@ -84,7 +84,7 @@ Admin, engineering owners, and the Project Business Approver are not runtime act
 | BR-RR-11 | If the exact wrong Customer-confirmed snapshot was used, no automatic second payout is made and Staff opens recovery. If Staff/System/payOS altered or misrouted it, Customer is not responsible. | BD-004 |
 | BR-RR-12 | Request and destination forms neither display nor accept amount. Final receipt/notification shows actual transferred amount and masked destination. | BD-005 |
 | BR-RR-13 | One active after-sales case is allowed per Order across Return/Refund and Exchange; duplicate commands return the existing case or deterministic conflict without duplicate effects. | BD-001, BD-021 |
-| BR-RR-14 | Normal paid-Return completion requires goods `Received`, the Return Refund obligation `Refunded`, the accepted primary collection still `Paid`, aggregate `MoneyObligationsSettled=true`, request `Completed`, and Order `Returned` exactly once. CR `BR-107` owns the separate uncollected/partial-COD recovery closure. | BD-001, BD-110, BD-114 |
+| BR-RR-14 | Normal paid-Return completion requires goods `Received`, the Return Refund obligation `Refunded`, the accepted primary collection still `Paid`, aggregate `MoneyObligationsSettled=true`, request `Completed`, and Order `Returned` exactly once. A Carrier settlement mismatch does not change a valid primary `Paid` fact. CR `BR-107` owns the separate Customer under-collection recovery closure. | BD-001, BD-110, BD-114, BD-117 |
 | BR-RR-15 | Warehouse never receives refund-destination data; Customer sees only owned cases; full destination values are restricted to authorized Staff and masked elsewhere. | BD-002, BD-003 |
 | BR-RR-16 | Notification failure does not roll back a committed decision, receipt, payout, or completion; retry must not repeat the business effect. | BD-001, BD-002 |
 
@@ -134,13 +134,13 @@ Admin, engineering owners, and the Project Business Approver are not runtime act
 | AF-RR-13 | Duplicate payout, callback, retry, or completion command | Return/reconcile existing result; repeat no side effect |
 | AF-RR-14 | Exact wrong Customer-confirmed destination was paid | No automatic second payout; open traceable recovery |
 | AF-RR-15 | Staff/System/payOS caused mismatch | Do not assign Customer responsibility; block false completion and correct/recover with evidence |
-| AF-RR-16 | Order is physically `Delivered` but COD full collection is not verified | Record one timely `AwaitingCODReconciliation` request. Verified full collection releases the normal flow. Verified less-than-full enters `CODRecoveryInProgress`: recover/account all goods once; zero closes `ClosedByCODRecovery` with no Refund, while a positive partial balance uses one exact COD-recovery Refund and closes only after verified payout. Unresolved evidence stays held |
+| AF-RR-16 | Order is physically `Delivered` but full `CustomerCollectedAmount` is not verified | Record one timely `AwaitingCODReconciliation` request. Verified full Customer collection releases the normal flow. A late/partial Carrier remittance after full Customer collection opens only settlement reconciliation and does not hold the case. Verified Customer under-collection enters `CODRecoveryInProgress`: recover/account all goods once; zero closes `ClosedByCODRecovery` with no Refund, while a positive verified `CustomerCollectedAmount` uses one exact server-derived COD-recovery Refund and closes only after verified payout. Unresolved collection evidence stays held |
 | AF-RR-17 | Linked Exchange converts after Warehouse/Inventory effects already occurred | Reuse immutable physical-unit and movement identities; request only remaining Customer-held goods; never post the same Inventory movement twice |
 | AF-RR-18 | Prior case is Rejected, Customer-cancelled, or Expired | Release the active lock; permit a new case only before/equal to the applicable immutable deadline with a new reason, evidence, and idempotency identity |
 
 ## 8. State and Data Invariants
 
-Return Request business states are `AwaitingCODReconciliation`, `CODRecoveryInProgress`, `ClosedByCODRecovery`, `New`, `Approved`, `Rejected`, `Expired`, `Received`, and `Completed`. Destination and Refund have independent lifecycles; they must not be compressed into Return Request state. `ClosedByCODRecovery` is the CR-only terminal exception for a delivered COD Order that was conclusively not fully collected and whose goods plus any verified partial balance were recovered.
+Return Request business states are `AwaitingCODReconciliation`, `CODRecoveryInProgress`, `ClosedByCODRecovery`, `New`, `Approved`, `Rejected`, `Expired`, `Received`, and `Completed`. Destination and Refund have independent lifecycles; they must not be compressed into Return Request state. `ClosedByCODRecovery` is the CR-only terminal exception for a delivered COD Order whose `CustomerCollectedAmount` was conclusively below fixed `CODExpectedAmount` and whose goods plus any verified Customer-collected balance were recovered. Carrier settlement reconciliation is a separate work item, not a Return Request state.
 
 Key invariants:
 
@@ -151,7 +151,7 @@ Key invariants:
 5. Order remains `Delivered` until final completion; approval and receipt alone do not make it `Returned`.
 6. Refund status never proves goods receipt, and goods receipt never proves payout.
 7. All decisions, destination versions, inspection values, Inventory transactions, payout attempts, reconciliation, and recovery evidence are append-only and attributable.
-8. `AwaitingCODReconciliation -> New` is permitted only after evidence proves full collection of immutable `Order.TotalAmount`. Conclusively verified less-than-full collection moves to `CODRecoveryInProgress`; it reaches `ClosedByCODRecovery` only after complete goods accounting and, for a positive partial balance, one exact verified COD-recovery Refund. Unknown/contradictory/disputed evidence remains held and creates no whole-Order Return Refund.
+8. `AwaitingCODReconciliation -> New` is permitted only after evidence proves `CustomerCollectedAmount = CODExpectedAmount = Order.TotalAmount`. A Carrier remittance delay does not block this transition once full Customer collection is proved. Conclusively verified Customer under-collection moves to `CODRecoveryInProgress`; it reaches `ClosedByCODRecovery` only after complete goods accounting and, for a positive Customer-collected balance, one exact verified COD-recovery Refund. Unknown/contradictory/disputed collection evidence remains held and creates no whole-Order Return Refund.
 9. A conversion from Exchange references existing Warehouse/Inventory lineage and may create movements only for remaining unprocessed physical units.
 10. Rejected, Customer-cancelled, and Expired cases release the active lock; Completed Return permanently closes whole-Order after-sales.
 
@@ -163,7 +163,7 @@ Key invariants:
 - Staff sees case evidence, decision controls, destination verification, payout/recovery state, and masked/full destination only according to authorization.
 - Warehouse sees only the minimum Order-line and condition evidence needed for receipt; no bank, amount-selection, or payout controls.
 - Repeated submit displays processing or already-recorded feedback and links to the existing case.
-- A COD recovery view shows whether money evidence, goods recovery, Warehouse accounting, destination verification, or a partial-balance Refund is still outstanding; it never asks Customer or Staff to enter the amount.
+- A COD recovery view shows whether money evidence, goods recovery, Warehouse accounting, destination verification, or the server-derived COD-recovery Refund is still outstanding; it never asks Customer or Staff to enter the amount.
 
 ## 10. Acceptance Examples
 
@@ -198,14 +198,14 @@ Key invariants:
 | BD-005 | BR-RR-02, BR-RR-12 | Customer forms; final receipt | Current Staff flow accepts refund amount and current Customer form presentation conflicts | AT-001, AT-013, AT-018 | ready |
 | BD-001, BD-021 | BR-RR-13 | Shared Return/Exchange active-case guard | Current combined flow lacks approved cross-use-case lock and terminal release rules | AT-002; CR AT-213, AT-214 | ready |
 | BD-001, BD-002 | BR-RR-16 | Decision, receipt, payout, completion notification outbox | Current notification calls are not one complete idempotent after-sales contract | AT-018; CR AT-220 | ready |
-| BD-110, BD-112, BD-113, BD-116 | CR BR-106, BR-110 through BR-112, BR-117, BR-118 | COD hold; conversion handoff; resubmission; evidence/destination security | Return/Refund, Inventory, upload, destination, and shared lock surfaces | CR AT-205 through AT-214, AT-221, AT-222 | ready; governed by SRC-055 |
+| BD-110, BD-112, BD-113, BD-116, BD-117 | CR BR-106 through BR-108, BR-110 through BR-112, BR-117, BR-118, BR-121 | COD hold; collection/settlement separation; conversion handoff; resubmission; evidence/destination security | Return/Refund, Payment, Carrier reconciliation, Inventory, upload, destination, and shared lock surfaces | CR AT-205 through AT-214, AT-221 through AT-226 | ready; governed by SRC-055 |
 
 Before implementation, G3 must map every row to exact SRS paragraphs, API contracts, model/service/UI locations, red tests, and release evidence. Existing passing tests remain `observed-behavior` until reconciled with this design.
 
-## 12. CR-001 v2 Cross-Slice Addendum
+## 12. CR-001 v2.1 Cross-Slice Addendum
 
-1. `BR-RR-01` preserves a timely Customer request for `Delivered + Unpaid`, while SRC-055 holds the normal after-sales flow pending COD reconciliation.
-2. `BR-RR-02` remains the normal whole-Order rule: the fixed Return Refund equals `Order.TotalAmount` only after verified full collection. Verified less-than-full COD uses the separate recovery outcome in CR `BR-107`: zero collection creates no Refund; a positive partial balance is refunded exactly after complete goods recovery.
+1. `BR-RR-01` preserves a timely Customer request for `Delivered + Unpaid`, while SRC-055 holds the normal after-sales flow pending Customer-collection reconciliation.
+2. `BR-RR-02` remains the normal whole-Order rule: the fixed Return Refund equals `Order.TotalAmount` only after verified full Customer collection. A Carrier settlement delay is not under-collection. Verified Customer under-collection uses the separate recovery outcome in CR `BR-107`: zero Customer collection creates no Refund; a positive verified Customer-collected balance is refunded exactly after complete goods recovery.
 3. Exchange conversion transfers the active lock and timely instant atomically, reuses prior physical/Inventory facts, and gives `SL-001` exclusive ownership of destination, Refund, payout, and remaining-goods completion.
 4. Terminal resubmission and replacement-unit windows follow CR `BR-111/BR-112`; completion of a whole Return permits no later after-sales case.
 5. Evidence and destination data must satisfy CR `BR-117/BR-118` before G4 tests or implementation can pass.
@@ -214,4 +214,4 @@ Before implementation, G3 must map every row to exact SRS paragraphs, API contra
 
 The archived SWR guidance requires functional requirements to be structured by actors and use cases and validated for correctness, completeness, consistency, feasibility, and verifiability. GreenHouse policy in this document comes only from the Project Business Approver, not from the archive or current code.
 
-No implementation plan or code change is authorized by this document alone. CR-001 v2 records the completed cross-system closure and bounded SRS sync; the next step is exact G3 mapping before red tests or implementation.
+No implementation plan or code change is authorized by this document alone. CR-001 v2.1 records the completed cross-system closure and COD terminology/settlement clarification; the next step is exact G3 mapping before red tests or implementation.

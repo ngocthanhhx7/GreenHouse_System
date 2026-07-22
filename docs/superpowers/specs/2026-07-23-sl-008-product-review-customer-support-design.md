@@ -8,7 +8,7 @@
 
 **Implementation baseline:** `20139fc10a467f49ed32561239df29ac5380e36f`
 
-**SRS baseline:** Google Docs revision `AIroW34IkEb4_bfEHKNh6uUV4L6eEmGXjpcD_XB5s_Y9mRvt--JCx7QPau6BWsE-Ad57nyluADuNsXJTg8nK4oy8F75yDDXRDrfJVAKgtn8`; one tab `t.0`; read back 2026-07-23
+**SRS baseline:** Google Docs revision `AIroW372r8j-BncuGRhIEqFwCQa2PLXsnMT53H_cxn5r7E_t-NkRjh2gJg2UEves9dhsAFtoTr0qoSWM8Lt1qYAOQzSFBEWVaj2Ap2eXHQI`; one tab `t.0`; read back 2026-07-23
 
 ## 1. Scope and Gate Status
 
@@ -47,7 +47,7 @@ No unresolved business decision remains inside the approved `SL-008` package.
 
 | Source ID | Source and location | Revision/date | Evidence it can prove | Authority level | Owner | Conflicts |
 |---|---|---|---|---|---|---|
-| SRC-045 | [Google SRS](https://docs.google.com/document/d/1j_1Qg_DoFC6Dk5zk_UZcnMnjjqW2wjKPNAH1ZNxNwtE/edit?tab=t.0) | Google Docs revision `AIroW34IkEb4_bfEHKNh6uUV4L6eEmGXjpcD_XB5s_Y9mRvt--JCx7QPau6BWsE-Ad57nyluADuNsXJTg8nK4oy8F75yDDXRDrfJVAKgtn8`; one tab `t.0`; read back 2026-07-23 | Candidate Review/Support text; CR-001 v2 adds only shared privacy/evidence constraints where referenced | Candidate source only where adopted or explicitly changed by this approved package | SRS contributors; Project Business Approver approves policy | Full SL-008 lifecycle still needs its own G3 mapping; CR-001 v2 does not replace Review/Support ownership rules |
+| SRC-045 | [Google SRS](https://docs.google.com/document/d/1j_1Qg_DoFC6Dk5zk_UZcnMnjjqW2wjKPNAH1ZNxNwtE/edit?tab=t.0) | Google Docs revision `AIroW372r8j-BncuGRhIEqFwCQa2PLXsnMT53H_cxn5r7E_t-NkRjh2gJg2UEves9dhsAFtoTr0qoSWM8Lt1qYAOQzSFBEWVaj2Ap2eXHQI`; one tab `t.0`; read back 2026-07-23 | Candidate Review/Support text; CR-001 v2.1 adds only shared privacy/evidence constraints where referenced | Candidate source only where adopted or explicitly changed by this approved package | SRS contributors; Project Business Approver approves policy | Full SL-008 lifecycle still needs its own G3 mapping; CR-001 v2.1 does not replace Review/Support ownership rules |
 | SRC-046 | Explicit fast-track approval, “duyệt SL-008” | 2026-07-23 | `BD-087` through `BD-097` and this complete bounded package | Normative business authority for `SL-008` | Project Business Approver | Approver display name is not recorded |
 | SRC-047 | Repository `D:\GreenHouse_System-main` | HEAD `20139fc10a467f49ed32561239df29ac5380e36f`; inspected 2026-07-23 | Current ProductReview/SupportRequest models, services, routes, public/Customer/Staff UI, seed mappings, reports, and tests | `observed-behavior` only | Engineering team | Public identifier leakage, per-Order duplicate reviews, required text, response overwrite, legacy `Open`, missing messages/claim guards, raw Order-ID input, ignored classification fields, and unbounded lists conflict with this design |
 | SRC-048 | Archived SWR Chapter 17 and SWD Chapters 9–11 | Local archive accessed 2026-07-23 | Requirements completeness/consistency/verifiability and explicit current-state/event/guard/action/next-state modeling | Method guidance only | SWR/SWD archive | Does not decide GreenHouse business policy |
@@ -465,7 +465,7 @@ When the project begins the SRS reconciliation phase, the following changes are 
 
 Read-only evidence gathered for this package:
 
-- At the SL-008 approval snapshot, Google SRS full content and revision/tab metadata were read without mutation; CR-001 v2 later performed the bounded reconciled sync and readback.
+- At the SL-008 approval snapshot, Google SRS full content and revision/tab metadata were read without mutation; CR-001 v2.1 later performed the bounded reconciled sync and readback.
 - ProductReview/SupportRequest models, services, routes, client services/pages, demo mappings, report coupling, and related tests were inspected.
 - Six selected server Review/Support tests and six selected client Review/Support tests passed against current behavior during the audit.
 - Those green tests are `observed-behavior` evidence only and leave `AT-150` through `AT-174` unimplemented.
@@ -475,4 +475,4 @@ Read-only evidence gathered for this package:
 
 Archived SWR Chapter 17 distinguishes validation of whether requirements satisfy stakeholder needs from verification that a development product meets its requirements. It calls for requirements to be correctly derived, complete, feasible, verifiable, necessary/sufficient, consistent across representations, and adequate for design/construction. Archived SWD Chapters 9–11 model state-dependent behavior through current state, input event, optional guard, transition action, and next state, and require alternative use-case sequences to be considered. Those sources guide structure and quality only; GreenHouse policy comes from `SRC-046` plus approved cross-slice decisions.
 
-No code change, migration, red test, or implementation plan is authorized by this document alone. CR-001 v2 records the completed cross-system closure and bounded SRS sync; the next step is exact G3 mapping before red acceptance tests or implementation.
+No code change, migration, red test, or implementation plan is authorized by this document alone. CR-001 v2.1 records the completed cross-system closure and COD collection/settlement clarification; the next step is exact G3 mapping before red acceptance tests or implementation.
