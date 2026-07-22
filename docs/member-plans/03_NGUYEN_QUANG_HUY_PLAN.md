@@ -251,3 +251,11 @@ Phần tích hợp cổng thanh toán online PayOS đã chuyển sang Nguyễn N
 - Thành sở hữu `@payos/node`, credential/env, tạo payment link, return/cancel URL, public webhook, signature verification, provider response mapping và frontend redirect/result integration.
 - Huy chỉ sở hữu Order/Payment domain state, COD, idempotency, amount/ownership validation, late paid callback và refund hand-off sau khi nhận dữ liệu provider đã được Thành xác minh.
 - Branch PayOS là `feature/thanh-payos-payment`; không commit PayOS bằng identity của Huy.
+
+## Ownership Addendum 2026-07-22 - Order Created Email Event
+
+Huy sở hữu phát sự kiện email `ORDER_CREATED` sau khi transaction checkout commit thành công:
+
+- Event được ghi vào email outbox với khóa idempotent `ORDER_CREATED:<orderId>` và gửi đến email của Customer.
+- Payload chỉ gồm snapshot tối thiểu (`orderId`, `orderCode`, `totalAmount`, `paymentMethod`); lỗi enqueue/delivery không rollback đơn hàng.
+- Không phát event khi checkout replay theo cùng idempotency key.
