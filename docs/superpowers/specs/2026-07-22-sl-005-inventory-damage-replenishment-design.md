@@ -8,7 +8,7 @@
 
 **Implementation baseline:** `048e6552245e0d8b03e5bcc3213e4dd205acdc41`
 
-**SRS baseline:** Google Docs revision `AIroW37xl-9inybbV_Kt8cUUhLWLjhfImasxQ_JiEqN2hcPklBhnb6W4yZNbueA2tCWVmMd5XfIbQTkiJLGM6ni-TNQx-hc6-YKXxEmQoPE`; Drive revision `4842`
+**SRS baseline:** Google Docs revision `AIroW34IkEb4_bfEHKNh6uUV4L6eEmGXjpcD_XB5s_Y9mRvt--JCx7QPau6BWsE-Ad57nyluADuNsXJTg8nK4oy8F75yDDXRDrfJVAKgtn8`; one tab `t.0`; read back 2026-07-23
 
 ## 1. Scope and Gate Status
 
@@ -22,7 +22,7 @@ This slice consumes reservation/export rules from `SL-003` and `SL-004`. Returne
 
 | Slice | G0 | G1 | G2 | G3 | G4 | G5 | G6 | G7 | Next evidence |
 |---|---|---|---|---|---|---|---|---|---|
-| SL-005 | passed | passed | passed | ready | not-started | not-started | not-started | not-started | Reconcile the approved package to SRS, interfaces, code, red acceptance tests, and release evidence |
+| SL-005 | passed | passed | passed | ready | not-started | not-started | not-started | not-started | Complete exact G3 API/interface/code/test/release-evidence mapping against the reconciled SRS revision |
 
 No unresolved business decision remains inside the approved `SL-005` package.
 
@@ -30,7 +30,7 @@ No unresolved business decision remains inside the approved `SL-005` package.
 
 | Source ID | Source and location | Revision/date | Evidence it can prove | Authority level | Owner | Conflicts |
 |---|---|---|---|---|---|---|
-| SRC-030 | [Google SRS](https://docs.google.com/document/d/1j_1Qg_DoFC6Dk5zk_UZcnMnjjqW2wjKPNAH1ZNxNwtE/edit?tab=t.0) | Revision in the document header; connector snapshot above | Candidate UC-ST-09, UC-WM-01 through UC-WM-05, UC-WM-07, UC-WM-09, FR-IWM/BR-INV rules, and inventory acceptance text | Candidate source only where adopted by this approved package | SRS contributors; Project Business Approver approves policy | Keeps reported damage sellable until confirmation, blocks physical truth when reservation conflicts, requires one exact replenishment receipt, and does not define Supplier boundary, quarantine, persistent alerts, short closure, or one stock authority |
+| SRC-030 | [Google SRS](https://docs.google.com/document/d/1j_1Qg_DoFC6Dk5zk_UZcnMnjjqW2wjKPNAH1ZNxNwtE/edit?tab=t.0) | Google Docs revision `AIroW34IkEb4_bfEHKNh6uUV4L6eEmGXjpcD_XB5s_Y9mRvt--JCx7QPau6BWsE-Ad57nyluADuNsXJTg8nK4oy8F75yDDXRDrfJVAKgtn8`; one tab `t.0`; read back 2026-07-23 | Candidate Inventory/Warehouse text plus the bounded Exchange conversion and COD stock-handoff rules | Candidate source except where approved; CR-001 v2 is normative for its bounded cross-slice handoffs | SRS contributors; Project Business Approver approves policy | The package still needs its complete Inventory G3 mapping; CR-001 v2 only closes shared boundaries |
 | SRC-031 | Explicit fast-track approval, “duyệt gói SL-005” | 2026-07-22 | BD-051 through BD-062 and this complete package | Normative business authority for SL-005 | Project Business Approver | Approver display name is not recorded |
 | SRC-032 | Repository `D:\GreenHouse_System-main` | HEAD `048e6552245e0d8b03e5bcc3213e4dd205acdc41`; inspected 2026-07-22 | Current Product, Inventory, DamageReport, ReplenishmentRequest, InventoryTransaction, settings, routes, services, UI, and tests | `observed-behavior` only | Engineering team | Dual stock fields, no quarantine/rejection UI, delta adjustments, disconnected thresholds, and exact one-shot receipt conflict with this design |
 | SRC-033 | Archived SWR Chapter 17 and SWD Chapters 9–11 | Local archive accessed 2026-07-22 | Requirements completeness/consistency/verifiability and explicit state/event/guard/action modeling | Method guidance only | SWR/SWD archive | Does not decide GreenHouse business policy |
@@ -401,4 +401,4 @@ The following are `observed-behavior`, not approved policy:
 
 Archived SWR guidance requires requirements to be complete, feasible, verifiable, necessary, and mutually consistent before design/construction. Archived SWD guidance models state-dependent behavior through explicit current state, event, guard, action, and next state, including alternate scenarios. GreenHouse business policy in this document comes only from SRC-031 and approved cross-slice decisions, not from method sources, the candidate SRS, passing tests, or current code.
 
-No implementation plan, migration, Google SRS mutation, or code change is authorized by this document alone. The project will continue through the remaining core business packages and then perform one cross-system consistency audit before freezing the SRS baseline and beginning acceptance-test-first implementation.
+No implementation plan, migration, or code change is authorized by this document alone. CR-001 v2 records the completed cross-system closure and bounded SRS sync; the next step is exact G3 mapping before red acceptance tests or implementation.

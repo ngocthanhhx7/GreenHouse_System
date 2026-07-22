@@ -8,7 +8,7 @@
 
 **Implementation baseline:** `2cd0b9518b42a6d1860951b20cdcfdfa2e398ca5`
 
-**SRS baseline:** Google Docs revision `AIroW37xl-9inybbV_Kt8cUUhLWLjhfImasxQ_JiEqN2hcPklBhnb6W4yZNbueA2tCWVmMd5XfIbQTkiJLGM6ni-TNQx-hc6-YKXxEmQoPE`; Drive revision `4842`
+**SRS baseline:** Google Docs revision `AIroW34IkEb4_bfEHKNh6uUV4L6eEmGXjpcD_XB5s_Y9mRvt--JCx7QPau6BWsE-Ad57nyluADuNsXJTg8nK4oy8F75yDDXRDrfJVAKgtn8`; one tab `t.0`; read back 2026-07-23
 
 ## 1. Scope and Gate Status
 
@@ -23,7 +23,7 @@ Physical stock export, packing, shipping, and delivery are downstream and will b
 
 | Slice | G0 | G1 | G2 | G3 | G4 | G5 | G6 | G7 | Next evidence |
 |---|---|---|---|---|---|---|---|---|---|
-| SL-003 | passed | passed | passed | ready | not-started | not-started | not-started | not-started | Reconcile the approved package to SRS, interfaces, code, tests, and release evidence |
+| SL-003 | passed | passed | passed | ready | not-started | not-started | not-started | not-started | Complete exact G3 API/interface/code/test/release-evidence mapping against the reconciled SRS revision |
 
 No unresolved business decision remains inside the approved `SL-003` package.
 
@@ -31,12 +31,13 @@ No unresolved business decision remains inside the approved `SL-003` package.
 
 | Source ID | Source and location | Revision/date | Evidence it can prove | Authority level | Owner | Conflicts |
 |---|---|---|---|---|---|---|
-| SRC-018 | [Google SRS](https://docs.google.com/document/d/1j_1Qg_DoFC6Dk5zk_UZcnMnjjqW2wjKPNAH1ZNxNwtE/edit?tab=t.0) | Revisions in the document header | Candidate UC-CS-04/05/06/10, UC-ST-02/06, FR-ORD, FR-PAY, BR-ORD, and BR-PAY text | Candidate source only where adopted by the approved package | SRS contributors; Project Business Approver approves policy | Blocks Customer cancellation while payment is Pending/Paid and does not fully model payOS Payout or excess payment |
+| SRC-018 | [Google SRS](https://docs.google.com/document/d/1j_1Qg_DoFC6Dk5zk_UZcnMnjjqW2wjKPNAH1ZNxNwtE/edit?tab=t.0) | Google Docs revision `AIroW34IkEb4_bfEHKNh6uUV4L6eEmGXjpcD_XB5s_Y9mRvt--JCx7QPau6BWsE-Ad57nyluADuNsXJTg8nK4oy8F75yDDXRDrfJVAKgtn8`; one tab `t.0`; read back 2026-07-23 | Candidate Order/Payment/Cancellation text plus the independent money-obligation closure | Candidate source except where approved; CR-001 v2 is normative for its bounded Payment/Refund rules | SRS contributors; Project Business Approver approves policy | Legacy Payment wording is superseded only where the CR-001 v2 precedence/addendum says so; complete package G3 mapping remains |
 | SRC-019 | Explicit fast-track approval, “duyệt gói SL-003” | 2026-07-22 | BD-029 through BD-038 and this complete package | Normative business authority for SL-003 | Project Business Approver | Approver display name is not recorded |
 | SRC-020 | Repository `D:\GreenHouse_System-main` | HEAD `2cd0b9518b42a6d1860951b20cdcfdfa2e398ca5`; inspected 2026-07-22 | Current Order, Payment, payOS, cancellation, UI, and tests | `observed-behavior` only | Engineering team | Current states, deadline storage, cancellation guards, attempt/refund states, and refund model conflict with this design |
 | SRC-021 | [payOS public API](https://payos.vn/docs/api/), [Node SDK](https://payos.vn/docs/sdks/back-end/node/), and [signature guidance](https://payos.vn/docs/tich-hop-webhook/kiem-tra-du-lieu-voi-signature/) | Accessed 2026-07-22 | Payment links, link cancellation, webhook verification, Payout destination/idempotency/status, and separate signatures | Provider evidence, not GreenHouse business authority | payOS | Cancelling an unpaid link is not a refund of collected money; Payout requires separate destination and configuration |
 | SRC-022 | Archived SWR material, Hassan Gomaa Chapter 6 and SWR Chapter 17 | Local archive accessed 2026-07-22 | Actor/use-case structure, alternate paths, consistency, traceability, and acceptance validation | Method guidance only | SWR archive | Does not decide GreenHouse policy |
 | SRC-023 | Approved `SL-001` and `SL-002` designs | 2026-07-22 | Shared secure destination, fixed-amount refund, actor privacy, and one-active-after-sales-case boundaries | Normative for referenced cross-slice rules | Project Business Approver | SL-003 cancellation refunds have no Warehouse receipt prerequisite |
+| SRC-055 | [`CR-001 v2`](2026-07-23-cr-001-cross-slice-business-closure-v2.md) | Approved 2026-07-23 | Immutable primary payment, distinct Refund obligations, aggregate money settlement, COD reporting clock, and no-money Exchange boundary | Normative cross-slice authority | Project Business Approver | Replaces any reading in which one Order-level RefundPending value overwrites a valid primary payment or collapses multiple Refunds |
 
 ## 3. Approved Business Decision Log
 
@@ -83,7 +84,7 @@ Admin manages future settings in another package but cannot change an existing O
 | BR-026 | Each payOS attempt references one owned Order and exact amount. At most one attempt is Pending. Retry creates a new attempt. Only authenticated, matched, idempotent provider webhook/reconciliation may establish Paid/Failed/Cancelled; browser redirect has no final business effect. | BD-033 |
 | BR-027 | Customer may cancel only an owned `Pending` Order and must provide a reason. Non-paid cancellation sets Order to `Cancelled`, retires any active payOS link/attempt when possible, and releases exact reservation atomically. Paid cancellation additionally creates the cancellation refund handoff. | BD-034 |
 | BR-028 | Staff may cancel `Pending` or `Confirmed` only before stock export completion and with a reason. It must cancel open export demand and release/correct reservation atomically. `Packed`, `Shipped`, `Delivered`, `Returned`, or already `Cancelled` cannot be newly cancelled. | BD-035 |
-| BR-029 | A Paid cancellation creates one fixed refund for the accepted captured transaction, sets Order payment to `RefundPending`, opens the authenticated secure destination flow immediately, and requires `Cancelled + DestinationVerified` for payout readiness; Warehouse receipt is not required. | BD-034, BD-036 |
+| BR-029 | A Paid cancellation creates one fixed cancellation Refund obligation for the accepted captured transaction while retaining the primary collection as `Paid`; the separate Refund starts `Pending` and aggregate `MoneyObligationsSettled=false`. It opens the authenticated secure destination flow immediately, and payout readiness requires `Order=Cancelled + DestinationVerified` before the Pending Refund obligation may start processing; Warehouse receipt is not required. | BD-034, BD-036, BD-114 |
 | BR-030 | A verified Paid result after cancellation or deadline never reopens the Order or reservation. Each post-cancellation or excess Paid provider transaction remains immutable Paid evidence and receives its own refund case linked to that transaction. | BD-037 |
 | BR-031 | Customer sees only owned Orders, attempts, cancellation refunds, and masked destinations. Staff cannot alter provider evidence, Customer-confirmed destination, or server-derived amount. Warehouse cannot operate payment/refund. | BD-038 |
 | BR-032 | Checkout, cancellation, deadline, provider callback, stock release, refund handoff, and payout commands are idempotent and concurrency-safe; grouped business effects commit all or none. | BD-031, BD-038 |
@@ -137,7 +138,7 @@ Admin manages future settings in another package but cannot change an existing O
 4. System revalidates ownership, `Pending` status, payment state, reservation, and concurrency.
 5. In one transaction, System sets Order `Cancelled`, releases exact reservation once, and:
    - for non-paid payment, retires the active payOS link/attempt when applicable and records no Refund;
-   - for Paid payment, preserves Paid transaction evidence, creates one cancellation Refund handoff, and sets Order payment `RefundPending`.
+   - for Paid payment, preserves the primary `Paid` collection, creates one `Pending` cancellation Refund obligation, and sets aggregate `MoneyObligationsSettled=false` without replacing the payment fact.
 6. System queues notification and audit after commit.
 7. For Paid cancellation, System opens the secure destination form; payout follows `Cancelled + DestinationVerified`.
 
@@ -177,7 +178,7 @@ Admin manages future settings in another package but cannot change an existing O
 5. At most one payOS attempt is Pending for one Order.
 6. A cancelled Order never returns to Pending/Confirmed and never reacquires reservation.
 7. Exact reservation is released at most once.
-8. `Order.PaymentStatus=RefundPending` means at least one required cancellation refund is incomplete; it does not overwrite provider transaction history.
+8. A valid primary collection keeps the fulfillment payment fact `Paid`; excess/late-transaction Refund obligations do not overwrite it. Cancellation/Return terminal projections may show their own refund lifecycle, while aggregate `MoneyObligationsSettled` remains false until every required obligation reaches an approved terminal outcome.
 9. Provider event/transaction identity produces business side effects at most once.
 10. Every price, total, deadline, actor action, reason, provider message, reservation movement, refund case, payout attempt, and notification result is traceable.
 
@@ -227,6 +228,7 @@ Admin manages future settings in another package but cannot change an existing O
 | BD-036, BD-037 | BR-029, BR-030 | Cancellation Refund, destination form, payout/reconciliation | `refundPending.model.js` is unique by Order and current attempt state mixes payment and refund | AT-050, AT-053 through AT-055 | ready |
 | BD-038 | BR-031 through BR-033 | Authorization, audit, notifications, all actor surfaces | Current code has partial idempotency and post-commit notification patterns | AT-056, AT-057 | ready |
 | BD-031, BD-038 | BR-034 | Staff confirmation and Warehouse handoff | Current Staff confirmation and stock-export request creation are separate actions | AT-058 | ready |
+| BD-114 | CR BR-113 through BR-115 | PaymentAttempt, primary payment, distinct Refund obligations, aggregate settlement | `payment.service.js`; `refundPending.model.js`; Order/refund/report projections | CR AT-215 through AT-217 | ready; governed by SRC-055 |
 
 ## 15. Confirmed Current Conflicts
 
@@ -243,8 +245,16 @@ The following are `observed-behavior`, not approved policy:
 
 These conflicts will become exact G3 rows and G4 red acceptance evidence only after the full business baseline is closed.
 
-## 16. Method Basis and Next Phase
+## 16. CR-001 v2 Cross-Slice Addendum
+
+1. `BR-030` creates one distinct Refund obligation per excess/late successful transaction; it never rewrites the accepted primary PaymentAttempt or valid live `Paid` fact.
+2. Every Refund is keyed by its trigger business event and provider transaction where applicable; one-Refund-per-Order storage is non-conforming.
+3. Order payment, provider attempts, each Refund obligation, and aggregate `MoneyObligationsSettled` are separate projections with no status substitution.
+4. COD CompletedSale timing follows CR `BR-108`; Exchange shipping payer is outside the SL-003/payOS payment boundary under CR `BR-116`.
+5. Refund creation and payout atomically allocate against a source collection identity; active plus completed allocations may never exceed that source's verified collected balance.
+
+## 17. Method Basis and Next Phase
 
 The archived SWR guidance requires actor/use-case requirements to be complete, consistent, feasible, and verifiable and recommends deriving acceptance criteria during requirements development. GreenHouse business policy here comes only from SRC-019 and approved cross-slice decisions.
 
-No implementation plan or code change is authorized by this document alone. The project will continue through the remaining business packages, then perform one cross-system consistency audit before freezing the SRS baseline.
+No implementation plan or code change is authorized by this document alone. CR-001 v2 records the completed cross-system closure and bounded SRS sync; the next step is exact G3 mapping before red tests or implementation.

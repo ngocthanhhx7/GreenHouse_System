@@ -8,7 +8,7 @@
 
 **Implementation baseline:** `d6a0f75f9dd3904f78585eb031c042ccda4518f2`
 
-**SRS baseline:** Google Docs revision `AIroW37xl-9inybbV_Kt8cUUhLWLjhfImasxQ_JiEqN2hcPklBhnb6W4yZNbueA2tCWVmMd5XfIbQTkiJLGM6ni-TNQx-hc6-YKXxEmQoPE`, last modified `2026-07-21T19:00:10.282Z`
+**SRS baseline:** Google Docs revision `AIroW34IkEb4_bfEHKNh6uUV4L6eEmGXjpcD_XB5s_Y9mRvt--JCx7QPau6BWsE-Ad57nyluADuNsXJTg8nK4oy8F75yDDXRDrfJVAKgtn8`; one tab `t.0`; read back 2026-07-23
 
 ## 1. Scope and Gate Status
 
@@ -35,7 +35,7 @@ This package does not define social login, multi-factor authentication, direct e
 
 | Slice | G0 | G1 | G2 | G3 | G4 | G5 | G6 | G7 | Next evidence |
 |---|---|---|---|---|---|---|---|---|---|
-| SL-007 | passed | passed | passed | ready | not-started | not-started | not-started | not-started | Reconcile this approved package to the Google SRS and interfaces, then create red acceptance tests before implementation |
+| SL-007 | passed | passed | passed | ready | not-started | not-started | not-started | not-started | Complete exact G3 API/interface/code/test/release-evidence mapping against the reconciled SRS revision |
 
 No unresolved business decision remains inside the approved `SL-007` package.
 
@@ -43,7 +43,7 @@ No unresolved business decision remains inside the approved `SL-007` package.
 
 | Source ID | Source and location | Revision/date | Evidence it can prove | Authority level | Owner | Conflicts |
 |---|---|---|---|---|---|---|
-| SRC-040 | [Google SRS](https://docs.google.com/document/d/1j_1Qg_DoFC6Dk5zk_UZcnMnjjqW2wjKPNAH1ZNxNwtE/edit?tab=t.0) | Google Docs revision and modified time in the document header | Candidate Guest registration, login, Customer profile, Admin account management, one-role, Disabled-account, normalized-email, session, and UserAddress requirements | Candidate source only where adopted by this approved package | SRS contributors; Project Business Approver approves policy | Creates an Active Customer before email delivery, requires a registration address, permits direct profile email change, leaves internal provisioning/session details incomplete, and treats UserAddress mainly as a physical extension |
+| SRC-040 | [Google SRS](https://docs.google.com/document/d/1j_1Qg_DoFC6Dk5zk_UZcnMnjjqW2wjKPNAH1ZNxNwtE/edit?tab=t.0) | Google Docs revision `AIroW34IkEb4_bfEHKNh6uUV4L6eEmGXjpcD_XB5s_Y9mRvt--JCx7QPau6BWsE-Ad57nyluADuNsXJTg8nK4oy8F75yDDXRDrfJVAKgtn8`; one tab `t.0`; read back 2026-07-23 | Candidate identity/RBAC/profile/address text; CR-001 v2 adds no new account lifecycle | Candidate source only where adopted by this approved package | SRS contributors; Project Business Approver approves policy | Full SL-007 lifecycle still needs its own G3 mapping; shared evidence/destination constraints from CR-001 apply where referenced |
 | SRC-041 | Explicit fast-track approval, “duyệt gói SL-007” | 2026-07-22 | BD-075 through BD-086 and this complete bounded package | Normative business authority for SL-007 | Project Business Approver | Approver display name is not recorded |
 | SRC-042 | Repository `D:\GreenHouse_System-main` | HEAD `d6a0f75f9dd3904f78585eb031c042ccda4518f2`; inspected 2026-07-22 | Current User/Role/OTP/address models, auth/profile/address/upload services, routes, UI, and tests | `observed-behavior` only | Engineering team | Direct Active registration, localStorage JWT, response-only logout, missing Admin account management, inconsistent password rules, duplicate profile/address fields, and non-atomic address default handling conflict with this design |
 | SRC-043 | Archived SWR Chapter 17 and SWD Chapters 9–11 | Local archive accessed 2026-07-22 | Requirements completeness/consistency/verifiability and explicit state/event/guard/action modeling | Method guidance only | SWR/SWD archive | Does not decide GreenHouse business policy |
@@ -434,4 +434,4 @@ The following are `observed-behavior`, not approved policy:
 
 Archived SWR Chapter 17 states that requirements validation checks whether requirements correctly derive from business needs/rules, are complete/feasible/verifiable, are necessary and sufficient, remain consistent across representations, and provide an adequate basis for design/construction. Archived SWD Chapters 9–11 describe state-dependent behavior through current state, input event, optional guard condition, transition action, and next state. GreenHouse policy in this document comes only from SRC-041 and approved cross-slice decisions, not from those method archives, candidate SRS text, passing tests, or current code.
 
-No code change, migration, red test, Google SRS mutation, or implementation plan is authorized by this document alone. The project will continue with the next bounded core business package, then perform one cross-system consistency audit before freezing the Google SRS baseline and beginning acceptance-test-first implementation.
+No code change, migration, red test, or implementation plan is authorized by this document alone. CR-001 v2 records the completed cross-system closure and bounded SRS sync; the next step is exact G3 mapping before red acceptance tests or implementation.

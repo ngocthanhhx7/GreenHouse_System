@@ -8,7 +8,7 @@
 
 **Implementation baseline:** `860e5200e944ed7d8a549686c656b8c3a0417af5`
 
-**SRS baseline:** Google Docs revision `AIroW37xl-9inybbV_Kt8cUUhLWLjhfImasxQ_JiEqN2hcPklBhnb6W4yZNbueA2tCWVmMd5XfIbQTkiJLGM6ni-TNQx-hc6-YKXxEmQoPE`; Drive revision `4842`
+**SRS baseline:** Google Docs revision `AIroW34IkEb4_bfEHKNh6uUV4L6eEmGXjpcD_XB5s_Y9mRvt--JCx7QPau6BWsE-Ad57nyluADuNsXJTg8nK4oy8F75yDDXRDrfJVAKgtn8`; one tab `t.0`; read back 2026-07-23
 
 ## 1. Scope and Gate Status
 
@@ -23,7 +23,7 @@ The current release does not provide a Carrier login role, shipper-account manag
 
 | Slice | G0 | G1 | G2 | G3 | G4 | G5 | G6 | G7 | Next evidence |
 |---|---|---|---|---|---|---|---|---|---|
-| SL-004 | passed | passed | passed | ready | not-started | not-started | not-started | not-started | Reconcile the approved package to SRS, interfaces, code, tests, and release evidence |
+| SL-004 | passed | passed | passed | ready | not-started | not-started | not-started | not-started | Complete exact G3 API/interface/code/test/release-evidence mapping against the reconciled SRS revision |
 
 No unresolved business decision remains inside the approved `SL-004` package.
 
@@ -31,11 +31,12 @@ No unresolved business decision remains inside the approved `SL-004` package.
 
 | Source ID | Source and location | Revision/date | Evidence it can prove | Authority level | Owner | Conflicts |
 |---|---|---|---|---|---|---|
-| SRC-025 | [Google SRS](https://docs.google.com/document/d/1j_1Qg_DoFC6Dk5zk_UZcnMnjjqW2wjKPNAH1ZNxNwtE/edit?tab=t.0) | Revisions in the document header | Candidate UC-ST-02/05/06, UC-WM-06, FR-ORD-12 through FR-ORD-19, FR-IWM-09 through FR-IWM-11, BR-ORD, BR-INV, notifications, and acceptance text | Candidate source only where adopted by the approved package | SRS contributors; Project Business Approver approves policy | Contains the success path but no Carrier actor, Shipment evidence, delivery-attempt, return-to-shop, loss/damage, address-version, or COD-discrepancy lifecycle; it also couples COD Paid to Delivered without preserving the physical-delivery exception |
+| SRC-025 | [Google SRS](https://docs.google.com/document/d/1j_1Qg_DoFC6Dk5zk_UZcnMnjjqW2wjKPNAH1ZNxNwtE/edit?tab=t.0) | Google Docs revision `AIroW34IkEb4_bfEHKNh6uUV4L6eEmGXjpcD_XB5s_Y9mRvt--JCx7QPau6BWsE-Ad57nyluADuNsXJTg8nK4oy8F75yDDXRDrfJVAKgtn8`; one tab `t.0`; read back 2026-07-23 | Candidate fulfillment/delivery text plus the bounded COD discrepancy and delivery-failure closure | Candidate source except where approved; CR-001 v2 is normative for its bounded COD and notification rules | SRS contributors; Project Business Approver approves policy | Legacy delivery text remains candidate; the CR-001 v2 addendum supersedes its COD/reconciliation conflict |
 | SRC-026 | Explicit fast-track approval, “duyệt gói SL004” | 2026-07-22 | BD-039 through BD-050 and this complete package | Normative business authority for SL-004 | Project Business Approver | Approver display name is not recorded |
 | SRC-027 | Repository `D:\GreenHouse_System-main` | HEAD `860e5200e944ed7d8a549686c656b8c3a0417af5`; inspected 2026-07-22 | Current Order, Inventory, StockExportRequest, Staff/Warehouse UI, routes, services, models, and tests | `observed-behavior` only | Engineering team | Current confirmation/export split, Order states, export approval, automatic packing, manual COD, and absent Shipment evidence conflict with this design |
 | SRC-028 | Archived SWR Chapter 17 and SWD Chapters 9–11 | Local archive accessed 2026-07-22 | Requirements completeness/consistency/acceptance validation and explicit state/event/guard modeling | Method guidance only | SWR/SWD archive | Does not decide GreenHouse policy |
 | SRC-029 | Approved `SL-001`, `SL-002`, and `SL-003` designs | Approved 2026-07-22 | Five-day after-sales deadlines, external Carrier evidence, risk before delivery, secure fixed-amount refund, cancellation boundary, exact reservation, and atomic initial export-request handoff | Normative for referenced cross-slice rules | Project Business Approver | `SL-004` adds the original-order fulfillment states and delivery-failure outcome while preserving those boundaries |
+| SRC-055 | [`CR-001 v2`](2026-07-23-cr-001-cross-slice-business-closure-v2.md) | Approved 2026-07-23 | CODDiscrepancy resolution, held after-sales rights, evidence-based CompletedSale clock, independent money obligations, and missing notification handoffs | Normative cross-slice authority | Project Business Approver | Closes the unsafe intersection between `Delivered + Unpaid` and full Return Refund eligibility |
 
 ## 3. Approved Business Decision Log
 
@@ -83,11 +84,11 @@ No unresolved business decision remains inside the approved `SL-004` package.
 | BR-038 | Completed stock export shall leave the Order Confirmed. Only Staff may change it to Packed after physically confirming every line and quantity and recording packing actor, time, and checklist. A discrepancy shall block Packed and open reconciliation. Packing shall not create a Customer email or Packed notification. | BD-042 |
 | BR-039 | Staff shall change Packed to Shipped only after complete physical Carrier handoff and shall record carrier name, tracking/reference, handoff timestamp, evidence, Shipment/cycle identity, and recording actor. Customer may view the owned Shipment summary, but no live location is implied. | BD-043 |
 | BR-040 | Delivery shall be established from integrated Carrier evidence when available or evidence-backed Staff recording otherwise. Source, original event time, recording actor/time, correction, and Customer dispute history shall be append-only. Physical DeliveredAt shall start immutable five-day Return/Refund and Exchange deadlines. An authorized correction creates a traceable version and shall not silently shorten a deadline already published to the Customer. | BD-044 |
-| BR-041 | For normal COD delivery, verified full collection of the server-derived Order.TotalAmount and verified physical delivery shall atomically set Order to Delivered and Payment to Paid; no actor enters or chooses the amount. If physical delivery is proven without verified full collection, Order becomes Delivered, Payment remains Unpaid, and exactly one open CODDiscrepancy is created for reconciliation. No Staff-only click may establish Paid. | BD-045 |
+| BR-041 | For normal COD delivery, verified full collection of the server-derived Order.TotalAmount and verified physical delivery shall atomically set Order to Delivered and Payment to Paid; no actor enters or chooses the amount. If physical delivery is proven without verified full collection, Order becomes Delivered, Payment remains Unpaid, and exactly one open CODDiscrepancy is created for reconciliation. No Staff-only click may establish Paid. A timely after-sales request may be recorded under CR BR-106, but no Return Refund/destination/payout path opens before full collection is verified. | BD-045, BD-110 |
 | BR-042 | Every delivery attempt shall be append-only with Shipment, outcome, reason, source, actor, and event time. A failed attempt leaves Order Shipped and may be retried without a fixed GreenHouse attempt limit. Carrier return-to-shop changes Shipment custody only; terminal DeliveryFailed or resend cannot proceed until Warehouse confirms complete returned-parcel receipt, unless verified irrecoverable loss/damage makes receipt impossible. | BD-046 |
 | BR-043 | Shop bears loss/damage risk until successful delivery. A verified incident creates no Customer fee, Order, or after-sales request. Customer chooses exact same-Order resend or terminal resolution. Resend creates a linked fulfillment cycle and consumes newly reserved/exported exact items only through BR-037. If exact stock is unavailable, Customer chooses wait or exact full refund. | BD-047 |
 | BR-044 | Order delivery data remains an immutable checkout snapshot. Before Carrier handoff, Staff may create a new immutable ShipmentDestinationVersion only from authenticated Customer-confirmed input; after handoff, a version requires Carrier acceptance/evidence. No version overwrites history. Responsibility follows whether the exact Customer-confirmed version or a Staff/System/Carrier deviation caused failure; current ShippingFee 0 permits no arbitrary surcharge or deduction. | BD-048 |
-| BR-045 | A returned-to-shop terminal resolution requires Warehouse to account for every Order line and atomically record sellable/damaged Inventory movements before Order becomes DeliveryFailed. A Paid online Order creates one fixed full refund for its accepted captured transaction through the approved secure destination/Payout/manual-evidence workflow and sets Order payment RefundPending until verified success. Uncollected COD becomes Payment Cancelled and creates no Refund. Verified irrecoverable loss/damage may create the same terminal money outcome without Warehouse receipt. | BD-049 |
+| BR-045 | A returned-to-shop terminal resolution requires Warehouse to account for every Order line and atomically record sellable/damaged Inventory movements before Order becomes `DeliveryFailed`. A Paid online Order retains its accepted primary collection as `Paid` and creates one fixed full failed-delivery Refund obligation, initially `Pending`, through the approved secure destination/Payout/manual-evidence workflow; aggregate `MoneyObligationsSettled=false` until verified resolution. Uncollected COD becomes Payment `Cancelled` and creates no Refund. Verified irrecoverable loss/damage may create the same terminal money outcome without Warehouse receipt. | BD-049, BD-114 |
 | BR-046 | Export, packing, handoff, delivery, COD, attempt, incident, returned receipt, resend, DeliveryFailed, refund handoff, and notification commands shall enforce actor authorization, current-state guards, idempotency, concurrency safety, and attributable audit. Customer notifications are created for Confirmed, Shipped, failed-attempt/reschedule, Delivered, DeliveryFailed, and final refund outcomes, but not internal export or Packed. Notification failure shall not roll back committed business state; repeated commands return the existing result with explicit feedback. | BD-050 |
 
 ## 7. UC-FUL-01 — Export and Pack the Order
@@ -169,7 +170,7 @@ No unresolved business decision remains inside the approved `SL-004` package.
 | AF-004-09 | Carrier attempt fails but parcel remains in Carrier custody | Append failure; keep Order Shipped; allow evidence-backed retry/reschedule |
 | AF-004-10 | Carrier says returned but Warehouse has not received/accounted for the parcel | Keep Shipment return evidence and Order Shipped; do not restock, resend, Refund, or set DeliveryFailed |
 | AF-004-11 | Returned parcel receipt omits a line or has invalid quantity/classification | Roll back all receipt/Inventory/terminal effects and retain the Warehouse work item |
-| AF-004-12 | Online Paid Order reaches terminal returned-to-shop resolution | After atomic receipt, set DeliveryFailed and RefundPending and create exactly one exact full-refund handoff |
+| AF-004-12 | Online Paid Order reaches terminal returned-to-shop resolution | After atomic receipt, set `DeliveryFailed`, retain primary `Paid`, create exactly one `Pending` exact full-refund obligation, and mark aggregate money obligations unsettled |
 | AF-004-13 | COD Order reaches terminal returned-to-shop resolution without collection | After atomic receipt, set DeliveryFailed and Payment Cancelled; create no Refund |
 | AF-004-14 | Shipment is verified lost/damaged before delivery | Open one incident; Shop bears risk; Customer chooses same-Order resend or terminal resolution without fee or new Order |
 | AF-004-15 | Exact stock for resend is unavailable | Create no partial/different-product resend; retain wait choice or create exact full-refund terminal outcome |
@@ -216,6 +217,18 @@ No unresolved business decision remains inside the approved `SL-004` package.
 | Lost or Damaged | Carrier incident evidence exists | Resend cycle or DeliveryFailed resolution |
 
 A resend creates a new Shipment and fulfillment-cycle identity; it never rewrites or reopens the previous Shipment.
+
+### 11.4 CODDiscrepancy State Table
+
+| Current state | Trigger/evidence | Guard/side effects | Next state |
+|---|---|---|---|
+| Open | Full collection proved at delivery | Amount equals immutable Order total; set `PaidAt=DeliveredAt`; release eligible after-sales hold | ResolvedCollectedAtDelivery |
+| Open | Full collection proved later | Amount equals immutable Order total; set `PaidAt` to actual collection instant; release eligible after-sales hold | ResolvedCollectedLater |
+| Open | Collection below Order total is conclusively proved | Derive actual collected balance from Carrier/provider evidence; block normal Return/Exchange; begin complete goods recovery | RecoveryRequired |
+| RecoveryRequired | Warehouse accounts all goods and collected balance is zero | Post each authorized Inventory movement once; set Order `Returned`, Payment `Cancelled`; close held case with no Refund | ResolvedUncollected |
+| RecoveryRequired | Warehouse accounts all goods and collected balance is positive but below total | Create one exact COD-recovery Refund through the secure destination flow; retain not-Paid primary state | RecoveryRefundPending |
+| RecoveryRefundPending | Exact COD-recovery Refund succeeds verifiably | Set Order `Returned`, Payment `Cancelled`; close held case and aggregate money obligations | ResolvedPartialRefunded |
+| Open, RecoveryRequired, or RecoveryRefundPending | Money/custody evidence or another prerequisite is incomplete, contradictory, or disputed | Append evidence/dispute only; create no false Paid, CompletedSale, replacement, whole-Order Return Refund, payout success, or terminal case outcome | Current state |
 
 ## 12. State and Data Invariants
 
@@ -276,7 +289,7 @@ A resend creates a new Shipment and fulfillment-cycle identity; it never rewrite
 | AT-066 | Given physical COD delivery is proven but full collection is not, when recorded, then Order is Delivered, Payment remains Unpaid, exactly one CODDiscrepancy opens, and no false Paid evidence exists. | `approved-requirement` |
 | AT-067 | Given one or more unsuccessful Carrier attempts while the parcel remains in custody, when recorded or retried, then every attempt remains append-only, Order stays Shipped, and Customer receives accurate attempt/reschedule feedback. | `approved-requirement` |
 | AT-068 | Given Carrier return-to-shop, when Warehouse has not accounted for every line, then no restock/resend/DeliveryFailed/payment/refund effect occurs; complete valid receipt commits exact sellable/damaged movements once. | `approved-requirement` |
-| AT-069 | Given complete returned-parcel receipt and terminal resolution, when finalized, then online Paid creates one exact full RefundPending handoff while uncollected COD becomes Cancelled with no Refund; ShippingFee 0 produces no deduction. | `approved-requirement` |
+| AT-069 | Given complete returned-parcel receipt and terminal resolution, when finalized, then online primary `Paid` remains intact and one exact full failed-delivery Refund obligation starts `Pending`, while uncollected COD becomes `Cancelled` with no Refund; ShippingFee 0 produces no deduction. | `approved-requirement` |
 | AT-070 | Given verified pre-delivery loss/damage and Customer chooses resend, when exact stock is available, then no new Order/fee/request is created and one linked exact reservation/export/packing/Shipment cycle is traceable. | `approved-requirement` |
 | AT-071 | Given verified irrecoverable loss/damage and Customer chooses terminal resolution or resend stock is unavailable, when full refund is selected, then DeliveryFailed and the exact full refund handoff occur without impossible Warehouse receipt, partial refund, or different-SKU substitution. | `approved-requirement` |
 | AT-072 | Given an address correction, when accepted before handoff or by Carrier after handoff, then one immutable destination version with Customer/Carrier evidence is added and prior versions remain; invalid correction is rejected and responsibility follows the evidenced cause. | `approved-requirement` |
@@ -297,6 +310,8 @@ A resend creates a new Shipment and fulfillment-cycle identity; it never rewrite
 | BD-048 | BR-044 | Address correction | Customer/Staff destination version interface | `order.model.js` stores one address string; no destination-version model exists | AT-072 | Overwrite-safe correction and causation evidence are absent | ready |
 | BD-049 | BR-045 | UC-FUL-03 terminal resolution | Warehouse receipt, DeliveryFailed, Refund handoff | Inventory/return/refund services have no failed-delivery join | AT-068, AT-069, AT-071 | Current cancellation cannot be reused after Packed and no DeliveryFailed state exists | ready |
 | BD-050 | BR-046 | All SL-004 actor interfaces | Authorization, idempotency, audit, notification outbox | Current services/pages contain partial state guards and notification behavior | AT-073, AT-074 | No end-to-end idempotent fulfillment evidence contract exists | ready |
+| BD-110, BD-111, BD-114 | CR BR-106 through BR-108, BR-113 through BR-115 | COD hold/reconciliation; CompletedSale; independent obligations | CODDiscrepancy, Return/Exchange guard, PaymentAttempt/Refund, report events | CR AT-205 through AT-208, AT-215 through AT-218 | Current COD action and refund model cannot preserve these independent facts | ready |
+| BD-050, BD-101 | CR BR-120 | Failed attempt/reschedule and DeliveryFailed notifications | DomainOutbox, Notification, EmailOutbox/templates | CR AT-220 | SL-009 matrix previously omitted SL-004-required outcomes | ready |
 
 ## 16. Confirmed Current Conflicts
 
@@ -315,8 +330,16 @@ The following are `observed-behavior`, not approved policy:
 
 These conflicts will become exact G3 rows and G4 red acceptance evidence only after the full business baseline is closed.
 
-## 17. Method Basis and Next Phase
+## 17. CR-001 v2 Cross-Slice Addendum
+
+1. Physical `Delivered` always starts immutable after-sales deadlines, including when COD collection is disputed.
+2. A Customer's timely request is preserved as a held case; Staff reconciliation cannot infer Paid or allow a Refund from delivery alone.
+3. CompletedSale timing follows evidence: collection at delivery uses `DeliveredAt`; actual later collection uses later `PaidAt`; unverified collection creates no sale.
+4. Distinct Refund obligations and aggregate settlement follow CR `BR-113..115`; Customer notifications include failed attempt/reschedule and terminal DeliveryFailed under CR `BR-120`.
+5. Conclusively verified less-than-full collection uses CR `BR-107`: complete goods recovery is mandatory; zero collection closes with no Refund, while a positive partial balance creates one exact COD-recovery Refund and closes only after verified payout.
+
+## 18. Method Basis and Next Phase
 
 Archived SWR guidance requires requirements to be complete, consistent, feasible, and verifiable and recommends acceptance criteria during requirements development. Archived SWD guidance treats states, events, guards, and transition actions as distinct control facts and requires alternate scenarios to be modeled. GreenHouse policy in this document comes only from SRC-026 and the approved cross-slice decisions, not from the method sources or current implementation.
 
-No implementation plan or code change is authorized by this document alone. The project will continue through the remaining core business packages, then perform one cross-system consistency audit before freezing and updating the Google SRS baseline.
+No implementation plan or code change is authorized by this document alone. CR-001 v2 records the completed cross-system closure and bounded SRS sync; the next step is exact G3 mapping before red tests or implementation.

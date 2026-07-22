@@ -8,7 +8,7 @@
 
 **Implementation baseline:** `20139fc10a467f49ed32561239df29ac5380e36f`
 
-**SRS baseline:** Google Docs revision `AIroW37xl-9inybbV_Kt8cUUhLWLjhfImasxQ_JiEqN2hcPklBhnb6W4yZNbueA2tCWVmMd5XfIbQTkiJLGM6ni-TNQx-hc6-YKXxEmQoPE`, last modified `2026-07-21T19:00:10.282Z`
+**SRS baseline:** Google Docs revision `AIroW34IkEb4_bfEHKNh6uUV4L6eEmGXjpcD_XB5s_Y9mRvt--JCx7QPau6BWsE-Ad57nyluADuNsXJTg8nK4oy8F75yDDXRDrfJVAKgtn8`; one tab `t.0`; read back 2026-07-23
 
 ## 1. Scope and Gate Status
 
@@ -39,7 +39,7 @@ Both Review and Support are `Must Have` in the approved release baseline. This r
 
 | Slice | G0 | G1 | G2 | G3 | G4 | G5 | G6 | G7 | Next evidence |
 |---|---|---|---|---|---|---|---|---|---|
-| SL-008 | passed | passed | passed | ready | not-started | not-started | not-started | not-started | Reconcile this approved package into the Google SRS and interfaces, then create red acceptance tests before implementation |
+| SL-008 | passed | passed | passed | ready | not-started | not-started | not-started | not-started | Complete exact G3 API/interface/code/test/release-evidence mapping against the reconciled SRS revision |
 
 No unresolved business decision remains inside the approved `SL-008` package.
 
@@ -47,7 +47,7 @@ No unresolved business decision remains inside the approved `SL-008` package.
 
 | Source ID | Source and location | Revision/date | Evidence it can prove | Authority level | Owner | Conflicts |
 |---|---|---|---|---|---|---|
-| SRC-045 | [Google SRS](https://docs.google.com/document/d/1j_1Qg_DoFC6Dk5zk_UZcnMnjjqW2wjKPNAH1ZNxNwtE/edit?tab=t.0) | Google Docs revision and modified time in this document header; one tab `t.0` verified 2026-07-23 | Candidate `UC-CS-11`, `UC-CS-13`, `UC-ST-08`, `FR-CRS-01` through `FR-CRS-09`, `BR-RFS-01` through `BR-RFS-07`, logical Review/Support data, and acceptance text | Candidate source only where adopted or explicitly changed by this approved package | SRS contributors; Project Business Approver approves policy | Conflicting Review priority; ambiguous active-review lifecycle; Staff-only one-way Support Messages; only three Support states; and no assignment, retry, moderation, public privacy, or cross-slice isolation details |
+| SRC-045 | [Google SRS](https://docs.google.com/document/d/1j_1Qg_DoFC6Dk5zk_UZcnMnjjqW2wjKPNAH1ZNxNwtE/edit?tab=t.0) | Google Docs revision `AIroW34IkEb4_bfEHKNh6uUV4L6eEmGXjpcD_XB5s_Y9mRvt--JCx7QPau6BWsE-Ad57nyluADuNsXJTg8nK4oy8F75yDDXRDrfJVAKgtn8`; one tab `t.0`; read back 2026-07-23 | Candidate Review/Support text; CR-001 v2 adds only shared privacy/evidence constraints where referenced | Candidate source only where adopted or explicitly changed by this approved package | SRS contributors; Project Business Approver approves policy | Full SL-008 lifecycle still needs its own G3 mapping; CR-001 v2 does not replace Review/Support ownership rules |
 | SRC-046 | Explicit fast-track approval, “duyệt SL-008” | 2026-07-23 | `BD-087` through `BD-097` and this complete bounded package | Normative business authority for `SL-008` | Project Business Approver | Approver display name is not recorded |
 | SRC-047 | Repository `D:\GreenHouse_System-main` | HEAD `20139fc10a467f49ed32561239df29ac5380e36f`; inspected 2026-07-23 | Current ProductReview/SupportRequest models, services, routes, public/Customer/Staff UI, seed mappings, reports, and tests | `observed-behavior` only | Engineering team | Public identifier leakage, per-Order duplicate reviews, required text, response overwrite, legacy `Open`, missing messages/claim guards, raw Order-ID input, ignored classification fields, and unbounded lists conflict with this design |
 | SRC-048 | Archived SWR Chapter 17 and SWD Chapters 9–11 | Local archive accessed 2026-07-23 | Requirements completeness/consistency/verifiability and explicit current-state/event/guard/action/next-state modeling | Method guidance only | SWR/SWD archive | Does not decide GreenHouse business policy |
@@ -465,7 +465,7 @@ When the project begins the SRS reconciliation phase, the following changes are 
 
 Read-only evidence gathered for this package:
 
-- Google SRS full content and current revision/tab metadata were read; no Drive mutation occurred.
+- At the SL-008 approval snapshot, Google SRS full content and revision/tab metadata were read without mutation; CR-001 v2 later performed the bounded reconciled sync and readback.
 - ProductReview/SupportRequest models, services, routes, client services/pages, demo mappings, report coupling, and related tests were inspected.
 - Six selected server Review/Support tests and six selected client Review/Support tests passed against current behavior during the audit.
 - Those green tests are `observed-behavior` evidence only and leave `AT-150` through `AT-174` unimplemented.
@@ -475,4 +475,4 @@ Read-only evidence gathered for this package:
 
 Archived SWR Chapter 17 distinguishes validation of whether requirements satisfy stakeholder needs from verification that a development product meets its requirements. It calls for requirements to be correctly derived, complete, feasible, verifiable, necessary/sufficient, consistent across representations, and adequate for design/construction. Archived SWD Chapters 9–11 model state-dependent behavior through current state, input event, optional guard, transition action, and next state, and require alternative use-case sequences to be considered. Those sources guide structure and quality only; GreenHouse policy comes from `SRC-046` plus approved cross-slice decisions.
 
-No code change, migration, red test, Google SRS mutation, or implementation plan is authorized by this document alone. The project will next reconcile the remaining Notification, Audit, Reporting, and cross-cutting configuration package, perform one cross-system consistency audit, update/freeze the Google SRS baseline, and only then begin acceptance-test-first implementation.
+No code change, migration, red test, or implementation plan is authorized by this document alone. CR-001 v2 records the completed cross-system closure and bounded SRS sync; the next step is exact G3 mapping before red acceptance tests or implementation.

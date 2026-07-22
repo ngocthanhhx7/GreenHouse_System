@@ -7,7 +7,7 @@
 **Business approver:** Project Business Approver (user in this Codex task)
 
 **Repository baseline:** `2cd0b9518b42a6d1860951b20cdcfdfa2e398ca5`
-**SRS baseline:** Google Docs revision `AIroW37xl-9inybbV_Kt8cUUhLWLjhfImasxQ_JiEqN2hcPklBhnb6W4yZNbueA2tCWVmMd5XfIbQTkiJLGM6ni-TNQx-hc6-YKXxEmQoPE`; Drive revision `4842`; modified `2026-07-21T19:00:10.282Z`
+**SRS baseline:** Google Docs revision `AIroW34IkEb4_bfEHKNh6uUV4L6eEmGXjpcD_XB5s_Y9mRvt--JCx7QPau6BWsE-Ad57nyluADuNsXJTg8nK4oy8F75yDDXRDrfJVAKgtn8`; one tab `t.0`; read back 2026-07-23
 
 ## 1. Purpose and Scope
 
@@ -41,7 +41,7 @@ The two slices share an Order-level after-sales exclusivity rule but do not shar
 
 | Slice ID | G0 | G1 | G2 | G3 | G4 | G5 | G6 | G7 | Blocker | Owner | Next evidence |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| SL-002 | passed | passed | passed | ready | not-started | not-started | not-started | not-started | Written-spec review, then decision-to-code/test mapping | Project Business Approver for review; engineering owner `unassigned` | Approved written spec and complete G3 traceability matrix |
+| SL-002 | passed | passed | passed | ready | not-started | not-started | not-started | not-started | Exact decision-to-API/interface/code/test mapping | Engineering owner `unassigned`; Project Business Approver reviews G3 | Complete G3 traceability matrix against the reconciled SRS revision |
 
 G0 passed because the user in this task is the recorded Project Business Approver. G1 passed when the actor matrix in Section 5 was approved. G2 passed when the approver accepted the trigger, preconditions, paths, rules, state invariants, UI constraints, and acceptance examples consolidated here. G3 remains unperformed; no code change is authorized by this document alone.
 
@@ -49,12 +49,13 @@ G0 passed because the user in this task is the recorded Project Business Approve
 
 | Source ID | Source and location | Revision/date | Evidence it can prove | Authority level | Owner | Conflicts |
 |---|---|---|---|---|---|---|
-| SRC-011 | [Google SRS](https://docs.google.com/document/d/1j_1Qg_DoFC6Dk5zk_UZcnMnjjqW2wjKPNAH1ZNxNwtE/edit?tab=t.0) | Docs/Drive revisions in the document header | Existing candidate Return/Refund requirements and current actor/use-case vocabulary | Candidate source only for SL-002 until reconciled and approved | SRS contributors; approval by Project Business Approver | It has no approved, separate Exchange lifecycle matching this design |
+| SRC-011 | [Google SRS](https://docs.google.com/document/d/1j_1Qg_DoFC6Dk5zk_UZcnMnjjqW2wjKPNAH1ZNxNwtE/edit?tab=t.0) | Google Docs revision `AIroW34IkEb4_bfEHKNh6uUV4L6eEmGXjpcD_XB5s_Y9mRvt--JCx7QPau6BWsE-Ad57nyluADuNsXJTg8nK4oy8F75yDDXRDrfJVAKgtn8`; one tab `t.0`; read back 2026-07-23 | Candidate Return/Refund vocabulary plus the bounded Exchange and cross-slice addendum | Candidate source except where approved; CR-001 v2 is normative for the Exchange handoff rules it states | SRS contributors; Project Business Approver approves policy | The SRS now has the bounded addendum but not the complete package-level Exchange lifecycle; G3 still maps the remaining details |
 | SRC-012 | Explicit approvals in this Codex task | 2026-07-22 | BD-009 through BD-028 and the complete SL-002 design | Normative business authority for SL-002 | Project Business Approver | Approval identity is the user of this task; no personal display name was recorded |
 | SRC-013 | Repository `D:\GreenHouse_System-main` | HEAD `2cd0b9518b42a6d1860951b20cdcfdfa2e398ca5`; inspected 2026-07-22 | Current routes, models, UI, settings, and tests | `observed-behavior`, not business authority | Engineering team | Only a combined Return/Refund implementation exists; Exchange is not modeled separately |
-| SRC-014 | `docs/superpowers/specs/2026-07-22-sl-001-return-refund-design.md` plus its reconciliation predecessors | Final design prepared 2026-07-22 | Approved Return/Refund lifecycle, money boundary, deadlines, destination flow, and cross-slice guard | Normative approved SL-001 design | Project Business Approver | Google SRS does not yet contain the approved final SL-001 lifecycle |
+| SRC-014 | `docs/superpowers/specs/2026-07-22-sl-001-return-refund-design.md` plus its reconciliation predecessors | Final design prepared 2026-07-22 | Approved Return/Refund lifecycle, money boundary, deadlines, destination flow, and cross-slice guard | Normative approved SL-001 design | Project Business Approver | Current SRS contains the bounded CR-001 handoff closure but not the complete package-level SL-001 lifecycle; G3 maps the remaining detail |
 | SRC-015 | Archived SWR source, Hassan Gomaa Chapter 6 and SWR Chapters 9, 10, and 17 | Local archive accessed 2026-07-22 | Actor/use-case structure, business-rule traceability, SRS quality, and acceptance validation guidance | Method guidance, not GreenHouse business authority | SWR archive | Does not decide GreenHouse policy |
 | SRC-016 | Archived SWD source, `Ch05_Overview of Software Modeling & Design Methods.pptx.md` | Local archive accessed 2026-07-22 | Consistency among use cases, participating objects, state models, components, and interfaces | Method guidance, not GreenHouse business authority | SWD archive | Does not decide GreenHouse component names or technology |
+| SRC-055 | [`CR-001 v2`](2026-07-23-cr-001-cross-slice-business-closure-v2.md) | Approved 2026-07-23 | Initial no-stock choice/wait states, atomic Return conversion, physical lineage, off-system shipping settlement, terminal resubmission, COD hold, and evidence security | Normative cross-slice authority | Project Business Approver | Refines AF-EX-07/17/18 and the conversion boundary without adding money to Exchange |
 
 ## 4. Approved Business Decision Log
 
@@ -124,7 +125,7 @@ This matrix is `approved-requirement` through BD-010 and its later refinements.
 | BR-010 | Warehouse shall account for and inspect every requested unit, recording accepted/rejected quantities, reason/evidence, and condition. Finalization requires non-negative integers and complete quantity accounting. | BD-010, BD-017 | AT-028, AT-029, AT-030 | `approved-requirement` |
 | BR-011 | Atomic inspection finalization shall add accepted sellable originals to sellable stock, add accepted damaged originals to damaged stock, create no stock for rejected originals, and release rejected replacement reservation quantities. | BD-017, BD-022 | AT-028, AT-029, AT-030 | `approved-requirement` |
 | BR-012 | Replacement/rejected-original outbound fulfillment begins only after inspection. Creating a replacement outbound Shipment atomically consumes its accepted replacement reservation; rejected originals are returned without replacement. | BD-015, BD-017, BD-022 | AT-028, AT-029, AT-030 | `approved-requirement` |
-| BR-013 | Staff shall record the shipping payer and rationale. Shop pays both directions for defect/Shop error; Customer pays both directions for approved preference exchange. | BD-018 | AT-031 | `approved-requirement` |
+| BR-013 | Staff shall record the shipping payer and rationale. Shop pays both directions for defect/Shop error; Customer pays both directions for approved preference exchange. This is an operational off-system carrier settlement in the current release; Exchange collects, deducts, refunds, and pays no shipping amount. | BD-018, BD-115 | AT-031, AT-038 | `approved-requirement` |
 | BR-014 | Carrier-confirmed `ReplacementDeliveredAt` starts a new immutable five-day Exchange window only for delivered replacement units. It shall not reopen the original whole-Order Return/Refund deadline. | BD-019, BD-023 | AT-035 | `approved-requirement` |
 | BR-015 | Re-exchange has no hard numeric limit, but every cycle requires new reason/evidence, Staff decision, Warehouse inspection, original-to-replacement lineage, and one active case per physical unit. | BD-020 | AT-036 | `approved-requirement` |
 | BR-016 | Carrier delivery facts shall be ingested directly when available; otherwise Staff may record them only from tracking evidence. Actor, source, time, and Customer dispute shall be auditable. | BD-023 | AT-035, AT-039 | `approved-requirement` |
@@ -174,7 +175,7 @@ This matrix is `approved-requirement` through BD-010 and its later refinements.
 | AF-EX-04 | Active after-sales case already exists | Return the existing case and **Xem yêu cầu đang xử lý** action; create no duplicate | `approved-requirement` |
 | AF-EX-05 | Customer submits/clicks repeatedly or retries after a lost response | Show processing/already-recorded feedback and return the same result; exactly one case and reservation identity exist | `approved-requirement` |
 | AF-EX-06 | Staff rejects | `Submitted -> Rejected`; reason required; create no reservation, Inventory movement, replacement, or money outcome; notify Customer | `approved-requirement` |
-| AF-EX-07 | Exact stock is insufficient or lost in an approval race | Approval fails atomically; request remains `Submitted`; no partial reservation exists; Staff communicates the unavailable outcome | `approved-requirement` |
+| AF-EX-07 | Staff confirms eligibility but exact stock is insufficient or lost in an approval race | Approval/reservation fails atomically; request enters `AwaitingExactStockChoice`; no partial reservation, `ApprovedAt`, or `ShipByAt` exists; Customer may wait or convert | `approved-requirement`; refined by CR BR-109 |
 | AF-EX-08 | Customer cancels before Carrier handoff | Move to `Cancelled`; release all reservations atomically; retain audit | `approved-requirement` |
 | AF-EX-09 | Customer misses `ShipByAt` | Move to `Expired`; release all reservations atomically; late handoff cannot revive the case automatically | `approved-requirement` |
 | AF-EX-10 | Customer attempts self-cancel after handoff | Deny; Staff handles an operational exception without erasing the shipment evidence | `approved-requirement` |
@@ -184,16 +185,22 @@ This matrix is `approved-requirement` through BD-010 and its later refinements.
 | AF-EX-14 | Any inspection/Inventory/reservation write fails | Roll back the grouped finalization; retain `WarehouseInspecting`; create no partial outbound authorization | `approved-requirement` |
 | AF-EX-15 | Replacement Shipment is lost/damaged before delivery | Move to `DeliveryIncident`; Shop bears responsibility; create no new Customer request/fee; preserve all prior evidence | `approved-requirement` |
 | AF-EX-16 | Exact resend stock is available | Atomically reserve and create a new same-SKU resend; keep the same case and lineage | `approved-requirement` |
-| AF-EX-17 | Exact resend/initial approval stock is unavailable and Customer chooses wait | Keep the case open in a visible waiting outcome; do not invent a different SKU or money credit | `approved-requirement` |
-| AF-EX-18 | Customer chooses whole-Order Return/Refund conversion | Atomically release remaining Exchange reservations, close Exchange as `ConvertedToReturnRefund`, and hand the original timely submission instant to SL-001. SL-001 owns all money, destination, whole-Order receipt, and payout rules | `approved-requirement`; implementation depends on SL-001 G2/G3 |
+| AF-EX-17 | Exact resend/initial approval stock is unavailable and Customer chooses wait | Move to `WaitingForExactStock`; reserve nothing. When exact stock later becomes available, atomic reservation creates `ApprovedAt` and `ShipByAt = ApprovedAt + 3 days`; do not invent another SKU or money credit | `approved-requirement`; refined by CR BR-109 |
+| AF-EX-18 | Customer chooses whole-Order Return/Refund conversion | Atomically release remaining Exchange reservations, close Exchange as `ConvertedToReturnRefund`, transfer the active lock, and hand the original timely submission instant plus physical/Inventory lineage to SL-001. Existing movements are referenced, not replayed; SL-001 owns remaining goods, COD hold, destination, Refund, and payout | `approved-requirement`; refined by CR BR-110 |
 | AF-EX-19 | Carrier integration is absent or delivery time disputed | Staff records only evidence-backed facts; retain source and dispute audit; do not silently alter the five-day clock | `approved-requirement` |
 | AF-EX-20 | Customer requests another Exchange for a delivered replacement within its new window | Create a new cycle only if Order/unit locks are free; require new reason/evidence and repeat approval/inspection; retain lineage | `approved-requirement` |
+| AF-EX-21 | Timely Exchange is submitted for `Delivered + Unpaid` with an open CODDiscrepancy | Record one `AwaitingCODReconciliation` intake with no eligibility approval, reservation, replacement, or deadline. Verified full collection releases it to `Submitted`; conclusively less-than-full collection uses CR `CODRecoveryInProgress/ClosedByCODRecovery`, creates no replacement, and refunds only a verified positive partial balance after complete goods recovery | `approved-requirement`; governed by CR BR-106/BR-107 |
 
 ## 9. State Model
 
 | State | Meaning | Entry owner/evidence | Permitted next states |
 |---|---|---|---|
-| `Submitted` | Valid Customer request exists; no stock reserved yet | Customer submission accepted by System | `ApprovedAwaitingShipment`, `Rejected`, `Cancelled` |
+| `AwaitingCODReconciliation` | Complete timely Exchange intent exists but full COD collection is not verified | Customer submission plus open CODDiscrepancy; no eligibility decision/reservation/deadline | `Submitted` after verified full collection; `CODRecoveryInProgress` under CR when less-than-full collection is conclusive |
+| `CODRecoveryInProgress` | Normal Exchange is blocked while the complete unpaid/partially paid Order is recovered and accounted for | Staff/Carrier/Warehouse evidence under CR; no replacement | `ClosedByCODRecovery` only after goods and any exact partial Refund are complete |
+| `ClosedByCODRecovery` | Unpaid/partially paid delivered goods were completely recovered; no Exchange replacement exists | Order `Returned`, Payment `Cancelled`; zero Refund or verified exact partial COD-recovery Refund | Terminal |
+| `Submitted` | Valid Customer request exists; no stock reserved yet | Customer submission accepted by System | `ApprovedAwaitingShipment`, `AwaitingExactStockChoice`, `Rejected`, `Cancelled` |
+| `AwaitingExactStockChoice` | Staff confirmed eligibility but exact reservation could not commit | Staff eligibility decision plus no-stock evidence; no reservation/deadline | `WaitingForExactStock`, `ConvertedToReturnRefund`, `Cancelled` |
+| `WaitingForExactStock` | Customer chose to wait for the exact SKU | Customer choice; no reservation/deadline | `ApprovedAwaitingShipment`, `ConvertedToReturnRefund`, `Cancelled` |
 | `ApprovedAwaitingShipment` | Staff approved and exact replacement stock is reserved; three-day handoff clock runs | Staff decision plus atomic reservation | `CustomerShipped`, `Cancelled`, `Expired` |
 | `CustomerShipped` | Customer handed originals to Carrier with valid proof | Customer/Carrier evidence | `WarehouseInspecting` |
 | `WarehouseInspecting` | Warehouse has receipt custody and must account for every unit | Warehouse receipt | `OutboundFulfillment` after successful atomic finalization |
@@ -308,7 +315,7 @@ This table proves requirement coverage in the design. API names, code locations,
 | BD-014 | BR-008 | SL-002 / UC-EX-01 | Staff approval and Inventory reservation | `not-started` | AT-024, AT-025 | Approved design | ready |
 | BD-016 | BR-009 | SL-002 / UC-EX-01 | Customer cancellation/handoff; expiry worker | `not-started` | AT-026, AT-027 | Approved design | ready |
 | BD-010, BD-017 | BR-010 | SL-002 / UC-EX-01 | Warehouse inspection | `not-started` | AT-028, AT-029, AT-030 | Approved design | ready |
-| BD-017, BD-022 | BR-011, BR-012 | SL-002 / UC-EX-01 | Inspection finalization; Inventory; outbound Shipment | `not-started` | AT-028, AT-029, AT-030 | Approved design | ready |
+| BD-015, BD-017, BD-022 | BR-011, BR-012 | SL-002 / UC-EX-01 | Inspection finalization; Inventory; outbound Shipment | `not-started` | AT-028, AT-029, AT-030 | Approved design | ready |
 | BD-018 | BR-013 | SL-002 / UC-EX-01 | Staff decision; Customer status | `not-started` | AT-031 | Approved design | ready |
 | BD-019, BD-023 | BR-014, BR-016 | SL-002 / UC-EX-01 | Carrier event or Staff evidence entry | `not-started` | AT-035, AT-039 | Approved design | ready |
 | BD-020 | BR-015 | SL-002 / UC-EX-01 | Replacement lineage and new-cycle submission | `not-started` | AT-036 | Approved design | ready |
@@ -317,6 +324,7 @@ This table proves requirement coverage in the design. API names, code locations,
 | BD-027 | BR-019 | SL-002 / UC-EX-01 | Customer submit and command idempotency | `not-started` | AT-022 | Approved design | ready |
 | BD-010, BD-026 | BR-020 | SL-002 / UC-EX-01 | Authorization and audit | `not-started` | AT-037, AT-039 | Approved design | ready |
 | BD-028 | BR-021 | SL-002 / UC-EX-01 | Shipment reconciliation and completion | `not-started` | AT-034 | Approved design | ready |
+| BD-112, BD-113, BD-115, BD-116 | CR BR-109 through BR-112, BR-116, BR-117 | No-stock choice; conversion; later case; shipping payer; evidence | `not-started` | CR AT-209 through AT-214, AT-221 | Approved CR-001 v2 | ready |
 
 ## 14. Current Implementation Conflicts and Gaps
 
@@ -330,14 +338,14 @@ All entries below are `observed-behavior`, not approved requirements.
 6. `server/src/services/systemSetting.service.js` defaults `RETURN_WINDOW_DAYS` to 7, while SL-002 requires a fixed immutable five-day deadline snapshot for each delivered original/replacement unit.
 7. `server/src/models/order.model.js` has `deliveredAt` but no immutable Exchange request deadline snapshot.
 8. Current tests verify the combined Return/Refund contract and Staff Refund-amount input; none prove AT-019 through AT-039.
-9. Google SRS revision SRC-011 does not yet contain BD-009 through BD-028, BR-003 through BR-021, UC-EX-01, the state model, or AT-019 through AT-039.
+9. Google SRS revision SRC-011 contains the bounded CR-001 v2 handoff addendum, but not the complete package-level BD-009 through BD-028, BR-003 through BR-021, UC-EX-01, state model, or AT-019 through AT-039; those remain a G3 mapping task.
 
 ## 15. Dependencies and Ordered Roadmap
 
 | Order | Slice/outcome | Dependencies | Business risk | Delivery owner | Business approver | Entry gate | Exit evidence |
 |---|---|---|---|---|---|---|---|
 | 1 | User reviews this written SL-002 spec | Approved conversational design | Mis-transcription or hidden contradiction | Requirements owner `unassigned` | Project Business Approver | G2 passed | Explicit written-spec approval |
-| 2 | Reconcile Google SRS with approved SL-002 and finish required SL-001 conversion boundary | Written-spec approval; SL-001 BD-006 through BD-008 | Competing normative documents; incomplete conversion handoff | SRS owner `unassigned` | Project Business Approver | G2 passed | Stable SRS revision containing approved rules and recorded external dependency |
+| 2 | Complete exact G3 mapping against the reconciled SRS and approved SL-001 conversion boundary | Approved SL-002; CR-001 v2; current SRS revision | Interface/code/test locations are still preliminary | Engineering owner `unassigned` | Project Business Approver | G3 ready | Complete traceability rows with exact contracts, files, red tests, and release evidence |
 | 3 | Build full decision → requirement → interface/API → code → test matrix | Approved written SRS revision | Orphan code/test changes | Engineering owner `unassigned` | Project Business Approver | G3 ready | Complete G3 matrix with no planned orphan change |
 | 4 | Write and observe failing AT-019 through AT-039 tests | G3 passed | Tests encoding old or invented policy | QA/engineering owner `unassigned` | Project Business Approver for business evidence | G4 | Expected red failures recorded |
 | 5 | Implement minimal coherent Exchange slice | G4 red evidence | Inventory duplication, role breach, stale retries | Engineering owner `unassigned` | Project Business Approver | G5 | Focused and regression tests pass with atomic/idempotent evidence |
@@ -356,9 +364,18 @@ This design applies the archived sources as method guidance only:
 
 GreenHouse policy in this document comes from the Project Business Approver through SRC-012, not from the archived course material or the current code.
 
-## 17. Implementation Sequence After Written-Spec Approval
+## 17. CR-001 v2 Cross-Slice Addendum
 
-1. Reconcile the approved design into the Google SRS and close the explicit SL-001 conversion dependency.
+1. Initial and resend no-stock outcomes use the explicit choice/wait states in Section 9; `ShipByAt` starts only after an exact reservation succeeds.
+2. Conversion is a grouped state/reservation/lock/handoff operation. It preserves the original timely instant, references every existing Warehouse/Inventory movement, and creates no duplicate movement or money field.
+3. A `Delivered + Unpaid` COD Order may preserve a timely Exchange request, but conversion into Return remains subject to CR `BR-106/BR-107` before any Return Refund path.
+4. Rejected, Customer-cancelled, and Expired terminal outcomes release the lock only under CR `BR-111`; completed replacement units follow CR `BR-112`.
+5. Shipping payer/rationale is informational and off-system; evidence uploads satisfy CR `BR-117`.
+6. Conclusively less-than-full COD collection closes the held Exchange through the shared recovery path, never through replacement: complete goods accounting is mandatory, zero collection creates no Refund, and a verified positive partial balance is refunded exactly without a Customer/Staff amount field.
+
+## 18. Implementation Sequence After Written-Spec Approval
+
+1. Use the reconciled SRS revision and CR-001 v2 to complete exact SL-001 conversion API, data, UI, and red-test mapping.
 2. Create the detailed G3 implementation plan and traceability matrix.
 3. Write failing acceptance tests before behavior code.
 4. Implement server-side authority, data model, state machine, atomic Inventory, Shipment, idempotency, and audit behavior.
@@ -366,4 +383,4 @@ GreenHouse policy in this document comes from the Project Business Approver thro
 6. Run focused, concurrency, authorization, regression, and actor-walkthrough verification.
 7. Reconcile the released behavior back to the SRS and evidence dashboard.
 
-No implementation step starts merely because this design file exists. The Project Business Approver must approve this written version first.
+No implementation step starts merely because this design file exists. The bounded SRS reconciliation is complete; G3 must still finish exact interface/code/test/release-evidence mapping, including SRC-055.
