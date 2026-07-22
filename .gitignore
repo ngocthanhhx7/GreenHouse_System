@@ -13,3 +13,5 @@ server/uploads/avatars/*
 !server/uploads/avatars/.gitkeep
 server/uploads/products/*
 !server/uploads/products/.gitkeep
+stitch
+.gstack/
