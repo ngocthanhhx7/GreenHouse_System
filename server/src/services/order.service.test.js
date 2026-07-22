@@ -184,6 +184,24 @@ describe('order service', () => {
     assert.equal(emailEvents[0].payload.orderCode, result.orderCode);
   });
 
+  it('keeps the committed order response when customer email lookup or enqueue fails', async () => {
+    const failures = [];
+    orderService = createOrderService({
+      transactionManager: { async withTransaction(work) { return work({ id: 'test-session' }); } },
+      cartRepository: createCartRepository(),
+      productRepository: createProductRepository(),
+      inventoryRepository: { async reserve() {} },
+      orderRepository: createOrderRepository(),
+      auditLogger: { async log(entry) { failures.push(entry); } },
+      customerRepository: { async findEmail() { throw new Error('customer lookup unavailable'); } },
+      emailOutboxService: { async enqueue() { throw new Error('outbox unavailable'); } },
+    });
+
+    const result = await orderService.placeOrder('customer-1', checkoutInput({ idempotencyKey: 'checkout-email-fail-001' }));
+    assert.equal(result.orderStatus, 'Pending');
+    assert.equal(failures.at(-1).action, 'EMAIL_OUTBOX_ENQUEUE_FAILED');
+  });
+
   it('rejects checkout when customer cart is empty', async () => {
     orderService = createOrderService({
       transactionManager: { async withTransaction(work) { return work({ id: 'test-session' }); } },
