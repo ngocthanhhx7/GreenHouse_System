@@ -2,6 +2,7 @@ const { DEMO_IMAGE_MANIFEST } = require('./demoImageManifest');
 
 const BASE_DATE = Date.parse('2026-06-01T02:00:00.000Z');
 const day = (offset) => new Date(BASE_DATE + offset * 86400000).toISOString();
+const hour = (offset) => new Date(BASE_DATE + offset * 3600000).toISOString();
 const two = (value) => String(value).padStart(2, '0');
 
 const roles = [
@@ -78,12 +79,12 @@ const productSource = [
 const products = productSource.map(([name, sku, categoryKey, price, unit, shortDescription], index) => ({
   key: `product-${two(index + 1)}`, name, sku, categoryKey, price, unit, shortDescription,
   description: `${shortDescription} Sản phẩm được tuyển chọn theo tiêu chuẩn GreenHome, ưu tiên vật liệu an toàn, độ bền lâu dài và thiết kế tối giản phù hợp với nhịp sống của gia đình Việt hiện đại. Hướng dẫn sử dụng và bảo quản được cung cấp rõ ràng để duy trì chất lượng tốt nhất.`,
-  currency: 'VND', status: 'Active', imageUrl: DEMO_IMAGE_MANIFEST[index].destination,
+  currency: 'VND', status: 'Active', imageUrl: DEMO_IMAGE_MANIFEST[index].destination, stockQuantity: 0,
 }));
 
 const inventories = products.map((product, index) => ({
-  key: `inventory-${two(index + 1)}`, productKey: product.key, stockQuantity: index % 6 === 0 ? 4 : 28 + index,
-  reservedQuantity: index % 4, damagedQuantity: index % 5 === 0 ? 1 : 0, lowStockThreshold: 5, lastUpdatedByKey: 'user-warehouse',
+  key: `inventory-${two(index + 1)}`, productKey: product.key, stockQuantity: 0,
+  reservedQuantity: 0, damagedQuantity: 0, lowStockThreshold: 5, lastUpdatedByKey: 'user-warehouse',
 }));
 
 const carts = Array.from({ length: 12 }, (_, index) => ({
@@ -99,9 +100,9 @@ const orderStates = [
   ['Pending', 'Unpaid', 'COD'], ['WaitingForPayment', 'Pending', 'ONLINE'], ['Pending', 'Paid', 'ONLINE'],
   ['Confirmed', 'Paid', 'ONLINE'], ['Confirmed', 'Unpaid', 'COD'], ['StockExportRequested', 'Paid', 'ONLINE'],
   ['StockExportRequested', 'Unpaid', 'COD'], ['Packed', 'Paid', 'ONLINE'], ['Packed', 'Unpaid', 'COD'],
-  ['Shipped', 'Paid', 'ONLINE'], ['Shipped', 'Unpaid', 'COD'],
-  ...Array.from({ length: 7 }, () => ['Delivered', 'Paid', 'COD']),
-  ['Returned', 'Refunded', 'ONLINE'], ['Cancelled', 'Cancelled', 'COD'], ['Cancelled', 'RefundPending', 'ONLINE'],
+  ['Shipped', 'Paid', 'ONLINE'], ['Delivered', 'Paid', 'COD'], ['Delivered', 'Paid', 'ONLINE'],
+  ...Array.from({ length: 6 }, () => ['Delivered', 'Paid', 'COD']),
+  ['Returned', 'Refunded', 'ONLINE'], ['Cancelled', 'Unpaid', 'COD'], ['Cancelled', 'RefundPending', 'ONLINE'],
   ['Expired', 'Failed', 'ONLINE'],
 ];
 
@@ -128,6 +129,7 @@ for (let index = 0; index < 22; index += 1) {
     currency: 'VND', paymentMethod, paymentStatus, orderStatus,
     receiverName: customerNames[customerNumber - 1], receiverPhone: `09120000${two(customerNumber)}`,
     shippingAddress: `${12 + customerNumber} đường Bếp Việt, ${provinces[(customerNumber - 1) % provinces.length]}`,
+    cancelReason: orderStatus === 'Cancelled' ? (paymentStatus === 'RefundPending' ? 'Khách đổi nhu cầu sau khi đã thanh toán.' : 'Khách chủ động hủy trước khi xuất kho.') : orderStatus === 'Expired' ? 'Phiên thanh toán đã hết hạn.' : '',
     createdAt: day(index * 2), confirmedAt: ['Confirmed', 'StockExportRequested', 'Packed', 'Shipped', 'Delivered', 'Returned'].includes(orderStatus) ? day(index * 2 + 1) : null,
     packedAt: ['Packed', 'Shipped', 'Delivered', 'Returned'].includes(orderStatus) ? day(index * 2 + 2) : null,
     shippedAt: ['Shipped', 'Delivered', 'Returned'].includes(orderStatus) ? day(index * 2 + 3) : null,
@@ -145,12 +147,19 @@ const paymentAttempts = payments.map((payment, index) => ({
   paymentMethod: payment.paymentMethod, paymentProvider: payment.paymentProvider, amount: payment.amount, currency: 'VND',
   paymentStatus: payment.paymentStatus, transactionId: payment.transactionId, paidAt: payment.paidAt,
 }));
-const callbackOrderNumbers = [2, 3, 4, 6, 8, 10, 12, 14, 19, 21];
-const paymentCallbacks = callbackOrderNumbers.map((number, index) => ({
-  key: `payment-callback-${two(index + 1)}`, orderKey: `order-${two(number)}`, paymentAttemptKey: `payment-attempt-${two(number)}`,
-  paymentProvider: 'GreenPayDemo', providerMessageId: `greenpay-message-${two(index + 1)}`, eventStatus: 'Processed',
-  processingStartedAt: day(number * 2), rawPayload: { demo: true, orderCode: `GH-DEMO-20${two(number)}` }, processingResult: { accepted: true },
-}));
+const callbackOrderNumbers = [2, 3, 4, 6, 8, 10, 12, 19, 21, 22];
+const paymentCallbacks = callbackOrderNumbers.map((number, index) => {
+  const order = orders[number - 1];
+  const isReceivedOnly = order.paymentStatus === 'Pending';
+  const gatewayStatus = order.paymentStatus === 'Failed' ? 'Failed' : 'Paid';
+  return {
+    key: `payment-callback-${two(index + 1)}`, orderKey: `order-${two(number)}`, paymentAttemptKey: `payment-attempt-${two(number)}`,
+    paymentProvider: 'GreenPayDemo', providerMessageId: `greenpay-message-${two(index + 1)}`,
+    eventStatus: isReceivedOnly ? 'Received' : 'Processed', processingStartedAt: isReceivedOnly ? null : day(number * 2 - 1),
+    rawPayload: { demo: true, orderCode: order.orderCode, paymentStatus: gatewayStatus },
+    processingResult: isReceivedOnly ? null : { accepted: gatewayStatus === 'Paid' },
+  };
+});
 
 const invoices = orders.slice(3, 13).map((order, index) => ({
   key: `invoice-${two(index + 1)}`, invoiceCode: `INV-DEMO-20${two(index + 1)}`, orderKey: order.key, issuedByKey: 'user-staff',
@@ -160,24 +169,16 @@ const invoices = orders.slice(3, 13).map((order, index) => ({
 }));
 
 const stockExports = orders.slice(3, 18).map((order, index) => ({
-  key: `stock-export-${two(index + 1)}`, orderKey: order.key, requestedByKey: 'user-staff', processedByKey: 'user-warehouse',
-  status: index === 0 ? 'Rejected' : index === 1 ? 'Cancelled' : order.orderStatus === 'StockExportRequested' ? 'Pending' : 'Exported',
-  note: `Phiếu xuất kho demo cho ${order.orderCode}`, exportedAt: ['Packed', 'Shipped', 'Delivered', 'Returned'].includes(order.orderStatus) ? day(index * 2 + 12) : null,
+  key: `stock-export-${two(index + 1)}`, orderKey: order.key, requestedByKey: 'user-staff',
+  processedByKey: index === 2 ? null : 'user-warehouse',
+  status: index < 2 ? 'Rejected' : index === 2 ? 'Pending' : index === 3 ? 'Approved' : 'Exported',
+  note: index < 2 ? `Kho từ chối phiếu của ${order.orderCode} và trả đơn về Confirmed.` : `Phiếu xuất kho demo cho ${order.orderCode}`,
+  createdAt: order.confirmedAt || order.createdAt,
+  updatedAt: index >= 4 ? order.packedAt : day(Number(order.createdAt.slice(8, 10))),
+  exportedAt: index >= 4 ? order.packedAt : null,
 }));
 
-const inventoryTransactions = Array.from({ length: 37 }, (_, index) => {
-  const transactionType = ['ADJUSTMENT', 'STOCK_EXPORT', 'REPLENISHMENT_RECEIVE', 'DAMAGE_CONFIRMED'][index % 4];
-  const quantity = ['STOCK_EXPORT', 'DAMAGE_CONFIRMED'].includes(transactionType) ? -((index % 3) + 1) : (index % 5) + 1;
-  const beforeQuantity = 60 + index;
-  return {
-    key: `inventory-transaction-${two(index + 1)}`, productKey: `product-${two((index % 20) + 1)}`,
-    orderKey: transactionType === 'STOCK_EXPORT' ? `order-${two((index % 15) + 4)}` : null,
-    performedByKey: 'user-warehouse', transactionType, quantity, beforeQuantity, afterQuantity: beforeQuantity + quantity,
-    reason: `Giao dịch kho demo số ${index + 1}`, createdAt: day(index + 3),
-  };
-});
-
-const replenishmentStatuses = ['PendingApproval', 'Approved', 'Rejected', 'Receiving', 'Received', 'Received'];
+const replenishmentStatuses = ['PendingApproval', 'Approved', 'Rejected', 'Approved', 'Received', 'Received'];
 const replenishments = replenishmentStatuses.map((status, index) => ({
   key: `replenishment-${two(index + 1)}`, productKey: `product-${two(index + 1)}`, inventoryKey: `inventory-${two(index + 1)}`,
   requestedByKey: 'user-warehouse', approvedByKey: status === 'PendingApproval' ? null : 'user-admin', quantity: 20 + index * 5,
@@ -194,52 +195,113 @@ const damageReports = damageStatuses.map((status, index) => ({
   confirmedAt: status === 'Confirmed' ? day(40 + index) : null,
 }));
 
+const ledger = new Map(products.map((product, index) => [product.key, 80 + index * 3]));
+const inventoryTransactions = [];
+const transactionSpecs = [];
+function appendInventoryTransaction({ productKey, orderKey = null, relatedCollection, relatedKey, transactionType, quantity, reason, createdAt }) {
+  const beforeQuantity = ledger.get(productKey);
+  const afterQuantity = beforeQuantity + quantity;
+  ledger.set(productKey, afterQuantity);
+  inventoryTransactions.push({
+    key: `inventory-transaction-${two(inventoryTransactions.length + 1)}`, productKey, orderKey, relatedCollection,
+    relatedKey, performedByKey: 'user-warehouse', transactionType, quantity, beforeQuantity, afterQuantity, reason, createdAt,
+  });
+}
+
+for (let index = 0; index < 12; index += 1) {
+  transactionSpecs.push({
+    productKey: `product-${two(index + 1)}`, relatedCollection: 'Inventory', relatedKey: `inventory-${two(index + 1)}`,
+    transactionType: 'ADJUSTMENT', quantity: index % 2 === 0 ? 5 : -2,
+    reason: `Kiểm kê điều chỉnh sản phẩm demo ${index + 1}.`, createdAt: day(5 + index),
+  });
+}
+for (const request of replenishments.filter((item) => item.status === 'Received')) {
+  transactionSpecs.push({
+    productKey: request.productKey, relatedCollection: 'ReplenishmentRequest', relatedKey: request.key,
+    transactionType: 'REPLENISHMENT_RECEIVE', quantity: request.receivedQuantity,
+    reason: `Nhận đủ yêu cầu bổ sung ${request.key}.`, createdAt: request.receivedAt,
+  });
+}
+const confirmedDamage = damageReports.find((item) => item.status === 'Confirmed');
+transactionSpecs.push({
+  productKey: confirmedDamage.productKey, relatedCollection: 'DamageReport', relatedKey: confirmedDamage.key,
+  transactionType: 'DAMAGE_CONFIRMED', quantity: -confirmedDamage.quantity,
+  reason: `Xác nhận hư hỏng ${confirmedDamage.key}.`, createdAt: confirmedDamage.confirmedAt,
+});
+for (const request of stockExports.filter((item) => item.status === 'Exported')) {
+  for (const detail of orderDetails.filter((item) => item.orderKey === request.orderKey)) {
+    transactionSpecs.push({
+      productKey: detail.productKey, orderKey: request.orderKey, relatedCollection: 'StockExportRequest', relatedKey: request.key,
+      transactionType: 'STOCK_EXPORT', quantity: -detail.quantity,
+      reason: `Xuất kho cho ${orders.find((order) => order.key === request.orderKey).orderCode}.`, createdAt: request.exportedAt,
+    });
+  }
+}
+transactionSpecs
+  .sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt) || left.relatedKey.localeCompare(right.relatedKey))
+  .forEach(appendInventoryTransaction);
+
+for (const inventory of inventories) {
+  inventory.stockQuantity = ledger.get(inventory.productKey);
+  inventory.reservedQuantity = orders
+    .filter((order) => ['Pending', 'WaitingForPayment', 'Confirmed', 'StockExportRequested'].includes(order.orderStatus))
+    .flatMap((order) => orderDetails.filter((detail) => detail.orderKey === order.key && detail.productKey === inventory.productKey))
+    .reduce((sum, detail) => sum + detail.quantity, 0);
+  inventory.damagedQuantity = confirmedDamage.productKey === inventory.productKey ? confirmedDamage.quantity : 0;
+  products.find((product) => product.key === inventory.productKey).stockQuantity = inventory.stockQuantity;
+}
+
 const returnStatuses = ['Pending', 'AwaitingInspection', 'Rejected', 'ReadyForRefund', 'Completed'];
-const returnOrders = [14, 15, 16, 17, 18];
+const returnOrders = [14, 15, 16, 17, 19];
 const returnRequests = returnStatuses.map((status, index) => ({
   key: `return-request-${two(index + 1)}`, requestCode: `RET-DEMO-20${two(index + 1)}`, orderKey: `order-${two(returnOrders[index])}`,
   customerKey: orders[returnOrders[index] - 1].customerKey, paymentKey: `payment-${two(returnOrders[index])}`,
   reason: ['Muốn đổi kích thước phù hợp hơn', 'Sản phẩm có vết xước nhẹ', 'Không đủ điều kiện đổi trả', 'Kho đã kiểm hàng, chờ hoàn tiền', 'Yêu cầu đã hoàn tất'][index],
   status, refundAmount: ['ReadyForRefund', 'Completed'].includes(status) ? orders[returnOrders[index] - 1].totalAmount : 0,
   resolvedByKey: status === 'Pending' ? null : 'user-staff', requestedAt: day(37 + index), handledAt: status === 'Pending' ? null : day(38 + index),
+  resolvedAt: status === 'Pending' ? null : day(38 + index),
   staffNote: status === 'Rejected' ? 'Yêu cầu ngoài điều kiện đổi trả.' : 'Đã tiếp nhận theo quy trình.',
+  inspectionNote: ['ReadyForRefund', 'Completed'].includes(status) ? 'Kho đã kiểm đủ số lượng và phân loại từng sản phẩm.' : '',
+  completedByKey: status === 'Completed' ? 'user-staff' : null,
+  completedAt: status === 'Completed' ? day(44) : null,
 }));
-const returnItems = returnRequests.slice(1).map((request, index) => {
-  const detail = orderDetails.find((item) => item.orderKey === request.orderKey);
-  return {
-    key: `return-item-${two(index + 1)}`, returnRequestKey: request.key, orderDetailKey: detail.key, productKey: detail.productKey,
-    requestedQuantity: 1, receivedQuantity: request.status === 'Rejected' ? 0 : 1,
-    sellableQuantity: ['AwaitingInspection', 'ReadyForRefund'].includes(request.status) ? 1 : 0,
-    damagedQuantity: request.status === 'Completed' ? 1 : 0,
-    warehouseNote: 'Biên bản kiểm hàng demo có ảnh và ghi chú rõ ràng.', inspectedByKey: 'user-warehouse', inspectedAt: day(40 + index),
-  };
-});
+const returnItems = returnRequests.filter((request) => ['ReadyForRefund', 'Completed'].includes(request.status)).flatMap((request) =>
+  orderDetails.filter((detail) => detail.orderKey === request.orderKey).map((detail, lineIndex) => ({
+    key: `return-item-${two(returnRequests.indexOf(request) + 1)}-${lineIndex + 1}`, returnRequestKey: request.key,
+    orderDetailKey: detail.key, productKey: detail.productKey, requestedQuantity: detail.quantity, receivedQuantity: 1,
+    sellableQuantity: request.status === 'ReadyForRefund' && lineIndex === 0 ? 1 : 0,
+    damagedQuantity: request.status === 'Completed' || lineIndex === 1 ? 1 : 0,
+    warehouseNote: 'Biên bản kiểm hàng demo có ảnh và ghi chú rõ ràng.', inspectedByKey: 'user-warehouse', inspectedAt: day(42 + lineIndex),
+  }))
+);
 const refundPendings = [
-  { key: 'refund-pending-01', orderKey: 'order-17', paymentAttemptKey: 'payment-attempt-17', status: 'HandedOff' },
+  { key: 'refund-pending-01', orderKey: 'order-17', paymentAttemptKey: 'payment-attempt-17', status: 'RefundPending' },
   { key: 'refund-pending-02', orderKey: 'order-19', paymentAttemptKey: 'payment-attempt-19', status: 'Refunded' },
   { key: 'refund-pending-03', orderKey: 'order-21', paymentAttemptKey: 'payment-attempt-21', status: 'RefundPending' },
 ].map((entry) => ({ ...entry, customerKey: orders[Number(entry.orderKey.slice(-2)) - 1].customerKey, amount: orders[Number(entry.orderKey.slice(-2)) - 1].totalAmount, currency: 'VND', reason: 'Bàn giao hoàn tiền theo kịch bản demo.' }));
 
 const supportTypes = ['Order', 'Product', 'Payment', 'ReturnRefund', 'Other'];
-const supportStatuses = ['New', 'Open', 'InProgress', 'Resolved'];
+const supportStatuses = ['New', 'InProgress', 'Resolved'];
 const supportRequests = customerNames.map((_, index) => ({
   key: `support-${two(index + 1)}`, ticketCode: `SUP-DEMO-${two(index + 1)}`, customerKey: `user-customer-${two(index + 1)}`,
   orderKey: `order-${two(index + 1)}`, productKey: `product-${two((index % 20) + 1)}`, requestType: supportTypes[index % supportTypes.length],
   priority: ['Low', 'Normal', 'High', 'Urgent'][index % 4], subject: `Yêu cầu hỗ trợ demo ${index + 1}`,
   content: 'Khách hàng cần được hướng dẫn rõ ràng về sản phẩm, thanh toán hoặc tiến độ xử lý đơn hàng.',
-  status: supportStatuses[index % supportStatuses.length], handledByKey: index % 4 === 0 ? null : 'user-staff',
-  response: index % 4 === 0 ? '' : 'GreenHome đã kiểm tra và phản hồi theo đúng nội dung yêu cầu.', respondedAt: index % 4 === 0 ? null : day(30 + index),
+  status: supportStatuses[index % supportStatuses.length], handledByKey: index % supportStatuses.length === 0 ? null : 'user-staff',
+  response: index % supportStatuses.length === 0 ? '' : 'GreenHome đã kiểm tra và phản hồi theo đúng nội dung yêu cầu.',
+  createdAt: day(12 + index), respondedAt: index % supportStatuses.length === 0 ? null : day(13 + index),
+  closedAt: index % supportStatuses.length === 2 ? day(14 + index) : null,
 }));
 
 const reviewDetails = orderDetails.filter((detail) => {
   const order = orders.find((candidate) => candidate.key === detail.orderKey);
-  return ['Delivered', 'Returned'].includes(order.orderStatus);
+  return order.orderStatus === 'Delivered';
 }).slice(0, 16);
 const reviews = reviewDetails.map((detail, index) => ({
   key: `review-${two(index + 1)}`, productKey: detail.productKey, orderKey: detail.orderKey,
   customerKey: orders.find((order) => order.key === detail.orderKey).customerKey, rating: 4 + (index % 2),
   content: index % 2 ? 'Thiết kế đẹp, đóng gói chắc chắn và dùng đúng như mô tả. Gia đình tôi rất hài lòng.' : 'Sản phẩm hoàn thiện tốt, chất liệu dễ vệ sinh và giao hàng đúng hẹn.',
-  status: index === 15 ? 'Hidden' : 'Visible', createdAt: day(45 + index),
+  status: index === 15 ? 'Hidden' : 'Visible', createdAt: day(41 + (index % 7)),
 }));
 
 const notifications = Array.from({ length: 40 }, (_, index) => {
@@ -250,7 +312,7 @@ const notifications = Array.from({ length: 40 }, (_, index) => {
     targetCollection: index % 2 ? 'Order' : 'SupportRequest', targetKey: index % 2 ? `order-${two((index % 22) + 1)}` : `support-${two((index % 10) + 1)}`,
     type: index % 2 ? 'ORDER_STATUS' : 'SUPPORT_STATUS', channel: 'InApp', subject: `Thông báo GreenHome số ${index + 1}`,
     content: 'Thông tin demo giúp kiểm tra danh sách, trạng thái đã đọc và liên kết đến tác vụ liên quan.', deliveryStatus: 'Sent',
-    isRead: read, readAt: read ? day(20 + index) : null, sentAt: day(20 + index), createdAt: day(20 + index),
+    isRead: read, readAt: read ? day(20 + (index % 25)) : null, sentAt: day(20 + (index % 25)), createdAt: day(20 + (index % 25)),
   };
 });
 
@@ -265,7 +327,7 @@ const auditLogs = Array.from({ length: 60 }, (_, index) => ({
   key: `audit-${two(index + 1)}`, userKey: users[index % users.length].key, action: auditActions[index % auditActions.length],
   targetEntity: ['User', 'Order', 'Payment', 'Inventory', 'SupportRequest', 'ReturnRefundRequest'][index % 6],
   targetId: `demo-target-${two(index + 1)}`, description: `Nhật ký demo có chủ đích số ${index + 1}.`,
-  ip: '127.0.0.1', userAgent: 'GreenHome Demo Seed', timestamp: day(index),
+  ip: '127.0.0.1', userAgent: 'GreenHome Demo Seed', timestamp: hour(index * 12),
 }));
 
 const DEMO_GRAPH = Object.freeze({

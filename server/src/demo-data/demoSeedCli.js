@@ -45,12 +45,18 @@ async function runDemoSeedCli({
   }
 
   if (options.mode === 'reset') {
-    const { assertResetAllowed, getDatabaseNameFromUri } = require('./demoSeedSafety');
+    const { assertResetAllowed, assertStaticResetAllowed, getDatabaseNameFromUri } = require('./demoSeedSafety');
+    const requestedDatabaseName = getDatabaseNameFromUri(env.MONGODB_URI || '');
+    assertStaticResetAllowed({
+      nodeEnv: env.NODE_ENV,
+      allowReset: env.DEMO_SEED_ALLOW_RESET,
+      databaseName: requestedDatabaseName,
+      confirmation: options.confirmation,
+    });
     await preflightImages({ workspaceRoot });
     if (typeof databaseProbe !== 'function') {
       throw new Error('Reset chưa được bật: chưa có database probe an toàn của Phase 2.');
     }
-    const requestedDatabaseName = getDatabaseNameFromUri(env.MONGODB_URI || '');
     const probe = await databaseProbe();
     if (!probe || probe.databaseName !== requestedDatabaseName) {
       throw new Error('Reset demo bị từ chối: tên database thực tế không khớp MONGODB_URI.');

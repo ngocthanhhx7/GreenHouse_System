@@ -55,4 +55,29 @@ describe('demo graph validator', () => {
     graph.products[0].imageUrl = '/uploads/products/ffffffff-ffff-4fff-8fff-ffffffffffff.webp';
     assert.throws(() => validateDemoGraph(graph), /manifest ảnh/i);
   });
+
+  for (const [label, mutate, expected] of [
+    ['COD callback', (graph) => { graph.paymentCallbacks[0].orderKey = 'order-01'; }, /callback.*ONLINE/i],
+    ['callback lifecycle drift', (graph) => { const item = graph.paymentCallbacks.find((callback) => callback.eventStatus === 'Received'); item.processingResult = { accepted: true }; }, /callback.*Received/i],
+    ['illegal warehouse reference', (graph) => { graph.inventoryTransactions.find((item) => item.transactionType === 'STOCK_EXPORT').relatedKey = 'stock-export-01'; }, /STOCK_EXPORT.*Exported/i],
+    ['completed return mismatch', (graph) => {
+      const request = graph.returnRequests.find((item) => item.status === 'Completed');
+      const order = graph.orders.find((item) => item.key === request.orderKey);
+      order.orderStatus = 'Delivered'; order.paymentStatus = 'Paid';
+      graph.payments.find((item) => item.orderKey === order.key).paymentStatus = 'Paid';
+      graph.paymentAttempts.find((item) => item.orderKey === order.key).paymentStatus = 'Paid';
+    }, /Completed.*Returned/i],
+    ['completed return actor missing', (graph) => { graph.returnRequests.find((item) => item.status === 'Completed').completedByKey = null; }, /Completed.*actor/i],
+    ['product stock drift', (graph) => { graph.products[0].stockQuantity += 1; }, /tồn kho product/i],
+    ['future timestamp', (graph) => { graph.auditLogs[0].timestamp = '2026-07-23T00:00:00.000Z'; }, /thời gian.*tương lai/i],
+    ['invalid support actor', (graph) => { const item = graph.supportRequests.find((support) => support.status === 'New'); item.handledByKey = 'user-staff'; }, /support.*New/i],
+  ]) {
+    it(`rejects ${label}`, () => {
+      const { DEMO_GRAPH, cloneDemoGraph } = require('./demoFixtures');
+      const { validateDemoGraph } = require('./demoGraphValidator');
+      const graph = cloneDemoGraph(DEMO_GRAPH);
+      mutate(graph);
+      assert.throws(() => validateDemoGraph(graph), expected);
+    });
+  }
 });

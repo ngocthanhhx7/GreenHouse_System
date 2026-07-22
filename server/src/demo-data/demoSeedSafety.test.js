@@ -61,6 +61,23 @@ describe('demo product image manifest', () => {
     const { preflightDemoImages } = require('./demoImageManifest');
     await assert.rejects(() => preflightDemoImages({ workspaceRoot: 'Z:/definitely-missing-greenhome' }), /thiếu 20 ảnh/i);
   });
+
+  it('validates WebP magic bytes and exact 1600x1200 dimensions', () => {
+    const { inspectDemoWebp } = require('./demoImageManifest');
+    const valid = Buffer.alloc(30);
+    valid.write('RIFF', 0, 'ascii');
+    valid.writeUInt32LE(22, 4);
+    valid.write('WEBP', 8, 'ascii');
+    valid.write('VP8X', 12, 'ascii');
+    valid.writeUInt32LE(10, 16);
+    valid.writeUIntLE(1599, 24, 3);
+    valid.writeUIntLE(1199, 27, 3);
+    assert.deepEqual(inspectDemoWebp(valid), { format: 'webp', width: 1600, height: 1200 });
+    assert.throws(() => inspectDemoWebp(Buffer.from('not-webp')), /WebP/i);
+    const wrongSize = Buffer.from(valid);
+    wrongSize.writeUIntLE(799, 24, 3);
+    assert.throws(() => inspectDemoWebp(wrongSize), /1600x1200/i);
+  });
 });
 
 describe('demo seed CLI parser', () => {
@@ -123,5 +140,33 @@ describe('demo seed CLI parser', () => {
       logger: { log() {}, error() {} },
     }), /thiếu 20 ảnh/i);
     assert.equal(databaseCalls, 0);
+  });
+
+  for (const [label, env, args] of [
+    ['production', { NODE_ENV: 'production', DEMO_SEED_ALLOW_RESET: 'true', MONGODB_URI: 'mongodb://127.0.0.1/greenhouse_demo' }, ['--reset', '--confirm=RESET:greenhouse_demo']],
+    ['missing opt-in', { NODE_ENV: 'development', DEMO_SEED_ALLOW_RESET: 'false', MONGODB_URI: 'mongodb://127.0.0.1/greenhouse_demo' }, ['--reset', '--confirm=RESET:greenhouse_demo']],
+    ['wrong database', { NODE_ENV: 'development', DEMO_SEED_ALLOW_RESET: 'true', MONGODB_URI: 'mongodb://127.0.0.1/greenhouse' }, ['--reset', '--confirm=RESET:greenhouse']],
+    ['wrong confirmation', { NODE_ENV: 'development', DEMO_SEED_ALLOW_RESET: 'true', MONGODB_URI: 'mongodb://127.0.0.1/greenhouse_demo' }, ['--reset', '--confirm=RESET:greenhouse_test']],
+  ]) {
+    it(`applies static ${label} guard before image or database probes`, async () => {
+      const { runDemoSeedCli } = require('./demoSeedCli');
+      let probeCalls = 0;
+      await assert.rejects(() => runDemoSeedCli({
+        args, env,
+        imagePreflight: async () => { probeCalls += 1; return { valid: true, count: 20 }; },
+        databaseProbe: async () => { probeCalls += 1; return { databaseName: 'greenhouse_demo', supportsTransactions: true, indexesReady: true }; },
+        logger: { log() {}, error() {} },
+      }), /reset demo bị từ chối/i);
+      assert.equal(probeCalls, 0);
+    });
+  }
+
+  it('forwards the legacy direct entrypoint to the guarded CLI without calling MongoDB', () => {
+    const { readFileSync } = require('node:fs');
+    const path = require('node:path');
+    const source = readFileSync(path.join(__dirname, '../config/seedDemoData.js'), 'utf8');
+    const directBlock = source.slice(source.indexOf('if (require.main === module)'));
+    assert.match(directBlock, /runDemoSeedCli/);
+    assert.doesNotMatch(directBlock, /connectDatabase|seedDemoData\(/);
   });
 });

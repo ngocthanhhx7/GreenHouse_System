@@ -761,10 +761,11 @@ async function runCli() {
 }
 
 if (require.main === module) {
-  runCli().catch(async (error) => {
-    console.error('Failed to seed demo data:', error);
-    await mongoose.disconnect().catch(() => {});
-    process.exit(1);
+  const path = require('node:path');
+  const { runDemoSeedCli } = require('../demo-data/demoSeedCli');
+  runDemoSeedCli({ workspaceRoot: path.resolve(__dirname, '../../..') }).catch((error) => {
+    console.error(error.message);
+    process.exitCode = 1;
   });
 }
 

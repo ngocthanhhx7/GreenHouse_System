@@ -25,15 +25,20 @@ function getDatabaseNameFromUri(uri) {
   return databaseName;
 }
 
-function assertResetAllowed({ nodeEnv, allowReset, databaseName, confirmation, supportsTransactions }) {
+function assertStaticResetAllowed({ nodeEnv, allowReset, databaseName, confirmation }) {
   const normalized = String(databaseName || '').trim();
   if (String(nodeEnv).toLowerCase() === 'production') reject('NODE_ENV=production.');
   if (allowReset !== 'true') reject('DEMO_SEED_ALLOW_RESET phải bằng true.');
   if (!normalized || FORBIDDEN_DATABASES.has(normalized.toLowerCase())) reject('database hệ thống hoặc không xác định.');
   if (!ALLOWED_DATABASES.has(normalized.toLowerCase())) reject('tên database không thuộc greenhouse_demo/greenhouse_test/greenhouse_e2e.');
   if (confirmation !== `RESET:${normalized}`) reject(`cần --confirm=RESET:${normalized}.`);
-  if (supportsTransactions !== true) reject('MongoDB không hỗ trợ transaction; không được xóa từng phần.');
   return { databaseName: normalized };
 }
 
-module.exports = { assertResetAllowed, DEMO_DELETE_ORDER, getDatabaseNameFromUri };
+function assertResetAllowed({ nodeEnv, allowReset, databaseName, confirmation, supportsTransactions }) {
+  const result = assertStaticResetAllowed({ nodeEnv, allowReset, databaseName, confirmation });
+  if (supportsTransactions !== true) reject('MongoDB không hỗ trợ transaction; không được xóa từng phần.');
+  return result;
+}
+
+module.exports = { assertResetAllowed, assertStaticResetAllowed, DEMO_DELETE_ORDER, getDatabaseNameFromUri };

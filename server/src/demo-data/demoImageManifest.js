@@ -31,6 +31,29 @@ const DEMO_IMAGE_MANIFEST = Object.freeze(PRODUCT_SKUS.map((sku, index) => {
   });
 }));
 
+function inspectDemoWebp(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 20 || buffer.toString('ascii', 0, 4) !== 'RIFF' || buffer.toString('ascii', 8, 12) !== 'WEBP') {
+    throw new Error('Ảnh demo phải là WebP hợp lệ theo magic bytes RIFF/WEBP.');
+  }
+  const chunk = buffer.toString('ascii', 12, 16);
+  let width;
+  let height;
+  if (chunk === 'VP8X' && buffer.length >= 30) {
+    width = buffer.readUIntLE(24, 3) + 1;
+    height = buffer.readUIntLE(27, 3) + 1;
+  } else if (chunk === 'VP8 ' && buffer.length >= 30 && buffer[23] === 0x9d && buffer[24] === 0x01 && buffer[25] === 0x2a) {
+    width = buffer.readUInt16LE(26) & 0x3fff;
+    height = buffer.readUInt16LE(28) & 0x3fff;
+  } else if (chunk === 'VP8L' && buffer.length >= 25 && buffer[20] === 0x2f) {
+    width = 1 + buffer[21] + ((buffer[22] & 0x3f) << 8);
+    height = 1 + (buffer[22] >> 6) + (buffer[23] << 2) + ((buffer[24] & 0x0f) << 10);
+  } else {
+    throw new Error(`Ảnh demo có WebP chunk không hỗ trợ hoặc bị hỏng: ${chunk || 'unknown'}.`);
+  }
+  if (width !== 1600 || height !== 1200) throw new Error(`Ảnh demo phải có kích thước chính xác 1600x1200, nhận được ${width}x${height}.`);
+  return { format: 'webp', width, height };
+}
+
 async function preflightDemoImages({ workspaceRoot, manifest = DEMO_IMAGE_MANIFEST } = {}) {
   if (manifest.length !== 20) throw new Error(`Manifest ảnh demo phải có đúng 20 ảnh, hiện có ${manifest.length}.`);
   const missing = [];
@@ -41,6 +64,7 @@ async function preflightDemoImages({ workspaceRoot, manifest = DEMO_IMAGE_MANIFE
     try {
       await access(sourcePath);
       const file = await readFile(sourcePath);
+      inspectDemoWebp(file);
       const hash = createHash('sha256').update(file).digest('hex');
       if (hash !== entry.sha256 || file.length > entry.maxBytes) invalid.push(entry.sku);
     } catch (error) {
@@ -54,4 +78,4 @@ async function preflightDemoImages({ workspaceRoot, manifest = DEMO_IMAGE_MANIFE
   return { count: manifest.length, valid: true };
 }
 
-module.exports = { DEMO_IMAGE_MANIFEST, preflightDemoImages };
+module.exports = { DEMO_IMAGE_MANIFEST, inspectDemoWebp, preflightDemoImages };

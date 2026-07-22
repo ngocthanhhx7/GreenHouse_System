@@ -88,4 +88,64 @@ describe('deterministic demo fixture graph', () => {
     const customerKeys = DEMO_GRAPH.users.filter((user) => user.roleName === 'Customer').map((user) => user.key);
     assert.ok(customerKeys.every((key) => participating.has(key)));
   });
+
+  it('mirrors the warehouse ledger and derives product inventory quantities', () => {
+    const { DEMO_GRAPH } = require('./demoFixtures');
+    const byType = Object.fromEntries(['STOCK_EXPORT', 'REPLENISHMENT_RECEIVE', 'DAMAGE_CONFIRMED', 'ADJUSTMENT']
+      .map((type) => [type, DEMO_GRAPH.inventoryTransactions.filter((item) => item.transactionType === type).length]));
+    assert.deepEqual(byType, { STOCK_EXPORT: 22, REPLENISHMENT_RECEIVE: 2, DAMAGE_CONFIRMED: 1, ADJUSTMENT: 12 });
+    for (const inventory of DEMO_GRAPH.inventories) {
+      const product = DEMO_GRAPH.products.find((item) => item.key === inventory.productKey);
+      assert.equal(product.stockQuantity, inventory.stockQuantity);
+      const held = DEMO_GRAPH.orders
+        .filter((order) => ['Pending', 'WaitingForPayment', 'Confirmed', 'StockExportRequested'].includes(order.orderStatus))
+        .flatMap((order) => DEMO_GRAPH.orderDetails.filter((detail) => detail.orderKey === order.key && detail.productKey === product.key))
+        .reduce((sum, detail) => sum + detail.quantity, 0);
+      assert.equal(inventory.reservedQuantity, held);
+    }
+  });
+
+  it('uses only durable service states and coherent linked workflows', () => {
+    const { DEMO_GRAPH } = require('./demoFixtures');
+    assert.ok(!DEMO_GRAPH.replenishments.some((item) => item.status === 'Receiving'));
+    for (const callback of DEMO_GRAPH.paymentCallbacks) {
+      assert.equal(DEMO_GRAPH.orders.find((order) => order.key === callback.orderKey).paymentMethod, 'ONLINE');
+    }
+    const receivedCallback = DEMO_GRAPH.paymentCallbacks.find((callback) => callback.eventStatus === 'Received');
+    assert.ok(receivedCallback && receivedCallback.processingStartedAt === null && receivedCallback.processingResult === null);
+    for (const callback of DEMO_GRAPH.paymentCallbacks.filter((item) => item.eventStatus === 'Processed')) {
+      const order = DEMO_GRAPH.orders.find((item) => item.key === callback.orderKey);
+      const expectedGatewayStatus = order.paymentStatus === 'Failed' ? 'Failed' : 'Paid';
+      assert.equal(callback.rawPayload.paymentStatus, expectedGatewayStatus);
+      assert.equal(callback.processingResult.accepted, expectedGatewayStatus === 'Paid');
+    }
+    for (const review of DEMO_GRAPH.reviews) {
+      assert.equal(DEMO_GRAPH.orders.find((order) => order.key === review.orderKey).orderStatus, 'Delivered');
+    }
+    const completed = DEMO_GRAPH.returnRequests.find((request) => request.status === 'Completed');
+    const completedOrder = DEMO_GRAPH.orders.find((order) => order.key === completed.orderKey);
+    assert.deepEqual([completedOrder.orderStatus, completedOrder.paymentStatus], ['Returned', 'Refunded']);
+    assert.ok(DEMO_GRAPH.returnItems.some((item) => item.returnRequestKey === completed.key));
+    assert.ok(completed.completedByKey === 'user-staff' && completed.completedAt && completed.inspectionNote);
+    assert.ok(Date.parse(completed.requestedAt) <= Date.parse(completed.completedAt));
+    assert.ok(DEMO_GRAPH.orders.filter((order) => order.orderStatus === 'Cancelled').every((order) => order.cancelReason));
+    assert.ok(DEMO_GRAPH.orders.filter((order) => order.paymentMethod === 'COD' && order.orderStatus !== 'Delivered').every((order) => order.paymentStatus === 'Unpaid'));
+  });
+
+  it('keeps support, stock-export actors and timestamps consistent and not in the future', () => {
+    const { DEMO_GRAPH } = require('./demoFixtures');
+    for (const support of DEMO_GRAPH.supportRequests) {
+      if (support.status === 'New') assert.deepEqual([support.handledByKey, support.response, support.respondedAt, support.closedAt], [null, '', null, null]);
+      if (support.status === 'InProgress') assert.ok(support.handledByKey && support.response && support.respondedAt && !support.closedAt);
+      if (support.status === 'Resolved') assert.ok(support.handledByKey && support.response && support.respondedAt && support.closedAt);
+    }
+    for (const request of DEMO_GRAPH.stockExports) {
+      assert.equal(request.requestedByKey, 'user-staff');
+      if (request.status === 'Pending') assert.deepEqual([request.processedByKey, request.exportedAt], [null, null]);
+      if (request.status === 'Exported') assert.ok(request.processedByKey === 'user-warehouse' && request.exportedAt);
+      if (request.exportedAt) assert.ok(Date.parse(request.createdAt) <= Date.parse(request.exportedAt));
+    }
+    const allDates = JSON.stringify(DEMO_GRAPH).match(/20\d\d-\d\d-\d\dT\d\d:\d\d:\d\d\.\d\d\dZ/g) || [];
+    assert.ok(allDates.every((value) => Date.parse(value) <= Date.parse('2026-07-22T00:00:00.000Z')));
+  });
 });

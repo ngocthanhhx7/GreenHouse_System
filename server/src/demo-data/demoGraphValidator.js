@@ -61,6 +61,10 @@ function validateDemoGraph(graph) {
   const payments = indexBy(graph.payments);
   const attempts = indexBy(graph.paymentAttempts);
   const returns = indexBy(graph.returnRequests);
+  const stockExports = indexBy(graph.stockExports);
+  const replenishments = indexBy(graph.replenishments);
+  const damageReports = indexBy(graph.damageReports);
+  const inventoryByProduct = new Map(graph.inventories.map((item) => [item.productKey, item]));
 
   for (const requiredRole of ['Customer', 'Staff', 'WarehouseManager', 'Admin']) {
     if (!roles.has(requiredRole)) fail(`thiếu role ${requiredRole}.`);
@@ -109,6 +113,13 @@ function validateDemoGraph(graph) {
   assertReference(graph.reviews, 'productKey', products, 'reviews');
   assertReference(graph.notifications, 'userKey', users, 'notifications');
   assertReference(graph.auditLogs, 'userKey', users, 'auditLogs');
+  for (const collection of [graph.stockExports, graph.inventoryTransactions, graph.replenishments, graph.damageReports, graph.returnItems, graph.supportRequests]) {
+    for (const item of collection) {
+      for (const field of ['requestedByKey', 'processedByKey', 'performedByKey', 'approvedByKey', 'receivedByKey', 'reportedByKey', 'confirmedByKey', 'inspectedByKey', 'handledByKey', 'resolvedByKey', 'completedByKey']) {
+        if (field in item && item[field] !== null && !users.has(item[field])) fail(`${item.key}.${field} không tồn tại.`);
+      }
+    }
+  }
 
   for (const order of graph.orders) {
     const lines = graph.orderDetails.filter((line) => line.orderKey === order.key);
@@ -121,6 +132,8 @@ function validateDemoGraph(graph) {
     if (order.orderStatus === 'WaitingForPayment' && (order.paymentMethod !== 'ONLINE' || order.paymentStatus !== 'Pending')) fail('WaitingForPayment phải là ONLINE/Pending.');
     if (order.orderStatus === 'Delivered' && order.paymentStatus !== 'Paid') fail('Đơn Delivered bắt buộc có paymentStatus Paid.');
     if (order.orderStatus === 'Returned' && order.paymentStatus !== 'Refunded') fail('Đơn Returned bắt buộc có paymentStatus Refunded.');
+    if (order.paymentMethod === 'COD' && order.orderStatus !== 'Delivered' && order.paymentStatus !== 'Unpaid') fail(`${order.orderCode} COD chưa giao phải Unpaid.`);
+    if (order.orderStatus === 'Cancelled' && !String(order.cancelReason || '').trim()) fail(`${order.orderCode} Cancelled phải có lý do.`);
     if (order.paymentMethod === 'ONLINE' && ['Confirmed', 'StockExportRequested', 'Packed', 'Shipped', 'Delivered'].includes(order.orderStatus) && order.paymentStatus !== 'Paid') fail(`${order.orderCode} ONLINE sau xác nhận phải Paid.`);
     const created = Date.parse(order.createdAt);
     if (!Number.isFinite(created)) fail(`${order.orderCode} thiếu createdAt hợp lệ.`);
@@ -137,8 +150,53 @@ function validateDemoGraph(graph) {
     const order = orders.get(attempt.orderKey);
     if (attempt.amount !== order.totalAmount || attempt.paymentStatus !== order.paymentStatus) fail(`${attempt.key} không khớp order.`);
   }
+  for (const callback of graph.paymentCallbacks) {
+    const order = orders.get(callback.orderKey);
+    const attempt = attempts.get(callback.paymentAttemptKey);
+    if (order.paymentMethod !== 'ONLINE' || attempt.orderKey !== order.key || attempt.paymentMethod !== 'ONLINE') fail(`Callback ${callback.key} chỉ được gắn với ONLINE attempt cùng order.`);
+    if (callback.eventStatus === 'Received' && (order.paymentStatus !== 'Pending' || callback.processingStartedAt !== null || callback.processingResult !== null)) fail(`Callback ${callback.key} Received chưa được có kết quả xử lý.`);
+    if (callback.eventStatus === 'Processed') {
+      const expectedGatewayStatus = order.paymentStatus === 'Failed' ? 'Failed' : 'Paid';
+      if (callback.rawPayload?.paymentStatus !== expectedGatewayStatus || callback.processingResult?.accepted !== (expectedGatewayStatus === 'Paid')) fail(`Callback ${callback.key} Processed không khớp kết quả gateway.`);
+    }
+  }
+
+  const transactionCounts = Object.fromEntries(['STOCK_EXPORT', 'REPLENISHMENT_RECEIVE', 'DAMAGE_CONFIRMED', 'ADJUSTMENT']
+    .map((type) => [type, graph.inventoryTransactions.filter((item) => item.transactionType === type).length]));
+  const expectedTransactionCounts = { STOCK_EXPORT: 22, REPLENISHMENT_RECEIVE: 2, DAMAGE_CONFIRMED: 1, ADJUSTMENT: 12 };
+  if (JSON.stringify(transactionCounts) !== JSON.stringify(expectedTransactionCounts)) fail('InventoryTransaction phải có đúng 22 export, 2 replenish, 1 damage và 12 adjustment.');
   for (const transaction of graph.inventoryTransactions) {
     if (!Number.isInteger(transaction.quantity) || transaction.afterQuantity !== transaction.beforeQuantity + transaction.quantity || transaction.afterQuantity < 0) fail(`${transaction.key} sai bất biến số lượng kho.`);
+    if (transaction.transactionType === 'ADJUSTMENT') {
+      const inventory = inventories.get(transaction.relatedKey);
+      if (transaction.relatedCollection !== 'Inventory' || !inventory || inventory.productKey !== transaction.productKey || transaction.orderKey !== null) fail(`${transaction.key} ADJUSTMENT tham chiếu Inventory không hợp lệ.`);
+    } else if (transaction.transactionType === 'REPLENISHMENT_RECEIVE') {
+      const request = replenishments.get(transaction.relatedKey);
+      if (transaction.relatedCollection !== 'ReplenishmentRequest' || !request || request.status !== 'Received' || request.productKey !== transaction.productKey || transaction.quantity !== request.receivedQuantity) fail(`${transaction.key} REPLENISHMENT_RECEIVE không khớp request Received.`);
+    } else if (transaction.transactionType === 'DAMAGE_CONFIRMED') {
+      const report = damageReports.get(transaction.relatedKey);
+      if (transaction.relatedCollection !== 'DamageReport' || !report || report.status !== 'Confirmed' || report.productKey !== transaction.productKey || transaction.quantity !== -report.quantity) fail(`${transaction.key} DAMAGE_CONFIRMED không khớp report Confirmed.`);
+    } else if (transaction.transactionType === 'STOCK_EXPORT') {
+      const request = stockExports.get(transaction.relatedKey);
+      if (transaction.relatedCollection !== 'StockExportRequest' || !request || request.status !== 'Exported' || request.orderKey !== transaction.orderKey) fail(`${transaction.key} STOCK_EXPORT phải tham chiếu request Exported cùng order.`);
+      const detail = graph.orderDetails.find((item) => item.orderKey === transaction.orderKey && item.productKey === transaction.productKey);
+      if (!detail || transaction.quantity !== -detail.quantity) fail(`${transaction.key} STOCK_EXPORT không khớp dòng hàng.`);
+    }
+  }
+  for (const product of graph.products) {
+    const inventory = inventoryByProduct.get(product.key);
+    const transactions = graph.inventoryTransactions.filter((item) => item.productKey === product.key)
+      .sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt) || left.key.localeCompare(right.key));
+    for (let index = 1; index < transactions.length; index += 1) {
+      if (transactions[index - 1].afterQuantity !== transactions[index].beforeQuantity) fail(`${product.sku} có chuỗi ledger kho bị đứt.`);
+    }
+    const finalQuantity = transactions.at(-1)?.afterQuantity;
+    if (product.stockQuantity !== inventory.stockQuantity || inventory.stockQuantity !== finalQuantity) fail(`${product.sku} tồn kho product/inventory không được derive từ ledger.`);
+    const expectedReserved = graph.orders
+      .filter((order) => ['Pending', 'WaitingForPayment', 'Confirmed', 'StockExportRequested'].includes(order.orderStatus))
+      .flatMap((order) => graph.orderDetails.filter((detail) => detail.orderKey === order.key && detail.productKey === product.key))
+      .reduce((sum, detail) => sum + detail.quantity, 0);
+    if (inventory.reservedQuantity !== expectedReserved || expectedReserved > inventory.stockQuantity) fail(`${product.sku} reservedQuantity không khớp các đơn đang giữ chỗ.`);
   }
   for (const invoice of graph.invoices) {
     const order = orders.get(invoice.orderKey);
@@ -148,11 +206,48 @@ function validateDemoGraph(graph) {
   for (const item of graph.returnItems) {
     if (item.receivedQuantity !== item.sellableQuantity + item.damagedQuantity) fail(`${item.key} sai phân loại số lượng trả.`);
   }
+  for (const request of graph.returnRequests) {
+    const order = orders.get(request.orderKey);
+    const items = graph.returnItems.filter((item) => item.returnRequestKey === request.key);
+    if (request.customerKey !== order.customerKey) fail(`${request.key} không thuộc customer của order.`);
+    if (request.status === 'Completed' && (order.orderStatus !== 'Returned' || order.paymentStatus !== 'Refunded' || items.length === 0)) fail(`${request.key} Completed bắt buộc order Returned/Refunded và có inspection items.`);
+    if (request.status === 'Completed' && (request.completedByKey !== 'user-staff' || !request.completedAt || !request.inspectionNote || items.some((item) => Date.parse(item.inspectedAt) > Date.parse(request.completedAt)))) fail(`${request.key} Completed thiếu actor/timestamp/inspection hợp lệ.`);
+    if (request.status === 'ReadyForRefund' && (order.orderStatus !== 'Delivered' || order.paymentStatus !== 'Paid' || items.length === 0)) fail(`${request.key} ReadyForRefund phải giữ order Delivered/Paid và có inspection items.`);
+    if (request.status === 'ReadyForRefund' && !request.inspectionNote) fail(`${request.key} ReadyForRefund thiếu inspection note.`);
+    if (['Pending', 'AwaitingInspection', 'Rejected'].includes(request.status) && items.length) fail(`${request.key} chưa inspection xong nhưng đã có return items.`);
+  }
+  for (const pending of graph.refundPendings) {
+    const order = orders.get(pending.orderKey);
+    const request = graph.returnRequests.find((item) => item.orderKey === order.key);
+    if (pending.status === 'Refunded' && (!request || request.status !== 'Completed' || order.orderStatus !== 'Returned' || order.paymentStatus !== 'Refunded')) fail(`${pending.key} Refunded không khớp return Completed.`);
+    if (pending.status === 'RefundPending') {
+      const validHandoff = request?.status === 'ReadyForRefund' || (order.orderStatus === 'Cancelled' && order.paymentStatus === 'RefundPending');
+      if (!validHandoff) fail(`${pending.key} RefundPending không khớp hand-off hiện tại.`);
+    }
+    if (pending.status === 'HandedOff') fail(`${pending.key} không dùng trạng thái HandedOff bền vững.`);
+  }
   for (const review of graph.reviews) {
     const order = orders.get(review.orderKey);
     const backed = graph.orderDetails.some((line) => line.orderKey === review.orderKey && line.productKey === review.productKey);
-    if (!['Delivered', 'Returned'].includes(order.orderStatus) || !backed || order.customerKey !== review.customerKey) fail(`Đánh giá ${review.key} không được bảo chứng bởi đơn Delivered.`);
+    if (order.orderStatus !== 'Delivered' || !backed || order.customerKey !== review.customerKey) fail(`Đánh giá ${review.key} không được bảo chứng bởi đơn Delivered.`);
   }
+
+  for (const support of graph.supportRequests) {
+    if (support.status === 'New' && (support.handledByKey !== null || support.response !== '' || support.respondedAt !== null || support.closedAt !== null)) fail(`Support ${support.key} New không được có actor/response/timestamp xử lý.`);
+    if (support.status === 'InProgress' && (!support.handledByKey || !support.response || !support.respondedAt || support.closedAt !== null)) fail(`Support ${support.key} InProgress thiếu actor/response hợp lệ.`);
+    if (support.status === 'Resolved' && (!support.handledByKey || !support.response || !support.respondedAt || !support.closedAt || Date.parse(support.closedAt) < Date.parse(support.respondedAt))) fail(`Support ${support.key} Resolved thiếu lifecycle hoàn chỉnh.`);
+  }
+  for (const request of graph.stockExports) {
+    const order = orders.get(request.orderKey);
+    if (request.requestedByKey !== 'user-staff') fail(`${request.key} phải do Staff yêu cầu.`);
+    if (request.status === 'Pending' && (request.processedByKey !== null || request.exportedAt !== null || order.orderStatus !== 'StockExportRequested')) fail(`${request.key} Pending có actor/timestamp sai.`);
+    if (request.status === 'Approved' && (request.processedByKey !== 'user-warehouse' || request.exportedAt !== null || order.orderStatus !== 'StockExportRequested')) fail(`${request.key} Approved có lifecycle sai.`);
+    if (request.status === 'Rejected' && (request.processedByKey !== 'user-warehouse' || request.exportedAt !== null || order.orderStatus !== 'Confirmed')) fail(`${request.key} Rejected phải trả order về Confirmed.`);
+    if (request.status === 'Exported' && (request.processedByKey !== 'user-warehouse' || !request.exportedAt || !['Packed', 'Shipped', 'Delivered'].includes(order.orderStatus) || Date.parse(request.exportedAt) > Date.parse(order.packedAt))) fail(`${request.key} Exported có actor/timestamp/order sai.`);
+  }
+
+  const dateValues = JSON.stringify(graph).match(/20\d\d-\d\d-\d\dT\d\d:\d\d:\d\d\.\d\d\dZ/g) || [];
+  if (dateValues.some((value) => !Number.isFinite(Date.parse(value)) || Date.parse(value) > Date.parse('2026-07-22T00:00:00.000Z'))) fail('Thời gian demo không hợp lệ hoặc nằm trong tương lai.');
 
   const settings = graph.systemSettings.map((item) => item.key).sort();
   const expectedSettings = ['LOW_STOCK_DEFAULT_THRESHOLD', 'PAYMENT_TIMEOUT_MINUTES', 'RETURN_WINDOW_DAYS'];
