@@ -330,9 +330,9 @@ function createOrderService({
           targetId: String(result.order._id),
           description: `Order created: ${result.order.orderCode}`,
         });
-        const recipient = customerRepository ? await customerRepository.findEmail(customerId) : null;
-        if (recipient && emailOutboxService) {
-          try {
+        try {
+          const recipient = customerRepository ? await customerRepository.findEmail(customerId) : null;
+          if (recipient && emailOutboxService) {
             await emailOutboxService.enqueue({
               eventType: 'ORDER_CREATED',
               idempotencyKey: `ORDER_CREATED:${result.order._id}`,
@@ -344,9 +344,15 @@ function createOrderService({
                 paymentMethod: result.order.paymentMethod,
               },
             });
-          } catch (error) {
-            // Checkout is already committed; email delivery is retried by the outbox worker.
           }
+        } catch (error) {
+            await auditLogger.log({
+              userId: customerId,
+              action: 'EMAIL_OUTBOX_ENQUEUE_FAILED',
+              targetEntity: 'Order',
+              targetId: String(result.order._id),
+              description: `Order email enqueue failed after commit: ${error.message}`,
+            });
         }
       }
       return toOrderResponse(result.order, result.lines);
