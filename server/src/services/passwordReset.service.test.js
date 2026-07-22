@@ -124,4 +124,20 @@ describe('password reset OTP service', () => {
     assert.equal(repos.tokens.length, 1);
     assert.equal(repos.outboxService.events.length, 1);
   });
+
+  it('keeps the OTP available when the password update transaction rolls back', async () => {
+    const repos = repositories();
+    const service = createService(repos, {
+      transactionManager: {
+        async withTransaction(work) {
+          const token = repos.tokens[0];
+          try { return await work({ id: 'session-1' }); } catch (error) { token.usedAt = null; throw error; }
+        },
+      },
+      hashPassword: async () => { throw new Error('hash unavailable'); },
+    });
+    await service.requestReset('thanh@example.com');
+    await assert.rejects(() => service.resetPassword({ email: 'thanh@example.com', otp: '123456', password: 'NewPassword123', confirmPassword: 'NewPassword123' }), /hash unavailable/);
+    assert.equal(repos.tokens[0].usedAt, null);
+  });
 });

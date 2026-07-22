@@ -1,6 +1,17 @@
 const EmailOutbox = require('../models/emailOutbox.model');
 const { decryptOtp } = require('./passwordReset.service');
 
+function assertEmailConfig(env = process.env) {
+  if (env.MAIL_PROVIDER !== 'smtp') return true;
+  if (!env.SMTP_HOST || !env.SMTP_USER || !env.SMTP_PASS || !env.MAIL_FROM) {
+    throw new Error('Thiếu cấu hình SMTP_HOST, SMTP_USER, SMTP_PASS hoặc MAIL_FROM.');
+  }
+  if (!env.RESET_OTP_SECRET || env.RESET_OTP_SECRET.length < 32) {
+    throw new Error('RESET_OTP_SECRET phải có ít nhất 32 ký tự khi bật SMTP.');
+  }
+  return true;
+}
+
 function renderEmail(entry, otpSecret) {
   const payload = entry.payload || {};
   if (entry.eventType === 'PASSWORD_RESET_OTP_REQUESTED') {
@@ -29,17 +40,19 @@ function createEmailProvider(providerName = process.env.MAIL_PROVIDER || 'disabl
   if (providerName === 'fake') return { async send() { return { accepted: true }; } };
   if (providerName !== 'smtp') return { async send() { return { accepted: false, disabled: true }; } };
 
-  const host = options.host || process.env.SMTP_HOST;
+  const config = { ...process.env, SMTP_HOST: options.host || process.env.SMTP_HOST, SMTP_USER: options.user || process.env.SMTP_USER, SMTP_PASS: options.pass || process.env.SMTP_PASS, MAIL_FROM: options.from || process.env.MAIL_FROM, RESET_OTP_SECRET: options.otpSecret || process.env.RESET_OTP_SECRET };
+  if (!options.transporter) assertEmailConfig({ ...config, MAIL_PROVIDER: 'smtp' });
+  else if (!config.RESET_OTP_SECRET || config.RESET_OTP_SECRET.length < 32) throw new Error('RESET_OTP_SECRET phải có ít nhất 32 ký tự khi bật SMTP.');
+  const host = config.SMTP_HOST;
   const port = Number(options.port || process.env.SMTP_PORT || 465);
   const secure = options.secure ?? String(process.env.SMTP_SECURE || 'true').toLowerCase() === 'true';
-  const user = options.user || process.env.SMTP_USER;
-  const pass = options.pass || process.env.SMTP_PASS;
-  const from = options.from || process.env.MAIL_FROM || user;
-  const otpSecret = options.otpSecret || process.env.RESET_OTP_SECRET || process.env.JWT_SECRET || 'greenhome-development-otp-secret';
+  const user = config.SMTP_USER;
+  const pass = config.SMTP_PASS;
+  const from = config.MAIL_FROM || user;
+  const otpSecret = config.RESET_OTP_SECRET;
   let transporter = options.transporter;
 
   if (!transporter) {
-    if (!host || !user || !pass || !from) throw new Error('Thiếu cấu hình SMTP_HOST, SMTP_USER, SMTP_PASS hoặc MAIL_FROM.');
     // Loaded only when SMTP is enabled so tests and local disabled mode stay offline.
     const nodemailer = require('nodemailer');
     transporter = nodemailer.createTransport({ host, port, secure, auth: { user, pass } });
@@ -65,14 +78,15 @@ function createModelEmailOutboxRepository() {
       return created.toObject();
     },
     async claimNext(now, leaseUntil) {
+      const claimId = require('node:crypto').randomUUID();
       return EmailOutbox.findOneAndUpdate(
         { $or: [{ status: { $in: ['Pending', 'Failed'] }, availableAt: { $lte: now } }, { status: 'Processing', leaseUntil: { $lt: now } }] },
-        { $set: { status: 'Processing', leaseUntil }, $inc: { attemptCount: 1 } },
+        { $set: { status: 'Processing', leaseUntil, claimId }, $inc: { attemptCount: 1 } },
         { sort: { availableAt: 1 }, new: true }
       ).lean();
     },
-    async markSent(id, data) { return EmailOutbox.findByIdAndUpdate(id, { $set: data }, { new: true }).lean(); },
-    async markFailed(id, data) { return EmailOutbox.findByIdAndUpdate(id, { $set: data }, { new: true }).lean(); },
+    async markSent(id, data, claimId) { return EmailOutbox.findOneAndUpdate({ _id: id, status: 'Processing', claimId }, { $set: data }, { new: true }).lean(); },
+    async markFailed(id, data, claimId) { return EmailOutbox.findOneAndUpdate({ _id: id, status: 'Processing', claimId }, { $set: data }, { new: true }).lean(); },
   };
 }
 
@@ -95,19 +109,21 @@ function createEmailOutboxService({ repository = createModelEmailOutboxRepositor
       try {
         const result = await provider.send(entry);
         if (result && result.disabled) {
-          await repository.markFailed(entry._id, { status: 'Failed', availableAt: new Date(current.getTime() + 60_000), leaseUntil: null, lastError: 'Email provider disabled' });
+          await repository.markFailed(entry._id, { status: 'Failed', availableAt: new Date(current.getTime() + 60_000), leaseUntil: null, lastError: 'Email provider disabled' }, entry.claimId);
           return { ...entry, status: 'Failed' };
         }
-        await repository.markSent(entry._id, { status: 'Sent', sentAt: now(), leaseUntil: null, lastError: '', providerMessageId: result.messageId || '' });
+        const finalized = await repository.markSent(entry._id, { status: 'Sent', sentAt: now(), leaseUntil: null, lastError: '', providerMessageId: result.messageId || '' }, entry.claimId);
+        if (finalized === null) return { ...entry, status: 'LostLease' };
         return { ...entry, status: 'Sent' };
       } catch (error) {
         const attempt = Math.max(1, Number(entry.attemptCount || 1));
         const delay = Math.min(60 * 60_000, (2 ** Math.min(attempt, 10)) * 1000);
-        await repository.markFailed(entry._id, { status: 'Failed', attemptCount: attempt, availableAt: new Date(current.getTime() + delay), leaseUntil: null, lastError: error.message });
+        const finalized = await repository.markFailed(entry._id, { status: 'Failed', attemptCount: attempt, availableAt: new Date(current.getTime() + delay), leaseUntil: null, lastError: error.message }, entry.claimId);
+        if (finalized === null) return { ...entry, status: 'LostLease' };
         return { ...entry, status: 'Failed' };
       }
     },
   };
 }
 
-module.exports = { createEmailProvider, createEmailOutboxService, createModelEmailOutboxRepository, renderEmail };
+module.exports = { createEmailProvider, createEmailOutboxService, createModelEmailOutboxRepository, renderEmail, assertEmailConfig };

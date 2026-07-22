@@ -32,7 +32,10 @@ function createApp({ rateLimit = true } = {}) {
   app.use(requestId);
   app.use(cors(createCorsOptions(resolveCorsOrigins())));
   app.use(express.json({ limit: '100kb' }));
-  if (rateLimit) app.use('/api/auth', createRateLimiter({ max: 30 }));
+  if (rateLimit) {
+    app.use('/api/auth', createRateLimiter({ max: 30 }));
+    app.use('/api/contact', createRateLimiter({ max: 5, message: 'Bạn đã gửi quá nhiều yêu cầu liên hệ, vui lòng thử lại sau.' }));
+  }
   app.use('/uploads', express.static(path.resolve(__dirname, '../uploads'), {
     dotfiles: 'deny',
     index: false,

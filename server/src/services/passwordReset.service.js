@@ -6,6 +6,13 @@ const { hashPassword: defaultHashPassword } = require('../utils/password');
 
 const GENERIC_RESPONSE = 'Nếu email tồn tại, mã OTP đặt lại mật khẩu sẽ được gửi đến hộp thư của bạn.';
 
+function resolveOtpSecret(value = process.env.RESET_OTP_SECRET || process.env.JWT_SECRET || 'greenhome-development-otp-secret') {
+  if (process.env.NODE_ENV === 'production' && value.length < 32) {
+    throw new Error('RESET_OTP_SECRET phải có ít nhất 32 ký tự trong production.');
+  }
+  return value;
+}
+
 function normalizeEmail(value) {
   return String(value || '').trim().toLowerCase();
 }
@@ -34,7 +41,10 @@ function decryptOtp(encryptedValue, secret) {
 function createModelUserRepository() {
   return {
     async findByEmail(email) { return User.findOne({ email }).lean(); },
-    async updatePassword(id, data) { return User.findByIdAndUpdate(id, { $set: data }, { new: true }).lean(); },
+    async updatePassword(id, data, session) {
+      const query = User.findByIdAndUpdate(id, { $set: data }, { new: true });
+      return (session ? query.session(session) : query).lean();
+    },
   };
 }
 
@@ -62,12 +72,13 @@ function createModelTokenRepository() {
       }
       return token;
     },
-    async consume(id, now, maxAttempts) {
-      return PasswordResetToken.findOneAndUpdate(
+    async consume(id, now, maxAttempts, session) {
+      const query = PasswordResetToken.findOneAndUpdate(
         { _id: id, usedAt: null, expiresAt: { $gt: now }, attemptCount: { $lt: maxAttempts } },
         { $set: { usedAt: now } },
         { new: true }
-      ).lean();
+      );
+      return (session ? query.session(session) : query).lean();
     },
   };
 }
@@ -96,11 +107,12 @@ function createPasswordResetService({
   outboxService,
   now = () => new Date(),
   otpGenerator = () => String(crypto.randomInt(0, 1_000_000)).padStart(6, '0'),
-  otpSecret = process.env.RESET_OTP_SECRET || process.env.JWT_SECRET || 'greenhome-development-otp-secret',
+  otpSecret = resolveOtpSecret(),
   hashPassword = defaultHashPassword,
   ttlMs = 10 * 60_000,
   cooldownMs = 60_000,
   maxAttempts = 5,
+  transactionManager = null,
 } = {}) {
   if (!outboxService) throw new Error('outboxService is required');
 
@@ -158,9 +170,13 @@ function createPasswordResetService({
         throw new ApiError(400, 'Mã OTP không chính xác.', [{ field: 'otp', message: 'Mã OTP không chính xác.' }], 'OTP_INCORRECT');
       }
 
-      const consumed = await tokenRepository.consume(token._id, current, maxAttempts);
-      if (!consumed) throw new ApiError(400, 'Mã OTP không hợp lệ hoặc đã được sử dụng.', [{ field: 'otp', message: 'Mã OTP không hợp lệ hoặc đã được sử dụng.' }], 'OTP_INVALID_OR_USED');
-      await userRepository.updatePassword(user._id, { passwordHash: await hashPassword(input.password), passwordChangedAt: current });
+      const update = async (session) => {
+        const consumed = await tokenRepository.consume(token._id, current, maxAttempts, session);
+        if (!consumed) throw new ApiError(400, 'Mã OTP không hợp lệ hoặc đã được sử dụng.', [{ field: 'otp', message: 'Mã OTP không hợp lệ hoặc đã được sử dụng.' }], 'OTP_INVALID_OR_USED');
+        await userRepository.updatePassword(user._id, { passwordHash: await hashPassword(input.password), passwordChangedAt: current }, session);
+      };
+      if (transactionManager) await transactionManager.withTransaction(update);
+      else await update(null);
       return { message: 'Đặt lại mật khẩu thành công. Vui lòng đăng nhập bằng mật khẩu mới.' };
     },
   };

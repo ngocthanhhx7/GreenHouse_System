@@ -12,6 +12,7 @@ const schema = new mongoose.Schema({
   lastError: { type: String, default: '' },
   sentAt: { type: Date, default: null },
   providerMessageId: { type: String, default: '', trim: true },
+  claimId: { type: String, default: '', trim: true, index: true },
 }, { timestamps: true });
 
 schema.index({ status: 1, availableAt: 1 });
