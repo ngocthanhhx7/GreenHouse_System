@@ -2,8 +2,23 @@ const { authService } = require('../services/auth.service');
 const { sendSuccess } = require('../utils/apiResponse');
 const { createEmailOutboxService } = require('../services/email.service');
 const { createPasswordResetService } = require('../services/passwordReset.service');
+const mongoose = require('mongoose');
 
-const passwordResetService = createPasswordResetService({ outboxService: createEmailOutboxService() });
+const passwordResetService = createPasswordResetService({
+  outboxService: createEmailOutboxService(),
+  transactionManager: {
+    async withTransaction(work) {
+      const session = await mongoose.startSession();
+      try {
+        let result;
+        await session.withTransaction(async () => { result = await work(session); });
+        return result;
+      } finally {
+        await session.endSession();
+      }
+    },
+  },
+});
 
 async function register(req, res, next) {
   try {
