@@ -7,11 +7,11 @@
 }
 
 @font-face {
-  font-family: 'Outfit';
+  font-family: 'Be Vietnam Pro';
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url('/fonts/outfit-latin-vietnamese.woff2') format('woff2');
+  src: url('/fonts/be-vietnam-pro-latin-vietnamese.woff2') format('woff2');
 }
 
 :root {
@@ -34,5 +34,5 @@
   --gh-radius-card: 16px;
   --gh-shadow: 0 10px 30px -10px rgba(23,62,49,.12);
   --gh-font-display: 'Fraunces', Georgia, serif;
-  --gh-font-ui: 'Outfit', Arial, sans-serif;
+  --gh-font-ui: 'Be Vietnam Pro', Arial, sans-serif;
 }

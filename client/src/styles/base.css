@@ -1,14 +1,16 @@
 body {
   margin: 0;
   color: var(--gh-ink);
-  background: var(--gh-paper);
+  background: var(--gh-ivory);
   font-family: var(--gh-font-ui);
+  line-height: 1.5;
 }
 
 h1,
 h2,
 h3,
 .brand-name {
+  color: var(--gh-forest-deep);
   font-family: var(--gh-font-display);
 }
 
