@@ -276,3 +276,9 @@ Nguyễn Ngọc Thành là owner nền tảng cho bộ dữ liệu demo có quan
 - Phase 2 sẽ bổ sung direct-write adapter idempotent, transaction integration test trên database dùng một lần, tạo/duyệt ảnh và API smoke test cho toàn bộ role. Không dùng service nghiệp vụ trong seed để tránh side effect upload, notification hoặc email.
 
 Thông tin người dùng phải cung cấp ngoài Git trước Phase 2: tên database demo có thể xóa, xác nhận cho phép xóa toàn bộ dữ liệu trong database đó, `MONGODB_URI`, `DEMO_SEED_ALLOW_RESET=true` và mật khẩu demo. Không gửi URI, password hoặc secret qua chat.
+## Ownership Addendum 2026-07-22 - Durable Email Delivery Hardening
+
+- The email outbox is drained by a startup worker with bounded polling and a clean stop hook; SMTP configuration fails fast when required Gmail variables or a strong `RESET_OTP_SECRET` are missing.
+- Outbox claims carry a random lease token. Sent/failed finalization is conditional on that token so an expired or stolen lease cannot overwrite another worker's result; failed deliveries remain retryable.
+- OTP consume and password update run in one transaction boundary. If the password mutation rolls back, the OTP remains available; successful reset still updates `passwordChangedAt` to invalidate older JWTs.
+- Public contact submission is throttled independently from field validation. Every delivery failure is observable through the outbox/audit path without failing a committed order or contact persistence operation.

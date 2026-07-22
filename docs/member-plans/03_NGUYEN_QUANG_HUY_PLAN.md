@@ -259,3 +259,7 @@ Huy sở hữu phát sự kiện email `ORDER_CREATED` sau khi transaction check
 - Event được ghi vào email outbox với khóa idempotent `ORDER_CREATED:<orderId>` và gửi đến email của Customer.
 - Payload chỉ gồm snapshot tối thiểu (`orderId`, `orderCode`, `totalAmount`, `paymentMethod`); lỗi enqueue/delivery không rollback đơn hàng.
 - Không phát event khi checkout replay theo cùng idempotency key.
+## Ownership Addendum 2026-07-22 - Order Email Failure Boundary
+
+- After checkout commits, customer lookup and `ORDER_CREATED` enqueue are isolated from the order response. A lookup/provider enqueue failure is recorded for operational follow-up and never rolls back or converts a successfully committed order into a 500 response.
+- The event remains idempotent with key `ORDER_CREATED:<orderId>`; retries are handled by the durable email worker owned by Thành.
