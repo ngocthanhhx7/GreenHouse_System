@@ -254,3 +254,18 @@ Nguyễn Ngọc Thành sở hữu toàn bộ lớp tích hợp PayOS, tách kh�
 - Branch: `feature/thanh-payos-payment`; commit author: `Nguyễn Ngọc Thành <thanhnnhe186491@fpt.edu.vn>`.
 
 Huy vẫn sở hữu Order/PaymentAttempt state, COD, checkout idempotency, late callback và refund invariant; không sở hữu credential, SDK, provider mapping hoặc public webhook của PayOS.
+
+## Ownership Addendum 2026-07-22 - Bộ Dữ Liệu Demo Toàn Hệ Thống
+
+Nguyễn Ngọc Thành là owner nền tảng cho bộ dữ liệu demo có quan hệ đầy đủ, tách thành hai phase an toàn:
+
+- Phase 1 (đã đặc tả và kiểm thử offline): fixture graph tất định gồm 4 role, 13 tài khoản (10 Customer), 20 địa chỉ, 5 danh mục, 15 sản phẩm tiếng Việt (3 mẫu đa dạng mỗi danh mục) và dữ liệu liên kết cho giỏ hàng, đơn hàng, thanh toán, callback, hóa đơn, kho, đổi trả, hoàn tiền, hỗ trợ, đánh giá, thông báo, cài đặt và audit log.
+- Mỗi collection dùng natural key ổn định; graph validator kiểm tra tham chiếu, tổng tiền, trạng thái nghiệp vụ, thời điểm báo cáo, quyền đánh giá và sự tham gia của cả 10 khách hàng trước mọi thao tác ghi.
+- Ledger kho demo gồm đúng 12 điều chỉnh, 2 lần nhận bổ sung, 1 xác nhận hư hỏng và 22 dòng xuất kho; tồn kho ở Product/Inventory cùng lượng giữ chỗ được derive từ ledger và các đơn đang hoạt động, không đặt số liệu rời rạc.
+- Kịch bản callback chỉ thuộc đơn ONLINE; đánh giá chỉ thuộc đơn Delivered; support, xuất kho, đổi trả và RefundPending bám đúng actor, trạng thái bền vững và timestamp của service hiện hành. Mọi timestamp demo không vượt quá ngày 2026-07-22.
+- Ảnh sản phẩm dùng manifest 15 file WebP 1600x1200, đường dẫn UUID-v4 tất định, giới hạn 350KB và SHA-256. Khi chưa tạo/duyệt đủ ảnh, asset preflight phải chặn apply/reset; seed không gọi upload service hoặc gửi email.
+- `npm run seed:demo -- --dry-run` chỉ kiểm tra offline, tuyệt đối không kết nối MongoDB. Luồng upsert/reset bị khóa cho đến Phase 2 và chỉ được mở sau khi người phụ trách xác nhận chính xác database demo.
+- Reset Phase 2 phải đồng thời thỏa `NODE_ENV != production`, `DEMO_SEED_ALLOW_RESET=true`, tên database thuộc `greenhouse_demo|greenhouse_test|greenhouse_e2e`, câu xác nhận `RESET:<databaseName>`, tiền kiểm graph/assets/indexes và MongoDB hỗ trợ transaction. Không dùng `dropDatabase`; chỉ xóa dữ liệu demo theo thứ tự phụ thuộc và không xóa collection Role dùng chung.
+- Phase 2 sẽ bổ sung direct-write adapter idempotent, transaction integration test trên database dùng một lần, tạo/duyệt ảnh và API smoke test cho toàn bộ role. Không dùng service nghiệp vụ trong seed để tránh side effect upload, notification hoặc email.
+
+Thông tin người dùng phải cung cấp ngoài Git trước Phase 2: tên database demo có thể xóa, xác nhận cho phép xóa toàn bộ dữ liệu trong database đó, `MONGODB_URI`, `DEMO_SEED_ALLOW_RESET=true` và mật khẩu demo. Không gửi URI, password hoặc secret qua chat.

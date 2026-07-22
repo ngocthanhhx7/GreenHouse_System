@@ -7,7 +7,7 @@
     "test": "node --test",
     "payos:confirm-webhook": "node src/scripts/confirmPayOSWebhook.js",
     "migrate:product-sku-index": "node src/scripts/migrateProductSkuIndex.js",
-    "seed:demo": "node src/config/seedDemoData.js",
+    "seed:demo": "node src/demo-data/demoSeedCli.js",
     "start": "node src/server.js"
   },
   "dependencies": {
