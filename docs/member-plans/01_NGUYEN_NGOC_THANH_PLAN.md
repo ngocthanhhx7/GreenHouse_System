@@ -97,6 +97,9 @@ Tạo nền tảng để mọi module khác hoạt động đúng quyền. Nếu
 |---|---|---|---|---|---|
 | POST | `/api/auth/register` | Public | fullName, email, phone, password, address | Customer account summary | Duplicate email, invalid input |
 | POST | `/api/auth/login` | Public | email, password | JWT, user summary, role | Invalid credentials, disabled account |
+| POST | `/api/auth/forgot-password` | Public | email | Anti-enumeration acknowledgement | Invalid email, rate limited |
+| POST | `/api/auth/reset-password` | Public | email, otp, password, confirmPassword | Password reset acknowledgement | OTP incorrect/expired/used/attempt limit, weak password |
+| POST | `/api/contact` | Public | name, email, phone, subject, message | Contact request summary | Field validation, rate limited |
 | GET | `/api/auth/me` | Authenticated | Bearer token | Current user | Missing/expired token |
 | POST | `/api/auth/logout` | Authenticated | Bearer token | Success | Missing token |
 | GET | `/api/admin/audit-logs` | Admin | filters | Audit list | Forbidden, invalid date |
@@ -232,10 +235,10 @@ Chi tiết execution: `docs/srs-sds-reconciliation/06_ACCOUNT_MEDIA_NOTIFICATION
 Nguyễn Ngọc Thành bổ sung vai trò owner nền tảng cho email delivery và điều phối validation xuyên suốt hệ thống:
 
 - Xây email delivery dùng chung theo cơ chế outbox/queue; lỗi nhà cung cấp email không được rollback tạo đơn, thanh toán hoặc mutation nghiệp vụ đã hoàn tất.
-- Hoàn thiện quên mật khẩu an toàn, form liên hệ gửi email và email xác nhận đơn hàng; token đặt lại mật khẩu chỉ lưu dạng hash, có TTL, dùng một lần và không làm lộ email có tồn tại hay không.
+- Hoàn thiện quên mật khẩu bằng OTP 6 số gửi qua Gmail SMTP, form liên hệ gửi email và email xác nhận đơn hàng. OTP chỉ lưu dạng HMAC hash, payload outbox được mã hóa, có TTL 10 phút, cooldown gửi lại 60 giây, tối đa 5 lần nhập sai, dùng một lần và không làm lộ email có tồn tại hay không. Đổi mật khẩu cập nhật `passwordChangedAt` để vô hiệu hóa JWT cũ.
 - Chuẩn hóa hợp đồng lỗi dùng chung gồm HTTP status, `errorCode`, `message` tiếng Việt và `fieldErrors`; frontend hiển thị lỗi riêng theo trường, backend luôn validate lại toàn bộ input.
 - Điều phối audit validation trên mọi body/query/path param của Public, Customer, Staff, WarehouseManager và Admin. Validation cú pháp/shape đặt tại request boundary; validation quyền, trạng thái và invariant nghiệp vụ tiếp tục nằm trong service của module sở hữu.
 - Triển khai theo ba phase để giữ code gọn và giảm regression: V1 bảo mật nền tảng/rate limit/body limit/CORS/ObjectId; V2 schema nghiệp vụ và pagination/filter bounds; V3 chuẩn hóa thông báo tiếng Việt, accessibility và route-level regression tests.
 - Mọi thay đổi scope/contract phải cập nhật `docs/member-plans` trước khi merge. Hai thư mục làm việc nội bộ `docs/superpowers/` và `docs/ui-prompts/` không được theo dõi hoặc push lên Git.
 
-Thông tin cần cấu hình ngoài Git cho email: provider, credentials, sender đã xác minh, inbox nhận liên hệ, public reset URL, CORS origin và rate-limit policy. Không ghi secret vào tài liệu hoặc commit.
+Thông tin cần cấu hình ngoài Git cho email: `MAIL_PROVIDER=smtp`, Gmail App Password, `MAIL_FROM`, `CONTACT_INBOX`, `RESET_OTP_SECRET`, public URL, CORS origin và rate-limit policy. Không ghi Gmail password, App Password hoặc secret thật vào tài liệu/commit.

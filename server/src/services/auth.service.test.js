@@ -119,6 +119,8 @@ describe('auth service', () => {
     assert.equal(typeof result.token, 'string');
     assert.equal(result.user.email, 'thanh@example.com');
     assert.equal(result.user.passwordHash, undefined);
+    const decoded = require('jsonwebtoken').decode(result.token);
+    assert.equal(decoded.pwd, 0);
     assert.equal(auditLogger.entries.at(-1).action, 'AUTH_LOGIN_SUCCESS');
   });
 

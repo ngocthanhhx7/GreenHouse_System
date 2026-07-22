@@ -6,6 +6,7 @@ function signAuthToken(user, jwtSecret) {
       sub: String(user._id),
       role: user.role.roleName,
       email: user.email,
+      pwd: user.passwordChangedAt ? new Date(user.passwordChangedAt).getTime() : 0,
     },
     jwtSecret,
     { expiresIn: '7d' }

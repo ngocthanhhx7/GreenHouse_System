@@ -19,17 +19,20 @@ const auditLogRoutes = require('./routes/auditLog.routes');
 const damageReportRoutes = require('./routes/damageReport.routes');
 const profileRoutes = require('./routes/profile.routes');
 const uploadRoutes = require('./routes/upload.routes');
+const contactRoutes = require('./routes/contact.routes');
 const path = require('node:path');
 const { notFound, errorHandler } = require('./middlewares/error.middleware');
 const { requestId } = require('./middlewares/requestId.middleware');
 const { sendSuccess } = require('./utils/apiResponse');
+const { resolveCorsOrigins, createCorsOptions, createRateLimiter } = require('./middlewares/security.middleware');
 
-function createApp() {
+function createApp({ rateLimit = true } = {}) {
   const app = express();
 
   app.use(requestId);
-  app.use(cors());
-  app.use(express.json());
+  app.use(cors(createCorsOptions(resolveCorsOrigins())));
+  app.use(express.json({ limit: '100kb' }));
+  if (rateLimit) app.use('/api/auth', createRateLimiter({ max: 30 }));
   app.use('/uploads', express.static(path.resolve(__dirname, '../uploads'), {
     dotfiles: 'deny',
     index: false,
@@ -43,6 +46,7 @@ function createApp() {
     return sendSuccess(res, null, 'GreenHome API is running');
   });
   app.use('/api/auth', authRoutes);
+  app.use('/api', contactRoutes);
   app.use('/api', cartRoutes);
   app.use('/api', categoryRoutes);
   app.use('/api', orderRoutes);
