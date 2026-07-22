@@ -30,6 +30,7 @@ export function translateOrderStatus(status) {
     Shipped: 'Đang giao',
     Delivered: 'Đã giao',
     Cancelled: 'Đã hủy',
+    Expired: 'Đã hết hạn',
     Expired: 'Đã hết hạn thanh toán',
     Returned: 'Đã hoàn trả',
   };

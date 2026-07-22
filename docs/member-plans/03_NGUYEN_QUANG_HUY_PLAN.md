@@ -6,7 +6,7 @@
 |---|---|
 | Owner | Nguyễn Quang Huy |
 | Role in team | Customer purchase flow owner |
-| Main responsibility | Cart Management, Checkout, Order Placement, Payment/COD, Customer Order History, Cancel Order |
+| Main responsibility | Cart Management, Checkout, Order Placement, Payment domain state/COD, Customer Order History, Cancel Order; không sở hữu PayOS integration |
 | Git branch | `feature/huy-cart-order-payment` |
 | Priority | Must Have |
 
@@ -19,7 +19,7 @@
 - Cart Management.
 - Checkout & Order Placement.
 - COD order flow.
-- Online payment mock/callback flow.
+- Online order/payment state và callback invariant; PayOS provider adapter/webhook do Nguyễn Ngọc Thành sở hữu.
 - Customer order history.
 - Customer order detail/status.
 - Cancel Pending unpaid order.
@@ -42,8 +42,8 @@
 |---|---|---|
 | Cart Page | `client/src/pages/customer/CartPage.jsx` | Manage cart items |
 | Checkout Page | `client/src/pages/customer/CheckoutPage.jsx` | Confirm shipping/payment |
-| Payment Page | `client/src/pages/customer/PaymentPage.jsx` | Start online payment/mock |
-| Payment Result Page | `client/src/pages/customer/PaymentResultPage.jsx` | Show payment result |
+| Payment Page | `client/src/pages/customer/PaymentPage.jsx` | Contract với PayOS integration của Thành |
+| Payment Result Page | `client/src/pages/customer/PaymentResultPage.jsx` | Hiển thị state từ provider; integration thuộc Thành |
 | Order History Page | `client/src/pages/customer/OrderHistoryPage.jsx` | Customer purchase history |
 | Order Detail Page | `client/src/pages/customer/OrderDetailPage.jsx` | Order status, items, cancel action |
 
@@ -84,13 +84,13 @@
 |---|---|---|
 | Route | `server/src/routes/cart.routes.js` | Cart item endpoints |
 | Route | `server/src/routes/order.routes.js` | Customer order endpoints |
-| Route | `server/src/routes/payment.routes.js` | Payment request/callback endpoints |
+| Route | `server/src/routes/payment.routes.js` | Huy phối hợp Payment domain route; PayOS webhook route thuộc Thành |
 | Controller | `server/src/controller/cart.controller.js` | Cart request/response |
 | Controller | `server/src/controller/order.controller.js` | Order request/response |
-| Controller | `server/src/controller/payment.controller.js` | Payment request/response |
+| Controller | `server/src/controller/payment.controller.js` | Shared boundary; PayOS request/webhook mapping thuộc Thành |
 | Service | `server/src/services/cart.service.js` | Cart business rules |
 | Service | `server/src/services/order.service.js` | Checkout/order/cancel rules |
-| Service | `server/src/services/payment.service.js` | COD/online payment rules |
+| Service | `server/src/services/payment.service.js` | Huy sở hữu domain state/COD/invariant; Thành sở hữu PayOS adapter/link/webhook integration |
 
 ## 7. API Scope
 
@@ -105,7 +105,7 @@
 | GET | `/api/orders/:id` | Customer | order id | Own order detail | Forbidden/not found |
 | PATCH | `/api/orders/:id/cancel` | Customer | reason optional | Cancelled order | Paid/confirmed order cannot cancel |
 | POST | `/api/orders/:id/payments` | Customer | paymentMethod | Payment result/request | Invalid amount/order |
-| POST | `/api/payments/callback` | Gateway/mock | transactionId, orderId, status, amount | Callback accepted | Duplicate/invalid callback |
+| POST | `/api/payments/payos/webhook` | PayOS | Signed webhook payload | Callback accepted | Signature/duplicate/amount invalid; endpoint và provider mapping thuộc Thành |
 
 ## 8. Database/Model Scope
 
@@ -167,9 +167,9 @@
 
 - [ ] Create Payment model.
 - [ ] Implement COD payment record.
-- [ ] Implement online payment mock request.
-- [ ] Implement payment callback endpoint.
-- [ ] Build Payment and Payment Result pages.
+- [ ] Bàn giao Payment domain contract để Thành tích hợp PayOS.
+- [ ] Giữ state/idempotency/late-callback invariant; không giữ PayOS credential hoặc webhook adapter.
+- [ ] Phối hợp Payment và Payment Result pages theo response contract của Thành.
 - [ ] Connect payment status to Order Detail.
 
 ### Phase 5 - Staff Support
@@ -188,7 +188,7 @@
 |---|---|---|
 | PR 1 | `feature/huy-cart-checkout` | Cart models/APIs/UI and checkout page |
 | PR 2 | `feature/huy-order-history-cancel` | Order models/APIs/history/detail/cancel |
-| PR 3 | `feature/huy-payment-flow` | Payment model/COD/online mock/callback/result page |
+| PR 3 | `feature/huy-payment-flow` | Payment domain model/state/COD; PayOS integration tách sang branch của Thành |
 
 ## 14. Testing Checklist
 
@@ -211,8 +211,8 @@
 3. Update quantity in Cart.
 4. Checkout with COD.
 5. Open Order History and show created order.
-6. Create another order with online payment mock.
-7. Simulate payment success/failure.
+6. Tạo một online order và yêu cầu hosted payment link PayOS.
+7. Quét QR/thanh toán trong môi trường test phù hợp hoặc gửi webhook test có signature; kiểm tra trạng thái chính thức qua webhook.
 8. Cancel a Pending unpaid order.
 9. Try cancelling a paid/confirmed order and show rejection.
 
@@ -230,7 +230,7 @@
 - [ ] Cart flow complete.
 - [ ] Checkout flow complete.
 - [ ] Order model/detail complete.
-- [ ] Payment model/COD/online mock complete.
+- [ ] Payment model/state/COD complete; PayOS integration được Thành bàn giao riêng.
 - [ ] Order history/detail complete.
 - [ ] Cancel valid order complete.
 - [ ] Manual demo tested.
@@ -243,3 +243,11 @@ Huy bổ sung **Checkout Address Book integration**:
 - Cho phép chọn nhanh, nhập địa chỉ mới dùng một lần hoặc lưu vào Address Book.
 - Validate thông tin người nhận, số điện thoại, tỉnh/thành, quận/huyện, phường/xã và địa chỉ chi tiết.
 - Gửi address payload chuẩn để backend tạo snapshot trong Order; không đọc lại địa chỉ hiện tại sau khi đặt đơn.
+
+## Ownership Addendum 2026-07-22 - PayOS
+
+Phần tích hợp cổng thanh toán online PayOS đã chuyển sang Nguyễn Ngọc Thành và addendum này ưu tiên hơn các dòng cũ còn nhắc “online mock/callback”:
+
+- Thành sở hữu `@payos/node`, credential/env, tạo payment link, return/cancel URL, public webhook, signature verification, provider response mapping và frontend redirect/result integration.
+- Huy chỉ sở hữu Order/Payment domain state, COD, idempotency, amount/ownership validation, late paid callback và refund hand-off sau khi nhận dữ liệu provider đã được Thành xác minh.
+- Branch PayOS là `feature/thanh-payos-payment`; không commit PayOS bằng identity của Huy.

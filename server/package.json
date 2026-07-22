@@ -5,11 +5,13 @@
   "main": "src/app.js",
   "scripts": {
     "test": "node --test",
+    "payos:confirm-webhook": "node src/scripts/confirmPayOSWebhook.js",
     "migrate:product-sku-index": "node src/scripts/migrateProductSkuIndex.js",
     "seed:demo": "node src/config/seedDemoData.js",
     "start": "node src/server.js"
   },
   "dependencies": {
+    "@payos/node": "^2.0.5",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",

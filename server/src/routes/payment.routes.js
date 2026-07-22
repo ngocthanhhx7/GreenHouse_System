@@ -6,6 +6,6 @@ const { authorizeRoles } = require('../middlewares/authorize.middleware');
 const router = express.Router();
 
 router.post('/orders/:id/payments', authenticate, authorizeRoles('Customer'), paymentController.createOnlinePayment);
-router.post('/payments/callback', paymentController.callback);
+router.post('/payments/payos/webhook', paymentController.payosWebhook);
 
 module.exports = router;

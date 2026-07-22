@@ -5,7 +5,7 @@
 - Họ tên: Nguyễn Ngọc Thành
 - Mã sinh viên: `HE186491`
 - Email commit: `thanhnnhe186491@fpt.edu.vn`
-- Vai trò: Team lead, Homepage owner, shared account/API/RBAC/audit owner, reviewer và merge owner.
+- Vai trò: Team lead, Homepage owner, shared account/API/RBAC/audit owner, PayOS integration owner, reviewer và merge owner.
 
 ## Goal
 
@@ -19,6 +19,7 @@
 - Notification foundation: unread badge, dropdown trên header, trang danh sách/chi tiết, deep-link và quy tắc chỉ xóa thông báo đã đọc.
 - Upload foundation dùng chung cho avatar và ảnh sản phẩm; Chung sở hữu phần tích hợp upload vào Product Management.
 - Dữ liệu demo tài khoản, địa chỉ và thông báo để các thành viên clone dự án có cùng baseline kiểm thử.
+- PayOS SDK/configuration, hosted checkout link, return/cancel integration, signature webhook và webhook registration.
 
 ### Trạng thái triển khai phạm vi bổ sung
 
@@ -53,6 +54,13 @@
 - `server/src/utils/auditLogger.js`
 - `client/src/components/auth/ProtectedRoute.jsx`
 - `client/src/components/auth/RoleRoute.jsx`
+- `server/src/config/payos.js`
+- `server/src/services/payment.service.js`
+- `server/src/controller/payment.controller.js`
+- `server/src/routes/payment.routes.js`
+- `client/src/services/paymentService.js`
+- `client/src/pages/customer/PaymentPage.jsx`
+- `client/src/pages/customer/PaymentResultPage.jsx`
 
 ## Chi tiết thực hiện
 
@@ -89,4 +97,15 @@ npm run build
 ```text
 feature/thanh-srs-sds-baseline
 docs: define srs sds reconciliation baseline
+
+feature/thanh-payos-payment
+feat: integrate payos online payment
 ```
+
+## PayOS Addendum 2026-07-22
+
+- Thành sở hữu provider integration; Huy không sở hữu PayOS credential, SDK hoặc public webhook.
+- Required env: `PAYOS_CLIENT_ID`, `PAYOS_API_KEY`, `PAYOS_CHECKSUM_KEY`, `PAYOS_RETURN_URL`, `PAYOS_CANCEL_URL`, `PAYOS_WEBHOOK_URL`, `PAYOS_PAYMENT_LINK_TTL_MINUTES`.
+- Webhook: `POST /api/payments/payos/webhook`; verify signature trước khi tìm `PaymentAttempt` và áp dụng state transition idempotent.
+- PayOS validation webhook có thể dùng order code không tồn tại; sau khi signature hợp lệ endpoint acknowledge 2XX nhưng không tạo side effect.
+- Local: dùng HTTPS tunnel tới port `5000`, sau đó chạy `npm run payos:confirm-webhook`.

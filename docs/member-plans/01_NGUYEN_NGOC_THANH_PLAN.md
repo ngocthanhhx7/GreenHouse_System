@@ -6,8 +6,8 @@
 |---|---|
 | Owner | Nguyễn Ngọc Thành |
 | Role in team | Team lead, integration owner, foundation owner |
-| Main responsibility | Xây nền tảng auth, role-based access, shared layout/API client, audit foundation và final merge |
-| Git branch | `feature/thanh-auth-rbac-foundation` |
+| Main responsibility | Xây nền tảng auth, role-based access, shared layout/API client, audit, tích hợp PayOS và final merge |
+| Git branch | Foundation: `feature/thanh-auth-rbac-foundation`; PayOS: `feature/thanh-payos-payment` |
 | Priority | Must Have |
 
 ## 2. Business Objective
@@ -25,6 +25,7 @@ Tạo nền tảng để mọi module khác hoạt động đúng quyền. Nếu
 - Role-based frontend route guard.
 - Login/Register/Profile basic.
 - AuditLog model/helper foundation.
+- PayOS provider adapter, hosted checkout link, webhook signature verification và cấu hình môi trường.
 - Final integration review and merge coordination.
 
 ## 4. Important Flows Owned
@@ -156,8 +157,9 @@ Tạo nền tảng để mọi module khác hoạt động đúng quyền. Nếu
 
 ### Phase 4 - Payment/Notification Support
 
-- [ ] Confirm payment callback does not require normal JWT but has gateway verification path.
-- [ ] Add audit action constants for payment status changes.
+- [x] PayOS webhook không yêu cầu JWT người dùng nhưng bắt buộc xác minh signature bằng Checksum Key.
+- [x] Tạo hosted checkout link ở backend; không đưa Client ID/API Key/Checksum Key xuống frontend.
+- [x] Giữ callback idempotent và audit action cho payment status changes.
 
 ### Phase 5-8 - Integration
 
@@ -239,3 +241,16 @@ Nguyễn Ngọc Thành bổ sung vai trò owner nền tảng cho email delivery 
 - Mọi thay đổi scope/contract phải cập nhật `docs/member-plans` trước khi merge. Hai thư mục làm việc nội bộ `docs/superpowers/` và `docs/ui-prompts/` không được theo dõi hoặc push lên Git.
 
 Thông tin cần cấu hình ngoài Git cho email: provider, credentials, sender đã xác minh, inbox nhận liên hệ, public reset URL, CORS origin và rate-limit policy. Không ghi secret vào tài liệu hoặc commit.
+
+## Ownership Addendum 2026-07-22 - PayOS Online Payment
+
+Nguyễn Ngọc Thành sở hữu toàn bộ lớp tích hợp PayOS, tách khỏi Payment domain của Nguyễn Quang Huy:
+
+- SDK `@payos/node`, adapter cấu hình, hosted checkout URL và TTL.
+- Các biến `PAYOS_CLIENT_ID`, `PAYOS_API_KEY`, `PAYOS_CHECKSUM_KEY`, `PAYOS_RETURN_URL`, `PAYOS_CANCEL_URL`, `PAYOS_WEBHOOK_URL` và `PAYOS_PAYMENT_LINK_TTL_MINUTES`.
+- Webhook `POST /api/payments/payos/webhook`, xác minh HMAC/signature trước khi chuyển dữ liệu đã tin cậy vào payment state machine.
+- Script `npm run payos:confirm-webhook` để PayOS xác nhận URL webhook công khai.
+- Local development dùng một public HTTPS URL forward tới backend `http://localhost:5000`, ví dụ `PAYOS_WEBHOOK_URL=https://<tunnel-domain>/api/payments/payos/webhook`; return/cancel URL có thể quay về frontend local.
+- Branch: `feature/thanh-payos-payment`; commit author: `Nguyễn Ngọc Thành <thanhnnhe186491@fpt.edu.vn>`.
+
+Huy vẫn sở hữu Order/PaymentAttempt state, COD, checkout idempotency, late callback và refund invariant; không sở hữu credential, SDK, provider mapping hoặc public webhook của PayOS.
