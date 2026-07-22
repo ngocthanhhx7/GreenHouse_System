@@ -37,7 +37,7 @@ describe('schema alignment with ERD', () => {
   });
 
   it('stores payment attempts, append-only callback identity, and refund hand-off state', () => {
-    ['orderId', 'attemptCode', 'paymentProvider', 'paymentStatus'].forEach((field) => assertPath(PaymentAttempt, field));
+    ['orderId', 'attemptCode', 'paymentProvider', 'providerOrderCode', 'paymentLinkId', 'checkoutUrl', 'qrCode', 'expiresAt', 'paymentStatus'].forEach((field) => assertPath(PaymentAttempt, field));
     ['orderId', 'paymentAttemptId', 'paymentProvider', 'providerMessageId', 'rawPayload'].forEach((field) => assertPath(PaymentCallbackEvent, field));
     ['orderId', 'paymentAttemptId', 'status', 'reason'].forEach((field) => assertPath(RefundPending, field));
     assert.ok(PaymentAttempt.schema.path('paymentStatus').enumValues.includes('Unpaid'));

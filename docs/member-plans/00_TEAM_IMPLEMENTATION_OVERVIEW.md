@@ -18,9 +18,9 @@ Core workflow cần ưu tiên:
 
 | Thành viên | Vai trò chính | Module sở hữu | Frontend chính | Backend chính | Flow mentor có thể kiểm tra |
 |---|---|---|---|---|---|
-| Nguyễn Ngọc Thành | Team lead, foundation, integration | Auth/RBAC, layout, shared API client, audit foundation, final merge | Login, Register, Profile, Role Guard, Layout | User, Role, Auth, JWT, Authorization, Audit helper | Guest register, user login, role redirect, forbidden access |
+| Nguyễn Ngọc Thành | Team lead, foundation, integration | Auth/RBAC, layout, shared API client, audit foundation, PayOS gateway/webhook, final merge | Login, Register, Profile, Role Guard, Layout, PayOS redirect/result | User, Role, Auth, JWT, Authorization, Audit helper, PayOS adapter/webhook | Guest register, user login, role redirect, forbidden access, online payment qua PayOS |
 | Phạm Thành Chung | Catalog owner | Product, Category, Public Catalog, Search/Filter | Home, Product Listing, Product Detail, Admin Product/Category | Product, Category, catalog APIs, admin product/category APIs | Guest browse/search/filter/view product, Admin manage product |
-| Nguyễn Quang Huy | Customer purchase owner | Cart, Checkout, Order, Payment, COD, Order History, Cancel | Cart, Checkout, Payment Result, Order History, Order Detail | Cart, CartItem, Order, OrderDetail, Payment | Customer add cart, COD/online checkout, cancel Pending unpaid order |
+| Nguyễn Quang Huy | Customer purchase owner | Cart, Checkout, Order, Payment state, COD, Order History, Cancel; không sở hữu tích hợp cổng PayOS | Cart, Checkout, Order History, Order Detail | Cart, CartItem, Order, OrderDetail, Payment domain state | Customer add cart, tạo online order/COD, cancel Pending unpaid order |
 | Nguyễn Hữu Anh Nhật | Staff operation owner | Staff Order Processing, Invoice, Order Status, Return/Refund handling | Staff Dashboard, Order Queue, Order Detail, Invoice, Refund Queue | Staff order APIs, order state machine, ReturnRefundRequest | Staff confirm order, request export, ship/deliver, approve/reject refund |
 | Lê Vũ Cường | Warehouse/admin closure owner | Inventory, Stock Export, Replenishment, Support, Review, Notification, Reports, Settings | Warehouse screens, Support, Review, Admin Reports/Settings | Inventory, Transaction, StockExport, Replenishment, Support, Review, Notification, Report, Setting | Warehouse export/adjust stock, low-stock replenishment, support/review/report |
 
@@ -31,7 +31,7 @@ Core workflow cần ưu tiên:
 | Phase 1 | Foundation/Auth/Layout/Role | Nguyễn Ngọc Thành | Tạo nền tảng app, auth, role guard, shared API/error format | PR auth + layout + middleware |
 | Phase 2 | Product/Catalog | Phạm Thành Chung | Tạo product/category và public catalog | PR product/category models/APIs/screens |
 | Phase 3 | Cart/Checkout/Order | Nguyễn Quang Huy | Customer mua hàng được từ cart tới order | PR cart/order models/APIs/screens |
-| Phase 4 | Payment/COD/Email | Nguyễn Quang Huy + Nguyễn Ngọc Thành + Lê Vũ Cường | COD/online payment mock, payment status, email/notification hook | PR payment + notification integration |
+| Phase 4 | Payment/COD/Email | Nguyễn Ngọc Thành + Nguyễn Quang Huy + Lê Vũ Cường | Thành tích hợp PayOS hosted checkout, signature webhook và env; Huy giữ Payment state/COD; email/notification hook dùng foundation chung | PR PayOS + payment state + notification integration |
 | Phase 5 | Staff Processing | Nguyễn Hữu Anh Nhật | Staff xử lý order theo trạng thái hợp lệ | PR staff queue/detail/status/invoice |
 | Phase 6 | Warehouse/Inventory | Lê Vũ Cường | Warehouse xuất kho, điều chỉnh tồn, transaction, low-stock | PR inventory/export/replenishment |
 | Phase 7 | Return/Refund/Support/Review | Nguyễn Hữu Anh Nhật + Lê Vũ Cường | After-sale workflows hoạt động | PR refund/support/review |
@@ -43,7 +43,7 @@ Branch format:
 
 | Thành viên | Branch gợi ý |
 |---|---|
-| Nguyễn Ngọc Thành | `feature/thanh-auth-rbac-foundation` |
+| Nguyễn Ngọc Thành | `feature/thanh-auth-rbac-foundation`; PayOS dùng `feature/thanh-payos-payment` |
 | Phạm Thành Chung | `feature/chung-product-catalog` |
 | Nguyễn Quang Huy | `feature/huy-cart-order-payment` |
 | Nguyễn Hữu Anh Nhật | `feature/nhat-staff-refund-flow` |
@@ -141,8 +141,8 @@ Một module được xem là hoàn thành khi có đủ:
 
 - [ ] Payment model/API.
 - [ ] COD order payment status.
-- [ ] Online payment mock/callback.
-- [ ] Payment result page.
+- [x] PayOS hosted payment link và signature-verified webhook do Nguyễn Ngọc Thành sở hữu.
+- [x] Payment page redirect sang hosted checkout và result page cho PayOS.
 - [ ] Notification/email hook.
 
 ### Phase 5 - Staff Processing
@@ -181,9 +181,9 @@ Một module được xem là hoàn thành khi có đủ:
 
 | Member | Phase 1 | Phase 2 | Phase 3 | Phase 4 | Phase 5 | Phase 6 | Phase 7 | Phase 8 |
 |---|---|---|---|---|---|---|---|---|
-| Nguyễn Ngọc Thành | Auth/RBAC | Support product integration | Support order integration | Payment auth/email integration | Review staff permissions | Review warehouse permissions | Review after-sale permissions | Audit/final merge |
+| Nguyễn Ngọc Thành | Auth/RBAC | Support product integration | Support order integration | PayOS gateway/webhook + payment auth/email integration | Review staff permissions | Review warehouse permissions | Review after-sale permissions | Audit/final merge |
 | Phạm Thành Chung | Wait for auth | Product/catalog main | Product data support | Product display support | Product info support | Stock visibility support | Review display support | Product report support |
-| Nguyễn Quang Huy | Wait for auth | Need product APIs | Cart/order main | Payment main | Order data support | Stock export dependency | Refund order dependency | Order report support |
+| Nguyễn Quang Huy | Wait for auth | Need product APIs | Cart/order main | Payment state/COD support, không giữ PayOS credentials/webhook | Order data support | Stock export dependency | Refund order dependency | Order report support |
 | Nguyễn Hữu Anh Nhật | Wait for auth | Need product/order data later | Need order APIs | Need payment status | Staff main | Export dependency | Refund main | Staff report support |
 | Lê Vũ Cường | Wait for auth | Need product model | Need order model | Notification support | Need staff export request | Warehouse main | Support/review main | Report/settings main |
 
@@ -216,6 +216,13 @@ Một module được xem là hoàn thành khi có đủ:
 
 - Nguyễn Ngọc Thành sở hữu email delivery foundation, password reset, public contact email và delivery/retry/read status; Nguyễn Quang Huy phát sự kiện `ORDER_CREATED` idempotent sau khi transaction tạo đơn thành công.
 - Validation áp dụng cho toàn hệ thống ở cả frontend và backend. Thành sở hữu primitive validator, request-schema adapter và error envelope; mỗi module owner vẫn sở hữu rule trạng thái/invariant nghiệp vụ và test của module mình.
+
+### Addendum 2026-07-22 - PayOS Online Payment
+
+- Nguyễn Ngọc Thành là owner của tích hợp cổng PayOS: SDK backend, tạo hosted checkout link, biến môi trường, return/cancel URL, xác minh signature webhook, đăng ký webhook và xử lý integration/frontend redirect.
+- Nguyễn Quang Huy tiếp tục sở hữu Cart, Checkout, Order, Payment domain state, COD, idempotency và late-payment/refund business rule; không giữ PayOS credential, provider adapter hoặc webhook public.
+- Webhook chuẩn là `POST /api/payments/payos/webhook`. Khi chạy local phải dùng HTTPS tunnel tới port backend; `localhost` không thể nhận callback trực tiếp từ PayOS.
+- Branch triển khai PayOS: `feature/thanh-payos-payment`, commit bằng `Nguyễn Ngọc Thành <thanhnnhe186491@fpt.edu.vn>`.
 - Mọi lỗi validation phải có thông báo tiếng Việt rõ ràng theo từng trường; backend là nguồn xác thực cuối cùng, frontend không được thay thế backend validation.
 - `docs/superpowers/` và `docs/ui-prompts/` là tài liệu làm việc local, không theo dõi hoặc push lên Git. Thay đổi ownership/scope chính thức phải được phản ánh trong `docs/member-plans/`.
 

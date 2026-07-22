@@ -9,15 +9,12 @@ async function createOnlinePayment(req, res, next) {
   }
 }
 
-async function callback(req, res, next) {
+async function payosWebhook(req, res, next) {
   try {
     return sendSuccess(
       res,
-      await paymentService.handlePaymentCallback({
-        ...req.body,
-        callbackSecret: req.get('x-payment-callback-secret') || req.body.callbackSecret,
-      }),
-      'Payment callback processed'
+      await paymentService.handlePayOSWebhook(req.body),
+      'payOS webhook processed'
     );
   } catch (error) {
     return next(error);
@@ -26,5 +23,5 @@ async function callback(req, res, next) {
 
 module.exports = {
   createOnlinePayment,
-  callback,
+  payosWebhook,
 };

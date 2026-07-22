@@ -5,11 +5,11 @@
 - Họ tên: Nguyễn Quang Huy
 - Mã sinh viên: `HE186466`
 - Email commit: `quanghuyn267@gmail.com`
-- Vai trò: Cart, Checkout, Order, Payment, COD và Customer Order History owner.
+- Vai trò: Cart, Checkout, Order, Payment domain state, COD và Customer Order History owner; không sở hữu PayOS provider integration.
 
 ## Goal
 
-Đồng bộ toàn bộ Cart -> Order -> Payment với SRS mới, đặc biệt là idempotent checkout, reservation boundary, PaymentAttempt, callback history, COD và refund trigger.
+Đồng bộ Cart -> Order -> Payment domain với SRS mới, đặc biệt là idempotent checkout, reservation boundary, PaymentAttempt, callback history, COD và refund trigger. PayOS SDK/credential/webhook/provider mapping thuộc Nguyễn Ngọc Thành.
 
 ## Phạm vi discrepancy cần sửa
 
@@ -28,13 +28,13 @@
 - `server/src/models/payment.model.js`
 - `server/src/services/cart.service.js`
 - `server/src/services/order.service.js`
-- `server/src/services/payment.service.js`
+- `server/src/services/payment.service.js` cho Payment domain state/invariant; PayOS adapter và provider mapping thuộc Thành.
 - `server/src/routes/cart.routes.js`
 - `server/src/routes/order.routes.js`
-- `server/src/routes/payment.routes.js`
+- `server/src/routes/payment.routes.js` cho domain route phối hợp; `POST /api/payments/payos/webhook` thuộc Thành.
 - `client/src/pages/customer/CartPage.jsx`
 - `client/src/pages/customer/CheckoutPage.jsx`
-- `client/src/pages/customer/PaymentPage.jsx`
+- `client/src/pages/customer/PaymentPage.jsx` và Result page là integration surface do Thành sở hữu khi nối PayOS.
 - `client/src/pages/customer/OrderHistoryPage.jsx`
 
 ## Chi tiết thực hiện
@@ -104,3 +104,11 @@ feat: integrate address book into checkout
 - Commit của Nguyễn Quang Huy: `8ecd408`.
 - Nguyễn Ngọc Thành đã review scope, transaction/idempotency, validation, Order snapshot và kết quả regression.
 - Đã merge `--no-ff` vào `main` bằng merge commit `790f132`.
+
+## Ownership Addendum 2026-07-22 - PayOS
+
+Addendum này ưu tiên hơn các mô tả cũ gán toàn bộ callback/provider cho Huy:
+
+- Nguyễn Ngọc Thành sở hữu `@payos/node`, env/credential, create payment link, return/cancel URL, `POST /api/payments/payos/webhook`, signature verification, webhook registration và frontend PayOS redirect/result.
+- Nguyễn Quang Huy sở hữu Payment domain state/COD, amount and ownership validation, callback idempotency/history, late-paid/refund invariant sau khi nhận payload PayOS đã được Thành xác minh.
+- PayOS implementation dùng branch `feature/thanh-payos-payment` và identity của Nguyễn Ngọc Thành.

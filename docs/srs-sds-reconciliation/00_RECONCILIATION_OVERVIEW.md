@@ -18,7 +18,7 @@
 
 | Priority | Finding | Owner |
 |---|---|---|
-| P0 | PaymentAttempt/PaymentCallbackEvent/Refund chưa đồng bộ với Payment trong SDS | Nguyễn Quang Huy |
+| P0 | PaymentAttempt/PaymentCallbackEvent/Refund chưa đồng bộ với Payment trong SDS | Nguyễn Quang Huy (domain state) + Nguyễn Ngọc Thành (PayOS provider/webhook) |
 | P0 | InventoryReservation và transaction atomic chưa đồng bộ với stock design | Lê Vũ Cường |
 | P0 | Order status trong SDS thiếu Packed, Shipped, Delivered và transition guard | Nguyễn Hữu Anh Nhật |
 | P0 | Return/refund đang gộp sai entity và sai ownership giữa Staff/Warehouse | Nguyễn Hữu Anh Nhật |
@@ -33,9 +33,9 @@
 
 | Member | Deliverable chính | Code area cần kiểm tra | Branch tạm |
 |---|---|---|---|
-| Nguyễn Ngọc Thành | Baseline governance, RBAC, API/error contract, audit và review merge | `server/src/middlewares`, `server/src/utils`, `client/src/components/auth`, `docs` | `feature/thanh-srs-sds-baseline` |
+| Nguyễn Ngọc Thành | Baseline governance, RBAC, API/error contract, audit, PayOS provider/webhook và review merge | `server/src/middlewares`, `server/src/utils`, `server/src/config/payos.js`, payment controller/routes, payment frontend integration, `docs` | `feature/thanh-payos-payment` |
 | Phạm Thành Chung | Catalog/Product/Category alignment, active visibility, SKU/image/snapshot | `server/src/models/product.model.js`, `category.model.js`, product/category services, public pages | `feature/chung-catalog-schema-alignment` |
-| Nguyễn Quang Huy | Cart/Order/Payment alignment, idempotency, callback và COD | cart/order/payment models/services/routes, checkout/payment pages | `feature/huy-payment-order-reconciliation` |
+| Nguyễn Quang Huy | Cart/Order/Payment domain alignment, idempotency, state machine, late callback/refund rule và COD; không sở hữu PayOS adapter/credential/webhook | cart/order/payment domain models/services, checkout/order pages | `feature/huy-payment-order-reconciliation` |
 | Nguyễn Hữu Anh Nhật | Staff order state machine, invoice, return/refund/support ownership | `staffOrder`, `returnRefund`, `support` services/pages | `feature/nhat-order-return-reconciliation` |
 | Lê Vũ Cường | Inventory/reservation/export/replenishment/notification/report/settings | inventory, replenishment, notification, report, system setting modules | `feature/cuong-warehouse-admin-reconciliation` |
 
@@ -43,7 +43,7 @@
 
 1. Thành chốt vocabulary, role matrix, response/error contract và baseline rules.
 2. Chung chốt Product/Category/Inventory reference để các luồng order dùng đúng snapshot và active rule.
-3. Huy chốt Cart -> Order -> Payment, reservation boundary và payment states.
+3. Huy chốt Cart -> Order -> Payment domain, reservation boundary và payment states; Thành chốt PayOS adapter, webhook signature và provider mapping.
 4. Nhật dùng Order/Payment state đã chốt để sửa Staff processing, invoice và return/refund.
 5. Cường dùng reservation/export contract của Huy và Staff status của Nhật để sửa warehouse, replenishment, notification và reports.
 6. Thành review tất cả diff trên `main`, chạy test/build và merge theo thứ tự trên.
@@ -106,5 +106,13 @@ Các yêu cầu mới về upload ảnh, avatar, hồ sơ, thông báo và sổ 
 | Nguyễn Quang Huy | Chọn địa chỉ đã lưu/mặc định hoặc nhập địa chỉ mới tại Checkout; Order address snapshot |
 | Nguyễn Hữu Anh Nhật | Staff Order, Return/Refund, Support; chỉ phát notification event theo contract của Thành |
 | Lê Vũ Cường | Warehouse, Reports, Settings; phát event tồn kho/replenishment và tích hợp Notification service của Thành |
+
+## 11. Ownership Addendum - PayOS Online Payment (2026-07-22)
+
+- Nguyễn Ngọc Thành là owner tích hợp PayOS: SDK/configuration, hosted checkout link, `providerOrderCode`, public webhook, signature verification, return/cancel flow và webhook registration.
+- Nguyễn Quang Huy giữ Payment domain state, COD, checkout idempotency, callback history/duplicate guard, late-paid/refund rule sau khi provider payload đã được Thành xác minh.
+- Endpoint webhook chuẩn: `POST /api/payments/payos/webhook`; webhook không dùng JWT nhưng phải pass Checksum Key signature verification.
+- Local development phải publish backend qua HTTPS tunnel. `PAYOS_WEBHOOK_URL` có dạng `https://<tunnel-domain>/api/payments/payos/webhook`.
+- Branch/author: `feature/thanh-payos-payment`, `Nguyễn Ngọc Thành <thanhnnhe186491@fpt.edu.vn>`.
 
 Chi tiết nằm tại `docs/srs-sds-reconciliation/06_ACCOUNT_MEDIA_NOTIFICATION_ADDRESS_PLAN.md`.

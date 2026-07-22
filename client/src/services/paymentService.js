@@ -17,9 +17,7 @@ function authHeaders() {
   };
 }
 
-const defaultCallbackSecret = import.meta.env?.VITE_PAYMENT_CALLBACK_SECRET || '';
-
-export function createPaymentService({ baseUrl = DEFAULT_BASE_URL, fetcher = fetch, callbackSecret = defaultCallbackSecret } = {}) {
+export function createPaymentService({ baseUrl = DEFAULT_BASE_URL, fetcher = fetch } = {}) {
   return {
     async createOnlinePayment(orderId) {
       return parseResponse(
@@ -27,18 +25,6 @@ export function createPaymentService({ baseUrl = DEFAULT_BASE_URL, fetcher = fet
           method: 'POST',
           headers: authHeaders(),
           body: JSON.stringify({}),
-        })
-      );
-    },
-    async submitMockCallback(input) {
-      return parseResponse(
-        await fetcher(`${baseUrl}/payments/callback`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(callbackSecret ? { 'x-payment-callback-secret': callbackSecret } : {}),
-          },
-          body: JSON.stringify(input),
         })
       );
     },
