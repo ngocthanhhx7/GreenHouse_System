@@ -44,4 +44,28 @@ describe('shared header design contract', () => {
     assert.match(header, /brand-mark/);
     assert.match(header, /nav-pill/);
   });
+
+  it('provides a searchable, keyboard-safe mobile navigation drawer', () => {
+    assert.match(header, /mobile-menu-button/);
+    assert.match(header, /aria-expanded=\{menuOpen\}/);
+    assert.match(header, /navigate\(query \? `\/products\?keyword=\$\{encodeURIComponent\(query\)\}` : '\/products'\)/);
+    assert.match(header, /role="dialog"/);
+    assert.match(header, /aria-modal="true"/);
+    assert.match(header, /event\.key === 'Escape'/);
+    assert.match(header, /document\.body\.style\.overflow = 'hidden'/);
+    assert.match(header, /menuButtonRef\.current\?\.focus\(\)/);
+  });
+
+  it('keeps the desktop profile dropdown independent from the mobile drawer', () => {
+    assert.match(header, /profileOpen/);
+    assert.match(header, /profileButtonRef/);
+    assert.match(header, /avatar-dropdown/);
+    assert.match(header, /roleMenuLinks/);
+    assert.doesNotMatch(header, /role="menu"|role="menuitem"/);
+  });
+
+  it('closes the modal drawer when the viewport returns to desktop', () => {
+    assert.match(header, /window\.matchMedia\('\(min-width: 901px\)'\)/);
+    assert.match(header, /if \(event\.matches\) setMenuOpen\(false\)/);
+  });
 });

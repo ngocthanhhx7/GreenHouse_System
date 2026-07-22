@@ -1,10 +1,8 @@
-@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&display=swap');
-
 :root {
   color: #1f2a24;
   background: #f5f7f1;
-  font-family: Outfit, Nunito, Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-  --font-vietnamese-display: Outfit, "Segoe UI", Nunito, Arial, sans-serif;
+  font-family: "Be Vietnam Pro", Nunito, Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-vietnamese-display: "Be Vietnam Pro", "Segoe UI", Nunito, Arial, sans-serif;
   --green-950: #17281d;
   --green-900: #1f3f2b;
   --green-700: #2f6b42;
@@ -1078,7 +1076,7 @@ body {
 
 .hero-title-gradient {
   color: var(--green-950);
-  font-family: Outfit, Nunito, sans-serif;
+  font-family: "Be Vietnam Pro", Nunito, sans-serif;
   font-size: clamp(48px, 7vw, 82px);
   font-weight: 900;
   line-height: 0.96;
@@ -1213,7 +1211,7 @@ body {
   color: var(--green-900);
   display: block;
   font-size: 24px;
-  font-family: Outfit, sans-serif;
+  font-family: "Be Vietnam Pro", sans-serif;
   line-height: 1.1;
 }
 
@@ -1330,7 +1328,7 @@ body {
 }
 
 .collection-overlay-v2 h3 {
-  font-family: Outfit, sans-serif;
+  font-family: "Be Vietnam Pro", sans-serif;
   font-size: 22px;
   font-weight: 800;
   margin: 0 0 4px;
@@ -1397,7 +1395,7 @@ body {
 }
 
 .featured-empty-inner h3 {
-  font-family: Outfit, sans-serif;
+  font-family: "Be Vietnam Pro", sans-serif;
   font-size: 24px;
   margin-bottom: 8px;
 }
@@ -1480,7 +1478,7 @@ body {
 }
 
 .product-title {
-  font-family: Outfit, sans-serif;
+  font-family: "Be Vietnam Pro", sans-serif;
   font-size: 17px;
   font-weight: 700;
   margin-bottom: 4px;
@@ -1507,7 +1505,7 @@ body {
   font-size: 18px;
   color: var(--green-900);
   font-weight: 800;
-  font-family: Outfit, sans-serif;
+  font-family: "Be Vietnam Pro", sans-serif;
 }
 
 .btn-detail-link {
@@ -1633,7 +1631,7 @@ body {
 .why-us-text strong {
   color: var(--green-950);
   font-size: 17px;
-  font-family: Outfit, sans-serif;
+  font-family: "Be Vietnam Pro", sans-serif;
 }
 
 .why-us-text span {
@@ -1770,7 +1768,7 @@ body {
   color: var(--green-950);
   display: block;
   font-size: 15px;
-  font-family: Outfit, sans-serif;
+  font-family: "Be Vietnam Pro", sans-serif;
 }
 
 .testimonial-author-info span {
@@ -1823,7 +1821,7 @@ body {
 }
 
 .newsletter-info h2 {
-  font-family: Outfit, sans-serif;
+  font-family: "Be Vietnam Pro", sans-serif;
   font-size: clamp(28px, 3vw, 40px);
   font-weight: 800;
   color: var(--green-950);
@@ -1878,7 +1876,7 @@ body {
 }
 
 .newsletter-form-card h3 {
-  font-family: Outfit, sans-serif;
+  font-family: "Be Vietnam Pro", sans-serif;
   font-size: 24px;
   font-weight: 800;
   color: var(--green-950);

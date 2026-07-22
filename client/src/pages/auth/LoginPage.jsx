@@ -8,51 +8,77 @@ export default function LoginPage() {
   const { login, getDashboardPath } = useAuth();
   const [form, setForm] = useState({ email: '', password: '' });
   const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
 
   async function handleSubmit(event) {
     event.preventDefault();
+    if (submitting) return;
     setError('');
+    setSubmitting(true);
     try {
       const result = await login(form);
       navigate(getDashboardPath(result.user.role.roleName), { replace: true });
     } catch (err) {
       setError(err.message);
+    } finally {
+      setSubmitting(false);
     }
   }
 
   return (
-    <div className="auth-page">
-      <form className="auth-card" onSubmit={handleSubmit}>
-        <h1>Đăng nhập</h1>
-        <p className="text-secondary">Truy cập tài khoản GreenHome Kitchen của bạn.</p>
-        {error && <div className="alert alert-danger">{error}</div>}
-        <label className="form-label">
-          Email
-          <input
-            className="form-control"
-            type="email"
-            value={form.email}
-            onChange={(event) => setForm({ ...form, email: event.target.value })}
-            required
-          />
-        </label>
-        <label className="form-label">
-          Mật khẩu
-          <input
-            className="form-control"
-            type="password"
-            value={form.password}
-            onChange={(event) => setForm({ ...form, password: event.target.value })}
-            required
-          />
-        </label>
-        <button className="btn btn-success w-100" type="submit">
-          Đăng nhập
-        </button>
-        <p className="text-center mt-3 mb-0">
-          Chưa có tài khoản? <Link to="/register">Đăng ký</Link>
-        </p>
-      </form>
-    </div>
+    <main className="auth-page auth-page--login">
+      <div className="auth-page-shell">
+        <aside className="auth-brand-panel">
+          <img src="/assets/logo/logo.png" alt="" className="auth-brand-logo" />
+          <p className="auth-brand-kicker">GreenHome Kitchen</p>
+          <h2>Mọi điều cho căn bếp ấm áp.</h2>
+          <p>Đăng nhập để tiếp tục mua sắm và theo dõi những đơn hàng của bạn.</p>
+        </aside>
+
+        <form className="auth-form-panel" onSubmit={handleSubmit} aria-busy={submitting}>
+          <div className="auth-form-heading">
+            <p className="auth-eyebrow">Tài khoản GreenHome</p>
+            <h1>Đăng nhập</h1>
+            <p>Truy cập tài khoản GreenHome Kitchen của bạn.</p>
+          </div>
+
+          <div className="auth-feedback" aria-live="polite">
+            {error && <div className="auth-alert" role="alert">{error}</div>}
+          </div>
+
+          <div className="auth-fields">
+            <label htmlFor="login-email">
+              Email
+              <input
+                id="login-email"
+                type="email"
+                value={form.email}
+                autoComplete="email"
+                onChange={(event) => setForm({ ...form, email: event.target.value })}
+                required
+                disabled={submitting}
+              />
+            </label>
+            <label htmlFor="login-password">
+              Mật khẩu
+              <input
+                id="login-password"
+                type="password"
+                value={form.password}
+                autoComplete="current-password"
+                onChange={(event) => setForm({ ...form, password: event.target.value })}
+                required
+                disabled={submitting}
+              />
+            </label>
+          </div>
+
+          <button className="auth-submit" type="submit" disabled={submitting}>
+            {submitting ? 'Đang đăng nhập…' : 'Đăng nhập'}
+          </button>
+          <p className="auth-cross-link">Chưa có tài khoản? <Link to="/register">Đăng ký</Link></p>
+        </form>
+      </div>
+    </main>
   );
 }

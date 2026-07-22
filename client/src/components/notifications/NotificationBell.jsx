@@ -15,7 +15,13 @@ export default function NotificationBell() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const rootRef = useRef(null);
+  const triggerRef = useRef(null);
   const navigate = useNavigate();
+
+  function closeDropdown() {
+    setOpen(false);
+    triggerRef.current?.focus();
+  }
 
   async function loadPreview() {
     setLoading(true);
@@ -41,7 +47,10 @@ export default function NotificationBell() {
       if (rootRef.current && !rootRef.current.contains(event.target)) setOpen(false);
     }
     function handleKeyDown(event) {
-      if (event.key === 'Escape') setOpen(false);
+      if (event.key === 'Escape') {
+        setOpen(false);
+        triggerRef.current?.focus();
+      }
     }
     document.addEventListener('mousedown', handleDocumentClick);
     document.addEventListener('keydown', handleKeyDown);
@@ -73,6 +82,7 @@ export default function NotificationBell() {
   return (
     <div className="notification-bell" ref={rootRef}>
       <button
+        ref={triggerRef}
         className="header-icon-btn notification-bell-button"
         type="button"
         aria-label={`Thông báo${unreadCount ? `, ${unreadCount} chưa đọc` : ''}`}
@@ -92,6 +102,7 @@ export default function NotificationBell() {
           <div className="notification-dropdown-heading">
             <strong>Thông báo</strong>
             <span>{unreadCount} chưa đọc</span>
+            <button className="notification-dropdown-close" type="button" aria-label="Đóng thông báo" onClick={closeDropdown}>×</button>
           </div>
           {loading && <p className="notification-dropdown-state">Đang tải thông báo...</p>}
           {!loading && error && <p className="notification-dropdown-state text-danger">{error}</p>}

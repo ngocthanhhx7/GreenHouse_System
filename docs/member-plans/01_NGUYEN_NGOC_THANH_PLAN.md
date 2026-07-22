@@ -217,6 +217,10 @@ Tạo nền tảng để mọi module khác hoạt động đúng quyền. Nếu
 - [ ] Demo accounts prepared.
 - [ ] Integration notes shared to team.
 
+## Design DNA Decision — 2026-07-22
+
+The responsive foundation uses Fraunces for display typography and Be Vietnam Pro for UI typography because the official Outfit release lacks Vietnamese glyph coverage. Both fonts must remain self-hosted from official OFL sources; runtime network font imports are prohibited.
+
 ## Ownership Addendum 2026-07-20
 
 Thành là owner chính của Homepage và các tài nguyên tài khoản dùng chung, bổ sung ngoài Auth/RBAC:

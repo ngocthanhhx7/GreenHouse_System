@@ -24,5 +24,6 @@ describe('account layout routing contract', () => {
     assert.match(layout, /user\?\.role === 'Customer'/);
     assert.match(layout, /<Header showCart/);
     assert.match(layout, /<InternalTopbar/);
+    assert.doesNotMatch(layout, /<Sidebar/);
   });
 });

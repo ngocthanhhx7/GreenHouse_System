@@ -1,0 +1,38 @@
+@font-face {
+  font-family: 'Fraunces';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/fraunces-latin-vietnamese.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Be Vietnam Pro';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/be-vietnam-pro-latin-vietnamese.woff2') format('woff2');
+}
+
+:root {
+  --gh-forest: #173E31;
+  --gh-forest-deep: #12392D;
+  --gh-leaf: #2F6B42;
+  --gh-ivory: #F7F3E8;
+  --gh-paper: #FFFDF8;
+  --gh-gold: #D8A75B;
+  --gh-border: #DCE5D8;
+  --gh-muted: #657367;
+  --gh-ink: #1C1C15;
+  --gh-error: #BA1A1A;
+  --gh-space-1: 4px;
+  --gh-gutter-mobile: 16px;
+  --gh-gutter-desktop: 40px;
+  --gh-container: 1280px;
+  --gh-radius-control: 6px;
+  --gh-radius-panel: 10px;
+  --gh-radius-card: 16px;
+  --gh-shadow: 0 10px 30px -10px rgba(23,62,49,.12);
+  --gh-font-display: 'Fraunces', Georgia, serif;
+  --gh-font-ui: 'Be Vietnam Pro', Arial, sans-serif;
+}
