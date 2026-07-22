@@ -47,11 +47,11 @@ describe('demo seed destructive safety', () => {
 });
 
 describe('demo product image manifest', () => {
-  it('declares twenty deterministic UUID-v4 destinations and SHA-256 checksums', () => {
+  it('declares fifteen deterministic UUID-v4 destinations and SHA-256 checksums', () => {
     const { DEMO_IMAGE_MANIFEST } = require('./demoImageManifest');
-    assert.equal(DEMO_IMAGE_MANIFEST.length, 20);
-    assert.equal(new Set(DEMO_IMAGE_MANIFEST.map((image) => image.sku)).size, 20);
-    assert.equal(new Set(DEMO_IMAGE_MANIFEST.map((image) => image.destination)).size, 20);
+    assert.equal(DEMO_IMAGE_MANIFEST.length, 15);
+    assert.equal(new Set(DEMO_IMAGE_MANIFEST.map((image) => image.sku)).size, 15);
+    assert.equal(new Set(DEMO_IMAGE_MANIFEST.map((image) => image.destination)).size, 15);
     assert.ok(DEMO_IMAGE_MANIFEST.every((image) => /^\/uploads\/products\/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.webp$/.test(image.destination)));
     assert.ok(DEMO_IMAGE_MANIFEST.every((image) => /^[0-9a-f]{64}$/.test(image.sha256)));
     assert.ok(DEMO_IMAGE_MANIFEST.every((image) => image.source.startsWith('server/src/assets/demo-products/')));
@@ -59,7 +59,7 @@ describe('demo product image manifest', () => {
 
   it('preflights count, missing files and checksums without copying assets', async () => {
     const { preflightDemoImages } = require('./demoImageManifest');
-    await assert.rejects(() => preflightDemoImages({ workspaceRoot: 'Z:/definitely-missing-greenhome' }), /thiếu 20 ảnh/i);
+    await assert.rejects(() => preflightDemoImages({ workspaceRoot: 'Z:/definitely-missing-greenhome' }), /thiếu 15 ảnh/i);
   });
 
   it('validates WebP magic bytes and exact 1600x1200 dimensions', () => {
@@ -126,7 +126,7 @@ describe('demo seed CLI parser', () => {
       args: ['--reset', '--confirm=RESET:greenhouse_demo'],
       workspaceRoot: 'D:/fixture-root',
       env: { NODE_ENV: 'development', DEMO_SEED_ALLOW_RESET: 'true', MONGODB_URI: 'mongodb://127.0.0.1/greenhouse_demo' },
-      imagePreflight: async () => { calls.push('assets'); return { valid: true, count: 20 }; },
+      imagePreflight: async () => { calls.push('assets'); return { valid: true, count: 15 }; },
       databaseProbe: async () => { calls.push('database'); return { databaseName: 'greenhouse_demo', supportsTransactions: true, indexesReady: true }; },
       logger: { log() {}, error() {} },
     }), /write adapter.*phase 2/i);
@@ -142,7 +142,7 @@ describe('demo seed CLI parser', () => {
       env: { NODE_ENV: 'development', DEMO_SEED_ALLOW_RESET: 'true', MONGODB_URI: 'mongodb://127.0.0.1/greenhouse_demo' },
       databaseProbe: async () => { databaseCalls += 1; },
       logger: { log() {}, error() {} },
-    }), /thiếu 20 ảnh/i);
+    }), /thiếu 15 ảnh/i);
     assert.equal(databaseCalls, 0);
   });
 
@@ -157,7 +157,7 @@ describe('demo seed CLI parser', () => {
       let probeCalls = 0;
       await assert.rejects(() => runDemoSeedCli({
         args, env,
-        imagePreflight: async () => { probeCalls += 1; return { valid: true, count: 20 }; },
+        imagePreflight: async () => { probeCalls += 1; return { valid: true, count: 15 }; },
         databaseProbe: async () => { probeCalls += 1; return { databaseName: 'greenhouse_demo', supportsTransactions: true, indexesReady: true }; },
         logger: { log() {}, error() {} },
       }), /reset demo bị từ chối/i);

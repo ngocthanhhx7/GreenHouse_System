@@ -8,7 +8,7 @@ describe('demo graph validator', () => {
     const result = validateDemoGraph(DEMO_GRAPH);
     assert.equal(result.valid, true);
     assert.equal(result.counts.orders, 22);
-    assert.equal(result.counts.products, 20);
+    assert.equal(result.counts.products, 15);
   });
 
   it('rejects duplicate stable natural identifiers', () => {
@@ -44,7 +44,8 @@ describe('demo graph validator', () => {
     const { DEMO_GRAPH, cloneDemoGraph } = require('./demoFixtures');
     const { validateDemoGraph } = require('./demoGraphValidator');
     const graph = cloneDemoGraph(DEMO_GRAPH);
-    graph.reviews[0].productKey = 'product-20';
+    const review = graph.reviews[0];
+    review.productKey = graph.products.find((product) => !graph.orderDetails.some((detail) => detail.orderKey === review.orderKey && detail.productKey === product.key)).key;
     assert.throws(() => validateDemoGraph(graph), /đánh giá.*Delivered/i);
   });
 

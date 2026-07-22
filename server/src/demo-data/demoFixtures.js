@@ -76,10 +76,12 @@ const productSource = [
   ['Kệ tre lưu trữ ba tầng', 'GH-LT-004', 'category-storage', 890000, 'cái', 'Kệ tre ba tầng chắc chắn giúp tận dụng chiều cao và giữ căn bếp gọn gàng.'],
 ];
 
-const products = productSource.map(([name, sku, categoryKey, price, unit, shortDescription], index) => ({
+const selectedProductSource = productSource.filter((_, index) => index % 4 < 3);
+const imageBySku = new Map(DEMO_IMAGE_MANIFEST.map((image) => [image.sku, image]));
+const products = selectedProductSource.map(([name, sku, categoryKey, price, unit, shortDescription], index) => ({
   key: `product-${two(index + 1)}`, name, sku, categoryKey, price, unit, shortDescription,
   description: `${shortDescription} Sản phẩm được tuyển chọn theo tiêu chuẩn GreenHome, ưu tiên vật liệu an toàn, độ bền lâu dài và thiết kế tối giản phù hợp với nhịp sống của gia đình Việt hiện đại. Hướng dẫn sử dụng và bảo quản được cung cấp rõ ràng để duy trì chất lượng tốt nhất.`,
-  currency: 'VND', status: 'Active', imageUrl: DEMO_IMAGE_MANIFEST[index].destination, stockQuantity: 0,
+  currency: 'VND', status: 'Active', imageUrl: imageBySku.get(sku).destination, stockQuantity: 0,
 }));
 
 const inventories = products.map((product, index) => ({
@@ -92,8 +94,8 @@ const carts = Array.from({ length: 12 }, (_, index) => ({
   createdAt: day(index + 1),
 }));
 const cartItems = Array.from({ length: 20 }, (_, index) => ({
-  key: `cart-item-${two(index + 1)}`, cartKey: `cart-${two((index % 10) + 1)}`, productKey: `product-${two((index % 20) + 1)}`,
-  productName: products[index % 20].name, quantity: (index % 3) + 1, unitPrice: products[index % 20].price,
+  key: `cart-item-${two(index + 1)}`, cartKey: `cart-${two((index % 10) + 1)}`, productKey: `product-${two((index % products.length) + 1)}`,
+  productName: products[index % products.length].name, quantity: (index % 3) + 1, unitPrice: products[index % products.length].price,
 }));
 
 const orderStates = [
@@ -111,7 +113,13 @@ const orderDetails = [];
 for (let index = 0; index < 22; index += 1) {
   const orderKey = `order-${two(index + 1)}`;
   const customerNumber = (index % 10) + 1;
-  const lineProducts = [products[(index * 2) % 20], products[(index * 2 + 1) % 20]];
+  const [orderStatus] = orderStates[index];
+  const reservesInventory = ['Pending', 'WaitingForPayment', 'Confirmed', 'StockExportRequested'].includes(orderStatus);
+  const orderProductPool = reservesInventory ? products.slice(0, -2) : products;
+  const lineProducts = [
+    orderProductPool[(index * 2) % orderProductPool.length],
+    orderProductPool[(index * 2 + 1) % orderProductPool.length],
+  ];
   const lines = lineProducts.map((product, lineIndex) => {
     const quantity = lineIndex + 1;
     return {
@@ -122,7 +130,7 @@ for (let index = 0; index < 22; index += 1) {
   });
   orderDetails.push(...lines);
   const subtotal = lines.reduce((sum, line) => sum + line.subtotal, 0);
-  const [orderStatus, paymentStatus, paymentMethod] = orderStates[index];
+  const [, paymentStatus, paymentMethod] = orderStates[index];
   orders.push({
     key: orderKey, orderCode: `GH-DEMO-20${two(index + 1)}`, customerKey: `user-customer-${two(customerNumber)}`,
     idempotencyKey: `demo-checkout-${two(index + 1)}`, subtotal, shippingFee: 30000, totalAmount: subtotal + 30000,
@@ -210,8 +218,8 @@ const damageReports = damageStatuses.map((status, index) => ({
 }));
 
 const ledger = new Map(products.map((product, index) => {
-  if (index === 18) return [product.key, 6];
-  if (index === 19) return [product.key, 7];
+  if (index === products.length - 2) return [product.key, 6];
+  if (index === products.length - 1) return [product.key, 7];
   return [product.key, 80 + index * 3];
 }));
 const inventoryTransactions = [];
@@ -302,7 +310,7 @@ const supportTypes = ['Order', 'Product', 'Payment', 'ReturnRefund', 'Other'];
 const supportStatuses = ['New', 'InProgress', 'Resolved'];
 const supportRequests = customerNames.map((_, index) => ({
   key: `support-${two(index + 1)}`, ticketCode: `SUP-DEMO-${two(index + 1)}`, customerKey: `user-customer-${two(index + 1)}`,
-  orderKey: `order-${two(index + 1)}`, productKey: `product-${two((index % 20) + 1)}`, requestType: supportTypes[index % supportTypes.length],
+  orderKey: `order-${two(index + 1)}`, productKey: `product-${two((index % products.length) + 1)}`, requestType: supportTypes[index % supportTypes.length],
   priority: ['Low', 'Normal', 'High', 'Urgent'][index % 4], subject: `Yêu cầu hỗ trợ demo ${index + 1}`,
   content: 'Khách hàng cần được hướng dẫn rõ ràng về sản phẩm, thanh toán hoặc tiến độ xử lý đơn hàng.',
   status: supportStatuses[index % supportStatuses.length], handledByKey: index % supportStatuses.length === 0 ? null : 'user-staff',

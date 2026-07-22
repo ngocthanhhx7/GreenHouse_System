@@ -1,5 +1,5 @@
 const EXPECTED_COUNTS = Object.freeze({
-  roles: 4, users: 13, addresses: 20, categories: 5, products: 20, inventories: 20,
+  roles: 4, users: 13, addresses: 20, categories: 5, products: 15, inventories: 15,
   carts: 12, cartItems: 20, orders: 22, orderDetails: 44, payments: 22,
   paymentAttempts: 22, paymentCallbacks: 10, invoices: 10, stockExports: 15,
   inventoryTransactions: 37, replenishments: 6, damageReports: 3, returnRequests: 5,

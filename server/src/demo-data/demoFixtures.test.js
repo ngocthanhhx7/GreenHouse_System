@@ -6,8 +6,8 @@ const EXPECTED_COUNTS = {
   users: 13,
   addresses: 20,
   categories: 5,
-  products: 20,
-  inventories: 20,
+  products: 15,
+  inventories: 15,
   carts: 12,
   cartItems: 20,
   orders: 22,
@@ -51,12 +51,12 @@ describe('deterministic demo fixture graph', () => {
     assert.equal(new Set(customers.map((user) => user.phone)).size, 10);
   });
 
-  it('contains four complete Vietnamese products per category', () => {
+  it('contains three complete Vietnamese products per category', () => {
     const { DEMO_GRAPH } = require('./demoFixtures');
     for (const category of DEMO_GRAPH.categories) {
-      assert.equal(DEMO_GRAPH.products.filter((product) => product.categoryKey === category.key).length, 4);
+      assert.equal(DEMO_GRAPH.products.filter((product) => product.categoryKey === category.key).length, 3);
     }
-    assert.equal(new Set(DEMO_GRAPH.products.map((product) => product.sku)).size, 20);
+    assert.equal(new Set(DEMO_GRAPH.products.map((product) => product.sku)).size, 15);
     assert.ok(DEMO_GRAPH.products.every((product) => product.currency === 'VND'));
     assert.ok(DEMO_GRAPH.products.every((product) => product.price >= 79000 && Number.isInteger(product.price)));
     assert.ok(DEMO_GRAPH.products.every((product) => product.name.length >= 12));

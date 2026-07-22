@@ -244,7 +244,7 @@ Thông tin cần cấu hình ngoài Git cho email: provider, credentials, sender
 
 Nguyễn Ngọc Thành là owner nền tảng cho bộ dữ liệu demo có quan hệ đầy đủ, tách thành hai phase an toàn:
 
-- Phase 1 (đã đặc tả và kiểm thử offline): fixture graph tất định gồm 4 role, 13 tài khoản (10 Customer), 20 địa chỉ, 5 danh mục, 20 sản phẩm tiếng Việt và dữ liệu liên kết cho giỏ hàng, đơn hàng, thanh toán, callback, hóa đơn, kho, đổi trả, hoàn tiền, hỗ trợ, đánh giá, thông báo, cài đặt và audit log.
+- Phase 1 (đã đặc tả và kiểm thử offline): fixture graph tất định gồm 4 role, 13 tài khoản (10 Customer), 20 địa chỉ, 5 danh mục, 15 sản phẩm tiếng Việt (3 mẫu đa dạng mỗi danh mục) và dữ liệu liên kết cho giỏ hàng, đơn hàng, thanh toán, callback, hóa đơn, kho, đổi trả, hoàn tiền, hỗ trợ, đánh giá, thông báo, cài đặt và audit log.
 - Mỗi collection dùng natural key ổn định; graph validator kiểm tra tham chiếu, tổng tiền, trạng thái nghiệp vụ, thời điểm báo cáo, quyền đánh giá và sự tham gia của cả 10 khách hàng trước mọi thao tác ghi.
 - Ledger kho demo gồm đúng 12 điều chỉnh, 2 lần nhận bổ sung, 1 xác nhận hư hỏng và 22 dòng xuất kho; tồn kho ở Product/Inventory cùng lượng giữ chỗ được derive từ ledger và các đơn đang hoạt động, không đặt số liệu rời rạc.
 - Kịch bản callback chỉ thuộc đơn ONLINE; đánh giá chỉ thuộc đơn Delivered; support, xuất kho, đổi trả và RefundPending bám đúng actor, trạng thái bền vững và timestamp của service hiện hành. Mọi timestamp demo không vượt quá ngày 2026-07-22.
