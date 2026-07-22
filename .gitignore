@@ -7,6 +7,8 @@ npm-debug.log*
 gsap-skills/
 .superpowers/
 .worktrees/
+docs/superpowers/
+docs/ui-prompts/
 server/uploads/avatars/*
 !server/uploads/avatars/.gitkeep
 server/uploads/products/*

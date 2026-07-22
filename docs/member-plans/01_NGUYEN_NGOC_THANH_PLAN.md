@@ -226,3 +226,16 @@ Thành là owner chính của Homepage và các tài nguyên tài khoản dùng 
 - Review contract của Chung/Huy/Nhật/Cường, chạy regression test, commit/merge cuối bằng danh tính `Nguyễn Ngọc Thành <thanhnnhe186491@fpt.edu.vn>`.
 
 Chi tiết execution: `docs/srs-sds-reconciliation/06_ACCOUNT_MEDIA_NOTIFICATION_ADDRESS_PLAN.md`.
+
+## Ownership Addendum 2026-07-22 - Email Delivery Và Validation Toàn Hệ Thống
+
+Nguyễn Ngọc Thành bổ sung vai trò owner nền tảng cho email delivery và điều phối validation xuyên suốt hệ thống:
+
+- Xây email delivery dùng chung theo cơ chế outbox/queue; lỗi nhà cung cấp email không được rollback tạo đơn, thanh toán hoặc mutation nghiệp vụ đã hoàn tất.
+- Hoàn thiện quên mật khẩu an toàn, form liên hệ gửi email và email xác nhận đơn hàng; token đặt lại mật khẩu chỉ lưu dạng hash, có TTL, dùng một lần và không làm lộ email có tồn tại hay không.
+- Chuẩn hóa hợp đồng lỗi dùng chung gồm HTTP status, `errorCode`, `message` tiếng Việt và `fieldErrors`; frontend hiển thị lỗi riêng theo trường, backend luôn validate lại toàn bộ input.
+- Điều phối audit validation trên mọi body/query/path param của Public, Customer, Staff, WarehouseManager và Admin. Validation cú pháp/shape đặt tại request boundary; validation quyền, trạng thái và invariant nghiệp vụ tiếp tục nằm trong service của module sở hữu.
+- Triển khai theo ba phase để giữ code gọn và giảm regression: V1 bảo mật nền tảng/rate limit/body limit/CORS/ObjectId; V2 schema nghiệp vụ và pagination/filter bounds; V3 chuẩn hóa thông báo tiếng Việt, accessibility và route-level regression tests.
+- Mọi thay đổi scope/contract phải cập nhật `docs/member-plans` trước khi merge. Hai thư mục làm việc nội bộ `docs/superpowers/` và `docs/ui-prompts/` không được theo dõi hoặc push lên Git.
+
+Thông tin cần cấu hình ngoài Git cho email: provider, credentials, sender đã xác minh, inbox nhận liên hệ, public reset URL, CORS origin và rate-limit policy. Không ghi secret vào tài liệu hoặc commit.
