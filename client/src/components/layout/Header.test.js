@@ -61,5 +61,11 @@ describe('shared header design contract', () => {
     assert.match(header, /profileButtonRef/);
     assert.match(header, /avatar-dropdown/);
     assert.match(header, /roleMenuLinks/);
+    assert.doesNotMatch(header, /role="menu"|role="menuitem"/);
+  });
+
+  it('closes the modal drawer when the viewport returns to desktop', () => {
+    assert.match(header, /window\.matchMedia\('\(min-width: 901px\)'\)/);
+    assert.match(header, /if \(event\.matches\) setMenuOpen\(false\)/);
   });
 });

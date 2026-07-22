@@ -15,7 +15,7 @@ function getInitials(user) {
     .join('');
 }
 
-export default function InternalTopbar({ onMenuToggle, menuOpen = false, menuButtonRef }) {
+export default function InternalTopbar({ backgroundInert = false, onMenuToggle, menuOpen = false, menuButtonRef }) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const [accountOpen, setAccountOpen] = useState(false);
@@ -52,7 +52,11 @@ export default function InternalTopbar({ onMenuToggle, menuOpen = false, menuBut
   }, [accountOpen]);
 
   return (
-    <header className="internal-topbar">
+    <header
+      className="internal-topbar"
+      inert={backgroundInert ? true : undefined}
+      aria-hidden={backgroundInert ? 'true' : undefined}
+    >
       <div className="internal-brand-area">
         {onMenuToggle && (
           <button
@@ -67,10 +71,10 @@ export default function InternalTopbar({ onMenuToggle, menuOpen = false, menuBut
             <span aria-hidden="true">☰</span>
           </button>
         )}
-        <Link to="/" className="internal-brand" aria-label="GreenHome Kitchen">
+        <div className="internal-brand">
           <span className="internal-brand-icon" aria-hidden="true">⌁</span>
           <span><strong>GreenHome Kitchen</strong><small>Không gian vận hành</small></span>
-        </Link>
+        </div>
       </div>
 
       <div className="internal-actions">
@@ -81,7 +85,6 @@ export default function InternalTopbar({ onMenuToggle, menuOpen = false, menuBut
             className="internal-profile"
             type="button"
             aria-label="Mở menu tài khoản"
-            aria-haspopup="menu"
             aria-expanded={accountOpen}
             onClick={() => setAccountOpen((value) => !value)}
           >
@@ -96,15 +99,15 @@ export default function InternalTopbar({ onMenuToggle, menuOpen = false, menuBut
           </button>
 
           {accountOpen && (
-            <div className="internal-account-dropdown" ref={accountMenuRef} role="menu">
+            <nav className="internal-account-dropdown" ref={accountMenuRef} aria-label="Điều hướng tài khoản">
               <div className="internal-account-summary">
                 <strong>{user?.fullName || user?.email}</strong>
                 <small>{translateRole(user?.role)}</small>
               </div>
-              <Link to="/profile" role="menuitem" onClick={() => setAccountOpen(false)}>Hồ sơ</Link>
-              <Link to="/notifications" role="menuitem" onClick={() => setAccountOpen(false)}>Thông báo</Link>
-              <button type="button" role="menuitem" onClick={handleLogout}>Đăng xuất</button>
-            </div>
+              <Link to="/profile" onClick={() => setAccountOpen(false)}>Hồ sơ</Link>
+              <Link to="/notifications" onClick={() => setAccountOpen(false)}>Thông báo</Link>
+              <button type="button" onClick={handleLogout}>Đăng xuất</button>
+            </nav>
           )}
         </div>
       </div>

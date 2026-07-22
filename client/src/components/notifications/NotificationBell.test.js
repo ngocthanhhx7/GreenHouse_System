@@ -25,4 +25,11 @@ describe('notification bell UX contract', () => {
     assert.match(internalTopbar, /<NotificationBell/);
     assert.match(header, /<NotificationBell/);
   });
+
+  it('returns focus to its trigger when Escape or the close control dismisses the disclosure', () => {
+    assert.match(source, /triggerRef/);
+    assert.match(source, /event\.key === 'Escape'[\s\S]*?triggerRef\.current\?\.focus\(\)/);
+    assert.match(source, /aria-label="Đóng thông báo"/);
+    assert.match(source, /onClick=\{closeDropdown\}/);
+  });
 });

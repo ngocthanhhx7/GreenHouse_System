@@ -44,6 +44,8 @@ const Sidebar = forwardRef(function Sidebar({ open = false, onNavigate }, ref) {
       id="operational-sidebar"
       ref={ref}
       className={`app-sidebar sidebar-drawer ${open ? 'is-open' : ''}`}
+      role={open ? 'dialog' : undefined}
+      aria-modal={open ? 'true' : undefined}
       aria-label={`Điều hướng ${translateRole(user?.role)}`}
       tabIndex={-1}
     >

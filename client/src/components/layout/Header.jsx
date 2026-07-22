@@ -130,6 +130,16 @@ export default function Header({ showCart = true }) {
   }, [profileOpen]);
 
   useEffect(() => {
+    const desktopQuery = window.matchMedia('(min-width: 901px)');
+    function closeDrawerAtDesktop(event) {
+      if (event.matches) setMenuOpen(false);
+    }
+
+    desktopQuery.addEventListener('change', closeDrawerAtDesktop);
+    return () => desktopQuery.removeEventListener('change', closeDrawerAtDesktop);
+  }, []);
+
+  useEffect(() => {
     if (!menuOpen) return undefined;
 
     const previousOverflow = document.body.style.overflow;
@@ -234,7 +244,6 @@ export default function Header({ showCart = true }) {
                   className="avatar-button"
                   type="button"
                   aria-label="Mở menu tài khoản"
-                  aria-haspopup="menu"
                   aria-expanded={profileOpen}
                   onClick={() => {
                     setMenuOpen(false);
@@ -251,20 +260,20 @@ export default function Header({ showCart = true }) {
                   <span aria-hidden="true">⌄</span>
                 </button>
                 {profileOpen && (
-                  <div className="avatar-dropdown" ref={profileMenuRef} role="menu">
+                  <nav className="avatar-dropdown" ref={profileMenuRef} aria-label="Điều hướng tài khoản">
                     <div className="avatar-dropdown-heading">
                       <strong>{user?.fullName || user?.email}</strong>
                       <small>{translateRole(userRole)}</small>
                     </div>
                     {accountLinks.map((link) => (
-                      <Link key={link.to} to={link.to} role="menuitem" className="avatar-dropdown-link" onClick={() => setProfileOpen(false)}>
+                      <Link key={link.to} to={link.to} className="avatar-dropdown-link" onClick={() => setProfileOpen(false)}>
                         {link.label}
                       </Link>
                     ))}
-                    <button className="avatar-dropdown-link logout" role="menuitem" type="button" onClick={handleLogout}>
+                    <button className="avatar-dropdown-link logout" type="button" onClick={handleLogout}>
                       Đăng xuất
                     </button>
-                  </div>
+                  </nav>
                 )}
               </div>
             </div>

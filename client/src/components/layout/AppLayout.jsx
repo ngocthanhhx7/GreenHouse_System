@@ -8,11 +8,24 @@ const FOCUSABLE_ELEMENTS = 'a[href], button:not([disabled])';
 
 export default function AppLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(() => window.matchMedia('(max-width: 900px)').matches);
   const menuButtonRef = useRef(null);
   const sidebarRef = useRef(null);
+  const modalOpen = isMobile && sidebarOpen;
 
   useEffect(() => {
-    if (!sidebarOpen) return undefined;
+    const mobileQuery = window.matchMedia('(max-width: 900px)');
+    function syncViewport(event) {
+      setIsMobile(event.matches);
+      if (!event.matches) setSidebarOpen(false);
+    }
+
+    mobileQuery.addEventListener('change', syncViewport);
+    return () => mobileQuery.removeEventListener('change', syncViewport);
+  }, []);
+
+  useEffect(() => {
+    if (!modalOpen) return undefined;
 
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
@@ -45,25 +58,31 @@ export default function AppLayout() {
       document.body.style.overflow = previousOverflow;
       menuButtonRef.current?.focus();
     };
-  }, [sidebarOpen]);
+  }, [modalOpen]);
 
   return (
     <div className="app-shell">
       <InternalTopbar
-        menuOpen={sidebarOpen}
+        backgroundInert={modalOpen}
+        menuOpen={modalOpen}
         menuButtonRef={menuButtonRef}
         onMenuToggle={() => setSidebarOpen((value) => !value)}
       />
       <div className="app-body">
-        <Sidebar ref={sidebarRef} open={sidebarOpen} onNavigate={() => setSidebarOpen(false)} />
-        {sidebarOpen && (
+        <Sidebar ref={sidebarRef} open={modalOpen} onNavigate={() => setSidebarOpen(false)} />
+        {modalOpen && (
           <div
             className="sidebar-overlay"
             aria-hidden="true"
             onMouseDown={() => setSidebarOpen(false)}
           />
         )}
-        <main id="main-content" className="app-content">
+        <main
+          id="main-content"
+          className="app-content"
+          inert={modalOpen ? true : undefined}
+          aria-hidden={modalOpen ? 'true' : undefined}
+        >
           <Outlet />
         </main>
       </div>

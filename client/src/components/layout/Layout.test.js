@@ -9,6 +9,7 @@ const publicLayout = readFileSync(join(process.cwd(), 'src/components/layout/Pub
 const appRoutes = readFileSync(join(process.cwd(), 'src/App.jsx'), 'utf8');
 const internalTopbar = readFileSync(join(process.cwd(), 'src/components/layout/InternalTopbar.jsx'), 'utf8');
 const sidebar = readFileSync(join(process.cwd(), 'src/components/layout/Sidebar.jsx'), 'utf8');
+const sharedShell = readFileSync(join(process.cwd(), 'src/styles/shared-shell.css'), 'utf8');
 
 describe('role layout separation contract', () => {
   it('keeps footer in storefront and customer layouts only', () => {
@@ -36,6 +37,8 @@ describe('role layout separation contract', () => {
     assert.match(internalTopbar, /Đăng xuất/);
     assert.doesNotMatch(internalTopbar, /to="\/cart"/);
     assert.doesNotMatch(internalTopbar, /Trang chủ|Sản phẩm|Về GreenHome/);
+    assert.doesNotMatch(internalTopbar, /to="\/"/);
+    assert.doesNotMatch(internalTopbar, /role="menu"|role="menuitem"/);
   });
 
   it('selects navigation only from the signed-in role group', () => {
@@ -49,5 +52,18 @@ describe('role layout separation contract', () => {
     assert.match(appLayout, /event\.key === 'Escape'/);
     assert.match(appLayout, /sidebar-overlay/);
     assert.match(appLayout, /menuButtonRef/);
+    assert.match(appLayout, /window\.matchMedia\('\(max-width: 900px\)'\)/);
+    assert.match(appLayout, /setSidebarOpen\(false\)/);
+    assert.match(sidebar, /role=\{open \? 'dialog' : undefined\}/);
+    assert.match(sidebar, /aria-modal=\{open \? 'true' : undefined\}/);
+    assert.match(appLayout, /inert=\{modalOpen \? true : undefined\}/);
+    assert.match(appLayout, /aria-hidden=\{modalOpen \? 'true' : undefined\}/);
+    assert.match(appLayout, /backgroundInert=\{modalOpen\}/);
+    assert.match(internalTopbar, /inert=\{backgroundInert \? true : undefined\}/);
+  });
+
+  it('scopes shared shell child selectors and keeps both guest actions at tablet width', () => {
+    assert.doesNotMatch(sharedShell, /^\.(avatar-dropdown-heading|mobile-navigation|mobile-menu-button|internal-brand-area|sidebar-overlay)\b/m);
+    assert.doesNotMatch(sharedShell, /header-auth-btn:first-child/);
   });
 });
