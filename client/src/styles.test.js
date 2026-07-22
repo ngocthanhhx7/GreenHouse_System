@@ -30,6 +30,22 @@ const requiredVietnameseCodePoints = [
   [0x1ea0, 0x1ef9],
 ].flatMap(([start, end]) => Array.from({ length: end - start + 1 }, (_, offset) => start + offset));
 
+const relativeLuminance = (hex) => {
+  const channels = hex.match(/[0-9a-f]{2}/gi).map((channel) => Number.parseInt(channel, 16) / 255);
+  const [red, green, blue] = channels.map((channel) => (
+    channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4
+  ));
+  return (0.2126 * red) + (0.7152 * green) + (0.0722 * blue);
+};
+
+const contrastRatio = (first, second) => {
+  const lighter = Math.max(relativeLuminance(first), relativeLuminance(second));
+  const darker = Math.min(relativeLuminance(first), relativeLuminance(second));
+  return (lighter + 0.05) / (darker + 0.05);
+};
+
+const tokenHex = (name) => tokens.match(new RegExp(`${name}:\\s*(#[0-9A-F]{6})`, 'i'))?.[1];
+
 describe('responsive style foundation', () => {
   it('loads the canonical cascade immediately after legacy styles', () => {
     assert.match(
@@ -65,16 +81,53 @@ describe('responsive style foundation', () => {
     assert.match(headingBlock, /font-family:\s*var\(--gh-font-display\)/);
   });
 
+  it('keeps dark-surface headings at accessible contrast', () => {
+    const footerHeadingBlock = base.match(/\.site-footer h1,[\s\S]*?\.site-footer \.brand-name\s*\{[^}]+\}/)?.[0] || '';
+    const ctaHeadingBlock = styles.match(/\.premium-final-cta h2\s*\{[^}]+\}/g)?.at(-1) || '';
+
+    assert.match(footerHeadingBlock, /color:\s*var\(--gh-paper\)/);
+    assert.match(ctaHeadingBlock, /color:\s*#ffffff/i);
+    assert.ok(contrastRatio(tokenHex('--gh-paper'), '#064f3c') >= 4.5);
+    assert.ok(contrastRatio('#ffffff', '#0d725c') >= 4.5);
+  });
+
+  it('uses a two-tone focus indicator with contrast on light and dark surfaces', () => {
+    const focusBlock = base.match(/:focus-visible\s*\{[^}]+\}/)?.[0] || '';
+
+    assert.match(focusBlock, /outline:\s*3px solid var\(--gh-gold\)/);
+    assert.match(focusBlock, /outline-offset:\s*3px/);
+    assert.match(focusBlock, /box-shadow:\s*0 0 0 3px var\(--gh-forest-deep\)/);
+    assert.ok(contrastRatio(tokenHex('--gh-forest-deep'), tokenHex('--gh-ivory')) >= 3);
+    assert.ok(contrastRatio(tokenHex('--gh-gold'), '#064f3c') >= 3);
+  });
+
+  it('registers the full supported weight range for both variable fonts', () => {
+    const frauncesFace = tokens.match(/@font-face\s*\{[^}]*font-family:\s*'Fraunces';[^}]+\}/)?.[0] || '';
+    const uiFace = tokens.match(/@font-face\s*\{[^}]*font-family:\s*'Be Vietnam Pro';[^}]+\}/)?.[0] || '';
+
+    assert.match(frauncesFace, /font-weight:\s*100 900/);
+    assert.match(uiFace, /font-weight:\s*100 900/);
+  });
+
   it('preloads only the canonical local font files', () => {
-    assert.match(index, /\/fonts\/fraunces-latin-vietnamese\.woff2/);
-    assert.match(index, /\/fonts\/be-vietnam-pro-latin-vietnamese\.woff2/);
-    assert.doesNotMatch(index, /outfit/i);
+    const preloads = [...index.matchAll(/<link\s+rel="preload"[^>]+>/g)].map(([tag]) => tag);
+    const hrefs = preloads.map((tag) => tag.match(/href="([^"]+)"/)?.[1]).sort();
+
+    assert.deepEqual(hrefs, [
+      '/fonts/be-vietnam-pro-latin-vietnamese.woff2',
+      '/fonts/fraunces-latin-vietnamese.woff2',
+    ]);
+    for (const preload of preloads) {
+      assert.match(preload, /\sas="font"/);
+      assert.match(preload, /\stype="font\/woff2"/);
+      assert.match(preload, /\scrossorigin(?:\s|\/|>)/);
+    }
   });
 
   it('pins the complete local font artifacts by hash', () => {
     const expectedFonts = new Map([
       ['fraunces-latin-vietnamese.woff2', '0928daeeeafa6ff0e512e333651a2a8a716dca56578dc7355460f0a812bc2415'],
-      ['be-vietnam-pro-latin-vietnamese.woff2', '44a0492e5ded22bb3afb725ae85fe87ffcbaad1b07a0b60270d0170528b3a567'],
+      ['be-vietnam-pro-latin-vietnamese.woff2', '7eac7000f8156452c799ba630a0b71153a9cd5001a95c56dd15468670e247d0a'],
     ]);
 
     for (const [fileName, expectedHash] of expectedFonts) {
@@ -95,6 +148,8 @@ describe('responsive style foundation', () => {
       const font = fontkit.create(readFileSync(join(process.cwd(), 'public/fonts', fileName)));
       const missing = requiredVietnameseCodePoints.filter((codePoint) => !font.hasGlyphForCodePoint(codePoint));
       assert.deepEqual(missing, [], `${fileName} is missing required Latin/Vietnamese glyphs`);
+      assert.equal(font.variationAxes.wght?.min, 100, `${fileName} must support weight 100`);
+      assert.equal(font.variationAxes.wght?.max, 900, `${fileName} must support weight 900`);
     }
   });
 
@@ -104,6 +159,8 @@ describe('responsive style foundation', () => {
     assert.match(provenance, /Copyright 2018 The Fraunces Project Authors/);
     assert.match(provenance, /Copyright 2021 The Be Vietnam Pro Project Authors/);
     assert.match(provenance, /ttf2woff2@8\.0\.1/);
+    assert.match(provenance, /804e62d81abbbcdcce5686069c69b41b8c245192/);
+    assert.match(provenance, /2E7F074803B2252224A55EBC3112D19E2E844B5EDEE4DCF1E91E254F78E69F4C/);
     assert.doesNotMatch(provenance, /Outfit Project Authors/);
     assert.match(plan, /Design DNA Decision[^\n]*2026-07-22/);
     assert.match(plan, /Fraunces[^\n]+Be Vietnam Pro/);

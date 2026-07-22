@@ -14,6 +14,13 @@ h3,
   font-family: var(--gh-font-display);
 }
 
+.site-footer h1,
+.site-footer h2,
+.site-footer h3,
+.site-footer .brand-name {
+  color: var(--gh-paper);
+}
+
 button,
 input,
 select,
@@ -22,6 +29,7 @@ textarea {
 }
 
 :focus-visible {
+  box-shadow: 0 0 0 3px var(--gh-forest-deep);
   outline: 3px solid var(--gh-gold);
   outline-offset: 3px;
 }
