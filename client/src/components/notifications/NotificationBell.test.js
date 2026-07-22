@@ -17,4 +17,12 @@ describe('notification bell UX contract', () => {
     assert.match(source, /markAsRead/);
     assert.match(source, /navigate\(`\/notifications\/\$\{notification\.id\}`\)/);
   });
+
+  it('remains reusable in both storefront and internal topbars', () => {
+    const internalTopbar = readFileSync(join(process.cwd(), 'src/components/layout/InternalTopbar.jsx'), 'utf8');
+    const header = readFileSync(join(process.cwd(), 'src/components/layout/Header.jsx'), 'utf8');
+
+    assert.match(internalTopbar, /<NotificationBell/);
+    assert.match(header, /<NotificationBell/);
+  });
 });

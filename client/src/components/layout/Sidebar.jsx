@@ -1,3 +1,4 @@
+import { forwardRef } from 'react';
 import { NavLink } from 'react-router-dom';
 
 import useAuth from '../../hooks/useAuth.js';
@@ -34,20 +35,31 @@ const ROLE_LINKS = {
   ],
 };
 
-export default function Sidebar() {
+const Sidebar = forwardRef(function Sidebar({ open = false, onNavigate }, ref) {
   const { user } = useAuth();
   const links = ROLE_LINKS[user?.role] || ROLE_LINKS.Customer;
 
   return (
-    <aside className="app-sidebar">
-      <div className="sidebar-title">{translateRole(user?.role)}</div>
+    <aside
+      id="operational-sidebar"
+      ref={ref}
+      className={`app-sidebar sidebar-drawer ${open ? 'is-open' : ''}`}
+      aria-label={`Điều hướng ${translateRole(user?.role)}`}
+      tabIndex={-1}
+    >
+      <div className="sidebar-title">
+        <span>GreenHome Kitchen</span>
+        <strong>{translateRole(user?.role)}</strong>
+      </div>
       <nav className="nav flex-column gap-1">
         {links.map((link) => (
-          <NavLink key={link.to} className="nav-link" to={link.to}>
+          <NavLink key={link.to} className="nav-link" to={link.to} onClick={onNavigate}>
             {link.label}
           </NavLink>
         ))}
       </nav>
     </aside>
   );
-}
+});
+
+export default Sidebar;

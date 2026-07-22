@@ -8,6 +8,7 @@ const customerLayout = readFileSync(join(process.cwd(), 'src/components/layout/C
 const publicLayout = readFileSync(join(process.cwd(), 'src/components/layout/PublicLayout.jsx'), 'utf8');
 const appRoutes = readFileSync(join(process.cwd(), 'src/App.jsx'), 'utf8');
 const internalTopbar = readFileSync(join(process.cwd(), 'src/components/layout/InternalTopbar.jsx'), 'utf8');
+const sidebar = readFileSync(join(process.cwd(), 'src/components/layout/Sidebar.jsx'), 'utf8');
 
 describe('role layout separation contract', () => {
   it('keeps footer in storefront and customer layouts only', () => {
@@ -28,14 +29,25 @@ describe('role layout separation contract', () => {
     assert.doesNotMatch(appLayout, /showCart/);
   });
 
-  it('keeps the operational topbar to non-link identity and logout controls', () => {
-    assert.match(internalTopbar, /import \{ useNavigate \} from 'react-router-dom';/);
-    assert.doesNotMatch(internalTopbar, /NotificationBell/);
-    assert.doesNotMatch(internalTopbar, /to="\/profile"/);
+  it('gives operational users notifications and an account menu without storefront controls', () => {
+    assert.match(internalTopbar, /NotificationBell/);
+    assert.match(internalTopbar, /to="\/profile"/);
+    assert.match(internalTopbar, /to="\/notifications"/);
+    assert.match(internalTopbar, /Đăng xuất/);
     assert.doesNotMatch(internalTopbar, /to="\/cart"/);
-    assert.doesNotMatch(internalTopbar, /<Link/);
-    assert.match(internalTopbar, /const navigate = useNavigate\(\);/);
-    assert.match(internalTopbar, /async function handleLogout\(\) \{[\s\S]*?await logout\(\);[\s\S]*?navigate\('\/login', \{ replace: true \}\);[\s\S]*?\}/);
-    assert.match(internalTopbar, /onClick=\{handleLogout\}/);
+    assert.doesNotMatch(internalTopbar, /Trang chủ|Sản phẩm|Về GreenHome/);
+  });
+
+  it('selects navigation only from the signed-in role group', () => {
+    assert.match(sidebar, /const links = ROLE_LINKS\[user\?\.role\] \|\| ROLE_LINKS\.Customer/);
+    assert.match(sidebar, /links\.map/);
+  });
+
+  it('owns mobile sidebar accessibility in the app shell', () => {
+    assert.match(appLayout, /sidebarOpen/);
+    assert.match(appLayout, /document\.body\.style\.overflow = 'hidden'/);
+    assert.match(appLayout, /event\.key === 'Escape'/);
+    assert.match(appLayout, /sidebar-overlay/);
+    assert.match(appLayout, /menuButtonRef/);
   });
 });

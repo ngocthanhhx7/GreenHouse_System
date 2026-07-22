@@ -1,43 +1,46 @@
 import { Link } from 'react-router-dom';
 
+const DISCOVERY_LINKS = [
+  { to: '/', label: 'Trang chủ' },
+  { to: '/products', label: 'Sản phẩm' },
+  { to: '/about', label: 'Về GreenHome' },
+  { to: '/contact', label: 'Liên hệ' },
+];
+
+const SUPPORT_LINKS = [
+  { to: '/support', label: 'Yêu cầu hỗ trợ' },
+  { to: '/profile', label: 'Hồ sơ cá nhân' },
+  { to: '/notifications', label: 'Thông báo' },
+];
+
 export default function Footer() {
   return (
     <footer className="site-footer">
       <div className="footer-grid">
-        <div className="footer-brand">
+        <section className="footer-brand" aria-labelledby="footer-brand-title">
           <Link to="/" className="brand-link footer-brand-link">
-            <img src="/assets/logo/logo.png" alt="GreenHome Kitchen Logo" className="brand-logo" />
-            <strong className="brand-name">GreenHome Kitchen</strong>
+            <img src="/assets/logo/logo.png" alt="" className="brand-logo" />
+            <strong id="footer-brand-title" className="brand-name">GreenHome Kitchen</strong>
           </Link>
-          <p>
-            GreenHome Kitchen cung cấp dụng cụ bếp, nồi chảo và giải pháp lưu trữ thông minh cho gia đình Việt hiện đại.
-          </p>
-        </div>
+          <p>Dụng cụ bếp được tuyển chọn cho gia đình Việt hiện đại.</p>
+        </section>
 
-        <div>
-          <h3>Sản phẩm</h3>
-          <Link to="/">Trang chủ</Link>
-          <Link to="/products">Sản phẩm</Link>
-          <Link to="/cart">Giỏ hàng</Link>
-          <Link to="/products">Nồi chảo cao cấp</Link>
-          <Link to="/support">Hỗ trợ sau mua</Link>
-        </div>
+        <nav className="footer-column" aria-labelledby="footer-discovery-title">
+          <h3 id="footer-discovery-title">Khám phá</h3>
+          {DISCOVERY_LINKS.map((link) => <Link key={link.to} to={link.to}>{link.label}</Link>)}
+        </nav>
 
-        <div>
-          <h3>Về chúng tôi</h3>
-          <Link to="/about">Về GreenHome</Link>
-          <Link to="/contact">Liên hệ</Link>
-          <Link to="/contact">Thanh toán và minh bạch</Link>
-          <Link to="/products">Kệ Chén Đa Năng</Link>
-        </div>
+        <nav className="footer-column" aria-labelledby="footer-support-title">
+          <h3 id="footer-support-title">Hỗ trợ</h3>
+          {SUPPORT_LINKS.map((link) => <Link key={link.to} to={link.to}>{link.label}</Link>)}
+        </nav>
 
-        <div>
-          <h3>Liên hệ</h3>
-          <span>0856 464 980</span>
-          <span>0836 456 025</span>
-          <span>kitchennhas@greenhome.com</span>
-          <span>GreenHome Kitchen, Hà Nội, Việt Nam</span>
-        </div>
+        <address className="footer-column footer-contact" aria-labelledby="footer-contact-title">
+          <h3 id="footer-contact-title">Liên hệ</h3>
+          <a href="tel:+84856464980"><span aria-hidden="true">☎</span> 0856 464 980</a>
+          <a href="mailto:kitchennhas@greenhome.com"><span aria-hidden="true">✉</span> kitchennhas@greenhome.com</a>
+          <span><span aria-hidden="true">⌖</span> Hà Nội, Việt Nam</span>
+        </address>
       </div>
 
       <div className="footer-bottom">
