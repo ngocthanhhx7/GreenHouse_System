@@ -4,6 +4,26 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 const styles = readFileSync(join(process.cwd(), 'src/styles.css'), 'utf8');
+const main = readFileSync(join(process.cwd(), 'src/main.jsx'), 'utf8');
+const tokens = readFileSync(join(process.cwd(), 'src/styles/tokens.css'), 'utf8');
+
+describe('responsive style foundation', () => {
+  it('loads the canonical cascade immediately after legacy styles', () => {
+    assert.match(
+      main,
+      /import '\.\/styles\.css';\s*import '\.\/styles\/tokens\.css';\s*import '\.\/styles\/base\.css';\s*import '\.\/styles\/shared-shell\.css';\s*import '\.\/styles\/storefront\.css';\s*import '\.\/styles\/operations\.css';/
+    );
+  });
+
+  it('defines local GreenHouse tokens without remote fonts or legacy forest', () => {
+    assert.match(tokens, /--gh-forest:\s*#173E31/);
+    assert.match(tokens, /--gh-paper:\s*#FFFDF8/);
+    assert.match(tokens, /--gh-font-display:\s*'Fraunces'/);
+    assert.match(tokens, /--gh-font-ui:\s*'Outfit'/);
+    assert.doesNotMatch(tokens, /fonts\.googleapis\.com/);
+    assert.doesNotMatch(tokens, /#00281C/);
+  });
+});
 
 describe('admin dashboard styles', () => {
   it('defines stable metric grid and metric box styles', () => {
