@@ -17,6 +17,29 @@ function parseSeedArgs(args = []) {
   return { mode: dryRun ? 'dry-run' : reset ? 'reset' : 'upsert', confirmation };
 }
 
+function countBy(items, field) {
+  return items.reduce((counts, item) => {
+    const value = item[field] ?? 'Unknown';
+    counts[value] = (counts[value] || 0) + 1;
+    return counts;
+  }, {});
+}
+
+function buildScenarioMatrix(graph) {
+  return {
+    orders: countBy(graph.orders, 'orderStatus'),
+    payments: countBy(graph.payments, 'paymentStatus'),
+    stockExports: countBy(graph.stockExports, 'status'),
+    returns: countBy(graph.returnRequests, 'status'),
+    support: countBy(graph.supportRequests, 'status'),
+    replenishments: countBy(graph.replenishments, 'status'),
+    damageReports: countBy(graph.damageReports, 'status'),
+    lowStockCount: graph.inventories.filter((inventory) => (
+      inventory.stockQuantity - inventory.reservedQuantity <= inventory.lowStockThreshold
+    )).length,
+  };
+}
+
 async function runDemoSeedCli({
   args = process.argv.slice(2),
   workspaceRoot,
@@ -39,9 +62,10 @@ async function runDemoSeedCli({
     } catch (error) {
       assets = { ready: false, message: error.message };
     }
+    const scenarios = buildScenarioMatrix(DEMO_GRAPH);
     logger.log('Dry-run hợp lệ: fixture được kiểm tra hoàn toàn offline, không kết nối MongoDB.');
-    logger.log(JSON.stringify({ counts: graph.counts, assets }, null, 2));
-    return { mode: options.mode, graph, assets };
+    logger.log(JSON.stringify({ counts: graph.counts, scenarios, assets }, null, 2));
+    return { mode: options.mode, graph, scenarios, assets };
   }
 
   if (options.mode === 'reset') {
@@ -85,4 +109,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { parseSeedArgs, runDemoSeedCli };
+module.exports = { buildScenarioMatrix, parseSeedArgs, runDemoSeedCli };

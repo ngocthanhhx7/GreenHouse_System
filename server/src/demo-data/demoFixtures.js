@@ -161,12 +161,26 @@ const paymentCallbacks = callbackOrderNumbers.map((number, index) => {
   };
 });
 
-const invoices = orders.slice(3, 13).map((order, index) => ({
-  key: `invoice-${two(index + 1)}`, invoiceCode: `INV-DEMO-20${two(index + 1)}`, orderKey: order.key, issuedByKey: 'user-staff',
-  issuedAt: day(index * 2 + 8), currency: 'VND', subtotal: order.subtotal, shippingFee: order.shippingFee,
-  totalAmount: order.totalAmount, receiverName: order.receiverName, receiverPhone: order.receiverPhone,
-  shippingAddress: order.shippingAddress, orderDetailKeys: orderDetails.filter((line) => line.orderKey === order.key).map((line) => line.key),
-}));
+const invoices = orders.slice(3, 13).map((order, index) => {
+  const details = orderDetails.filter((line) => line.orderKey === order.key);
+  return {
+    key: `invoice-${two(index + 1)}`, invoiceCode: `INV-DEMO-20${two(index + 1)}`, orderKey: order.key, issuedByKey: 'user-staff',
+    issuedAt: day(index * 2 + 8), currency: 'VND', subtotal: order.subtotal, shippingFee: order.shippingFee,
+    totalAmount: order.totalAmount, receiverName: order.receiverName, receiverPhone: order.receiverPhone,
+    shippingAddress: order.shippingAddress, orderDetailKeys: details.map((line) => line.key),
+    items: details.map((line) => ({
+      orderDetailKey: line.key,
+      productKey: line.productKey,
+      productNameSnapshot: line.productNameSnapshot,
+      productSkuSnapshot: line.productSkuSnapshot,
+      unitSnapshot: line.unitSnapshot,
+      productImageSnapshot: line.productImageSnapshot,
+      priceSnapshot: line.priceSnapshot,
+      quantity: line.quantity,
+      subtotal: line.subtotal,
+    })),
+  };
+});
 
 const stockExports = orders.slice(3, 18).map((order, index) => ({
   key: `stock-export-${two(index + 1)}`, orderKey: order.key, requestedByKey: 'user-staff',
@@ -187,15 +201,19 @@ const replenishments = replenishmentStatuses.map((status, index) => ({
   receivedAt: status === 'Received' ? day(34 + index) : null,
 }));
 
-const damageStatuses = ['PendingWarehouseConfirmation', 'Confirmed', 'Rejected'];
+const damageStatuses = ['PendingWarehouseConfirmation', 'Confirmed', 'PendingWarehouseConfirmation'];
 const damageReports = damageStatuses.map((status, index) => ({
   key: `damage-report-${two(index + 1)}`, inventoryKey: `inventory-${two(index + 7)}`, productKey: `product-${two(index + 7)}`,
-  reportedByKey: 'user-staff', confirmedByKey: status === 'PendingWarehouseConfirmation' ? null : 'user-warehouse', quantity: index + 1,
-  reason: ['Bao bì móp khi nhận hàng', 'Sản phẩm nứt trong quá trình kiểm kho', 'Sai lệch mẫu nhưng sản phẩm vẫn đạt'][index], status,
+  reportedByKey: 'user-staff', confirmedByKey: status === 'Confirmed' ? 'user-warehouse' : null, quantity: index + 1,
+  reason: ['Bao bì móp khi nhận hàng', 'Sản phẩm nứt trong quá trình kiểm kho', 'Sai lệch mẫu đang chờ kho kiểm tra'][index], status,
   confirmedAt: status === 'Confirmed' ? day(40 + index) : null,
 }));
 
-const ledger = new Map(products.map((product, index) => [product.key, 80 + index * 3]));
+const ledger = new Map(products.map((product, index) => {
+  if (index === 18) return [product.key, 6];
+  if (index === 19) return [product.key, 7];
+  return [product.key, 80 + index * 3];
+}));
 const inventoryTransactions = [];
 const transactionSpecs = [];
 function appendInventoryTransaction({ productKey, orderKey = null, relatedCollection, relatedKey, transactionType, quantity, reason, createdAt }) {
@@ -257,7 +275,7 @@ const returnRequests = returnStatuses.map((status, index) => ({
   key: `return-request-${two(index + 1)}`, requestCode: `RET-DEMO-20${two(index + 1)}`, orderKey: `order-${two(returnOrders[index])}`,
   customerKey: orders[returnOrders[index] - 1].customerKey, paymentKey: `payment-${two(returnOrders[index])}`,
   reason: ['Muốn đổi kích thước phù hợp hơn', 'Sản phẩm có vết xước nhẹ', 'Không đủ điều kiện đổi trả', 'Kho đã kiểm hàng, chờ hoàn tiền', 'Yêu cầu đã hoàn tất'][index],
-  status, refundAmount: ['ReadyForRefund', 'Completed'].includes(status) ? orders[returnOrders[index] - 1].totalAmount : 0,
+  status, refundAmount: ['AwaitingInspection', 'ReadyForRefund', 'Completed'].includes(status) ? orders[returnOrders[index] - 1].totalAmount : 0,
   resolvedByKey: status === 'Pending' ? null : 'user-staff', requestedAt: day(37 + index), handledAt: status === 'Pending' ? null : day(38 + index),
   resolvedAt: status === 'Pending' ? null : day(38 + index),
   staffNote: status === 'Rejected' ? 'Yêu cầu ngoài điều kiện đổi trả.' : 'Đã tiếp nhận theo quy trình.',
@@ -276,7 +294,7 @@ const returnItems = returnRequests.filter((request) => ['ReadyForRefund', 'Compl
 );
 const refundPendings = [
   { key: 'refund-pending-01', orderKey: 'order-17', paymentAttemptKey: 'payment-attempt-17', status: 'RefundPending' },
-  { key: 'refund-pending-02', orderKey: 'order-19', paymentAttemptKey: 'payment-attempt-19', status: 'Refunded' },
+  { key: 'refund-pending-02', orderKey: 'order-19', paymentAttemptKey: 'payment-attempt-19', status: 'RefundPending' },
   { key: 'refund-pending-03', orderKey: 'order-21', paymentAttemptKey: 'payment-attempt-21', status: 'RefundPending' },
 ].map((entry) => ({ ...entry, customerKey: orders[Number(entry.orderKey.slice(-2)) - 1].customerKey, amount: orders[Number(entry.orderKey.slice(-2)) - 1].totalAmount, currency: 'VND', reason: 'Bàn giao hoàn tiền theo kịch bản demo.' }));
 

@@ -107,6 +107,10 @@ describe('demo seed CLI parser', () => {
     assert.equal(result.mode, 'dry-run');
     assert.equal(result.graph.valid, true);
     assert.equal(result.assets.ready, false);
+    assert.ok(result.scenarios.lowStockCount >= 2);
+    assert.equal(result.scenarios.orders.Delivered, 8);
+    assert.equal(result.scenarios.returns.AwaitingInspection, 1);
+    assert.match(output.join('\n'), /"scenarios"/i);
     assert.match(output.join('\n'), /không kết nối MongoDB/i);
   });
 

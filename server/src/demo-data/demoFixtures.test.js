@@ -130,6 +130,33 @@ describe('deterministic demo fixture graph', () => {
     assert.ok(Date.parse(completed.requestedAt) <= Date.parse(completed.completedAt));
     assert.ok(DEMO_GRAPH.orders.filter((order) => order.orderStatus === 'Cancelled').every((order) => order.cancelReason));
     assert.ok(DEMO_GRAPH.orders.filter((order) => order.paymentMethod === 'COD' && order.orderStatus !== 'Delivered').every((order) => order.paymentStatus === 'Unpaid'));
+    assert.ok(DEMO_GRAPH.damageReports.every((report) => report.status !== 'Rejected'));
+    const awaiting = DEMO_GRAPH.returnRequests.find((request) => request.status === 'AwaitingInspection');
+    const awaitingOrder = DEMO_GRAPH.orders.find((order) => order.key === awaiting.orderKey);
+    assert.ok(awaiting.refundAmount > 0 && awaiting.refundAmount <= awaitingOrder.totalAmount);
+  });
+
+  it('contains at least two unreserved low-stock products for the dashboard scenario', () => {
+    const { DEMO_GRAPH } = require('./demoFixtures');
+    const lowStock = DEMO_GRAPH.inventories.filter((inventory) => inventory.stockQuantity - inventory.reservedQuantity <= inventory.lowStockThreshold);
+    assert.ok(lowStock.length >= 2);
+    assert.ok(lowStock.every((inventory) => inventory.reservedQuantity === 0));
+  });
+
+  it('keeps invoice lines as a complete snapshot of each order', () => {
+    const { DEMO_GRAPH } = require('./demoFixtures');
+    for (const invoice of DEMO_GRAPH.invoices) {
+      const details = DEMO_GRAPH.orderDetails.filter((detail) => detail.orderKey === invoice.orderKey);
+      assert.deepEqual([...invoice.orderDetailKeys].sort(), details.map((detail) => detail.key).sort());
+      assert.equal(invoice.items.length, details.length);
+      assert.equal(invoice.items.reduce((sum, item) => sum + item.subtotal, 0), invoice.subtotal);
+      for (const detail of details) {
+        const snapshot = invoice.items.find((item) => item.orderDetailKey === detail.key);
+        assert.equal(snapshot.productNameSnapshot, detail.productNameSnapshot);
+        assert.equal(snapshot.priceSnapshot, detail.priceSnapshot);
+        assert.equal(snapshot.subtotal, detail.subtotal);
+      }
+    }
   });
 
   it('keeps support, stock-export actors and timestamps consistent and not in the future', () => {

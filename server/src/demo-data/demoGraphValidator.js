@@ -200,8 +200,27 @@ function validateDemoGraph(graph) {
   }
   for (const invoice of graph.invoices) {
     const order = orders.get(invoice.orderKey);
+    const details = graph.orderDetails.filter((detail) => detail.orderKey === order.key);
+    const expectedDetailKeys = details.map((detail) => detail.key).sort();
+    const actualDetailKeys = [...invoice.orderDetailKeys].sort();
     if (invoice.totalAmount !== invoice.subtotal + invoice.shippingFee || invoice.totalAmount !== order.totalAmount) fail(`${invoice.key} sai tổng tiền hóa đơn.`);
-    if (invoice.orderDetailKeys.some((key) => !orderDetails.has(key) || orderDetails.get(key).orderKey !== order.key)) fail(`${invoice.key} tham chiếu dòng hàng sai.`);
+    if (JSON.stringify(actualDetailKeys) !== JSON.stringify(expectedDetailKeys)) fail(`${invoice.key} phải chụp đầy đủ chính xác các dòng hàng của order.`);
+    if (!Array.isArray(invoice.items) || invoice.items.length !== details.length) fail(`${invoice.key} thiếu items snapshot đầy đủ.`);
+    for (const detail of details) {
+      const item = invoice.items.find((candidate) => candidate.orderDetailKey === detail.key);
+      if (!item
+        || item.productKey !== detail.productKey
+        || item.productNameSnapshot !== detail.productNameSnapshot
+        || item.productSkuSnapshot !== detail.productSkuSnapshot
+        || item.unitSnapshot !== detail.unitSnapshot
+        || item.productImageSnapshot !== detail.productImageSnapshot
+        || item.priceSnapshot !== detail.priceSnapshot
+        || item.quantity !== detail.quantity
+        || item.subtotal !== detail.subtotal) {
+        fail(`${invoice.key} có invoice item snapshot không khớp OrderDetail.`);
+      }
+    }
+    if (invoice.items.reduce((sum, item) => sum + item.subtotal, 0) !== invoice.subtotal) fail(`${invoice.key} có subtotal items không khớp.`);
   }
   for (const item of graph.returnItems) {
     if (item.receivedQuantity !== item.sellableQuantity + item.damagedQuantity) fail(`${item.key} sai phân loại số lượng trả.`);
@@ -214,17 +233,18 @@ function validateDemoGraph(graph) {
     if (request.status === 'Completed' && (request.completedByKey !== 'user-staff' || !request.completedAt || !request.inspectionNote || items.some((item) => Date.parse(item.inspectedAt) > Date.parse(request.completedAt)))) fail(`${request.key} Completed thiếu actor/timestamp/inspection hợp lệ.`);
     if (request.status === 'ReadyForRefund' && (order.orderStatus !== 'Delivered' || order.paymentStatus !== 'Paid' || items.length === 0)) fail(`${request.key} ReadyForRefund phải giữ order Delivered/Paid và có inspection items.`);
     if (request.status === 'ReadyForRefund' && !request.inspectionNote) fail(`${request.key} ReadyForRefund thiếu inspection note.`);
+    if (request.status === 'AwaitingInspection' && (!(request.refundAmount > 0) || request.refundAmount > order.totalAmount || request.resolvedByKey !== 'user-staff' || !request.handledAt)) {
+      fail(`${request.key} AwaitingInspection cần số tiền hoàn dương hợp lệ và quyết định của Staff.`);
+    }
     if (['Pending', 'AwaitingInspection', 'Rejected'].includes(request.status) && items.length) fail(`${request.key} chưa inspection xong nhưng đã có return items.`);
   }
   for (const pending of graph.refundPendings) {
     const order = orders.get(pending.orderKey);
     const request = graph.returnRequests.find((item) => item.orderKey === order.key);
-    if (pending.status === 'Refunded' && (!request || request.status !== 'Completed' || order.orderStatus !== 'Returned' || order.paymentStatus !== 'Refunded')) fail(`${pending.key} Refunded không khớp return Completed.`);
-    if (pending.status === 'RefundPending') {
-      const validHandoff = request?.status === 'ReadyForRefund' || (order.orderStatus === 'Cancelled' && order.paymentStatus === 'RefundPending');
-      if (!validHandoff) fail(`${pending.key} RefundPending không khớp hand-off hiện tại.`);
-    }
-    if (pending.status === 'HandedOff') fail(`${pending.key} không dùng trạng thái HandedOff bền vững.`);
+    if (pending.status !== 'RefundPending') fail(`${pending.key} phải phản ánh trạng thái RefundPending mà service hiện tại đang lưu.`);
+    const validHandoff = ['ReadyForRefund', 'Completed'].includes(request?.status)
+      || (order.orderStatus === 'Cancelled' && order.paymentStatus === 'RefundPending');
+    if (!validHandoff) fail(`${pending.key} RefundPending không khớp hand-off hiện tại.`);
   }
   for (const review of graph.reviews) {
     const order = orders.get(review.orderKey);
@@ -244,7 +264,40 @@ function validateDemoGraph(graph) {
     if (request.status === 'Approved' && (request.processedByKey !== 'user-warehouse' || request.exportedAt !== null || order.orderStatus !== 'StockExportRequested')) fail(`${request.key} Approved có lifecycle sai.`);
     if (request.status === 'Rejected' && (request.processedByKey !== 'user-warehouse' || request.exportedAt !== null || order.orderStatus !== 'Confirmed')) fail(`${request.key} Rejected phải trả order về Confirmed.`);
     if (request.status === 'Exported' && (request.processedByKey !== 'user-warehouse' || !request.exportedAt || !['Packed', 'Shipped', 'Delivered'].includes(order.orderStatus) || Date.parse(request.exportedAt) > Date.parse(order.packedAt))) fail(`${request.key} Exported có actor/timestamp/order sai.`);
+    if (request.status === 'Exported') {
+      const details = graph.orderDetails.filter((detail) => detail.orderKey === request.orderKey);
+      const transactions = graph.inventoryTransactions.filter((item) => item.transactionType === 'STOCK_EXPORT' && item.relatedKey === request.key);
+      if (transactions.length !== details.length) fail(`${request.key} phải có đúng một STOCK_EXPORT cho mỗi OrderDetail.`);
+      for (const detail of details) {
+        const matches = transactions.filter((transaction) => transaction.orderKey === request.orderKey
+          && transaction.productKey === detail.productKey
+          && transaction.quantity === -detail.quantity);
+        if (matches.length !== 1) fail(`${request.key} thiếu hoặc trùng STOCK_EXPORT cho ${detail.key}.`);
+      }
+    }
   }
+
+  const roleByUser = new Map(graph.users.map((user) => [user.key, user.roleName]));
+  for (const request of graph.replenishments) {
+    if (roleByUser.get(request.requestedByKey) !== 'WarehouseManager') fail(`${request.key} phải do WarehouseManager yêu cầu.`);
+    if (request.approvedByKey && roleByUser.get(request.approvedByKey) !== 'Admin') fail(`${request.key} phải do Admin phê duyệt.`);
+    if (request.receivedByKey && roleByUser.get(request.receivedByKey) !== 'WarehouseManager') fail(`${request.key} phải do WarehouseManager nhận hàng.`);
+  }
+  for (const report of graph.damageReports) {
+    if (roleByUser.get(report.reportedByKey) !== 'Staff') fail(`${report.key} phải do Staff báo hỏng.`);
+    if (report.status === 'Confirmed' && (roleByUser.get(report.confirmedByKey) !== 'WarehouseManager' || !report.confirmedAt)) fail(`${report.key} Confirmed cần WarehouseManager và thời gian xác nhận.`);
+    if (report.status === 'PendingWarehouseConfirmation' && (report.confirmedByKey !== null || report.confirmedAt !== null)) fail(`${report.key} Pending không được có actor xác nhận.`);
+    if (!['PendingWarehouseConfirmation', 'Confirmed'].includes(report.status)) fail(`${report.key} dùng trạng thái không thể sinh bởi service hiện tại.`);
+  }
+  for (const notification of graph.notifications) {
+    const targets = notification.targetCollection === 'Order' ? orders
+      : notification.targetCollection === 'SupportRequest' ? new Map(graph.supportRequests.map((item) => [item.key, item]))
+        : null;
+    if (!targets || !targets.has(notification.targetKey)) fail(`${notification.key} có targetCollection/targetKey không hợp lệ.`);
+  }
+
+  const lowStock = graph.inventories.filter((inventory) => inventory.stockQuantity - inventory.reservedQuantity <= inventory.lowStockThreshold);
+  if (lowStock.length < 2 || lowStock.some((inventory) => inventory.reservedQuantity !== 0)) fail('Demo phải có ít nhất hai sản phẩm sắp hết không bị reservation để hiển thị dashboard kho.');
 
   const dateValues = JSON.stringify(graph).match(/20\d\d-\d\d-\d\dT\d\d:\d\d:\d\d\.\d\d\dZ/g) || [];
   if (dateValues.some((value) => !Number.isFinite(Date.parse(value)) || Date.parse(value) > Date.parse('2026-07-22T00:00:00.000Z'))) fail('Thời gian demo không hợp lệ hoặc nằm trong tương lai.');
