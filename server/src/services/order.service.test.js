@@ -130,6 +130,7 @@ describe('order service', () => {
   let auditLogger;
   let cartRepository;
   let inventoryRepository;
+  let emailEvents;
 
   beforeEach(() => {
     orderRepository = createOrderRepository();
@@ -140,6 +141,7 @@ describe('order service', () => {
       async reserve(_productId, quantity) { this.reservedQuantity += quantity; },
       async release(_productId, quantity) { this.reservedQuantity -= quantity; },
     };
+    emailEvents = [];
     orderService = createOrderService({
       transactionManager: { async withTransaction(work) { return work({ id: 'test-session' }); } },
       cartRepository,
@@ -147,6 +149,8 @@ describe('order service', () => {
       inventoryRepository,
       orderRepository,
       auditLogger,
+      customerRepository: { async findEmail() { return 'customer@example.com'; } },
+      emailOutboxService: { async enqueue(event) { emailEvents.push(event); return event; } },
     });
   });
 
@@ -166,6 +170,18 @@ describe('order service', () => {
     assert.equal(orderRepository.payments[0].paymentMethod, 'COD');
     assert.equal(cartRepository.items.length, 0);
     assert.equal(auditLogger.entries[0].action, 'ORDER_CREATE');
+  });
+
+  it('enqueues one idempotent ORDER_CREATED email after checkout commits', async () => {
+    const result = await orderService.placeOrder('customer-1', checkoutInput({ idempotencyKey: 'checkout-email-001' }));
+    const replay = await orderService.placeOrder('customer-1', checkoutInput({ idempotencyKey: 'checkout-email-001' }));
+
+    assert.equal(replay.id, result.id);
+    assert.equal(emailEvents.length, 1);
+    assert.equal(emailEvents[0].eventType, 'ORDER_CREATED');
+    assert.equal(emailEvents[0].idempotencyKey, `ORDER_CREATED:${result.id}`);
+    assert.equal(emailEvents[0].recipient, 'customer@example.com');
+    assert.equal(emailEvents[0].payload.orderCode, result.orderCode);
   });
 
   it('rejects checkout when customer cart is empty', async () => {

@@ -243,3 +243,11 @@ Huy bổ sung **Checkout Address Book integration**:
 - Cho phép chọn nhanh, nhập địa chỉ mới dùng một lần hoặc lưu vào Address Book.
 - Validate thông tin người nhận, số điện thoại, tỉnh/thành, quận/huyện, phường/xã và địa chỉ chi tiết.
 - Gửi address payload chuẩn để backend tạo snapshot trong Order; không đọc lại địa chỉ hiện tại sau khi đặt đơn.
+
+## Ownership Addendum 2026-07-22 - Order Created Email Event
+
+Huy sở hữu phát sự kiện email `ORDER_CREATED` sau khi transaction checkout commit thành công:
+
+- Event được ghi vào email outbox với khóa idempotent `ORDER_CREATED:<orderId>` và gửi đến email của Customer.
+- Payload chỉ gồm snapshot tối thiểu (`orderId`, `orderCode`, `totalAmount`, `paymentMethod`); lỗi enqueue/delivery không rollback đơn hàng.
+- Không phát event khi checkout replay theo cùng idempotency key.

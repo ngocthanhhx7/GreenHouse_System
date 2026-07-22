@@ -9,7 +9,9 @@ const Order = require('../models/order.model');
 const OrderDetail = require('../models/orderDetail.model');
 const Payment = require('../models/payment.model');
 const PaymentAttempt = require('../models/paymentAttempt.model');
+const User = require('../models/user.model');
 const { logAudit } = require('../utils/auditLogger');
+const { createEmailOutboxService } = require('./email.service');
 
 function toOrderResponse(order, details = []) {
   return {
@@ -192,6 +194,15 @@ function createModelOrderRepository() {
   };
 }
 
+function createModelCustomerRepository() {
+  return {
+    async findEmail(customerId) {
+      const user = await User.findById(customerId).select('email').lean();
+      return user ? user.email : null;
+    },
+  };
+}
+
 function createOrderService({
   transactionManager = createModelTransactionManager(),
   cartRepository = createModelCartRepository(),
@@ -199,6 +210,8 @@ function createOrderService({
   inventoryRepository = createModelInventoryRepository(),
   orderRepository = createModelOrderRepository(),
   auditLogger = { log: logAudit },
+  customerRepository = null,
+  emailOutboxService = null,
 } = {}) {
   function normalizeIdempotencyKey(input = {}) {
     const key = String(input.idempotencyKey || '').trim();
@@ -317,6 +330,24 @@ function createOrderService({
           targetId: String(result.order._id),
           description: `Order created: ${result.order.orderCode}`,
         });
+        const recipient = customerRepository ? await customerRepository.findEmail(customerId) : null;
+        if (recipient && emailOutboxService) {
+          try {
+            await emailOutboxService.enqueue({
+              eventType: 'ORDER_CREATED',
+              idempotencyKey: `ORDER_CREATED:${result.order._id}`,
+              recipient,
+              payload: {
+                orderId: String(result.order._id),
+                orderCode: result.order.orderCode,
+                totalAmount: result.order.totalAmount,
+                paymentMethod: result.order.paymentMethod,
+              },
+            });
+          } catch (error) {
+            // Checkout is already committed; email delivery is retried by the outbox worker.
+          }
+        }
       }
       return toOrderResponse(result.order, result.lines);
     },
@@ -373,5 +404,5 @@ function createOrderService({
 
 module.exports = {
   createOrderService,
-  orderService: createOrderService(),
+  orderService: createOrderService({ customerRepository: createModelCustomerRepository(), emailOutboxService: createEmailOutboxService() }),
 };
