@@ -45,6 +45,13 @@ const contrastRatio = (first, second) => {
 };
 
 const tokenHex = (name) => tokens.match(new RegExp(`${name}:\\s*(#[0-9A-F]{6})`, 'i'))?.[1];
+const parseHtmlAttributes = (tag) => Object.fromEntries(
+  [...tag.matchAll(/\s([^\s=/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g)]
+    .map(([, name, doubleQuoted, singleQuoted, bare]) => [
+      name.toLowerCase(),
+      doubleQuoted ?? singleQuoted ?? bare ?? '',
+    ])
+);
 
 describe('responsive style foundation', () => {
   it('loads the canonical cascade immediately after legacy styles', () => {
@@ -101,6 +108,20 @@ describe('responsive style foundation', () => {
     assert.ok(contrastRatio(tokenHex('--gh-gold'), '#064f3c') >= 3);
   });
 
+  it('wins the legacy focus cascade without changing pointer-focus behavior', () => {
+    const newsletterConflict = styles.match(/\.newsletter-form-v2 \.newsletter-input:focus\s*\{[^}]+\}/)?.[0] || '';
+    const accountConflict = styles.match(/\.account-form input:focus,[\s\S]*?\.address-form textarea:focus\s*\{[^}]+\}/)?.[0] || '';
+    const scopedOverride = base.match(/\.newsletter-form-v2 \.newsletter-input:focus-visible,[\s\S]*?\.address-form textarea:focus-visible\s*\{[^}]+\}/)?.[0] || '';
+
+    assert.match(newsletterConflict, /box-shadow:[^;]+!important/);
+    assert.match(newsletterConflict, /outline:\s*none/);
+    assert.match(accountConflict, /outline:\s*none/);
+    assert.match(scopedOverride, /box-shadow:\s*0 0 0 3px var\(--gh-forest-deep\) !important/);
+    assert.match(scopedOverride, /outline:\s*3px solid var\(--gh-gold\) !important/);
+    assert.match(scopedOverride, /outline-offset:\s*3px !important/);
+    assert.doesNotMatch(scopedOverride, /:focus(?!-visible)/);
+  });
+
   it('registers the full supported weight range for both variable fonts', () => {
     const frauncesFace = tokens.match(/@font-face\s*\{[^}]*font-family:\s*'Fraunces';[^}]+\}/)?.[0] || '';
     const uiFace = tokens.match(/@font-face\s*\{[^}]*font-family:\s*'Be Vietnam Pro';[^}]+\}/)?.[0] || '';
@@ -110,18 +131,29 @@ describe('responsive style foundation', () => {
   });
 
   it('preloads only the canonical local font files', () => {
-    const preloads = [...index.matchAll(/<link\s+rel="preload"[^>]+>/g)].map(([tag]) => tag);
-    const hrefs = preloads.map((tag) => tag.match(/href="([^"]+)"/)?.[1]).sort();
+    const links = [...index.matchAll(/<link\b[^>]*>/gi)].map(([tag]) => parseHtmlAttributes(tag));
+    const fontPreloads = links.filter(({ rel, as }) => rel?.split(/\s+/).includes('preload') && as === 'font');
+    const hrefs = fontPreloads.map(({ href }) => href).sort();
 
     assert.deepEqual(hrefs, [
       '/fonts/be-vietnam-pro-latin-vietnamese.woff2',
       '/fonts/fraunces-latin-vietnamese.woff2',
     ]);
-    for (const preload of preloads) {
-      assert.match(preload, /\sas="font"/);
-      assert.match(preload, /\stype="font\/woff2"/);
-      assert.match(preload, /\scrossorigin(?:\s|\/|>)/);
+    for (const preload of fontPreloads) {
+      assert.equal(preload.rel, 'preload');
+      assert.equal(preload.as, 'font');
+      assert.equal(preload.type, 'font/woff2');
+      assert.ok(Object.hasOwn(preload, 'crossorigin'));
     }
+
+    const reordered = parseHtmlAttributes('<link href="/font.woff2" crossorigin as="font" type="font/woff2" rel="preload">');
+    assert.deepEqual(reordered, {
+      href: '/font.woff2',
+      crossorigin: '',
+      as: 'font',
+      type: 'font/woff2',
+      rel: 'preload',
+    });
   });
 
   it('pins the complete local font artifacts by hash', () => {

@@ -34,6 +34,16 @@ textarea {
   outline-offset: 3px;
 }
 
+.newsletter-form-v2 .newsletter-input:focus-visible,
+.account-form input:focus-visible,
+.account-form textarea:focus-visible,
+.address-form input:focus-visible,
+.address-form textarea:focus-visible {
+  box-shadow: 0 0 0 3px var(--gh-forest-deep) !important;
+  outline: 3px solid var(--gh-gold) !important;
+  outline-offset: 3px !important;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
