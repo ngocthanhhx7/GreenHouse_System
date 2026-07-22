@@ -9,7 +9,7 @@ const ERROR_CODES = {
 };
 
 function getRequestId(res, req) {
-  return (req || (res && res.req)) && (req || res.req).requestId;
+  return (req && req.requestId) || (res && res.req && res.req.requestId);
 }
 
 function getErrorCode(statusCode, errorCode) {

@@ -214,7 +214,7 @@ Một module được xem là hoàn thành khi có đủ:
 
 ### Addendum 2026-07-22 - Email Và Validation
 
-- Nguyễn Ngọc Thành sở hữu email delivery foundation, password reset, public contact email và delivery/retry/read status; Nguyễn Quang Huy phát sự kiện `ORDER_CREATED` idempotent sau khi transaction tạo đơn thành công.
+- Nguyễn Ngọc Thành sở hữu email delivery foundation dùng Gmail SMTP/App Password, password reset OTP 6 số (hash-only + payload mã hóa, TTL/cooldown/attempt limit), public contact email và delivery/retry/read status; Nguyễn Quang Huy phát sự kiện `ORDER_CREATED` idempotent sau khi transaction tạo đơn thành công.
 - Validation áp dụng cho toàn hệ thống ở cả frontend và backend. Thành sở hữu primitive validator, request-schema adapter và error envelope; mỗi module owner vẫn sở hữu rule trạng thái/invariant nghiệp vụ và test của module mình.
 
 ### Addendum 2026-07-22 - PayOS Online Payment
