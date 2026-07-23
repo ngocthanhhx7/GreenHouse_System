@@ -210,12 +210,12 @@ Một module được xem là hoàn thành khi có đủ:
 | Nguyễn Ngọc Thành | Homepage, layout tài khoản dùng chung, upload foundation, hồ sơ/avatar, Address Book API nền tảng, Notification API/UI và review/merge |
 | Phạm Thành Chung | Upload ảnh sản phẩm, preview/sắp xếp/chọn ảnh đại diện trong Product Management |
 | Nguyễn Quang Huy | Tích hợp địa chỉ đã lưu/mặc định và nhập địa chỉ mới vào Checkout; lưu snapshot địa chỉ trong Order |
-| Nguyễn Hữu Anh Nhật | Staff Order, Return/Refund, Support; phát event theo Notification contract của Thành |
+| Nguyễn Hữu Anh Nhật | Staff Order, Return/Refund, Support; phát event theo Notification contract của Huy |
 | Lê Vũ Cường | Warehouse, Reports, Settings; phát event tồn kho/replenishment, không sở hữu bell/read/delete notification |
 
 ### Addendum 2026-07-22 - Email Và Validation
 
-- Nguyễn Ngọc Thành sở hữu email delivery foundation dùng Gmail SMTP/App Password, password reset OTP 6 số (hash-only + payload mã hóa, TTL/cooldown/attempt limit), public contact email và delivery/retry/read status; Nguyễn Quang Huy phát sự kiện `ORDER_CREATED` idempotent sau khi transaction tạo đơn thành công.
+- Nguyễn Ngọc Thành sở hữu email delivery foundation dùng Gmail SMTP/App Password, password reset OTP 6 số (hash-only + payload mã hóa, TTL/cooldown/attempt limit), public contact email và trạng thái delivery/retry của EmailOutbox. Nguyễn Quang Huy sở hữu read/unread/delete của in-app Notification và phát sự kiện `ORDER_CREATED` idempotent sau khi transaction tạo đơn thành công.
 - Validation áp dụng cho toàn hệ thống ở cả frontend và backend. Thành sở hữu primitive validator, request-schema adapter và error envelope; mỗi module owner vẫn sở hữu rule trạng thái/invariant nghiệp vụ và test của module mình.
 
 ### Addendum 2026-07-22 - PayOS Online Payment
