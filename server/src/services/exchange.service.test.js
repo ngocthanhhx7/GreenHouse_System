@@ -204,6 +204,24 @@ function makeHarness() {
       state.shipmentEvents.push(item);
       return item;
     },
+    async updateUnitsForInspection(caseId, lineId, {
+      sellableQuantity,
+      damagedQuantity,
+      sellableMovementKey,
+      damagedMovementKey,
+    }) {
+      const units = state.units
+        .filter((item) => item.exchangeCaseId === caseId && item.exchangeLineId === lineId)
+        .sort((left, right) => left.originalUnitOrdinal - right.originalUnitOrdinal);
+      units.forEach((unit, index) => {
+        const isSellable = index < sellableQuantity;
+        const isDamaged = index >= sellableQuantity && index < sellableQuantity + damagedQuantity;
+        Object.assign(unit, {
+          outcome: isSellable || isDamaged ? 'Accepted' : 'Rejected',
+          inventoryMovementKeys: isSellable ? [sellableMovementKey] : isDamaged ? [damagedMovementKey] : [],
+        });
+      });
+    },
     async updateDeliveredUnits(caseId, lineId, quantity, deliveredAt, deadlineAt) {
       const units = state.units.filter((item) => (
         item.exchangeCaseId === caseId && item.exchangeLineId === lineId && item.outcome === 'Accepted'
@@ -533,6 +551,60 @@ describe('SL-002 Exchange service', () => {
     });
     assert.equal(harness.state.cases.find((item) => item._id === request.id).status, 'Completed');
     assert.equal(harness.state.notifications.filter((item) => item.type === 'EXCHANGE_COMPLETED').length, 1);
+  });
+
+  it('records mutually exclusive sellable, damaged, and rejected Inventory lineage per physical unit', async () => {
+    harness.state.inventories[0].stockQuantity = 3;
+    harness.state.products[0].stockQuantity = 3;
+    const request = await harness.service.createCustomerRequest('customer-1', validRequest({
+      idempotencyKey: 'exchange-unit-lineage-0001',
+      lines: [{ orderDetailId: 'line-1', quantity: 3 }],
+    }));
+    await harness.service.decideRequest('staff-1', request.id, {
+      idempotencyKey: 'decision-unit-lineage-0001',
+      decision: 'APPROVE', responsibility: 'SHOP_FAULT', reason: 'Lá»—i Shop',
+    });
+    await harness.service.recordHandoffProof('customer-1', request.id, {
+      idempotencyKey: 'handoff-unit-lineage-0001',
+      proofReference: 'TRACK-UNIT-LINEAGE',
+      handoffAt: harness.now,
+    });
+    await harness.service.recordWarehouseReceipt('warehouse-1', request.id, {
+      idempotencyKey: 'receipt-unit-lineage-0001',
+      receivedAt: harness.now,
+      evidenceReference: 'RECEIPT-UNIT-LINEAGE',
+    });
+    const line = harness.state.lines.find((item) => item.exchangeCaseId === request.id);
+    await harness.service.finalizeInspection('warehouse-1', request.id, {
+      idempotencyKey: 'inspection-unit-lineage-0001',
+      lines: [{
+        exchangeLineId: line._id,
+        receivedQuantity: 3,
+        acceptedSellableQuantity: 1,
+        acceptedDamagedQuantity: 1,
+        rejectedQuantity: 1,
+        inspectionReason: 'Má»™t sáº£n pháº©m Ä‘á»§ Ä‘iá»u kiá»‡n, má»™t sáº£n pháº©m hÆ° há»ng',
+        rejectionReason: 'Sáº£n pháº©m cÃ²n láº¡i khÃ´ng Ä‘á»§ Ä‘iá»u kiá»‡n Ä‘á»•i',
+        evidenceImages: ['/api/exchanges/evidence/unit-lineage.jpg'],
+      }],
+    });
+
+    const units = harness.state.units
+      .filter((item) => item.exchangeCaseId === request.id)
+      .sort((left, right) => left.originalUnitOrdinal - right.originalUnitOrdinal);
+    const sellableMovement = harness.state.inventoryTransactions.find((item) => item.transactionType === 'EXCHANGE_RETURN_IN');
+    const damagedMovement = harness.state.inventoryTransactions.find((item) => item.transactionType === 'EXCHANGE_RETURN_DAMAGED_IN');
+    assert.deepEqual(units.map((unit) => ({
+      ordinal: unit.originalUnitOrdinal,
+      outcome: unit.outcome,
+      inventoryMovementKeys: unit.inventoryMovementKeys,
+    })), [
+      { ordinal: 1, outcome: 'Accepted', inventoryMovementKeys: [sellableMovement.movementKey] },
+      { ordinal: 2, outcome: 'Accepted', inventoryMovementKeys: [damagedMovement.movementKey] },
+      { ordinal: 3, outcome: 'Rejected', inventoryMovementKeys: [] },
+    ]);
+    assert.equal(units.filter((unit) => unit.inventoryMovementKeys.includes(sellableMovement.movementKey)).length, sellableMovement.quantity);
+    assert.equal(units.filter((unit) => unit.inventoryMovementKeys.includes(damagedMovement.movementKey)).length, damagedMovement.quantity);
   });
 
   it('keeps repeated replacement incidents in one case and completes the delivered resend chain', async () => {

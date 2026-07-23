@@ -138,17 +138,24 @@ function createModelRepository({ lockService = afterSalesLockService } = {}) {
       ), session);
       return result.modifiedCount;
     },
-    async updateUnitsForInspection(caseId, lineId, acceptedQuantity, movementKeys, session) {
+    async updateUnitsForInspection(caseId, lineId, {
+      sellableQuantity,
+      damagedQuantity,
+      sellableMovementKey,
+      damagedMovementKey,
+    }, session) {
       const units = await withSession(ExchangeUnitLineage.find({
         exchangeCaseId: caseId, exchangeLineId: lineId,
       }).sort({ originalUnitOrdinal: 1 }), session).lean();
       for (let index = 0; index < units.length; index += 1) {
+        const isSellable = index < sellableQuantity;
+        const isDamaged = index >= sellableQuantity && index < sellableQuantity + damagedQuantity;
         await withSession(ExchangeUnitLineage.findByIdAndUpdate(
           units[index]._id,
           {
             $set: {
-              outcome: index < acceptedQuantity ? 'Accepted' : 'Rejected',
-              inventoryMovementKeys: index < acceptedQuantity ? movementKeys : [],
+              outcome: isSellable || isDamaged ? 'Accepted' : 'Rejected',
+              inventoryMovementKeys: isSellable ? [sellableMovementKey] : isDamaged ? [damagedMovementKey] : [],
             },
           },
           { new: true, runValidators: true }
@@ -1323,10 +1330,10 @@ function createExchangeService({
           }, session);
           const receivedInventory = await repository.receiveInventory(item.line.productId, item.sellable, item.damaged, warehouseId, session);
           if (!receivedInventory) throw new ApiError(409, 'Inventory record is missing for accepted Exchange goods');
-          const movementKeys = [];
+          let sellableMovementKey;
           if (item.sellable > 0) {
             const key = `${String(id)}:${String(item.line._id)}:EXCHANGE_RETURN_IN`;
-            movementKeys.push(key);
+            sellableMovementKey = key;
             await repository.createInventoryTransaction({
               productId: item.line.productId,
               orderId: exchangeCase.orderId,
@@ -1341,9 +1348,10 @@ function createExchangeService({
               movementKey: key,
             }, session);
           }
+          let damagedMovementKey;
           if (item.damaged > 0) {
             const key = `${String(id)}:${String(item.line._id)}:EXCHANGE_RETURN_DAMAGED_IN`;
-            movementKeys.push(key);
+            damagedMovementKey = key;
             await repository.createInventoryTransaction({
               productId: item.line.productId,
               orderId: exchangeCase.orderId,
@@ -1368,7 +1376,12 @@ function createExchangeService({
             rejectionEvidenceImages: item.evidenceImages,
           }, session);
           if (repository.updateUnitsForInspection) {
-            await repository.updateUnitsForInspection(id, item.line._id, accepted, movementKeys, session);
+            await repository.updateUnitsForInspection(id, item.line._id, {
+              sellableQuantity: item.sellable,
+              damagedQuantity: item.damaged,
+              sellableMovementKey,
+              damagedMovementKey,
+            }, session);
           }
           inspectionRecords.push({
             inspectionKey: `${String(id)}:${String(item.line._id)}:${idempotencyKey}`,
