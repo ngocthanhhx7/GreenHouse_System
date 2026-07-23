@@ -8,6 +8,7 @@ const CodRecoveryReceipt = require('../models/codRecoveryReceipt.model');
 const OrderDetail = require('../models/orderDetail.model');
 const RefundPending = require('../models/refundPending.model');
 const ReturnRefundRequest = require('../models/returnRefundRequest.model');
+const ExchangeCase = require('../models/exchangeCase.model');
 const { logAudit } = require('../utils/auditLogger');
 
 const MAX_EVENT_ID_LENGTH = 160;
@@ -61,9 +62,30 @@ function createModelRepository() {
     async findLatestPaymentAttemptByOrder(orderId, session) { return withOptionalSession(PaymentAttempt.findOne({ orderId }).sort({ createdAt: -1 }), session).lean(); },
     async updatePaymentAttempt(id, data, session) { return withOptionalSession(PaymentAttempt.findByIdAndUpdate(id, { $set: data }, { new: true, runValidators: true }), session).lean(); },
     async findHeldRequestByOrder(orderId, session) {
-      return withOptionalSession(ReturnRefundRequest.findOne({ orderId, status: { $in: ['AwaitingCODReconciliation', 'CODRecoveryInProgress'] } }), session).lean();
+      const returnRequest = await withOptionalSession(ReturnRefundRequest.findOne({
+        orderId,
+        status: { $in: ['AwaitingCODReconciliation', 'CODRecoveryInProgress'] },
+      }), session).lean();
+      if (returnRequest) return { ...returnRequest, _caseType: 'RETURN_REFUND' };
+      const exchange = await withOptionalSession(ExchangeCase.findOne({
+        orderId,
+        status: { $in: ['AwaitingCODReconciliation', 'CODRecoveryInProgress'] },
+      }), session).lean();
+      return exchange ? { ...exchange, _caseType: 'EXCHANGE' } : null;
     },
-    async updateRequest(id, data, session) { return withOptionalSession(ReturnRefundRequest.findByIdAndUpdate(id, { $set: data }, { new: true, runValidators: true }), session).lean(); },
+    async updateRequest(id, data, session) {
+      const updatedReturn = await withOptionalSession(ReturnRefundRequest.findByIdAndUpdate(
+        id,
+        { $set: data },
+        { new: true, runValidators: true }
+      ), session).lean();
+      if (updatedReturn) return updatedReturn;
+      return withOptionalSession(ExchangeCase.findByIdAndUpdate(
+        id,
+        { $set: data },
+        { new: true, runValidators: true }
+      ), session).lean();
+    },
     async findRefundByObligationKey(obligationKey, session) { return withOptionalSession(RefundPending.findOne({ obligationKey }), session).lean(); },
     async upsertRefundPending(data, session) {
       return withOptionalSession(
@@ -229,7 +251,7 @@ function createCodReconciliationService({
       const heldRequest = await repository.findHeldRequestByOrder(order._id, session);
       if (fullCollection && heldRequest) {
         await repository.updateRequest(heldRequest._id, {
-          status: 'Pending',
+          status: heldRequest._caseType === 'EXCHANGE' ? 'Submitted' : 'Pending',
           holdReason: '',
           paymentId: payment?._id || null,
           handledAt: new Date(clock()),

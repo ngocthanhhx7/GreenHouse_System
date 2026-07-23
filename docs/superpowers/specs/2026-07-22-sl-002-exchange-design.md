@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-22
 
-**Status:** Design approved; G0, G1, and G2 passed; implementation not started
+**Status:** Design approved; G0 through G5 passed; G6 acceptance pending
 
 **Business approver:** Project Business Approver (user in this Codex task)
 
@@ -41,9 +41,9 @@ The two slices share an Order-level after-sales exclusivity rule but do not shar
 
 | Slice ID | G0 | G1 | G2 | G3 | G4 | G5 | G6 | G7 | Blocker | Owner | Next evidence |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| SL-002 | passed | passed | passed | ready | not-started | not-started | not-started | not-started | Exact decision-to-API/interface/code/test mapping | Engineering owner `unassigned`; Project Business Approver reviews G3 | Complete G3 traceability matrix against the reconciled SRS revision |
+| SL-002 | passed | passed | passed | passed | passed | passed | blocked | not-started | Expanded denied/alternate actor walkthrough and reviewed release evidence remain pending | Engineering owner `unassigned`; Project Business Approver | Record G6 actor acceptance, then obtain review and reconcile release evidence for G7 |
 
-G0 passed because the user in this task is the recorded Project Business Approver. G1 passed when the actor matrix in Section 5 was approved. G2 passed when the approver accepted the trigger, preconditions, paths, rules, state invariants, UI constraints, and acceptance examples consolidated here. G3 remains unperformed; no code change is authorized by this document alone.
+G0 passed because the user in this task is the recorded Project Business Approver. G1 passed when the actor matrix in Section 5 was approved. G2 passed when the approver accepted the trigger, preconditions, paths, rules, state invariants, UI constraints, and acceptance examples consolidated here. G3 is recorded in `../reconciliation/SL-002_G3_TRACEABILITY.md`. G4 is satisfied by the approved reconstructed baseline demonstration in `../reconciliation/SL-002_G4_RECONSTRUCTED_RED.md`, explicitly without claiming the original chronological log was retained. G5 is supported by the focused/full regressions, production build, live Mongo verification, migration idempotency, and main actor walkthrough in `../reconciliation/SL-002_HANDOFF.md`.
 
 ## 3. Source-of-Truth Ledger
 

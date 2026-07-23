@@ -30,6 +30,8 @@ import OrderDetailPage from './pages/customer/OrderDetailPage.jsx';
 import PaymentPage from './pages/customer/PaymentPage.jsx';
 import PaymentResultPage from './pages/customer/PaymentResultPage.jsx';
 import ReturnRefundPage from './pages/customer/ReturnRefundPage.jsx';
+import ExchangeListPage from './pages/customer/ExchangeListPage.jsx';
+import CustomerExchangeDetailPage from './pages/customer/ExchangeDetailPage.jsx';
 import SupportPage from './pages/customer/SupportPage.jsx';
 import StaffDashboardPage from './pages/staff/StaffDashboardPage.jsx';
 import StaffOrderQueuePage from './pages/staff/StaffOrderQueuePage.jsx';
@@ -37,6 +39,8 @@ import StaffOrderDetailPage from './pages/staff/StaffOrderDetailPage.jsx';
 import InvoicePrintPage from './pages/staff/InvoicePrintPage.jsx';
 import ReturnRefundQueuePage from './pages/staff/ReturnRefundQueuePage.jsx';
 import ReturnRefundDetailPage from './pages/staff/ReturnRefundDetailPage.jsx';
+import ExchangeQueuePage from './pages/staff/ExchangeQueuePage.jsx';
+import StaffExchangeDetailPage from './pages/staff/ExchangeDetailPage.jsx';
 import SupportQueuePage from './pages/staff/SupportQueuePage.jsx';
 import SupportDetailPage from './pages/staff/SupportDetailPage.jsx';
 import WarehouseDashboardPage from './pages/warehouse/WarehouseDashboardPage.jsx';
@@ -47,6 +51,8 @@ import StockExportDetailPage from './pages/warehouse/StockExportDetailPage.jsx';
 import ReplenishmentPage from './pages/warehouse/ReplenishmentPage.jsx';
 import WarehouseReturnRefundQueuePage from './pages/warehouse/ReturnRefundQueuePage.jsx';
 import ReturnRefundInspectionPage from './pages/warehouse/ReturnRefundInspectionPage.jsx';
+import WarehouseExchangeQueuePage from './pages/warehouse/ExchangeQueuePage.jsx';
+import ExchangeInspectionPage from './pages/warehouse/ExchangeInspectionPage.jsx';
 import ReplenishmentAdminPage from './pages/admin/ReplenishmentAdminPage.jsx';
 
 export default function App() {
@@ -142,6 +148,22 @@ export default function App() {
           }
         />
         <Route
+          path="exchanges"
+          element={
+            <RoleRoute allowedRoles={['Customer']}>
+              <ExchangeListPage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="exchanges/:id"
+          element={
+            <RoleRoute allowedRoles={['Customer']}>
+              <CustomerExchangeDetailPage />
+            </RoleRoute>
+          }
+        />
+        <Route
           path="support"
           element={
             <RoleRoute allowedRoles={['Customer']}>
@@ -196,6 +218,22 @@ export default function App() {
           element={
             <RoleRoute allowedRoles={['Staff']}>
               <ReturnRefundQueuePage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="staff/exchanges"
+          element={
+            <RoleRoute allowedRoles={['Staff']}>
+              <ExchangeQueuePage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="staff/exchanges/:id"
+          element={
+            <RoleRoute allowedRoles={['Staff']}>
+              <StaffExchangeDetailPage />
             </RoleRoute>
           }
         />
@@ -276,6 +314,22 @@ export default function App() {
           element={
             <RoleRoute allowedRoles={['WarehouseManager']}>
               <WarehouseReturnRefundQueuePage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="warehouse/exchanges"
+          element={
+            <RoleRoute allowedRoles={['WarehouseManager']}>
+              <WarehouseExchangeQueuePage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="warehouse/exchanges/:id"
+          element={
+            <RoleRoute allowedRoles={['WarehouseManager']}>
+              <ExchangeInspectionPage />
             </RoleRoute>
           }
         />

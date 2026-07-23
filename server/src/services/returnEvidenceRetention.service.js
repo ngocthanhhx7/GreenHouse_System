@@ -3,9 +3,15 @@ const { readdir, stat, unlink } = require('node:fs/promises');
 
 const ReturnItem = require('../models/returnItem.model');
 const ReturnRefundRequest = require('../models/returnRefundRequest.model');
+const ExchangeCase = require('../models/exchangeCase.model');
+const ExchangeLine = require('../models/exchangeLine.model');
+const ExchangeInspection = require('../models/exchangeInspection.model');
 const { DEFAULT_UPLOADS_ROOT } = require('./upload.service');
 
-const TERMINAL_STATUSES = new Set(['Rejected', 'Expired', 'Completed', 'ClosedByCODRecovery']);
+const TERMINAL_STATUSES = new Set([
+  'Rejected', 'Expired', 'Completed', 'ClosedByCODRecovery',
+  'Cancelled', 'ClosedNoExchange', 'ConvertedToReturnRefund',
+]);
 const SAFE_FILENAME = /^[0-9a-f-]{36}\.(?:jpg|png|webp)$/;
 
 async function findReferencesFromModels(candidateUrls) {
@@ -19,7 +25,23 @@ async function findReferencesFromModels(candidateUrls) {
       .select('_id status completedAt expiredAt resolvedAt handledAt updatedAt')
       .lean()
     : [];
-  return [...new Map([...direct, ...parents].map((request) => [String(request._id), request])).values()];
+  const exchangeDirect = await ExchangeCase.find({ evidenceImages: { $in: candidateUrls } })
+    .select('_id status completedAt terminalAt decidedAt updatedAt')
+    .lean();
+  const [exchangeLineCaseIds, inspectionCaseIds] = await Promise.all([
+    ExchangeLine.find({ rejectionEvidenceImages: { $in: candidateUrls } }).distinct('exchangeCaseId'),
+    ExchangeInspection.find({ evidenceImages: { $in: candidateUrls } }).distinct('exchangeCaseId'),
+  ]);
+  const exchangeParentIds = [...new Set([...exchangeLineCaseIds, ...inspectionCaseIds].map(String))];
+  const exchangeParents = exchangeParentIds.length
+    ? await ExchangeCase.find({ _id: { $in: exchangeParentIds } })
+      .select('_id status completedAt terminalAt decidedAt updatedAt')
+      .lean()
+    : [];
+  return [...new Map(
+    [...direct, ...parents, ...exchangeDirect, ...exchangeParents]
+      .map((request) => [String(request._id), request])
+  ).values()];
 }
 
 function parsePositiveNumber(value, name, { required = false } = {}) {
@@ -34,7 +56,8 @@ function parsePositiveNumber(value, name, { required = false } = {}) {
 
 function terminalTimestamp(request) {
   if (!TERMINAL_STATUSES.has(request.status)) return null;
-  const value = request.completedAt || request.expiredAt || request.resolvedAt || request.handledAt || request.updatedAt;
+  const value = request.completedAt || request.terminalAt || request.expiredAt
+    || request.resolvedAt || request.decidedAt || request.handledAt || request.updatedAt;
   const date = value ? new Date(value) : null;
   return date && !Number.isNaN(date.getTime()) ? date : null;
 }
@@ -79,6 +102,7 @@ function createReturnEvidenceRetentionService({
         if (!target.startsWith(`${evidenceRoot}${path.sep}`)) continue;
         const candidateUrls = [
           `/api/return-refunds/evidence/${entry.name}`,
+          `/api/exchanges/evidence/${entry.name}`,
           `/uploads/return-evidence/${entry.name}`,
         ];
         const references = await findReferences(candidateUrls);

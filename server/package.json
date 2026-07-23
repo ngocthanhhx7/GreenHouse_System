@@ -8,6 +8,8 @@
     "payos:confirm-webhook": "node src/scripts/confirmPayOSWebhook.js",
     "migrate:product-sku-index": "node src/scripts/migrateProductSkuIndex.js",
     "migrate:cod-reconciliation": "node src/scripts/migrateCodReconciliation.js",
+    "migrate:sl002": "node src/scripts/migrateSl002Exchange.js",
+    "verify:sl002": "node src/scripts/verifySl002Exchange.js",
     "verify:sl001": "node src/scripts/verifySl001ReturnRefund.js",
     "seed:demo": "node src/demo-data/demoSeedCli.js",
     "start": "node src/server.js"

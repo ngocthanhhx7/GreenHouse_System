@@ -30,6 +30,7 @@ function toOrderResponse(order, details = []) {
     settlementReconciliationStatus: order.settlementReconciliationStatus || 'NotApplicable',
     completedSaleAt: order.completedSaleAt || null,
     returnDeadlineAt: order.returnDeadlineAt || null,
+    exchangeDeadlineAt: order.exchangeDeadlineAt || null,
     paymentMethod: order.paymentMethod,
     paymentStatus: order.paymentStatus,
     orderStatus: order.orderStatus,

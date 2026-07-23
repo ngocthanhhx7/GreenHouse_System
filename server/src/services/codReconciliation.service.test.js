@@ -88,6 +88,35 @@ describe('COD reconciliation service', () => {
     assert.equal(repository.evidence.length, 1);
   });
 
+  it('releases a held Exchange to Submitted only after full Customer collection', async () => {
+    repository.requests[0]._caseType = 'EXCHANGE';
+    const result = await service.recordCollectionEvidence('order-1', {
+      eventId: 'exchange-collection-full', customerCollectedAmount: 100, collectionTiming: 'AT_DELIVERY',
+      occurredAt: '2026-07-23T10:01:00.000Z', evidenceReference: 'pod-exchange-full',
+    });
+
+    assert.equal(result.order.paymentStatus, 'Paid');
+    assert.equal(repository.requests[0].status, 'Submitted');
+    assert.equal(repository.requests[0].holdReason, '');
+  });
+
+  it('moves a held Exchange to COD recovery on under-collection without treating settlement as Customer payment', async () => {
+    repository.requests[0]._caseType = 'EXCHANGE';
+    await service.recordCollectionEvidence('order-1', {
+      eventId: 'exchange-collection-partial', customerCollectedAmount: 40, collectionTiming: 'AFTER_DELIVERY',
+      occurredAt: '2026-07-23T11:00:00.000Z', evidenceReference: 'pod-exchange-partial',
+    });
+    assert.equal(repository.requests[0].status, 'CODRecoveryInProgress');
+    assert.equal(repository.orders[0].paymentStatus, 'Unpaid');
+
+    await service.recordSettlementEvidence('order-1', {
+      eventId: 'exchange-settlement-full', carrierSettlementAmount: 100,
+      occurredAt: '2026-07-25T08:00:00.000Z', evidenceReference: 'settlement-exchange-full',
+    });
+    assert.equal(repository.requests[0].status, 'CODRecoveryInProgress');
+    assert.equal(repository.orders[0].paymentStatus, 'Unpaid');
+  });
+
   it('does not accept Carrier collection evidence before physical delivery', async () => {
     repository.orders[0].orderStatus = 'Shipped';
     await assert.rejects(

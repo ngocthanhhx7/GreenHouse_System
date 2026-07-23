@@ -22,7 +22,12 @@ export default function ReturnRefundInspectionPage() {
       : returnRefundService.getWarehouseRequest(id);
     loader.then((result) => {
       setRequest(result);
-      setItems((result.details || []).map((detail) => ({ orderDetailId: detail._id || detail.id, productName: detail.productNameSnapshot, requestedQuantity: detail.quantity, receivedQuantity: detail.quantity, sellableQuantity: 0, damagedQuantity: detail.quantity, warehouseNote: '' })));
+      setItems((result.details || [])
+        .filter((detail) => Number(detail.remainingReturnQuantity ?? detail.quantity) > 0)
+        .map((detail) => {
+          const remainingQuantity = Number(detail.remainingReturnQuantity ?? detail.quantity);
+          return { orderDetailId: detail._id || detail.id, productName: detail.productNameSnapshot, requestedQuantity: remainingQuantity, receivedQuantity: remainingQuantity, sellableQuantity: 0, damagedQuantity: remainingQuantity, warehouseNote: '' };
+        }));
     }).catch((err) => setError(err.message));
   }, [id, isProactiveCodRecovery]);
 

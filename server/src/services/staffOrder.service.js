@@ -59,6 +59,7 @@ function toOrderSummary(order) {
     settlementReconciliationStatus: order.settlementReconciliationStatus || 'NotApplicable',
     completedSaleAt: order.completedSaleAt || null,
     returnDeadlineAt: order.returnDeadlineAt || null,
+    exchangeDeadlineAt: order.exchangeDeadlineAt || null,
     shippingAddress: order.shippingAddress,
     receiverName: order.receiverName || '',
     receiverPhone: order.receiverPhone || '',
@@ -205,6 +206,7 @@ function createStaffOrderService({ orderRepository = createModelOrderRepository(
       const timestamps = nextStatus === 'Shipped' ? { shippedAt: transitionAt } : nextStatus === 'Delivered' ? {
         deliveredAt: transitionAt,
         returnDeadlineAt: new Date(transitionAt.getTime() + RETURN_WINDOW_MS),
+        exchangeDeadlineAt: new Date(transitionAt.getTime() + RETURN_WINDOW_MS),
         ...(order.paymentMethod === 'COD' ? {
           codExpectedAmount: Number(order.codExpectedAmount ?? order.totalAmount),
           codDiscrepancyStatus: order.paymentStatus === 'Paid' ? 'Resolved' : 'Open',

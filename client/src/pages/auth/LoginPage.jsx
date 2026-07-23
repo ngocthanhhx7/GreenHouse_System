@@ -1,14 +1,19 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 
 import useAuth from '../../hooks/useAuth.js';
 
 export default function LoginPage() {
   const navigate = useNavigate();
-  const { login, getDashboardPath } = useAuth();
+  const { login, getDashboardPath, isAuthenticated, user } = useAuth();
   const [form, setForm] = useState({ email: '', password: '' });
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (!isAuthenticated || !user?.role) return;
+    navigate(getDashboardPath(user.role), { replace: true });
+  }, [getDashboardPath, isAuthenticated, navigate, user]);
 
   async function handleSubmit(event) {
     event.preventDefault();
@@ -16,8 +21,7 @@ export default function LoginPage() {
     setError('');
     setSubmitting(true);
     try {
-      const result = await login(form);
-      navigate(getDashboardPath(result.user.role.roleName), { replace: true });
+      await login(form);
     } catch (err) {
       setError(err.message);
     } finally {

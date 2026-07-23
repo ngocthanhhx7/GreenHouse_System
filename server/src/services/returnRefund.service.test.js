@@ -714,6 +714,32 @@ describe('return/refund service', () => {
     assert.equal(repository.attempts[0].paymentStatus, 'Paid');
   });
 
+  it('references goods already accounted by a converted Exchange without posting Inventory twice', async () => {
+    const requestId = await approveRequest();
+    const request = repository.requests.find((entry) => entry._id === requestId);
+    request.sourceExchangeCaseId = 'exchange-1';
+    request.preAccountedMovementKeys = ['exchange-1:detail-1:EXCHANGE_RETURN_DAMAGED_IN'];
+    request.preAccountedItems = [{
+      orderDetailId: 'detail-1',
+      productId: 'product-1',
+      sellableQuantity: 0,
+      damagedQuantity: 1,
+      movementKeys: ['exchange-1:detail-1:EXCHANGE_RETURN_DAMAGED_IN'],
+    }];
+    const before = structuredClone(repository.inventories[0]);
+
+    const result = await service.inspectRequest('warehouse-1', requestId, {
+      idempotencyKey: 'inspection-converted-exchange-001',
+      items: [],
+    });
+
+    assert.equal(result.status, 'Received');
+    assert.deepEqual(repository.inventories[0], before);
+    assert.equal(repository.inventoryTransactions.length, 0);
+    assert.equal(repository.returnItems.length, 1);
+    assert.match(repository.returnItems[0].warehouseNote, /not replayed/i);
+  });
+
   it('rolls back request, inventory, movements, items, and refund when a Warehouse write fails', async () => {
     const requestId = await approveRequest();
     await recordHandoff(requestId);

@@ -23,6 +23,7 @@ const {
 const { createPayOSGateway } = require('../config/payos');
 const { logAudit } = require('../utils/auditLogger');
 const { notificationService } = require('./notification.service');
+const { afterSalesLockService } = require('./afterSalesLock.service');
 
 const OPEN_STATUSES = [
   'New', 'Pending', 'AwaitingCODReconciliation', 'Approved',
@@ -224,6 +225,10 @@ function toPayoutIncidentResponse(incident) {
 }
 
 function toResponse({ request, order, details = [], items = [], destination = null, payoutEvidence = null, payoutIncident = null }, audience = 'Staff') {
+  const preAccountedByDetail = new Map((request.preAccountedItems || []).map((item) => [
+    String(item.orderDetailId),
+    Number(item.sellableQuantity || 0) + Number(item.damagedQuantity || 0),
+  ]));
   const response = {
     id: String(request._id),
     orderId: String(request.orderId),
@@ -249,7 +254,13 @@ function toResponse({ request, order, details = [], items = [], destination = nu
     completedBy: request.completedBy ? String(request.completedBy) : null,
     completedAt: request.completedAt || null,
     payoutStatus: payoutEvidence?.status || null,
-    details,
+    details: details.map((detail) => ({
+      ...toObject(detail),
+      remainingReturnQuantity: Math.max(
+        0,
+        Number(detail.quantity || 0) - Number(preAccountedByDetail.get(String(detail._id)) || 0)
+      ),
+    })),
     items: items.map((item) => ({ ...toObject(item), evidenceImages: evidenceForResponse(item.evidenceImages) })),
     createdAt: request.createdAt,
   };
@@ -282,6 +293,16 @@ function toResponse({ request, order, details = [], items = [], destination = nu
 function createModelRepository() {
   return {
     async findOrderById(id, session) { return withOptionalSession(Order.findById(id), session).lean(); },
+    async claimOrderLock(data, session) { return afterSalesLockService.claim(data, session); },
+    async releaseOrderLock(orderId, caseId, terminalStatus, closePermanently = false, session) {
+      return afterSalesLockService.release({
+        orderId,
+        caseType: 'RETURN_REFUND',
+        caseId,
+        terminalStatus,
+        closePermanently,
+      }, session);
+    },
     async ensureReturnDeadline(id, deadlineAt, session) {
       const updated = await withOptionalSession(Order.findOneAndUpdate(
         { _id: id, returnDeadlineAt: null },
@@ -338,6 +359,18 @@ function createModelRepository() {
     async claimInspection(id, data, session) {
       return withOptionalSession(ReturnRefundRequest.findOneAndUpdate(
         { _id: id, status: { $in: RECEIVABLE_STATUSES }, handoffAt: { $ne: null } },
+        { $set: data },
+        { new: true, runValidators: true }
+      ), session).lean();
+    },
+    async claimPreAccountedInspection(id, data, session) {
+      return withOptionalSession(ReturnRefundRequest.findOneAndUpdate(
+        {
+          _id: id,
+          status: { $in: RECEIVABLE_STATUSES },
+          sourceExchangeCaseId: { $ne: null },
+          'preAccountedItems.0': { $exists: true },
+        },
         { $set: data },
         { new: true, runValidators: true }
       ), session).lean();
@@ -589,6 +622,16 @@ function createReturnRefundService({
 
     const updatedOrder = await repository.updateOrder(loaded.order._id, { orderStatus: 'Returned' }, session);
     if (!updatedOrder) throw new ApiError(409, 'Order changed while payout was being completed');
+    if (repository.releaseOrderLock) {
+      const closedLock = await repository.releaseOrderLock(
+        loaded.order._id,
+        loaded.request._id,
+        'Completed',
+        true,
+        session
+      );
+      if (!closedLock) throw new ApiError(409, 'After-sales lock changed while Return was being completed');
+    }
     return { completed, updatedOrder, updatedRefund };
   }
 
@@ -818,18 +861,29 @@ function createReturnRefundService({
 
       let request;
       try {
-        request = await repository.createRequest({
-          orderId: order._id,
-          requestCode: generateRequestCode(),
-          customerId,
-          paymentId: payment?._id || null,
-          reason,
-          evidenceImages,
-          status: codHold ? 'AwaitingCODReconciliation' : 'New',
-          refundAmount: 0,
-          holdReason: codHold ? 'Đã ghi nhận đúng hạn; đang chờ đối soát bằng chứng thu COD từ khách hàng.' : '',
-          deadlineAt,
-          requestedAt: new Date(clock()),
+        request = await transactionManager.withTransaction(async (session) => {
+          const created = await repository.createRequest({
+            orderId: order._id,
+            requestCode: generateRequestCode(),
+            customerId,
+            paymentId: payment?._id || null,
+            reason,
+            evidenceImages,
+            status: codHold ? 'AwaitingCODReconciliation' : 'New',
+            refundAmount: 0,
+            holdReason: codHold ? 'Đã ghi nhận đúng hạn; đang chờ đối soát bằng chứng thu COD từ khách hàng.' : '',
+            deadlineAt,
+            requestedAt: new Date(clock()),
+          }, session);
+          if (repository.claimOrderLock) {
+            const lock = await repository.claimOrderLock({
+              orderId: order._id,
+              caseType: 'RETURN_REFUND',
+              caseId: created._id,
+            }, session);
+            if (!lock) throw new ApiError(409, 'This Order already has an active after-sales case');
+          }
+          return created;
         });
       } catch (error) {
         if (error?.code === 11000) throw new ApiError(409, 'This order already has an open return/refund request');
@@ -897,10 +951,17 @@ function createReturnRefundService({
         staffNote,
         ...(approved ? { approvedAt: decidedAt, shipByAt: new Date(decidedAt.getTime() + SHIP_WINDOW_MS) } : {}),
       };
-      const updated = repository.claimDecision
-        ? await repository.claimDecision(id, DECIDABLE_STATUSES, decisionData)
-        : await repository.updateRequest(id, decisionData);
-      if (!updated) throw new ApiError(409, 'Return/refund request changed while Staff was deciding it');
+      const updated = await transactionManager.withTransaction(async (session) => {
+        const claimed = repository.claimDecision
+          ? await repository.claimDecision(id, DECIDABLE_STATUSES, decisionData, session)
+          : await repository.updateRequest(id, decisionData, session);
+        if (!claimed) throw new ApiError(409, 'Return/refund request changed while Staff was deciding it');
+        if (!approved && repository.releaseOrderLock) {
+          const released = await repository.releaseOrderLock(order._id, request._id, 'Rejected', false, session);
+          if (!released) throw new ApiError(409, 'After-sales lock changed while Return was being rejected');
+        }
+        return claimed;
+      });
 
       await writeAudit(staffId, approved ? 'RETURN_REFUND_APPROVED' : 'RETURN_REFUND_REJECTED', id, `Staff ${approved ? 'approved' : 'rejected'} return/refund for ${order.orderCode}`);
       await notifyCustomer(request.customerId, request._id, approved ? 'RETURN_REFUND_APPROVED' : 'RETURN_REFUND_REJECTED', approved ? 'Yêu cầu trả hàng đã được duyệt' : 'Yêu cầu trả hàng bị từ chối', approved ? 'Vui lòng bàn giao hàng trong thời hạn hiển thị.' : staffNote);
@@ -950,10 +1011,17 @@ function createReturnRefundService({
       if (request.handoffAt) throw new ApiError(409, 'A request with timely handoff proof cannot expire');
       const now = new Date(clock());
       if (!request.shipByAt || now.getTime() <= new Date(request.shipByAt).getTime()) throw new ApiError(409, 'The handoff deadline has not expired');
-      const updated = repository.claimExpiry
-        ? await repository.claimExpiry(id, now, { status: 'Expired', expiredAt: now, expiryReason: 'No timely handoff proof', handledAt: now })
-        : await repository.updateRequest(id, { status: 'Expired', expiredAt: now, expiryReason: 'No timely handoff proof', handledAt: now });
-      if (!updated) throw new ApiError(409, 'Return/refund request changed while expiry was being recorded');
+      const updated = await transactionManager.withTransaction(async (session) => {
+        const claimed = repository.claimExpiry
+          ? await repository.claimExpiry(id, now, { status: 'Expired', expiredAt: now, expiryReason: 'No timely handoff proof', handledAt: now }, session)
+          : await repository.updateRequest(id, { status: 'Expired', expiredAt: now, expiryReason: 'No timely handoff proof', handledAt: now }, session);
+        if (!claimed) throw new ApiError(409, 'Return/refund request changed while expiry was being recorded');
+        if (repository.releaseOrderLock) {
+          const released = await repository.releaseOrderLock(request.orderId, request._id, 'Expired', false, session);
+          if (!released) throw new ApiError(409, 'After-sales lock changed while Return was expiring');
+        }
+        return claimed;
+      });
       await writeAudit(staffId, 'RETURN_REFUND_EXPIRED', id, 'Approved request expired without timely handoff proof');
       await notifyCustomer(request.customerId, request._id, 'RETURN_REFUND_EXPIRED', 'Yêu cầu trả hàng đã hết hạn', 'Hệ thống không ghi nhận bằng chứng bàn giao hàng đúng hạn.');
       return respond(id, 'Staff');
@@ -965,13 +1033,12 @@ function createReturnRefundService({
       const candidates = await repository.listOverdueRequests(now, 100);
       let expired = 0;
       for (const candidate of candidates) {
-        const updated = await repository.claimExpiry(candidate._id, now, {
-          status: 'Expired', expiredAt: now, expiryReason: 'No timely handoff proof', handledAt: now,
-        });
-        if (!updated) continue;
-        expired += 1;
-        await writeAudit(null, 'RETURN_REFUND_EXPIRED', candidate._id, 'System expired an approved request without timely handoff proof');
-        await notifyCustomer(candidate.customerId, candidate._id, 'RETURN_REFUND_EXPIRED', 'Yêu cầu trả hàng đã hết hạn', 'Hệ thống không ghi nhận bằng chứng bàn giao hàng đúng hạn.');
+        try {
+          await service.expireRequest(null, candidate._id);
+          expired += 1;
+        } catch (error) {
+          if (error?.statusCode !== 409) throw error;
+        }
       }
       return { expired };
     },
@@ -1091,38 +1158,98 @@ function createReturnRefundService({
         throw new ApiError(409, 'Warehouse receipt already exists under a different idempotency identity');
       }
       if (!RECEIVABLE_STATUSES.includes(request.status)) throw new ApiError(409, 'Only Approved requests can be inspected');
-      if (!request.handoffAt || !request.handoffProofReference) throw new ApiError(409, 'Timely Customer handoff proof is required before Warehouse receipt');
-      if (!Array.isArray(input.items) || input.items.length === 0) throw new ApiError(400, 'A complete inspected item list is required');
-      if (!details.length || input.items.length !== details.length) throw new ApiError(400, 'Inspection must include every purchased order line exactly once');
+      if (!details.length) throw new ApiError(409, 'Order details are missing');
+      if (!Array.isArray(input.items)) throw new ApiError(400, 'A complete inspected item list is required');
+      const preAccountedByDetail = new Map((request.preAccountedItems || []).map((item) => [
+        String(item.orderDetailId),
+        {
+          sellableQuantity: Number(item.sellableQuantity || 0),
+          damagedQuantity: Number(item.damagedQuantity || 0),
+          movementKeys: item.movementKeys || [],
+        },
+      ]));
+      const remainingDetails = details.filter((detail) => {
+        const pre = preAccountedByDetail.get(String(detail._id)) || { sellableQuantity: 0, damagedQuantity: 0 };
+        return Number(detail.quantity) - pre.sellableQuantity - pre.damagedQuantity > 0;
+      });
+      if (remainingDetails.length > 0 && (!request.handoffAt || !request.handoffProofReference)) {
+        throw new ApiError(409, 'Timely Customer handoff proof is required before Warehouse receipt');
+      }
+      if (input.items.length !== remainingDetails.length) {
+        throw new ApiError(
+          400,
+          preAccountedByDetail.size > 0
+            ? 'Inspection must include every remaining Customer-held order line exactly once'
+            : 'Inspection must include every purchased order line exactly once'
+        );
+      }
 
-      const detailById = new Map(details.map((detail) => [String(detail._id), detail]));
+      const submittedByDetail = new Map(input.items.map((item) => [String(item.orderDetailId), item]));
       const seen = new Set();
       const inspectedAt = new Date(clock());
       const inspectionIdempotencyKey = input.idempotencyKey
         ? normalizeIdempotencyKey(input.idempotencyKey)
         : `inspection:${String(request._id)}`;
-      const items = input.items.map((item) => {
-        const detail = detailById.get(String(item.orderDetailId));
-        if (!detail) throw new ApiError(400, 'Return item does not belong to the order');
+      const items = details.map((detail) => {
+        const pre = preAccountedByDetail.get(String(detail._id)) || {
+          sellableQuantity: 0,
+          damagedQuantity: 0,
+          movementKeys: [],
+        };
+        const purchasedQuantity = Number(detail.quantity);
+        const preAccountedQuantity = pre.sellableQuantity + pre.damagedQuantity;
+        const remainingQuantity = purchasedQuantity - preAccountedQuantity;
+        if (!Number.isInteger(remainingQuantity) || remainingQuantity < 0) {
+          throw new ApiError(409, 'Pre-accounted Exchange quantity exceeds purchased quantity');
+        }
+        if (remainingQuantity === 0) {
+          return {
+            returnRefundRequestId: request._id,
+            orderDetailId: detail._id,
+            productId: detail.productId,
+            requestedQuantity: purchasedQuantity,
+            receivedQuantity: purchasedQuantity,
+            sellableQuantity: pre.sellableQuantity,
+            damagedQuantity: pre.damagedQuantity,
+            inventorySellableQuantity: 0,
+            inventoryDamagedQuantity: 0,
+            evidenceImages: [],
+            warehouseNote: 'Referenced from linked Exchange; Inventory movement is not replayed',
+            inspectedBy: warehouseId,
+            inspectedAt,
+            inventoryAppliedAt: inspectedAt,
+            inventoryMovementKey: `PREACCOUNTED:${String(request._id)}:${String(detail._id)}`,
+          };
+        }
+        const item = submittedByDetail.get(String(detail._id));
+        if (!item) throw new ApiError(400, 'Return item does not belong to the remaining Customer-held Order lines');
         if (seen.has(String(detail._id))) throw new ApiError(400, 'Each order item can only be inspected once');
         seen.add(String(detail._id));
-        const purchasedQuantity = Number(detail.quantity);
         const receivedQuantity = Number(item.receivedQuantity);
         const sellableQuantity = Number(item.sellableQuantity);
         const damagedQuantity = Number(item.damagedQuantity);
         if (![purchasedQuantity, receivedQuantity, sellableQuantity, damagedQuantity].every((quantity) => Number.isInteger(quantity) && quantity >= 0)) {
           throw new ApiError(400, 'Inspection quantities must be non-negative integers');
         }
-        if (receivedQuantity !== purchasedQuantity) throw new ApiError(400, 'Received quantity must equal the complete purchased quantity');
+        if (receivedQuantity !== remainingQuantity) {
+          throw new ApiError(
+            400,
+            preAccountedQuantity > 0
+              ? 'Received quantity must equal the remaining Customer-held quantity'
+              : 'Received quantity must equal the complete purchased quantity'
+          );
+        }
         if (sellableQuantity + damagedQuantity !== receivedQuantity) throw new ApiError(400, 'Sellable and damaged quantities must equal received quantity');
         return {
           returnRefundRequestId: request._id,
           orderDetailId: detail._id,
           productId: detail.productId,
           requestedQuantity: purchasedQuantity,
-          receivedQuantity,
-          sellableQuantity,
-          damagedQuantity,
+          receivedQuantity: receivedQuantity + preAccountedQuantity,
+          sellableQuantity: sellableQuantity + pre.sellableQuantity,
+          damagedQuantity: damagedQuantity + pre.damagedQuantity,
+          inventorySellableQuantity: sellableQuantity,
+          inventoryDamagedQuantity: damagedQuantity,
           evidenceImages: normalizeEvidence(item.evidenceImages),
           warehouseNote: String(item.warehouseNote || input.warehouseNote || '').trim(),
           inspectedBy: warehouseId,
@@ -1131,21 +1258,27 @@ function createReturnRefundService({
           inventoryMovementKey: `${String(request._id)}:${String(detail._id)}`,
         };
       });
-      if (seen.size !== details.length) throw new ApiError(400, 'Inspection must include every purchased order line exactly once');
+      if (seen.size !== remainingDetails.length) throw new ApiError(400, 'Inspection must include every remaining Customer-held order line exactly once');
 
       const result = await transactionManager.withTransaction(async (session) => {
-        const claimed = repository.claimInspection
-          ? await repository.claimInspection(id, {
+        const claimData = {
             status: 'Received',
             receivedAt: inspectedAt,
             inspectionNote: String(input.warehouseNote || '').trim(),
             inspectionIdempotencyKey,
             handledAt: inspectedAt,
-          }, session)
-          : await repository.updateRequest(id, { status: 'Received', receivedAt: inspectedAt }, session);
+          };
+        const claimed = remainingDetails.length === 0
+          ? (repository.claimPreAccountedInspection
+            ? await repository.claimPreAccountedInspection(id, claimData, session)
+            : await repository.updateRequest(id, claimData, session))
+          : (repository.claimInspection
+            ? await repository.claimInspection(id, claimData, session)
+            : await repository.updateRequest(id, claimData, session));
         if (!claimed) throw new ApiError(409, 'Only an Approved request with handoff proof can be inspected');
 
         for (const item of items) {
+          if (item.inventorySellableQuantity === 0 && item.inventoryDamagedQuantity === 0) continue;
           const before = await repository.findInventoryByProductId(item.productId, session);
           if (!before) throw new ApiError(409, 'Every returned product requires an Inventory record');
           const beforeStock = Number(before.stockQuantity);
@@ -1156,7 +1289,7 @@ function createReturnRefundService({
           const after = await repository.claimReturnInventory(
             item.productId,
             { stockQuantity: beforeStock, damagedQuantity: beforeDamaged },
-            { sellableQuantity: item.sellableQuantity, damagedQuantity: item.damagedQuantity },
+            { sellableQuantity: item.inventorySellableQuantity, damagedQuantity: item.inventoryDamagedQuantity },
             warehouseId,
             session
           );
@@ -1171,7 +1304,7 @@ function createReturnRefundService({
             relatedId: request._id,
             performedBy: warehouseId,
             transactionType: 'RETURN_IN',
-            quantity: item.sellableQuantity,
+            quantity: item.inventorySellableQuantity,
             beforeQuantity: beforeStock,
             afterQuantity: Number(after.stockQuantity),
             movementKey: `${item.inventoryMovementKey}:RETURN_IN`,
@@ -1184,7 +1317,7 @@ function createReturnRefundService({
             relatedId: request._id,
             performedBy: warehouseId,
             transactionType: 'RETURN_DAMAGED_IN',
-            quantity: item.damagedQuantity,
+            quantity: item.inventoryDamagedQuantity,
             beforeQuantity: beforeDamaged,
             afterQuantity: Number(after.damagedQuantity),
             movementKey: `${item.inventoryMovementKey}:RETURN_DAMAGED_IN`,

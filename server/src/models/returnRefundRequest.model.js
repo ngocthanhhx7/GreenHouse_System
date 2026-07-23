@@ -22,6 +22,34 @@ const returnRefundRequestSchema = new mongoose.Schema(
       ref: 'Payment',
       default: null,
     },
+    sourceExchangeCaseId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'ExchangeCase',
+      default: null,
+      immutable: true,
+    },
+    originalRequestedAt: {
+      type: Date,
+      default: null,
+      immutable: true,
+    },
+    preAccountedMovementKeys: {
+      type: [String],
+      default: [],
+      immutable: true,
+    },
+    preAccountedItems: {
+      type: [{
+        _id: false,
+        orderDetailId: { type: mongoose.Schema.Types.ObjectId, ref: 'OrderDetail', required: true },
+        productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true },
+        sellableQuantity: { type: Number, min: 0, required: true },
+        damagedQuantity: { type: Number, min: 0, required: true },
+        movementKeys: { type: [String], default: [] },
+      }],
+      default: [],
+      immutable: true,
+    },
     reason: {
       type: String,
       required: true,

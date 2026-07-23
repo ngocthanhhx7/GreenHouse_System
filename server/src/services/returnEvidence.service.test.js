@@ -10,6 +10,7 @@ function createService(request) {
     findLinkedRequest: async (candidateUrls) => {
       assert.deepEqual(candidateUrls, [
         `/api/return-refunds/evidence/${filename}`,
+        `/api/exchanges/evidence/${filename}`,
         `/uploads/return-evidence/${filename}`,
       ]);
       return request;
