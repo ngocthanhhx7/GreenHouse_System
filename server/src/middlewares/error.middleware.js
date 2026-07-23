@@ -31,7 +31,15 @@ function errorHandler(error, req, res, next) {
     );
   }
   if (error instanceof ApiError) {
-    return sendError(res, error.message, error.statusCode, error.errors, error.errorCode, req);
+    return sendError(
+      res,
+      error.message,
+      error.statusCode,
+      error.errors,
+      error.errorCode,
+      req,
+      error.data
+    );
   }
   return sendError(res, 'Internal server error', 500, [], undefined, req);
 }

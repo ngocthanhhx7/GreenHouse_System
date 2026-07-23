@@ -4,7 +4,11 @@ import { Link } from 'react-router-dom';
 import { returnRefundService } from '../../services/returnRefundService.js';
 import { translateRequestStatus } from '../../utils/formatters.js';
 
-const STATUS_OPTIONS = ['', 'New', 'AwaitingCODReconciliation', 'Approved', 'Received', 'Rejected', 'Expired', 'Completed'];
+const STATUS_OPTIONS = [
+  '', 'New', 'Pending', 'AwaitingCODReconciliation', 'Approved',
+  'AwaitingInspection', 'Received', 'ReadyForRefund', 'Rejected', 'Expired',
+  'CODRecoveryInProgress', 'ClosedByCODRecovery', 'Completed',
+];
 
 export default function ReturnRefundQueuePage() {
   const [status, setStatus] = useState('New');

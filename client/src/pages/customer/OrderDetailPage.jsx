@@ -5,6 +5,12 @@ import { exchangeService } from '../../services/exchangeService.js';
 import { orderService } from '../../services/orderService.js';
 import { returnRefundService } from '../../services/returnRefundService.js';
 import { formatCurrency, translateOrderStatus, translatePaymentMethod, translatePaymentStatus } from '../../utils/formatters.js';
+import {
+  classifyReplacementExchangeUnits,
+  getExchangeSubmissionGuard,
+  getOriginalExchangeAction,
+  getReturnAction,
+} from '../../utils/exchangeUiState.js';
 
 const ACTIVE_EXCHANGE_STATUSES = new Set([
   'AwaitingCODReconciliation', 'CODRecoveryInProgress', 'Submitted',
@@ -32,7 +38,8 @@ export default function OrderDetailPage() {
   const [exchangeReason, setExchangeReason] = useState('');
   const [exchangeEvidenceFiles, setExchangeEvidenceFiles] = useState([]);
   const [exchangeQuantities, setExchangeQuantities] = useState({});
-  const [eligibleReplacementUnits, setEligibleReplacementUnits] = useState([]);
+  const [replacementExchangeUnits, setReplacementExchangeUnits] = useState([]);
+  const [deadlineNow, setDeadlineNow] = useState(() => Date.now());
   const [selectedReplacementUnitIds, setSelectedReplacementUnitIds] = useState([]);
   const [isSubmittingReturn, setIsSubmittingReturn] = useState(false);
   const [isSubmittingExchange, setIsSubmittingExchange] = useState(false);
@@ -54,14 +61,9 @@ export default function OrderDetailPage() {
       const exchange = (exchangeResult.items || []).find((item) => (
         String(item.orderId) === String(id) && ACTIVE_EXCHANGE_STATUSES.has(item.status)
       ));
-      setEligibleReplacementUnits((exchangeResult.items || [])
-        .flatMap((item) => item.units || [])
-        .filter((unit) => (
-          String(unit.orderId) === String(id)
-          && unit.outcome === 'ReplacementDelivered'
-          && unit.exchangeDeadlineAt
-          && Date.now() <= new Date(unit.exchangeDeadlineAt).getTime()
-        )));
+      setReplacementExchangeUnits(
+        (exchangeResult.items || []).flatMap((item) => item.units || [])
+      );
       const returnRequest = (returnResult.items || []).find((item) => (
         String(item.orderId) === String(id) && ACTIVE_RETURN_STATUSES.has(item.status)
       ));
@@ -76,8 +78,47 @@ export default function OrderDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
+  useEffect(() => {
+    const currentNow = Date.now();
+    const deadlineTimes = [
+      order?.exchangeDeadlineAt,
+      order?.returnDeadlineAt,
+      ...replacementExchangeUnits.map((unit) => unit?.exchangeDeadlineAt),
+    ]
+      .map((value) => new Date(value).getTime())
+      .filter(Number.isFinite);
+    const crossedWhileLoading = deadlineTimes.some((value) => (
+      deadlineNow <= value && currentNow > value
+    ));
+    if (crossedWhileLoading) {
+      setDeadlineNow(currentNow);
+      return undefined;
+    }
+    const deadlines = deadlineTimes.filter((value) => value >= currentNow);
+    if (!deadlines.length) return undefined;
+    const nextDeadline = Math.min(...deadlines);
+    const timer = globalThis.setTimeout(
+      () => setDeadlineNow(Date.now()),
+      Math.max(0, nextDeadline - currentNow + 1),
+    );
+    return () => globalThis.clearTimeout(timer);
+  }, [deadlineNow, id, order, replacementExchangeUnits]);
+
   async function cancelOrder() {
     try { setOrder(await orderService.cancelOrder(id)); } catch (err) { setError(err.message); }
+  }
+
+  function handleAfterSalesConflict(err) {
+    const actionHref = err.data?.action?.href;
+    const currentCase = err.data?.currentCase;
+    if (err.errorCode !== 'AFTER_SALES_CASE_ACTIVE' || !actionHref || !currentCase) return false;
+    setActiveCase({
+      type: currentCase.type,
+      id: currentCase.id,
+      status: currentCase.status,
+      action: { label: err.data.action.label, href: actionHref },
+    });
+    return true;
   }
 
   async function requestReturnRefund(event) {
@@ -91,6 +132,10 @@ export default function OrderDetailPage() {
     setError('');
     setMessage('');
     try {
+      const currentNow = Date.now();
+      const currentReturnAction = getReturnAction(order, currentNow);
+      setDeadlineNow(currentNow);
+      if (currentReturnAction.disabled) throw new Error(currentReturnAction.reason);
       if (!returnEvidenceFiles.length) throw new Error('Vui lòng đính kèm ít nhất một ảnh bằng chứng.');
       const uploaded = await returnRefundService.uploadEvidence(returnEvidenceFiles);
       const evidenceImages = (uploaded.items || []).map((item) => item.url);
@@ -98,6 +143,7 @@ export default function OrderDetailPage() {
       setActiveCase({ type: 'RETURN', ...created });
       setMessage('Đã ghi nhận yêu cầu trả hàng/hoàn tiền.');
     } catch (err) {
+      handleAfterSalesConflict(err);
       setError(err.message);
     } finally {
       returnSubmissionInFlight.current = false;
@@ -116,16 +162,25 @@ export default function OrderDetailPage() {
     setError('');
     setMessage('');
     try {
-      const originalDeadline = order.exchangeDeadlineAt || order.returnDeadlineAt;
-      const originalExpired = Boolean(originalDeadline && Date.now() > new Date(originalDeadline).getTime());
-      const lines = originalExpired ? [] : (order.details || [])
+      const replacementMode = afterSalesMode === 'REPLACEMENT_EXCHANGE';
+      const currentNow = Date.now();
+      const deadlineGuard = getExchangeSubmissionGuard({
+        mode: afterSalesMode,
+        order,
+        units: replacementExchangeUnits,
+        orderId: id,
+        selectedReplacementUnitIds,
+      }, currentNow);
+      setDeadlineNow(currentNow);
+      if (!deadlineGuard.allowed) throw new Error(deadlineGuard.reason);
+      const lines = replacementMode ? [] : (order.details || [])
         .map((item) => ({
           orderDetailId: item._id || item.id,
           quantity: Number(exchangeQuantities[item._id || item.id] || 0),
         }))
         .filter((item) => item.quantity > 0);
-      if (originalExpired && !selectedReplacementUnitIds.length) throw new Error('Vui lòng chọn ít nhất một sản phẩm thay thế còn trong hạn.');
-      if (!originalExpired && !lines.length) throw new Error('Vui lòng chọn ít nhất một sản phẩm cần đổi.');
+      if (replacementMode && !selectedReplacementUnitIds.length) throw new Error('Vui lòng chọn ít nhất một sản phẩm thay thế còn trong hạn.');
+      if (!replacementMode && !lines.length) throw new Error('Vui lòng chọn ít nhất một sản phẩm cần đổi.');
       if (!exchangeEvidenceFiles.length) throw new Error('Vui lòng đính kèm ít nhất một ảnh bằng chứng.');
       const uploaded = await exchangeService.uploadEvidence(exchangeEvidenceFiles);
       const evidenceImages = (uploaded.items || []).map((item) => item.url);
@@ -133,11 +188,12 @@ export default function OrderDetailPage() {
         idempotencyKey: exchangeSubmissionKey.current,
         reason: exchangeReason,
         evidenceImages,
-        ...(originalExpired ? { replacementUnitIds: selectedReplacementUnitIds } : { lines }),
+        ...(replacementMode ? { replacementUnitIds: selectedReplacementUnitIds } : { lines }),
       });
       setActiveCase({ type: 'EXCHANGE', ...created });
       setMessage(created.idempotentReplay ? 'Yêu cầu đổi hàng đã được ghi nhận.' : 'Đã ghi nhận yêu cầu đổi hàng.');
     } catch (err) {
+      handleAfterSalesConflict(err);
       setError(err.message);
     } finally {
       exchangeSubmissionInFlight.current = false;
@@ -156,13 +212,18 @@ export default function OrderDetailPage() {
   }
 
   if (!order && !error) return <div className="page-center">Đang tải đơn hàng...</div>;
-  const originalAfterSalesDeadline = order?.exchangeDeadlineAt || order?.returnDeadlineAt;
-  const originalWindowExpired = Boolean(originalAfterSalesDeadline && Date.now() > new Date(originalAfterSalesDeadline).getTime());
-  const replacementDeadline = eligibleReplacementUnits.length
-    ? new Date(Math.min(...eligibleReplacementUnits.map((unit) => new Date(unit.exchangeDeadlineAt).getTime())))
-    : null;
-  const afterSalesDeadline = originalWindowExpired && replacementDeadline ? replacementDeadline : originalAfterSalesDeadline;
-  const hasExchangeRight = !originalWindowExpired || eligibleReplacementUnits.length > 0;
+  const originalExchangeAction = getOriginalExchangeAction(order, deadlineNow);
+  const returnAction = getReturnAction(order, deadlineNow);
+  const currentReplacementExchangeUnits = classifyReplacementExchangeUnits(
+    replacementExchangeUnits,
+    id,
+    deadlineNow
+  );
+  const eligibleReplacementUnits = currentReplacementExchangeUnits.filter((unit) => unit.eligible);
+  const replacementMode = afterSalesMode === 'REPLACEMENT_EXCHANGE';
+  const exchangeFormAvailable = replacementMode
+    ? eligibleReplacementUnits.length > 0
+    : !originalExchangeAction.disabled;
 
   return (
     <div className="surface">
@@ -217,51 +278,96 @@ export default function OrderDetailPage() {
             <div className="alert alert-info mt-4">
               Đơn này đang có một yêu cầu hậu mãi được xử lý.
               {' '}
-              <Link to={activeCase.type === 'EXCHANGE' ? `/exchanges/${activeCase.id}` : '/return-refunds'}>
-                Xem yêu cầu đang xử lý
+              <Link to={activeCase.action?.href || (activeCase.type === 'EXCHANGE' ? `/exchanges/${activeCase.id}` : '/return-refunds')}>
+                {activeCase.action?.label || 'Xem yêu cầu đang xử lý'}
               </Link>
             </div>
           )}
-          {!activeCase && order.orderStatus === 'Delivered' && !hasExchangeRight && (
-            <div className="alert alert-secondary mt-4">
-              Đã quá thời hạn 5 ngày. Hạn gửi yêu cầu: {new Date(afterSalesDeadline).toLocaleString('vi-VN')}.
-            </div>
-          )}
-          {!activeCase && order.orderStatus === 'Delivered' && hasExchangeRight && (
+          {!activeCase && order.orderStatus === 'Delivered' && (
             <section className="mt-4">
               <h2>Đổi/Trả hàng</h2>
-              {afterSalesDeadline && <p className="text-secondary">Hạn gửi yêu cầu: {new Date(afterSalesDeadline).toLocaleString('vi-VN')}</p>}
+              {originalExchangeAction.deadlineAt && (
+                <p className="text-secondary">
+                  Hạn đổi hàng từ đơn gốc: {new Date(originalExchangeAction.deadlineAt).toLocaleString('vi-VN')}
+                </p>
+              )}
               <div className="d-flex flex-wrap gap-2">
-                <button className="btn btn-outline-success" type="button" onClick={() => setAfterSalesMode('EXCHANGE')}>Đổi hàng</button>
-                {!originalWindowExpired && (
-                  <button className="btn btn-outline-danger" type="button" onClick={() => setAfterSalesMode('RETURN')}>Trả hàng/Hoàn tiền</button>
+                <button
+                  className="btn btn-outline-success"
+                  type="button"
+                  disabled={originalExchangeAction.disabled}
+                  title={originalExchangeAction.reason}
+                  onClick={() => setAfterSalesMode('ORIGINAL_EXCHANGE')}
+                >
+                  Đổi hàng từ đơn gốc
+                </button>
+                {currentReplacementExchangeUnits.length > 0 && (
+                  <button
+                    className="btn btn-outline-success"
+                    type="button"
+                    disabled={!eligibleReplacementUnits.length}
+                    onClick={() => setAfterSalesMode('REPLACEMENT_EXCHANGE')}
+                  >
+                    Đổi lại hàng thay thế
+                  </button>
                 )}
+                <button
+                  className="btn btn-outline-danger"
+                  type="button"
+                  disabled={returnAction.disabled}
+                  title={returnAction.reason}
+                  onClick={() => setAfterSalesMode('RETURN')}
+                >
+                  Trả hàng/Hoàn tiền
+                </button>
               </div>
-              {originalWindowExpired && (
-                <div className="alert alert-info mt-2">
-                  Hạn của đơn gốc đã hết. Bạn chỉ có thể đổi lại sản phẩm thay thế đang còn trong cửa sổ 5 ngày riêng của sản phẩm đó.
+              {originalExchangeAction.disabled && (
+                <div className="alert alert-secondary mt-2">{originalExchangeAction.reason}</div>
+              )}
+              {returnAction.disabled && (
+                <div className="alert alert-secondary mt-2">{returnAction.reason}</div>
+              )}
+              {currentReplacementExchangeUnits.length > 0 && eligibleReplacementUnits.length === 0 && (
+                <div
+                  id="replacement-expiry-summary"
+                  className="alert alert-secondary mt-2"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <strong>Không còn sản phẩm thay thế đủ điều kiện đổi lại.</strong>
+                  <ul className="mb-0 mt-2">
+                    {currentReplacementExchangeUnits.map((unit) => (
+                      <li key={`expired-${unit.id}`}>
+                        Hạn từng sản phẩm: {unit.exchangeDeadlineAt
+                          ? new Date(unit.exchangeDeadlineAt).toLocaleString('vi-VN')
+                          : 'Chưa có hạn hợp lệ'} — {unit.reason}
+                      </li>
+                    ))}
+                  </ul>
                 </div>
               )}
 
-              {afterSalesMode === 'EXCHANGE' && (
+              {['ORIGINAL_EXCHANGE', 'REPLACEMENT_EXCHANGE'].includes(afterSalesMode) && exchangeFormAvailable && (
                 <form className="mt-3" onSubmit={requestExchange}>
                   <div className="alert alert-info">
                     Chỉ đổi đúng sản phẩm/SKU đã mua. Không có chênh lệch giá hoặc giao dịch tiền trong luồng đổi hàng.
                   </div>
                   <fieldset>
                     <legend className="h5">Chọn sản phẩm cần đổi</legend>
-                    {originalWindowExpired ? eligibleReplacementUnits.map((unit) => {
+                    {replacementMode ? currentReplacementExchangeUnits.map((unit) => {
                       const detail = (order.details || []).find((item) => String(item._id || item.id) === String(unit.orderDetailId));
                       return (
                         <label className="form-check mb-2" key={unit.id}>
                           <input
                             className="form-check-input"
                             type="checkbox"
+                            disabled={!unit.eligible}
                             checked={selectedReplacementUnitIds.includes(unit.id)}
                             onChange={(event) => toggleReplacementUnit(unit.id, event.target.checked)}
                           />
                           <span className="form-check-label">
                             {detail?.productNameSnapshot || 'Sản phẩm thay thế'} · vòng đổi {unit.cycle} · hạn {new Date(unit.exchangeDeadlineAt).toLocaleString('vi-VN')}
+                            {!unit.eligible && ` · ${unit.reason}`}
                           </span>
                         </label>
                       );
@@ -310,7 +416,7 @@ export default function OrderDetailPage() {
                 </form>
               )}
 
-              {afterSalesMode === 'RETURN' && (
+              {afterSalesMode === 'RETURN' && !returnAction.disabled && (
                 <form className="mt-3" onSubmit={requestReturnRefund}>
                   <div className="alert alert-warning">Trả hàng áp dụng cho toàn bộ đơn. Số tiền do hệ thống xác định từ đơn hàng; bạn không cần nhập.</div>
                   <label className="form-label" htmlFor="returnReason">Lý do trả hàng</label>

@@ -12,6 +12,12 @@ const auditLogSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
+    eventId: {
+      type: String,
+      default: '',
+      trim: true,
+      immutable: true,
+    },
     targetEntity: {
       type: String,
       required: true,
@@ -54,5 +60,13 @@ const auditLogSchema = new mongoose.Schema(
 
 auditLogSchema.index({ userId: 1, timestamp: -1 });
 auditLogSchema.index({ action: 1, timestamp: -1 });
+auditLogSchema.index(
+  { eventId: 1 },
+  {
+    unique: true,
+    name: 'audit_event_id_unique',
+    partialFilterExpression: { eventId: { $type: 'string', $gt: '' } },
+  }
+);
 
 module.exports = mongoose.model('AuditLog', auditLogSchema);

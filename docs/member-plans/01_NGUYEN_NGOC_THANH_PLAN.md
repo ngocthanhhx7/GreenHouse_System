@@ -282,3 +282,22 @@ Thông tin người dùng phải cung cấp ngoài Git trước Phase 2: tên da
 - Outbox claims carry a random lease token. Sent/failed finalization is conditional on that token so an expired or stolen lease cannot overwrite another worker's result; failed deliveries remain retryable.
 - OTP consume and password update run in one transaction boundary. If the password mutation rolls back, the OTP remains available; successful reset still updates `passwordChangedAt` to invalidate older JWTs.
 - Public contact submission is throttled independently from field validation. Every delivery failure is observable through the outbox/audit path without failing a committed order or contact persistence operation.
+
+## Review Addendum 2026-07-23 - SL-002 Post-Merge Closure
+
+Nguyễn Hữu Anh Nhật remains the original implementation owner of SL-002
+Same-SKU Exchange. Nguyễn Ngọc Thành owns the independent post-merge integration
+review and closure on `feature/sl-002-postmerge-closure`:
+
+- Reconcile the merged SL-002 implementation with SL-001 and CR-001 v2.1.
+- Close atomicity, physical-unit lineage, migration, COD, incident, typed
+  conflict, deadline and actor-UI contract findings using acceptance tests first.
+- Preserve actor ownership: Warehouse creates initial outbound obligations;
+  Staff alone owns replacement resend after a delivery incident.
+- Run full server/client regression, dependency audits, production build,
+  expanded G6 actor acceptance, traceability and handoff.
+- Review and merge with the exact identity
+  `Nguyễn Ngọc Thành <thanhnnhe186491@fpt.edu.vn>`.
+- Keep the previously merged saved-address Checkout correction isolated; no
+  Checkout, Address Book, Cart, Payment or PayOS file belongs to this SL-002
+  closure diff.

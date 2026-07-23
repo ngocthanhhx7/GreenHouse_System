@@ -11,6 +11,7 @@ const ExchangeShipment = require('../models/exchangeShipment.model');
 const ExchangeShipmentEvent = require('../models/exchangeShipmentEvent.model');
 const ExchangeConversion = require('../models/exchangeConversion.model');
 const InventoryTransaction = require('../models/inventoryTransaction.model');
+const AuditLog = require('../models/auditLog.model');
 const Order = require('../models/order.model');
 const ReturnRefundRequest = require('../models/returnRefundRequest.model');
 
@@ -20,50 +21,166 @@ const ACTIVE_RETURN_STATUSES = [
   'AwaitingInspection', 'Received', 'ReadyForRefund', 'CODRecoveryInProgress',
 ];
 
-async function migrateSl002Exchange() {
-  const delivered = await Order.find({
-    orderStatus: 'Delivered',
-    deliveredAt: { $ne: null },
-    exchangeDeadlineAt: null,
-  }).select('_id deliveredAt').lean();
+function createMigrationRepository() {
+  const indexedModels = [
+    AfterSalesOrderLock, ExchangeCase, ExchangeLine, ExchangeUnitLineage,
+    StockReservation, ExchangeInspection, ExchangeShipment,
+    ExchangeShipmentEvent, ExchangeConversion, InventoryTransaction, AuditLog,
+  ];
+  return {
+    async loadAuditEventIdConflicts() {
+      return AuditLog.aggregate([
+        { $match: { eventId: { $type: 'string', $ne: '' } } },
+        {
+          $group: {
+            _id: '$eventId',
+            count: { $sum: 1 },
+            ids: { $push: '$_id' },
+          },
+        },
+        { $match: { count: { $gt: 1 } } },
+        {
+          $project: {
+            _id: 0,
+            eventId: '$_id',
+            count: 1,
+            ids: 1,
+          },
+        },
+        { $sort: { eventId: 1 } },
+      ]);
+    },
+    async loadReturnCasesForLockBackfill() {
+      return ReturnRefundRequest.find({
+        status: { $in: [...ACTIVE_RETURN_STATUSES, 'Completed'] },
+      }).select('_id orderId status createdAt completedAt').lean();
+    },
+    async loadDeliveredOrdersWithoutExchangeDeadline() {
+      return Order.find({
+        orderStatus: 'Delivered',
+        deliveredAt: { $ne: null },
+        exchangeDeadlineAt: null,
+      }).select('_id deliveredAt').lean();
+    },
+    async backfillExchangeDeadline(orderId, exchangeDeadlineAt) {
+      const result = await Order.updateOne(
+        { _id: orderId, exchangeDeadlineAt: null },
+        { $set: { exchangeDeadlineAt } }
+      );
+      return result.modifiedCount;
+    },
+    async backfillReturnLock(item) {
+      const result = await AfterSalesOrderLock.updateOne(
+        { orderId: item.orderId },
+        { $setOnInsert: item },
+        { upsert: true }
+      );
+      return result.upsertedCount;
+    },
+    async loadUnitsWithoutPhysicalClaim() {
+      return ExchangeUnitLineage.find({
+        exclusivePhysicalClaimKey: { $exists: false },
+      }).select('_id exchangeCaseId orderId orderDetailId parentUnitId originalUnitOrdinal').lean();
+    },
+    async loadExchangeCaseStatuses(caseIds) {
+      return ExchangeCase.find({ _id: { $in: caseIds } }).select('_id status').lean();
+    },
+    async backfillPhysicalClaim(unitId, exclusivePhysicalClaimKey) {
+      const result = await ExchangeUnitLineage.updateOne(
+        { _id: unitId, exclusivePhysicalClaimKey: { $exists: false } },
+        { $set: { exclusivePhysicalClaimKey } }
+      );
+      return result.modifiedCount;
+    },
+    async verifyIndexes() {
+      for (const model of indexedModels) await model.createIndexes();
+      return indexedModels.length;
+    },
+  };
+}
+
+function createLockBackfillConflict(orderId, activeCount, completedCount) {
+  const error = new Error(
+    `SL-002 Return lock backfill is ambiguous for orderId=${orderId}; `
+    + `active=${activeCount}; completed=${completedCount}`
+  );
+  error.code = 'SL002_LOCK_BACKFILL_CONFLICT';
+  return error;
+}
+
+function createAuditEventIdConflict(conflicts) {
+  const context = conflicts
+    .map((item) => (
+      `eventId=${item.eventId}; count=${Number(item.count)}; ids=${(item.ids || []).map(String).join(',')}`
+    ))
+    .join(' | ');
+  const error = new Error(`SL-002 AuditLog eventId preflight conflict: ${context}`);
+  error.code = 'SL002_AUDIT_EVENT_ID_CONFLICT';
+  error.conflicts = conflicts;
+  return error;
+}
+
+function planReturnLockBackfill(returnCases, { clock = () => new Date() } = {}) {
+  const grouped = new Map();
+  for (const item of returnCases) {
+    const orderId = String(item.orderId);
+    if (!grouped.has(orderId)) grouped.set(orderId, []);
+    grouped.get(orderId).push(item);
+  }
+
+  const plan = [];
+  for (const [orderId, items] of grouped) {
+    const active = items.filter((item) => ACTIVE_RETURN_STATUSES.includes(item.status));
+    const completed = items.filter((item) => item.status === 'Completed');
+    const allowed = (active.length === 1 && completed.length === 0)
+      || (active.length === 0 && completed.length === 1);
+    if (!allowed) {
+      throw createLockBackfillConflict(orderId, active.length, completed.length);
+    }
+    const item = active[0] || completed[0];
+    const isActive = active.length === 1;
+    plan.push({
+      orderId: item.orderId,
+      caseType: 'RETURN_REFUND',
+      caseId: item._id,
+      status: isActive ? 'Active' : 'ClosedPermanently',
+      acquiredAt: item.createdAt || new Date(clock()),
+      releasedAt: isActive ? null : (item.completedAt || new Date(clock())),
+      terminalStatus: isActive ? '' : 'Completed',
+    });
+  }
+  return plan;
+}
+
+async function migrateSl002Exchange({
+  repository = createMigrationRepository(),
+  clock = () => new Date(),
+} = {}) {
+  const auditEventIdConflicts = await repository.loadAuditEventIdConflicts();
+  if (auditEventIdConflicts.length) {
+    throw createAuditEventIdConflict(auditEventIdConflicts);
+  }
+
+  const returnCases = await repository.loadReturnCasesForLockBackfill();
+  const lockPlan = planReturnLockBackfill(returnCases, { clock });
+
+  const delivered = await repository.loadDeliveredOrdersWithoutExchangeDeadline();
   let deadlinesBackfilled = 0;
   for (const order of delivered) {
-    const result = await Order.updateOne(
-      { _id: order._id, exchangeDeadlineAt: null },
-      { $set: { exchangeDeadlineAt: new Date(new Date(order.deliveredAt).getTime() + 5 * DAY_MS) } }
+    deadlinesBackfilled += await repository.backfillExchangeDeadline(
+      order._id,
+      new Date(new Date(order.deliveredAt).getTime() + 5 * DAY_MS)
     );
-    deadlinesBackfilled += result.modifiedCount;
   }
 
-  const returnCases = await ReturnRefundRequest.find({
-    status: { $in: [...ACTIVE_RETURN_STATUSES, 'Completed'] },
-  }).select('_id orderId status createdAt completedAt').sort({ createdAt: 1 }).lean();
   let locksBackfilled = 0;
-  for (const item of returnCases) {
-    const active = ACTIVE_RETURN_STATUSES.includes(item.status);
-    const result = await AfterSalesOrderLock.updateOne(
-      { orderId: item.orderId },
-      {
-        $setOnInsert: {
-          orderId: item.orderId,
-          caseType: 'RETURN_REFUND',
-          caseId: item._id,
-          status: active ? 'Active' : 'ClosedPermanently',
-          acquiredAt: item.createdAt || new Date(),
-          releasedAt: active ? null : (item.completedAt || new Date()),
-          terminalStatus: active ? '' : 'Completed',
-        },
-      },
-      { upsert: true }
-    );
-    locksBackfilled += result.upsertedCount;
+  for (const item of lockPlan) {
+    locksBackfilled += await repository.backfillReturnLock(item);
   }
 
-  const unitsWithoutClaim = await ExchangeUnitLineage.find({
-    exclusivePhysicalClaimKey: { $exists: false },
-  }).select('_id exchangeCaseId orderId orderDetailId parentUnitId originalUnitOrdinal').lean();
+  const unitsWithoutClaim = await repository.loadUnitsWithoutPhysicalClaim();
   const unitCaseIds = [...new Set(unitsWithoutClaim.map((item) => String(item.exchangeCaseId)))];
-  const unitCases = await ExchangeCase.find({ _id: { $in: unitCaseIds } }).select('_id status').lean();
+  const unitCases = await repository.loadExchangeCaseStatuses(unitCaseIds);
   const statusByCase = new Map(unitCases.map((item) => [String(item._id), item.status]));
   let physicalClaimsBackfilled = 0;
   for (const unit of unitsWithoutClaim) {
@@ -71,36 +188,37 @@ async function migrateSl002Exchange() {
     const exclusivePhysicalClaimKey = unit.parentUnitId
       ? `REPLACEMENT:${String(unit.parentUnitId)}`
       : `ORIGINAL:${String(unit.orderId)}:${String(unit.orderDetailId)}:${Number(unit.originalUnitOrdinal)}`;
-    const result = await ExchangeUnitLineage.updateOne(
-      { _id: unit._id, exclusivePhysicalClaimKey: { $exists: false } },
-      { $set: { exclusivePhysicalClaimKey } }
+    physicalClaimsBackfilled += await repository.backfillPhysicalClaim(
+      unit._id,
+      exclusivePhysicalClaimKey
     );
-    physicalClaimsBackfilled += result.modifiedCount;
   }
 
-  const models = [
-    AfterSalesOrderLock, ExchangeCase, ExchangeLine, ExchangeUnitLineage,
-    StockReservation, ExchangeInspection, ExchangeShipment,
-    ExchangeShipmentEvent, ExchangeConversion, InventoryTransaction,
-  ];
-  for (const model of models) await model.createIndexes();
+  const indexesVerified = await repository.verifyIndexes();
   return {
     deadlinesBackfilled,
     locksBackfilled,
     physicalClaimsBackfilled,
-    indexesVerified: models.length,
+    indexesVerified,
   };
 }
 
-async function runCli() {
-  require('dotenv').config();
-  await connectDatabase();
+async function runCli({
+  loadEnv = () => require('dotenv').config(),
+  mongooseClient = mongoose,
+  connect = connectDatabase,
+  migrate = migrateSl002Exchange,
+  logger = console,
+} = {}) {
+  loadEnv();
+  mongooseClient.set('autoIndex', false);
+  await connect();
   try {
-    const result = await migrateSl002Exchange();
-    console.log('SL-002 Exchange migration completed.');
-    console.table([result]);
+    const result = await migrate();
+    logger.log('SL-002 Exchange migration completed.');
+    logger.table([result]);
   } finally {
-    await mongoose.disconnect();
+    await mongooseClient.disconnect();
   }
 }
 
@@ -111,4 +229,10 @@ if (require.main === module) {
   });
 }
 
-module.exports = { migrateSl002Exchange, ACTIVE_RETURN_STATUSES };
+module.exports = {
+  ACTIVE_RETURN_STATUSES,
+  createMigrationRepository,
+  migrateSl002Exchange,
+  planReturnLockBackfill,
+  runCli,
+};

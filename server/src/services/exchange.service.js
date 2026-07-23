@@ -17,6 +17,11 @@ const ExchangeShipmentEvent = require('../models/exchangeShipmentEvent.model');
 const ExchangeConversion = require('../models/exchangeConversion.model');
 const ReturnRefundRequest = require('../models/returnRefundRequest.model');
 const { afterSalesLockService } = require('./afterSalesLock.service');
+const {
+  ACTIVE_AFTER_SALES_ERROR_CODE,
+  resolveActiveAfterSalesConflict,
+  createActiveAfterSalesConflict,
+} = require('./afterSalesConflict.service');
 const { returnEvidenceClaim, MAX_RETURN_EVIDENCE_TOTAL_SIZE } = require('../utils/returnEvidenceClaim');
 const { logAudit } = require('../utils/auditLogger');
 const { notificationService } = require('./notification.service');
@@ -41,6 +46,35 @@ class NoExactStockError extends Error {
     this.name = 'NoExactStockError';
     this.productId = productId;
   }
+}
+
+function duplicateIndexText(error) {
+  return [
+    ...Object.keys(error?.keyPattern || {}),
+    String(error?.index || ''),
+    String(error?.codeName || ''),
+    String(error?.message || ''),
+  ].join(' ');
+}
+
+function classifyExchangeDuplicateConflict(error) {
+  const indexText = duplicateIndexText(error);
+  if (/requestCode|exchange_request_code_unique/i.test(indexText)) {
+    return new ApiError(409, 'Exchange request code collision; retry the command');
+  }
+  if (/exclusivePhysicalClaimKey|exchange_physical_claim_unique/i.test(indexText)) {
+    return new ApiError(409, 'A selected physical unit is already owned by another Exchange');
+  }
+  if (/idempotencyKey|exchange_customer_idempotency_unique/i.test(indexText)) {
+    return new ApiError(409, 'Exchange idempotency key is already owned by another command');
+  }
+  if (/exchangeCaseId|orderDetailId|exchange_line_case_order_detail_unique/i.test(indexText)) {
+    return new ApiError(409, 'An Exchange line already exists for this command');
+  }
+  if (/unitKey|exchange_unit_key_unique/i.test(indexText)) {
+    return new ApiError(409, 'An Exchange unit lineage already exists for this command');
+  }
+  return new ApiError(409, 'Duplicate command conflict');
 }
 
 function withSession(query, session) {
@@ -77,6 +111,9 @@ function createModelRepository({ lockService = afterSalesLockService } = {}) {
       return withSession(OrderDetail.find({ orderId }).sort({ createdAt: 1 }), session).lean();
     },
     async findCaseById(id, session) { return withSession(ExchangeCase.findById(id), session).lean(); },
+    async findReturnRequestById(id, session) {
+      return withSession(ReturnRefundRequest.findById(id), session).lean();
+    },
     async findCaseByIdempotency(customerId, idempotencyKey, session) {
       return withSession(ExchangeCase.findOne({ customerId, idempotencyKey }), session).lean();
     },
@@ -99,6 +136,13 @@ function createModelRepository({ lockService = afterSalesLockService } = {}) {
       return withSession(ExchangeCase.findOneAndUpdate(
         { _id: id, status: { $in: statuses } },
         { $set: data },
+        { new: true, runValidators: true }
+      ), session).lean();
+    },
+    async touchShipmentOutcome(id, statuses, session) {
+      return withSession(ExchangeCase.findOneAndUpdate(
+        { _id: id, status: { $in: statuses } },
+        { $inc: { shipmentOutcomeVersion: 1 } },
         { new: true, runValidators: true }
       ), session).lean();
     },
@@ -131,6 +175,14 @@ function createModelRepository({ lockService = afterSalesLockService } = {}) {
       }).select('originalUnitOrdinal'), session).lean();
       return units.map((item) => Number(item.originalUnitOrdinal));
     },
+    async listClaimedReplacementParentIds(orderId, session) {
+      const units = await withSession(ExchangeUnitLineage.find({
+        orderId,
+        parentUnitId: { $ne: null },
+        exclusivePhysicalClaimKey: { $exists: true, $ne: '' },
+      }).select('parentUnitId'), session).lean();
+      return units.map((item) => String(item.parentUnitId));
+    },
     async releaseUnitClaims(caseId, session) {
       const result = await withSession(ExchangeUnitLineage.updateMany(
         { exchangeCaseId: caseId },
@@ -138,17 +190,24 @@ function createModelRepository({ lockService = afterSalesLockService } = {}) {
       ), session);
       return result.modifiedCount;
     },
-    async updateUnitsForInspection(caseId, lineId, acceptedQuantity, movementKeys, session) {
+    async updateUnitsForInspection(caseId, lineId, {
+      sellableQuantity,
+      damagedQuantity,
+      sellableMovementKey,
+      damagedMovementKey,
+    }, session) {
       const units = await withSession(ExchangeUnitLineage.find({
         exchangeCaseId: caseId, exchangeLineId: lineId,
       }).sort({ originalUnitOrdinal: 1 }), session).lean();
       for (let index = 0; index < units.length; index += 1) {
+        const isSellable = index < sellableQuantity;
+        const isDamaged = index >= sellableQuantity && index < sellableQuantity + damagedQuantity;
         await withSession(ExchangeUnitLineage.findByIdAndUpdate(
           units[index]._id,
           {
             $set: {
-              outcome: index < acceptedQuantity ? 'Accepted' : 'Rejected',
-              inventoryMovementKeys: index < acceptedQuantity ? movementKeys : [],
+              outcome: isSellable || isDamaged ? 'Accepted' : 'Rejected',
+              inventoryMovementKeys: isSellable ? [sellableMovementKey] : isDamaged ? [damagedMovementKey] : [],
             },
           },
           { new: true, runValidators: true }
@@ -268,6 +327,13 @@ function createModelRepository({ lockService = afterSalesLockService } = {}) {
     async updateShipment(id, data, session) {
       return withSession(ExchangeShipment.findByIdAndUpdate(id, { $set: data }, { new: true, runValidators: true }), session).lean();
     },
+    async claimShipmentOutcome(id, allowedStatus = 'InTransit', data, session) {
+      return withSession(ExchangeShipment.findOneAndUpdate(
+        { _id: id, status: allowedStatus },
+        { $set: data },
+        { new: true, runValidators: true }
+      ), session).lean();
+    },
     async findShipmentEventByKey(eventKey, session) {
       return withSession(ExchangeShipmentEvent.findOne({ eventKey }), session).lean();
     },
@@ -385,7 +451,7 @@ function createExchangeService({
   evidenceVerifier = normalizeEvidenceDefault,
   auditLogger = { log: logAudit },
   notifier = {
-    notify: async ({ userId, type, subject, content, caseId }) => notificationService.createInAppNotification({
+    notify: async ({ userId, type, subject, content, caseId }, session) => notificationService.createInAppNotification({
       userId,
       type,
       subject,
@@ -393,18 +459,59 @@ function createExchangeService({
       targetCollection: 'ExchangeCase',
       targetId: caseId,
       eventId: `${type}:${caseId}`,
-    }),
+    }, session),
   },
   clock = () => new Date(),
 } = {}) {
-  async function writeAudit(userId, action, caseId, description) {
+  async function activeAfterSalesConflict(orderId, customerId, session, requireVerified = false) {
+    const resolved = await resolveActiveAfterSalesConflict({
+      repository,
+      orderId,
+      customerId,
+      session,
+    });
+    if (requireVerified && !resolved.verified) return null;
+    return createActiveAfterSalesConflict(resolved.data);
+  }
+
+  async function writeAudit(userId, action, caseId, description, session, eventId = '') {
     await auditLogger.log({
       userId: userId || null,
       action,
+      eventId,
       targetEntity: 'ExchangeCase',
       targetId: String(caseId),
       description,
-    });
+    }, session);
+  }
+
+  function isInitialStockChoice(exchangeCase) {
+    return ['AwaitingExactStockChoice', 'WaitingForExactStock'].includes(exchangeCase.status)
+      && exchangeCase.waitingFor === 'INITIAL_APPROVAL';
+  }
+
+  function isIncidentStockChoice(exchangeCase) {
+    return ['AwaitingExactStockChoice', 'WaitingForExactStock'].includes(exchangeCase.status)
+      && exchangeCase.waitingFor === 'INCIDENT_RESEND';
+  }
+
+  function isInitialReservationRetry(exchangeCase) {
+    return exchangeCase.status === 'WaitingForExactStock'
+      && exchangeCase.waitingFor === 'INITIAL_APPROVAL';
+  }
+
+  function assertShipmentEventReplay(existing, expected) {
+    if (String(existing.exchangeCaseId) !== String(expected.exchangeCaseId)
+      || String(existing.shipmentId) !== String(expected.shipmentId)
+      || existing.eventType !== expected.eventType
+      || existing.source !== expected.source
+      || String(existing.actorId || '') !== String(expected.actorId || '')
+      || String(existing.evidenceReference) !== expected.evidenceReference
+      || new Date(existing.occurredAt).getTime() !== expected.occurredAt.getTime()
+      || String(existing.replacesEventId || '') !== String(expected.replacesEventId || '')
+      || String(existing.note || '') !== expected.note) {
+      throw new ApiError(409, 'Shipment event id was already used for a different fact');
+    }
   }
 
   async function shipmentEventResult(event, source, replay) {
@@ -422,15 +529,6 @@ function createExchangeService({
     };
   }
 
-  function unresolvedShipmentIncidents(shipments) {
-    return shipments.filter((incident) => (
-      incident.status === 'Incident'
-      && !shipments.some((candidate) => (
-        String(candidate.resendOfShipmentId || '') === String(incident._id)
-      ))
-    ));
-  }
-
   function incidentResolvedByDeliveredDescendant(incident, shipments, visited = new Set()) {
     const incidentId = String(incident._id);
     if (visited.has(incidentId)) return false;
@@ -444,18 +542,48 @@ function createExchangeService({
       ));
   }
 
+  function activeIncidentLeaves(shipments) {
+    const childrenByParent = new Map();
+    for (const shipment of shipments) {
+      const parentId = String(shipment.resendOfShipmentId || '');
+      if (!parentId) continue;
+      const children = childrenByParent.get(parentId) || [];
+      children.push(shipment);
+      childrenByParent.set(parentId, children);
+    }
+    const leaves = shipments
+      .filter((shipment) => shipment.status === 'Incident'
+        && !incidentResolvedByDeliveredDescendant(shipment, shipments))
+      .map((incident) => {
+        let leaf = incident;
+        const visited = new Set();
+        while (!visited.has(String(leaf._id))) {
+          visited.add(String(leaf._id));
+          const [child] = childrenByParent.get(String(leaf._id)) || [];
+          if (!child) break;
+          leaf = child;
+        }
+        return leaf;
+      });
+    return leaves.filter((leaf, index) => (
+      leaves.findIndex((candidate) => String(candidate._id) === String(leaf._id)) === index
+    ));
+  }
+
   async function reconcileIncidentState(caseId, session) {
     const shipments = await repository.listShipments(caseId, session);
-    const unresolved = unresolvedShipmentIncidents(shipments);
-    if (unresolved.length) {
-      const incident = unresolved[0];
+    const activeLeaves = activeIncidentLeaves(shipments);
+    if (activeLeaves.length) {
+      const incident = activeLeaves[0];
       return repository.claimCase(caseId, [
         'OutboundFulfillment', 'ReplacementShipped', 'DeliveryIncident',
       ], {
         status: 'DeliveryIncident',
-        waitingFor: incident.direction === 'REPLACEMENT_TO_CUSTOMER'
-          ? 'INCIDENT_RESEND'
-          : 'REJECTED_ORIGINAL_RECONCILIATION',
+        waitingFor: incident.status === 'InTransit'
+          ? 'INCIDENT_RESEND_IN_TRANSIT'
+          : (incident.direction === 'REPLACEMENT_TO_CUSTOMER'
+            ? 'INCIDENT_RESEND'
+            : 'REJECTED_ORIGINAL_RECONCILIATION'),
         incidentShipmentId: incident._id,
         shippingPayer: 'SHOP',
       }, session);
@@ -484,6 +612,19 @@ function createExchangeService({
       repository.listShipments(caseId, session),
       repository.listShipmentEvents(caseId, session),
     ]);
+    const [claimedReplacementParentIdValues, orderLock] = audience === 'Customer'
+      ? await Promise.all([
+        repository.listClaimedReplacementParentIds
+          ? repository.listClaimedReplacementParentIds(exchangeCase.orderId, session)
+          : [],
+        repository.findOrderLock
+          ? repository.findOrderLock(exchangeCase.orderId, session)
+          : null,
+      ])
+      : [[], null];
+    const claimedReplacementParentIds = new Set(claimedReplacementParentIdValues);
+    const hasOrderBarrier = orderLock?.status === 'Active'
+      || (orderLock?.status === 'ClosedPermanently' && orderLock?.caseType === 'RETURN_REFUND');
     const response = {
       id: String(exchangeCase._id),
       requestCode: exchangeCase.requestCode,
@@ -517,23 +658,41 @@ function createExchangeService({
       inspections: inspections.map(toPlain),
       shipments: shipments.map(toPlain),
       shipmentEvents: shipmentEvents.map(toPlain),
+      activeIncidents: activeIncidentLeaves(shipments).map((shipment) => ({
+        shipmentId: String(shipment._id),
+        direction: shipment.direction,
+        status: shipment.status,
+      })),
       idempotentReplay: replay,
     };
     if (audience === 'Staff') {
       response.reservations = reservations.map(toPlain);
     }
     if (audience === 'Customer') {
-      response.units = units.map((unit) => ({
-        id: String(unit._id),
-        orderId: String(unit.orderId),
-        orderDetailId: String(unit.orderDetailId),
-        productId: String(unit.productId),
-        parentUnitId: unit.parentUnitId ? String(unit.parentUnitId) : null,
-        cycle: Number(unit.cycle || 0),
-        outcome: unit.outcome,
-        replacementDeliveredAt: unit.replacementDeliveredAt || null,
-        exchangeDeadlineAt: unit.exchangeDeadlineAt || null,
-      }));
+      response.units = units.map((unit) => {
+        const deadlineTime = unit.exchangeDeadlineAt
+          ? new Date(unit.exchangeDeadlineAt).getTime()
+          : Number.NaN;
+        const deadlineValid = Number.isFinite(deadlineTime);
+        const deadlineCurrent = deadlineValid && new Date(clock()).getTime() <= deadlineTime;
+        const sourceClaimed = claimedReplacementParentIds.has(String(unit._id));
+        const eligibleForReplacementExchange = unit.outcome === 'ReplacementDelivered'
+          && deadlineCurrent
+          && !hasOrderBarrier
+          && !sourceClaimed;
+        return {
+          id: String(unit._id),
+          orderId: String(unit.orderId),
+          orderDetailId: String(unit.orderDetailId),
+          productId: String(unit.productId),
+          parentUnitId: unit.parentUnitId ? String(unit.parentUnitId) : null,
+          cycle: Number(unit.cycle || 0),
+          outcome: unit.outcome,
+          replacementDeliveredAt: unit.replacementDeliveredAt || null,
+          exchangeDeadlineAt: unit.exchangeDeadlineAt || null,
+          eligibleForReplacementExchange,
+        };
+      });
     }
     if (audience === 'Warehouse') {
       delete response.customerId;
@@ -816,7 +975,7 @@ function createExchangeService({
             caseType: 'EXCHANGE',
             caseId: exchangeCase._id,
           }, session);
-          if (!lock) throw new ApiError(409, 'This Order already has an active after-sales case');
+          if (!lock) throw createActiveAfterSalesConflict(null);
           const lines = await repository.createLines(normalizedLines.map(({ detail, quantity }) => ({
             exchangeCaseId: exchangeCase._id,
             orderDetailId: detail._id,
@@ -873,10 +1032,15 @@ function createExchangeService({
           return exchangeCase;
         });
       } catch (error) {
+        if (error?.errorCode === ACTIVE_AFTER_SALES_ERROR_CODE) {
+          throw await activeAfterSalesConflict(order._id, customerId);
+        }
         if (error?.code === 11000) {
           const replay = await repository.findCaseByIdempotency(customerId, idempotencyKey);
           if (replay) return loadCreateReplay(replay, customerId, input);
-          throw new ApiError(409, 'A selected physical unit is already owned by another Exchange');
+          const conflict = await activeAfterSalesConflict(order._id, customerId, undefined, true);
+          if (conflict) throw conflict;
+          throw classifyExchangeDuplicateConflict(error);
         }
         throw error;
       }
@@ -994,12 +1158,22 @@ function createExchangeService({
           if (!rejected) throw new ApiError(409, 'Exchange request changed while Staff was deciding it');
           await repository.releaseUnitClaims(rejected._id, session);
           await repository.releaseOrderLock(rejected.orderId, rejected._id, 'Rejected', false, session);
+          await writeAudit(
+            staffId,
+            'EXCHANGE_REJECTED',
+            id,
+            reason,
+            session,
+            `EXCHANGE_REJECTED:${String(id)}`
+          );
+          await notifier.notify({
+            userId: exchangeCase.customerId,
+            type: 'EXCHANGE_REJECTED',
+            subject: 'Yêu cầu đổi hàng bị từ chối',
+            content: reason,
+            caseId: id,
+          }, session);
           return rejected;
-        });
-        await writeAudit(staffId, 'EXCHANGE_REJECTED', id, reason);
-        await notifier.notify({
-          userId: exchangeCase.customerId, type: 'EXCHANGE_REJECTED',
-          subject: 'Yêu cầu đổi hàng bị từ chối', content: reason, caseId: id,
         });
         return load(updated._id, 'Staff');
       }
@@ -1024,9 +1198,15 @@ function createExchangeService({
       if (exchangeCase.reservationRetryIdempotencyKey === idempotencyKey) {
         return load(id, 'Staff', true);
       }
-      if (exchangeCase.status !== 'WaitingForExactStock') throw new ApiError(409, 'Only a waiting Exchange can retry reservation');
-      if (exchangeCase.waitingFor === 'INCIDENT_RESEND') {
-        throw new ApiError(409, 'Incident stock must continue through the exact-SKU resend flow');
+      if (!isInitialReservationRetry(exchangeCase)) {
+        if (exchangeCase.status === 'AwaitingExactStockChoice'
+          && exchangeCase.waitingFor === 'INITIAL_APPROVAL') {
+          throw new ApiError(409, 'Customer must choose WAIT before Staff can retry reservation');
+        }
+        if (isIncidentStockChoice(exchangeCase)) {
+          throw new ApiError(409, 'Incident stock must continue through the exact-SKU resend flow');
+        }
+        throw new ApiError(409, 'Only an initial exact-stock choice can retry reservation');
       }
       const updated = await attemptApproval(staffId, exchangeCase, {
         decisionReason: exchangeCase.decisionReason,
@@ -1051,12 +1231,15 @@ function createExchangeService({
         }
         return load(id, 'Customer', true);
       }
-      if (!['AwaitingExactStockChoice', 'WaitingForExactStock', 'DeliveryIncident'].includes(exchangeCase.status)) {
-        throw new ApiError(409, 'This Exchange is not waiting for a stock choice');
+      if (!(isInitialStockChoice(exchangeCase) || isIncidentStockChoice(exchangeCase))) {
+        if (exchangeCase.waitingFor === 'REJECTED_ORIGINAL_RECONCILIATION') {
+          throw new ApiError(409, 'A rejected-original delivery incident requires Staff reconciliation');
+        }
+        throw new ApiError(409, 'This Exchange has no exact-stock failure awaiting a Customer choice');
       }
       if (choice === 'WAIT') {
         const waiting = await repository.claimCase(id, [
-          'AwaitingExactStockChoice', 'WaitingForExactStock', 'DeliveryIncident',
+          'AwaitingExactStockChoice', 'WaitingForExactStock',
         ], {
           status: 'WaitingForExactStock',
           stockChoiceIdempotencyKey: idempotencyKey,
@@ -1075,12 +1258,15 @@ function createExchangeService({
       const exchangeCase = await repository.findCaseById(id);
       if (!exchangeCase || String(exchangeCase.customerId) !== String(customerId)) throw new ApiError(404, 'Exchange request not found');
       if (exchangeCase.status === 'ConvertedToReturnRefund') return load(id, 'Customer', true);
-      if (!['AwaitingExactStockChoice', 'WaitingForExactStock', 'DeliveryIncident'].includes(exchangeCase.status)) {
-        throw new ApiError(409, 'This Exchange cannot convert to Return/Refund');
+      if (!(isInitialStockChoice(exchangeCase) || isIncidentStockChoice(exchangeCase))) {
+        if (exchangeCase.waitingFor === 'REJECTED_ORIGINAL_RECONCILIATION') {
+          throw new ApiError(409, 'A rejected-original delivery incident cannot convert to Return/Refund');
+        }
+        throw new ApiError(409, 'This Exchange cannot convert without an exact-stock failure');
       }
       const converted = await transactionManager.withTransaction(async (session) => {
         const claimed = await repository.claimCase(id, [
-          'AwaitingExactStockChoice', 'WaitingForExactStock', 'DeliveryIncident',
+          'AwaitingExactStockChoice', 'WaitingForExactStock',
         ], {
           status: 'ConvertedToReturnRefund',
           stockChoiceIdempotencyKey: conversionKey,
@@ -1323,10 +1509,10 @@ function createExchangeService({
           }, session);
           const receivedInventory = await repository.receiveInventory(item.line.productId, item.sellable, item.damaged, warehouseId, session);
           if (!receivedInventory) throw new ApiError(409, 'Inventory record is missing for accepted Exchange goods');
-          const movementKeys = [];
+          let sellableMovementKey;
           if (item.sellable > 0) {
             const key = `${String(id)}:${String(item.line._id)}:EXCHANGE_RETURN_IN`;
-            movementKeys.push(key);
+            sellableMovementKey = key;
             await repository.createInventoryTransaction({
               productId: item.line.productId,
               orderId: exchangeCase.orderId,
@@ -1341,9 +1527,10 @@ function createExchangeService({
               movementKey: key,
             }, session);
           }
+          let damagedMovementKey;
           if (item.damaged > 0) {
             const key = `${String(id)}:${String(item.line._id)}:EXCHANGE_RETURN_DAMAGED_IN`;
-            movementKeys.push(key);
+            damagedMovementKey = key;
             await repository.createInventoryTransaction({
               productId: item.line.productId,
               orderId: exchangeCase.orderId,
@@ -1368,7 +1555,12 @@ function createExchangeService({
             rejectionEvidenceImages: item.evidenceImages,
           }, session);
           if (repository.updateUnitsForInspection) {
-            await repository.updateUnitsForInspection(id, item.line._id, accepted, movementKeys, session);
+            await repository.updateUnitsForInspection(id, item.line._id, {
+              sellableQuantity: item.sellable,
+              damagedQuantity: item.damaged,
+              sellableMovementKey,
+              damagedMovementKey,
+            }, session);
           }
           inspectionRecords.push({
             inspectionKey: `${String(id)}:${String(item.line._id)}:${idempotencyKey}`,
@@ -1402,10 +1594,12 @@ function createExchangeService({
       const idempotencyKey = normalizeIdempotencyKey(input.idempotencyKey);
       const exchangeCase = await repository.findCaseById(id);
       if (!exchangeCase) throw new ApiError(404, 'Exchange request not found');
-      const incidentWait = ['AwaitingExactStockChoice', 'WaitingForExactStock'].includes(exchangeCase.status)
-        && exchangeCase.waitingFor === 'INCIDENT_RESEND';
-      if (!['OutboundFulfillment', 'ReplacementShipped', 'DeliveryIncident'].includes(exchangeCase.status)
-        && !incidentWait) {
+      const outboundBlockedCause = [
+        'REJECTED_ORIGINAL_RECONCILIATION',
+        'INCIDENT_RESEND_IN_TRANSIT',
+      ].includes(exchangeCase.waitingFor);
+      if (outboundBlockedCause
+        || !['OutboundFulfillment', 'ReplacementShipped', 'DeliveryIncident'].includes(exchangeCase.status)) {
         throw new ApiError(409, 'Inspection must finalize before outbound shipment');
       }
       const shipmentKey = `${String(id)}:${idempotencyKey}`;
@@ -1533,19 +1727,6 @@ function createExchangeService({
       if (occurredAt.getTime() > new Date(clock()).getTime() + FUTURE_TOLERANCE_MS) {
         throw new ApiError(400, 'Shipment event cannot occur in the future');
       }
-      const existing = await repository.findShipmentEventByKey(eventKey);
-      if (existing) {
-        if (String(existing.shipmentId) !== String(shipmentId)
-          || existing.eventType !== eventType
-          || existing.source !== source
-          || String(existing.evidenceReference) !== evidenceReference
-          || new Date(existing.occurredAt).getTime() !== occurredAt.getTime()
-          || String(existing.replacesEventId || '') !== String(input.replacesEventId || '')
-          || String(existing.note || '') !== note) {
-          throw new ApiError(409, 'Shipment event id was already used for a different fact');
-        }
-        return shipmentEventResult(existing, source, true);
-      }
       const shipment = await repository.findShipmentById(shipmentId);
       if (!shipment) throw new ApiError(404, 'Exchange shipment not found');
       if (input.exchangeCaseId && String(input.exchangeCaseId) !== String(shipment.exchangeCaseId)) {
@@ -1553,15 +1734,38 @@ function createExchangeService({
       }
       const eventCase = await repository.findCaseById(shipment.exchangeCaseId);
       if (!eventCase) throw new ApiError(404, 'Exchange request not found');
+      if (source === 'CUSTOMER_DISPUTE'
+        && String(eventCase.customerId) !== String(actorId)) {
+        throw new ApiError(404, 'Exchange request not found');
+      }
+      const expectedEventFact = {
+        exchangeCaseId: shipment.exchangeCaseId,
+        shipmentId,
+        eventType,
+        source,
+        actorId: actorId || null,
+        evidenceReference,
+        occurredAt,
+        replacesEventId: input.replacesEventId || null,
+        note,
+      };
+      const existing = await repository.findShipmentEventByKey(eventKey);
+      if (existing) {
+        assertShipmentEventReplay(existing, expectedEventFact);
+        return shipmentEventResult(existing, source, true);
+      }
+      const isRawOutcome = ['DELIVERED', 'LOST', 'DAMAGED'].includes(eventType);
       if (TERMINAL_STATUSES.has(eventCase.status)
-        && ['DELIVERED', 'LOST', 'DAMAGED'].includes(eventType)) {
+        && isRawOutcome) {
         throw new ApiError(409, 'A terminal Exchange cannot accept a new Shipment outcome');
       }
-      if (shipment.status === 'Delivered'
-        && ['DELIVERED', 'LOST', 'DAMAGED'].includes(eventType)) {
-        throw new ApiError(409, 'A delivered Shipment outcome can change only through an attributable correction');
+      if (isRawOutcome && shipment.status !== 'InTransit') {
+        throw new ApiError(
+          409,
+          'A raw Shipment outcome requires InTransit status; later evidence must use an attributable correction'
+        );
       }
-      if (['DELIVERED', 'LOST', 'DAMAGED'].includes(eventType)
+      if (isRawOutcome
         && occurredAt.getTime() < new Date(shipment.shippedAt).getTime()) {
         throw new ApiError(400, 'Shipment outcome cannot occur before Shipment handoff');
       }
@@ -1582,66 +1786,129 @@ function createExchangeService({
       }
       let event;
       let completedCase = null;
-      await transactionManager.withTransaction(async (session) => {
-        event = await repository.createShipmentEvent({
-          eventKey,
-          exchangeCaseId: shipment.exchangeCaseId,
-          shipmentId: shipment._id,
-          eventType,
-          source,
-          occurredAt,
-          evidenceReference,
-          actorId: actorId || null,
-          replacesEventId: replacesEvent?._id || null,
-          note,
-        }, session);
-        if (eventType === 'DELIVERED') {
-          await repository.updateShipment(shipment._id, { status: 'Delivered', deliveredAt: occurredAt }, session);
-          if (shipment.direction === 'REPLACEMENT_TO_CUSTOMER') {
-            await repository.updateDeliveredUnits(
-              shipment.exchangeCaseId,
-              shipment.exchangeLineId,
-              Number(shipment.quantity),
-              occurredAt,
-              new Date(occurredAt.getTime() + EXCHANGE_WINDOW_MS),
+      let outcomeShipment = shipment;
+      let transactionReplay = false;
+      try {
+        await transactionManager.withTransaction(async (session) => {
+          if (isRawOutcome) {
+            const currentShipment = await repository.findShipmentById(shipmentId, session);
+            if (!currentShipment
+              || String(currentShipment.exchangeCaseId) !== String(eventCase._id)) {
+              throw new ApiError(404, 'Exchange shipment not found');
+            }
+            const currentCase = await repository.findCaseById(currentShipment.exchangeCaseId, session);
+            if (!currentCase) throw new ApiError(404, 'Exchange request not found');
+            const committedWinner = await repository.findShipmentEventByKey(eventKey, session);
+            if (committedWinner) {
+              assertShipmentEventReplay(committedWinner, expectedEventFact);
+              event = committedWinner;
+              transactionReplay = true;
+              return;
+            }
+            if (TERMINAL_STATUSES.has(currentCase.status)) {
+              throw new ApiError(409, 'A terminal Exchange cannot accept a new Shipment outcome');
+            }
+            if (currentShipment.status !== 'InTransit') {
+              throw new ApiError(
+                409,
+                'A raw Shipment outcome requires InTransit status; later evidence must use an attributable correction'
+              );
+            }
+            if (occurredAt.getTime() < new Date(currentShipment.shippedAt).getTime()) {
+              throw new ApiError(400, 'Shipment outcome cannot occur before Shipment handoff');
+            }
+            const serializedCase = await repository.touchShipmentOutcome(
+              currentCase._id,
+              ['OutboundFulfillment', 'ReplacementShipped', 'DeliveryIncident'],
               session
             );
+            if (!serializedCase) {
+              throw new ApiError(409, 'Exchange changed before the Shipment outcome could be recorded');
+            }
+            outcomeShipment = await repository.claimShipmentOutcome(
+              currentShipment._id,
+              'InTransit',
+              eventType === 'DELIVERED'
+                ? { status: 'Delivered', deliveredAt: occurredAt }
+                : { status: 'Incident', incidentAt: occurredAt, incidentReason: eventType },
+              session
+            );
+            if (!outcomeShipment) {
+              throw new ApiError(
+                409,
+                'Shipment changed before the raw outcome was recorded; use an attributable correction'
+              );
+            }
           }
-          completedCase = await reconcileCompletion(shipment.exchangeCaseId, session);
-          if (!completedCase) await reconcileIncidentState(shipment.exchangeCaseId, session);
-        } else if (['LOST', 'DAMAGED'].includes(eventType)) {
-          await repository.updateShipment(shipment._id, {
-            status: 'Incident', incidentAt: occurredAt, incidentReason: eventType,
+          event = await repository.createShipmentEvent({
+            eventKey,
+            exchangeCaseId: outcomeShipment.exchangeCaseId,
+            shipmentId: outcomeShipment._id,
+            eventType,
+            source,
+            occurredAt,
+            evidenceReference,
+            actorId: actorId || null,
+            replacesEventId: replacesEvent?._id || null,
+            note,
           }, session);
-          const incidentCase = await repository.claimCase(shipment.exchangeCaseId, [
-            'OutboundFulfillment', 'ReplacementShipped', 'DeliveryIncident',
-          ], {
-            status: 'DeliveryIncident',
-            incidentReason: `${eventType}: ${String(input.note || evidenceReference).trim()}`,
-            shippingPayer: 'SHOP',
-            waitingFor: shipment.direction === 'REPLACEMENT_TO_CUSTOMER'
-              ? 'INCIDENT_RESEND'
-              : 'REJECTED_ORIGINAL_RECONCILIATION',
-            incidentShipmentId: shipment._id,
-          }, session);
-          if (!incidentCase) throw new ApiError(409, 'Exchange changed before the Shipment incident could be recorded');
-        }
-      });
-      await writeAudit(actorId, `EXCHANGE_SHIPMENT_${eventType}`, shipment.exchangeCaseId, `${source}: ${evidenceReference}`);
-      if (completedCase) {
-        await notifier.notify({
-          userId: completedCase.customerId,
-          type: 'EXCHANGE_COMPLETED',
-          subject: completedCase.status === 'ClosedNoExchange'
-            ? 'Yêu cầu đổi hàng đã đóng'
-            : 'Yêu cầu đổi hàng đã hoàn tất',
-          content: completedCase.status === 'ClosedNoExchange'
-            ? 'Mọi sản phẩm bị từ chối đã được giao trả.'
-            : 'Mọi nghĩa vụ giao sản phẩm thay thế và trả hàng bị từ chối đã hoàn tất.',
-          caseId: shipment.exchangeCaseId,
+          if (eventType === 'DELIVERED') {
+            if (outcomeShipment.direction === 'REPLACEMENT_TO_CUSTOMER') {
+              await repository.updateDeliveredUnits(
+                outcomeShipment.exchangeCaseId,
+                outcomeShipment.exchangeLineId,
+                Number(outcomeShipment.quantity),
+                occurredAt,
+                new Date(occurredAt.getTime() + EXCHANGE_WINDOW_MS),
+                session
+              );
+            }
+            completedCase = await reconcileCompletion(outcomeShipment.exchangeCaseId, session);
+            if (!completedCase) await reconcileIncidentState(outcomeShipment.exchangeCaseId, session);
+          } else if (['LOST', 'DAMAGED'].includes(eventType)) {
+            const incidentCase = await repository.claimCase(outcomeShipment.exchangeCaseId, [
+              'OutboundFulfillment', 'ReplacementShipped', 'DeliveryIncident',
+            ], {
+              status: 'DeliveryIncident',
+              incidentReason: `${eventType}: ${String(input.note || evidenceReference).trim()}`,
+              shippingPayer: 'SHOP',
+              waitingFor: outcomeShipment.direction === 'REPLACEMENT_TO_CUSTOMER'
+                ? 'INCIDENT_RESEND'
+                : 'REJECTED_ORIGINAL_RECONCILIATION',
+              incidentShipmentId: outcomeShipment._id,
+            }, session);
+            if (!incidentCase) throw new ApiError(409, 'Exchange changed before the Shipment incident could be recorded');
+          }
+          await writeAudit(
+            actorId,
+            `EXCHANGE_SHIPMENT_${eventType}`,
+            outcomeShipment.exchangeCaseId,
+            `${source}: ${evidenceReference}`,
+            session,
+            `EXCHANGE_SHIPMENT_${eventType}:${String(outcomeShipment.exchangeCaseId)}:${eventKey}`
+          );
+          if (completedCase) {
+            await notifier.notify({
+              userId: completedCase.customerId,
+              type: 'EXCHANGE_COMPLETED',
+              subject: completedCase.status === 'ClosedNoExchange'
+                ? 'Yêu cầu đổi hàng đã đóng'
+                : 'Yêu cầu đổi hàng đã hoàn tất',
+              content: completedCase.status === 'ClosedNoExchange'
+                ? 'Mọi sản phẩm bị từ chối đã được giao trả.'
+                : 'Mọi nghĩa vụ giao sản phẩm thay thế và trả hàng bị từ chối đã hoàn tất.',
+              caseId: outcomeShipment.exchangeCaseId,
+            }, session);
+          }
         });
+      } catch (error) {
+        if (error?.code !== 11000) throw error;
+        const winner = await repository.findShipmentEventByKey(eventKey);
+        if (!winner) throw error;
+        assertShipmentEventReplay(winner, expectedEventFact);
+        return shipmentEventResult(winner, source, true);
       }
-      return shipmentEventResult(event, source, false);
+      return shipmentEventResult(event, source, transactionReplay);
     },
 
     async recordStaffShipmentEvent(staffId, caseId, shipmentId, input = {}) {
@@ -1669,15 +1936,11 @@ function createExchangeService({
       const idempotencyKey = normalizeIdempotencyKey(input.idempotencyKey);
       const exchangeCase = await repository.findCaseById(id);
       if (!exchangeCase) throw new ApiError(404, 'Exchange request not found');
-      const canResendNow = exchangeCase.status === 'DeliveryIncident'
-        || (exchangeCase.status === 'WaitingForExactStock' && exchangeCase.waitingFor === 'INCIDENT_RESEND');
-      if (!canResendNow) throw new ApiError(409, 'Only a delivery incident can create a replacement resend');
       const incidentShipment = await repository.findShipmentById(input.incidentShipmentId);
       if (!incidentShipment
         || String(incidentShipment.exchangeCaseId) !== String(id)
-        || incidentShipment.direction !== 'REPLACEMENT_TO_CUSTOMER'
-        || incidentShipment.status !== 'Incident') {
-        throw new ApiError(400, 'A matching incident replacement Shipment is required');
+        || incidentShipment.direction !== 'REPLACEMENT_TO_CUSTOMER') {
+        throw new ApiError(400, 'A matching replacement incident Shipment is required');
       }
       const shipmentKey = `${String(id)}:resend:${idempotencyKey}`;
       if (repository.findShipmentByKey) {
@@ -1695,6 +1958,19 @@ function createExchangeService({
           }
           return { shipment: existing, request: await load(id, 'Staff'), idempotentReplay: true };
         }
+      }
+      const canResendNow = exchangeCase.status === 'DeliveryIncident'
+        || (exchangeCase.status === 'WaitingForExactStock'
+          && exchangeCase.waitingFor === 'INCIDENT_RESEND');
+      if (!canResendNow) throw new ApiError(409, 'Only a delivery incident can create a replacement resend');
+      const activeLeaves = activeIncidentLeaves(await repository.listShipments(id));
+      const activeIncident = activeLeaves.find((shipment) => (
+        String(shipment._id) === String(incidentShipment._id)
+        && shipment.direction === 'REPLACEMENT_TO_CUSTOMER'
+        && shipment.status === 'Incident'
+      ));
+      if (!activeIncident) {
+        throw new ApiError(409, 'Only an active replacement incident leaf can create a resend');
       }
       const carrierName = String(input.carrierName || '').trim();
       const trackingCode = String(input.trackingCode || '').trim();
@@ -1717,6 +1993,17 @@ function createExchangeService({
       let shipment;
       try {
         await transactionManager.withTransaction(async (session) => {
+          const currentActiveLeaves = activeIncidentLeaves(
+            await repository.listShipments(id, session)
+          );
+          const currentIncident = currentActiveLeaves.find((candidate) => (
+            String(candidate._id) === String(incidentShipment._id)
+            && candidate.direction === 'REPLACEMENT_TO_CUSTOMER'
+            && candidate.status === 'Incident'
+          ));
+          if (!currentIncident) {
+            throw new ApiError(409, 'Replacement incident changed before resend creation');
+          }
           const reserved = await repository.reserveInventory(line.productId, quantity, staffId, session);
           if (!reserved) throw new NoExactStockError(line.productId);
           const [reservation] = await repository.createReservations([{
@@ -1759,21 +2046,14 @@ function createExchangeService({
             createdBy: staffId,
             resendOfShipmentId: incidentShipment._id,
           }, session);
-          const shipments = await repository.listShipments(id, session);
-          const unresolved = unresolvedShipmentIncidents(shipments);
-          const nextIncident = unresolved[0] || null;
           const progressed = await repository.claimCase(id, [
             'DeliveryIncident', 'WaitingForExactStock',
           ], {
-            status: nextIncident ? 'DeliveryIncident' : 'ReplacementShipped',
+            status: 'DeliveryIncident',
             incidentReason: '',
             shippingPayer: 'SHOP',
-            waitingFor: nextIncident
-              ? (nextIncident.direction === 'REPLACEMENT_TO_CUSTOMER'
-                ? 'INCIDENT_RESEND'
-                : 'REJECTED_ORIGINAL_RECONCILIATION')
-              : '',
-            incidentShipmentId: nextIncident?._id || null,
+            waitingFor: 'INCIDENT_RESEND_IN_TRANSIT',
+            incidentShipmentId: shipment._id,
             stockFailureReason: '',
           }, session);
           if (!progressed) throw new ApiError(409, 'Exchange changed while the replacement resend was being created');

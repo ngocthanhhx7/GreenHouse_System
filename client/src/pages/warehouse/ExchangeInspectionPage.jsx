@@ -3,6 +3,11 @@ import { Link, useParams } from 'react-router-dom';
 
 import AuthenticatedEvidenceList from '../../components/returnRefund/AuthenticatedEvidenceList.jsx';
 import { exchangeService } from '../../services/exchangeService.js';
+import { translateExchangeStatus } from '../../utils/afterSalesLabels.js';
+import {
+  getExchangeWorkflowActions,
+  getExchangeWorkflowMessage,
+} from '../../utils/exchangeUiState.js';
 
 function commandKey(prefix) {
   return `${prefix}:${globalThis.crypto?.randomUUID?.() || Date.now()}`;
@@ -116,6 +121,8 @@ export default function ExchangeInspectionPage() {
   }
 
   if (!request && !error) return <div className="page-center">Đang tải công việc đổi hàng...</div>;
+  const workflowActions = getExchangeWorkflowActions(request);
+  const workflowMessage = getExchangeWorkflowMessage(request);
   return (
     <div className="surface">
       <div className="page-heading"><h1>Kiểm hàng đổi hàng</h1><Link className="btn btn-outline-success" to="/warehouse/exchanges">Hàng đợi</Link></div>
@@ -123,8 +130,9 @@ export default function ExchangeInspectionPage() {
       {message && <div className="alert alert-success">{message}</div>}
       {request && (
         <>
-          <p><strong>{request.requestCode}</strong> / {request.status}</p>
+          <p><strong>{request.requestCode}</strong> / {translateExchangeStatus(request.status)}</p>
           <AuthenticatedEvidenceList urls={request.evidenceImages} fetchEvidence={exchangeService.fetchEvidence} />
+          {workflowMessage && <div className="alert alert-warning mt-3">{workflowMessage}</div>}
 
           {request.status === 'CustomerShipped' && (
             <form className="mt-3" onSubmit={recordReceipt}>
@@ -181,9 +189,7 @@ export default function ExchangeInspectionPage() {
             </form>
           )}
 
-          {(['OutboundFulfillment', 'ReplacementShipped', 'DeliveryIncident'].includes(request.status)
-            || (['AwaitingExactStockChoice', 'WaitingForExactStock'].includes(request.status)
-              && request.waitingFor === 'INCIDENT_RESEND')) && (
+          {workflowActions.canCreateOutbound && (
             <form className="mt-4" onSubmit={createShipment}>
               <h2>Tạo chuyến hàng ra</h2>
               <label className="form-label" htmlFor="exchangeShipmentLine">Dòng hàng</label>

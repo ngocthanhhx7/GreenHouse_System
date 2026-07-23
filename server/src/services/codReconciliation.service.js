@@ -10,6 +10,9 @@ const RefundPending = require('../models/refundPending.model');
 const ReturnRefundRequest = require('../models/returnRefundRequest.model');
 const ExchangeCase = require('../models/exchangeCase.model');
 const { logAudit } = require('../utils/auditLogger');
+const {
+  afterSalesLockService: modelAfterSalesLockService,
+} = require('./afterSalesLock.service');
 
 const MAX_EVENT_ID_LENGTH = 160;
 
@@ -70,6 +73,18 @@ function createModelRepository() {
       const exchange = await withOptionalSession(ExchangeCase.findOne({
         orderId,
         status: { $in: ['AwaitingCODReconciliation', 'CODRecoveryInProgress'] },
+      }), session).lean();
+      return exchange ? { ...exchange, _caseType: 'EXCHANGE' } : null;
+    },
+    async findTerminalClosedRequestByOrder(orderId, session) {
+      const returnRequest = await withOptionalSession(ReturnRefundRequest.findOne({
+        orderId,
+        status: 'ClosedByCODRecovery',
+      }), session).lean();
+      if (returnRequest) return { ...returnRequest, _caseType: 'RETURN_REFUND' };
+      const exchange = await withOptionalSession(ExchangeCase.findOne({
+        orderId,
+        status: 'ClosedByCODRecovery',
       }), session).lean();
       return exchange ? { ...exchange, _caseType: 'EXCHANGE' } : null;
     },
@@ -161,6 +176,7 @@ function createCodReconciliationService({
   repository = createModelRepository(),
   transactionManager = createModelTransactionManager(),
   auditLogger = { log: logAudit },
+  afterSalesLockService = modelAfterSalesLockService,
   clock = () => new Date(),
 } = {}) {
   async function writeAudit(userId, action, order, description) {
@@ -177,6 +193,42 @@ function createCodReconciliationService({
     const order = await repository.findOrderById(orderId, session);
     assertCodOrder(order);
     return order;
+  }
+
+  async function closeHeldRequestAndLock(
+    heldRequest,
+    orderId,
+    data,
+    session,
+    { requestAlreadyTerminal = false } = {}
+  ) {
+    if (!requestAlreadyTerminal) {
+      await repository.updateRequest(heldRequest._id, data, session);
+    }
+    const released = await afterSalesLockService.release({
+      orderId,
+      caseType: heldRequest._caseType,
+      caseId: heldRequest._id,
+      terminalStatus: 'ClosedByCODRecovery',
+      closePermanently: true,
+    }, session);
+    if (released) return released;
+
+    const existingLock = await afterSalesLockService.find(orderId, session);
+    const exactClosedLock = existingLock
+      && existingLock.status === 'ClosedPermanently'
+      && existingLock.terminalStatus === 'ClosedByCODRecovery'
+      && existingLock.caseType === heldRequest._caseType
+      && String(existingLock.caseId) === String(heldRequest._id);
+    if (exactClosedLock) return existingLock;
+    throw new ApiError(409, 'Active after-sales lock changed during COD recovery closure');
+  }
+
+  async function loadTerminalClosedRequest(orderId, session) {
+    if (!repository.findTerminalClosedRequestByOrder) {
+      return null;
+    }
+    return repository.findTerminalClosedRequestByOrder(orderId, session);
   }
 
   function checkReplay(existing, orderId, eventType, amount) {
@@ -476,10 +528,18 @@ function createCodReconciliationService({
       const obligationKey = `COD_RECOVERY:${String(order._id)}`;
       const existingRefund = await repository.findRefundByObligationKey(obligationKey, session);
       if (order.codDiscrepancyStatus === 'Closed' || order.orderStatus === 'Returned') {
-        const heldRequest = await repository.findHeldRequestByOrder(order._id, session);
-        if (heldRequest && (collected === 0 || existingRefund?.status === 'Refunded')) {
-          const completedAt = new Date(clock());
-          await repository.updateRequest(heldRequest._id, {
+        const heldRequest = await repository.findHeldRequestByOrder(order._id, session)
+          || await loadTerminalClosedRequest(order._id, session);
+        const requestAlreadyTerminal = heldRequest?.status === 'ClosedByCODRecovery';
+        if (heldRequest && (
+          requestAlreadyTerminal
+          || collected === 0
+          || existingRefund?.status === 'Refunded'
+        )) {
+          const completedAt = requestAlreadyTerminal && heldRequest.recoveryCompletedAt
+            ? new Date(heldRequest.recoveryCompletedAt)
+            : new Date(clock());
+          await closeHeldRequestAndLock(heldRequest, order._id, {
             status: 'ClosedByCODRecovery',
             refundAmount: collected,
             recoveryRefundId: existingRefund?._id || null,
@@ -488,7 +548,7 @@ function createCodReconciliationService({
               ? 'Goods recovered and server-derived recovery refund verified'
               : 'Goods recovered; no Customer collection to refund',
             handledAt: completedAt,
-          }, session);
+          }, session, { requestAlreadyTerminal });
         }
         return { order, refund: existingRefund, idempotentReplay: true };
       }
@@ -539,7 +599,7 @@ function createCodReconciliationService({
       if (heldRequest) {
         const payoutComplete = collected === 0 || refund?.status === 'Refunded';
         const completedAt = payoutComplete ? new Date(clock()) : null;
-        await repository.updateRequest(heldRequest._id, {
+        const requestData = {
           status: payoutComplete ? 'ClosedByCODRecovery' : 'CODRecoveryInProgress',
           refundAmount: collected,
           recoveryRefundId: refund?._id || null,
@@ -550,7 +610,12 @@ function createCodReconciliationService({
               : 'Goods recovered; no Customer collection to refund')
             : 'Goods recovered; server-derived recovery refund pending',
           handledAt: completedAt,
-        }, session);
+        };
+        if (payoutComplete) {
+          await closeHeldRequestAndLock(heldRequest, order._id, requestData, session);
+        } else {
+          await repository.updateRequest(heldRequest._id, requestData, session);
+        }
       }
       return { order: claimedOrder, refund, idempotentReplay: false, note };
     });

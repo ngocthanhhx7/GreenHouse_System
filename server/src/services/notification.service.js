@@ -78,16 +78,30 @@ function createModelNotificationRepository() {
   }
 
   return {
-    async create(data) {
-      return Notification.create(data);
+    async create(data, session) {
+      if (!session) return Notification.create(data);
+      const [created] = await Notification.create([data], { session });
+      return created;
     },
-    async createIdempotent(data) {
-      if (!data.eventId) return Notification.create(data);
+    async createIdempotent(data, session) {
+      if (!data.eventId) return this.create(data, session);
+      if (session) {
+        const existing = await Notification.findOne({
+          userId: data.userId,
+          eventId: data.eventId,
+        }).session(session).lean();
+        if (existing) return existing;
+        const [created] = await Notification.create([data], { session });
+        return created;
+      }
       try {
         return await Notification.create(data);
       } catch (error) {
         if (error && error.code === 11000) {
-          const existing = await Notification.findOne({ userId: data.userId, eventId: data.eventId }).lean();
+          const existing = await Notification.findOne({
+            userId: data.userId,
+            eventId: data.eventId,
+          }).lean();
           if (existing) return existing;
         }
         throw error;
@@ -170,7 +184,7 @@ function createNotificationService({
       targetCollection = '',
       targetId = null,
       recipientEmail = '',
-    }) {
+    }, session) {
       const create = eventId && notificationRepository.createIdempotent
         ? notificationRepository.createIdempotent.bind(notificationRepository)
         : notificationRepository.create.bind(notificationRepository);
@@ -187,7 +201,7 @@ function createNotificationService({
         targetCollection,
         targetId,
         recipientEmail,
-      });
+      }, session);
       return toPlainNotification(notification);
     },
 

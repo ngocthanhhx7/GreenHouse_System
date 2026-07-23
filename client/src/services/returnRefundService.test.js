@@ -20,6 +20,34 @@ describe('client return/refund service', () => {
     assert.equal(result.id, 'refund-1');
   });
 
+  it('preserves the typed active after-sales conflict returned by Return creation', async () => {
+    const data = {
+      currentCase: { type: 'EXCHANGE', id: 'exchange-1', status: 'Submitted' },
+      action: { label: 'Xem yêu cầu đang xử lý', href: '/exchanges/exchange-1' },
+    };
+    const service = createReturnRefundService({
+      baseUrl: 'http://api.test/api',
+      fetcher: async () => ({
+        ok: false,
+        json: async () => ({
+          success: false,
+          message: 'This Order already has an active after-sales case',
+          errorCode: 'AFTER_SALES_CASE_ACTIVE',
+          data,
+        }),
+      }),
+    });
+
+    await assert.rejects(
+      () => service.createCustomerRequest('order-1', { reason: 'Damaged' }),
+      (error) => {
+        assert.equal(error.errorCode, 'AFTER_SALES_CASE_ACTIVE');
+        assert.deepEqual(error.data, data);
+        return true;
+      },
+    );
+  });
+
   it('updates a staff return/refund decision', async () => {
     const service = createReturnRefundService({
       baseUrl: 'http://api.test/api',

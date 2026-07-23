@@ -1,9 +1,11 @@
 # SL-002 G3 Traceability — Exchange
 
-**Gate:** G3 `passed`; post-implementation local evidence recorded 2026-07-23
+**Gate:** G3 `passed`; post-merge closure evidence updated 2026-07-23
 **Business authority:** approved SL-002 design plus CR-001 v2.1
-**Implementation branch:** `feature/sl-002-exchange`
-**Baseline:** merge commit `7ba2533de2c81ebb1164ba9846443a1d814590d6`
+**Original implementation:** Nguyễn Hữu Anh Nhật, `feature/sl-002-exchange`
+**Post-merge closure/review:** Nguyễn Ngọc Thành, `feature/sl-002-postmerge-closure`
+**Reviewed baseline:** `main` at `1e2f0945d90fdb5fd10ba27a3eaf821a8f9dfe47`
+**Closure candidate:** `874da318cbd250a3e5f02335686fff09bad9aa4d`
 
 This matrix fixes the approved implementation boundary and records the production
 surfaces now present in the worktree. A green test outside the listed business
@@ -72,6 +74,18 @@ refund, payout, price-difference, or PayOS field.
 | CR BR-110 | Atomic Exchange-to-Return handoff preserves original instant, lock, and movement lineage | `exchangeConversion.model.js`, Exchange and Return services | conversion rollback/replay tests | CR AT-211/212 |
 | CR BR-117 | Shared owner-bound evidence profile and authorized reads | upload middleware/service, Exchange evidence access | spoof/count/owner/role tests | CR AT-221 |
 
+## Post-merge closure evidence
+
+| Closure concern | Production boundary | Acceptance evidence |
+|---|---|---|
+| Exact physical-unit ownership and replacement eligibility | Durable unit lineage, exclusive claim key, released parent handling, per-unit deadline barriers | Model/repository/service lineage and duplicate-claim tests |
+| Repeat-safe migration and historical compatibility | Deadline/lock/claim backfill, index ownership, verifier safety | Migration repeat-safety tests and verifier safety/Carrier ACK tests |
+| COD and incident closure invariants | Positive recovery remains open until Refund settlement; incident/correction/completion effects are atomic | COD reconciliation, audit rollback, replay, resend-chain and completion tests |
+| Typed active-case conflict | Stable `AFTER_SALES_CASE_ACTIVE` envelope; owner-safe action data and `data: null` for foreign/error cases | API error, Return/Exchange conflict and client service tests |
+| Live Return/Exchange deadlines | Exact inclusive deadline, timeout cleanup, form closure, and submit-time guard before evidence upload | Client workflow/source-contract tests plus server eligibility tests |
+| Warehouse versus Staff resend ownership | Warehouse creates only initial outbound obligations; Staff alone owns `resendReplacement` after an incident | Backend outbound matrix and client action-matrix tests |
+| Vietnamese actor surfaces | Status, payer, shipment event, wait cause and action labels are translated without changing stored enums | Label utility and Customer/Staff/Warehouse source-contract tests |
+
 ## Data ownership
 
 - `ExchangeCase`: lifecycle, immutable deadlines, Staff decision, operational payer,
@@ -97,9 +111,10 @@ refund, payout, price-difference, or PayOS field.
   included.
 - Actor mutation boundaries are route-level and service-level.
 - No planned Exchange schema or UI owns money.
-- Focused Exchange contracts pass `31/31` (`26` server and `5` client); full
-  server regression passes `397/397`; full client regression passes `128/128`; the production client build
-  succeeds.
+- Final focused SL-002 contracts pass `83/83` server and `40/40` client.
+  Full server regression passes `484/484`; full client regression passes
+  `163/163`; both dependency audits report zero vulnerabilities; the production
+  client build succeeds with only the pre-existing large-chunk warning.
 - Live replica-set verification reaches `Completed`, records two Inventory
   movements, releases the shared lock, creates the replacement five-day window,
   and cleans up its database fixture.
@@ -113,5 +128,5 @@ refund, payout, price-difference, or PayOS field.
   baseline `7ba2533` for the intended missing contracts and passes `3/3` on the
   current implementation. Combined with the recorded focused/full/live evidence,
   G4 and G5 pass.
-- G6 still requires recorded denied-route and alternate/failure actor
-  walkthroughs. G7 requires reviewed commit/release evidence.
+- G6 actor acceptance is recorded in `SL-002_G6_ACTOR_ACCEPTANCE.md`.
+  G7 remains pending until the closure branch is reviewed and merged.

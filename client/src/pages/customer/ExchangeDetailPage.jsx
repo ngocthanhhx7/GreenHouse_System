@@ -3,6 +3,16 @@ import { Link, useParams } from 'react-router-dom';
 
 import AuthenticatedEvidenceList from '../../components/returnRefund/AuthenticatedEvidenceList.jsx';
 import { exchangeService } from '../../services/exchangeService.js';
+import {
+  translateExchangeStatus,
+  translateShipmentDirection,
+  translateShipmentStatus,
+  translateShippingPayer,
+} from '../../utils/afterSalesLabels.js';
+import {
+  getExchangeWorkflowActions,
+  getExchangeWorkflowMessage,
+} from '../../utils/exchangeUiState.js';
 
 function key(prefix) {
   return `${prefix}:${globalThis.crypto?.randomUUID?.() || Date.now()}`;
@@ -84,6 +94,8 @@ export default function ExchangeDetailPage() {
   }
 
   if (!request && !error) return <div className="page-center">Đang tải yêu cầu đổi hàng...</div>;
+  const workflowActions = getExchangeWorkflowActions(request);
+  const workflowMessage = getExchangeWorkflowMessage(request);
   return (
     <div className="surface">
       <div className="page-heading"><h1>Chi tiết đổi hàng</h1><Link className="btn btn-outline-success" to="/exchanges">Danh sách</Link></div>
@@ -93,10 +105,10 @@ export default function ExchangeDetailPage() {
         <>
           <dl className="row">
             <dt className="col-sm-4">Mã yêu cầu</dt><dd className="col-sm-8">{request.requestCode}</dd>
-            <dt className="col-sm-4">Trạng thái</dt><dd className="col-sm-8">{request.status}</dd>
+            <dt className="col-sm-4">Trạng thái</dt><dd className="col-sm-8">{translateExchangeStatus(request.status)}</dd>
             <dt className="col-sm-4">Lý do</dt><dd className="col-sm-8">{request.reason}</dd>
             <dt className="col-sm-4">Hạn gửi yêu cầu</dt><dd className="col-sm-8">{new Date(request.deadlineAt).toLocaleString('vi-VN')}</dd>
-            <dt className="col-sm-4">Bên chịu phí vận chuyển</dt><dd className="col-sm-8">{request.shippingPayer || 'Chưa quyết định'}</dd>
+            <dt className="col-sm-4">Bên chịu phí vận chuyển</dt><dd className="col-sm-8">{translateShippingPayer(request.shippingPayer)}</dd>
             <dt className="col-sm-4">Hạn bàn giao</dt><dd className="col-sm-8">{request.shipByAt ? new Date(request.shipByAt).toLocaleString('vi-VN') : 'Chưa có'}</dd>
           </dl>
           {request.holdReason && <div className="alert alert-warning">{request.holdReason}</div>}
@@ -116,7 +128,8 @@ export default function ExchangeDetailPage() {
           {['Submitted', 'AwaitingExactStockChoice', 'WaitingForExactStock'].includes(request.status) && (
             <button className="btn btn-outline-danger mt-2" type="button" onClick={cancel}>Hủy yêu cầu</button>
           )}
-          {['AwaitingExactStockChoice', 'WaitingForExactStock', 'DeliveryIncident'].includes(request.status) && (
+          {workflowMessage && <div className="alert alert-warning mt-3">{workflowMessage}</div>}
+          {workflowActions.canWaitOrConvert && (
             <div className="mt-3">
               <button className="btn btn-outline-success me-2" type="button" onClick={() => choose('WAIT')}>Chờ đúng sản phẩm</button>
               <button className="btn btn-outline-danger" type="button" onClick={() => choose('CONVERT_TO_RETURN')}>Chuyển sang trả hàng/hoàn tiền</button>
@@ -131,7 +144,7 @@ export default function ExchangeDetailPage() {
           <section className="mt-4">
             <h2>Vận chuyển</h2>
             {(request.shipments || []).length
-              ? <ul>{request.shipments.map((shipment) => <li key={shipment._id}>{shipment.direction}: {shipment.trackingCode} — {shipment.status}</li>)}</ul>
+              ? <ul>{request.shipments.map((shipment) => <li key={shipment._id}>{translateShipmentDirection(shipment.direction)}: {shipment.trackingCode} — {translateShipmentStatus(shipment.status)}</li>)}</ul>
               : <p className="text-muted">Chưa có chuyến hàng ra.</p>}
           </section>
           {(request.shipments || []).some((shipment) => shipment.status === 'Delivered') && (

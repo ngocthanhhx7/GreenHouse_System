@@ -2,9 +2,11 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import { exchangeService } from '../../services/exchangeService.js';
+import { translateExchangeStatus } from '../../utils/afterSalesLabels.js';
 
 const STATUSES = [
-  '', 'AwaitingCODReconciliation', 'Submitted', 'AwaitingExactStockChoice',
+  '', 'AwaitingCODReconciliation', 'CODRecoveryInProgress', 'ClosedByCODRecovery',
+  'Submitted', 'AwaitingExactStockChoice',
   'WaitingForExactStock', 'ApprovedAwaitingShipment', 'CustomerShipped',
   'WarehouseInspecting', 'OutboundFulfillment', 'ReplacementShipped',
   'DeliveryIncident', 'Rejected', 'Cancelled', 'Expired',
@@ -31,7 +33,7 @@ export default function ExchangeQueuePage() {
       <div className="page-heading">
         <h1>Hàng đợi đổi hàng</h1>
         <select className="form-select status-select" value={status} onChange={(event) => { setStatus(event.target.value); load(event.target.value); }}>
-          {STATUSES.map((item) => <option key={item || 'all'} value={item}>{item || 'Tất cả trạng thái'}</option>)}
+          {STATUSES.map((item) => <option key={item || 'all'} value={item}>{item ? translateExchangeStatus(item) : 'Tất cả trạng thái'}</option>)}
         </select>
       </div>
       {error && <div className="alert alert-danger">{error}</div>}
@@ -41,7 +43,7 @@ export default function ExchangeQueuePage() {
           <tbody>
             {items.map((item) => (
               <tr key={item.id}>
-                <td>{item.requestCode}</td><td>{item.status}</td><td>{item.reason}</td>
+                <td>{item.requestCode}</td><td>{translateExchangeStatus(item.status)}</td><td>{item.reason}</td>
                 <td><Link className="btn btn-outline-success btn-sm" to={`/staff/exchanges/${item.id}`}>Mở yêu cầu</Link></td>
               </tr>
             ))}

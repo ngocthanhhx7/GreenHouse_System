@@ -28,11 +28,19 @@ function sendSuccess(res, data = null, message = 'OK', statusCode = 200, req) {
   return res.status(statusCode).json(payload);
 }
 
-function sendError(res, message = 'Something went wrong', statusCode = 500, errors = [], errorCode, req) {
+function sendError(
+  res,
+  message = 'Something went wrong',
+  statusCode = 500,
+  errors = [],
+  errorCode,
+  req,
+  data = null
+) {
   const payload = {
     success: false,
     message,
-    data: null,
+    data,
     errors,
     errorCode: getErrorCode(statusCode, errorCode),
   };

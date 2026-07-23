@@ -1,11 +1,12 @@
-import { DEFAULT_BASE_URL, TOKEN_KEY, apiRequest } from './apiClient.js';
+import {
+  DEFAULT_BASE_URL,
+  TOKEN_KEY,
+  apiRequest,
+  parseApiResponse,
+} from './apiClient.js';
 
 async function parseResponse(response) {
-  const payload = await response.json();
-  if (!response.ok || payload.success === false) {
-    throw new Error(payload.message || 'Return/refund request failed');
-  }
-  return payload.data;
+  return parseApiResponse(response, 'Return/refund request failed');
 }
 
 function buildQuery(params = {}) {

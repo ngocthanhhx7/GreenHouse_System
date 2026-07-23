@@ -15,11 +15,18 @@ function createRepository() {
   const evidence = [];
   const details = [{ _id: 'detail-1', orderId: 'order-1', productId: 'product-1', quantity: 2 }];
   const recoveryReceipts = [];
-  const requests = [{ _id: 'request-1', orderId: 'order-1', status: 'AwaitingCODReconciliation', refundAmount: 0 }];
+  const requestUpdates = [];
+  const requests = [{
+    _id: 'request-1',
+    orderId: 'order-1',
+    status: 'AwaitingCODReconciliation',
+    refundAmount: 0,
+    _caseType: 'RETURN_REFUND',
+  }];
   const refunds = [];
 
   return {
-    orders, payments, attempts, evidence, details, recoveryReceipts, requests, refunds,
+    orders, payments, attempts, evidence, details, recoveryReceipts, requestUpdates, requests, refunds,
     async findOrderById(id) { return orders.find((entry) => entry._id === id) || null; },
     async findEvidenceByEventId(eventId) { return evidence.find((entry) => entry.eventId === eventId) || null; },
     async findCollectionEvidenceByOrder(orderId) { return evidence.find((entry) => entry.orderId === orderId && entry.eventType === 'COLLECTION') || null; },
@@ -37,7 +44,15 @@ function createRepository() {
     async findLatestPaymentAttemptByOrder(orderId) { return attempts.find((entry) => entry.orderId === orderId) || null; },
     async updatePaymentAttempt(id, data) { const attempt = attempts.find((entry) => entry._id === id); Object.assign(attempt, data); return attempt; },
     async findHeldRequestByOrder(orderId) { return requests.find((entry) => entry.orderId === orderId && ['AwaitingCODReconciliation', 'CODRecoveryInProgress'].includes(entry.status)) || null; },
-    async updateRequest(id, data) { const request = requests.find((entry) => entry._id === id); Object.assign(request, data); return request; },
+    async findTerminalClosedRequestByOrder(orderId) {
+      return requests.find((entry) => entry.orderId === orderId && entry.status === 'ClosedByCODRecovery') || null;
+    },
+    async updateRequest(id, data) {
+      const request = requests.find((entry) => entry._id === id);
+      requestUpdates.push({ id, data: structuredClone(data) });
+      Object.assign(request, data);
+      return request;
+    },
     async listOrderDetails(orderId) { return details.filter((entry) => entry.orderId === orderId); },
     async findRecoveryReceiptById(receiptId) { return recoveryReceipts.find((entry) => entry.receiptId === receiptId) || null; },
     async findRecoveryReceiptByOrder(orderId) { return recoveryReceipts.find((entry) => entry.orderId === orderId) || null; },
@@ -55,14 +70,32 @@ function createRepository() {
 describe('COD reconciliation service', () => {
   let repository;
   let service;
+  let lockReleases;
+  let lockReleaseResult;
+  let lockFinds;
+  let lockFindResult;
 
   beforeEach(() => {
     repository = createRepository();
+    lockReleases = [];
+    lockReleaseResult = { status: 'ClosedPermanently' };
+    lockFinds = [];
+    lockFindResult = null;
     service = createCodReconciliationService({
       repository,
       transactionManager: { async withTransaction(work) { return work({ id: 'session-1' }); } },
       clock: () => new Date('2026-07-23T12:00:00.000Z'),
       auditLogger: { async log() {} },
+      afterSalesLockService: {
+        async release(payload, session) {
+          lockReleases.push({ payload, session });
+          return lockReleaseResult;
+        },
+        async find(orderId, session) {
+          lockFinds.push({ orderId, session });
+          return lockFindResult;
+        },
+      },
     });
   });
 
@@ -216,6 +249,7 @@ describe('COD reconciliation service', () => {
     assert.equal(repository.refunds[0].amount, 40);
     assert.equal(repository.refunds[0].obligationType, 'COD_RECOVERY');
     assert.equal(repository.requests[0].status, 'CODRecoveryInProgress');
+    assert.equal(lockReleases.length, 0);
     assert.equal(repository.requests[0].recoveryRefundId, repository.refunds[0]._id);
     assert.equal(repository.requests[0].recoveryCompletedAt, null);
 
@@ -234,6 +268,16 @@ describe('COD reconciliation service', () => {
     });
     assert.equal(repository.requests[0].status, 'ClosedByCODRecovery');
     assert.ok(repository.requests[0].recoveryCompletedAt);
+    assert.deepEqual(lockReleases, [{
+      payload: {
+        orderId: 'order-1',
+        caseType: 'RETURN_REFUND',
+        caseId: 'request-1',
+        terminalStatus: 'ClosedByCODRecovery',
+        closePermanently: true,
+      },
+      session: { id: 'session-1' },
+    }]);
   });
 
   it('does not finalize recovery when another Staff worker already claimed the closure', async () => {
@@ -271,6 +315,176 @@ describe('COD reconciliation service', () => {
     assert.equal(result.order.paymentStatus, 'Cancelled');
     assert.equal(repository.refunds.length, 0);
     assert.equal(repository.requests[0].status, 'ClosedByCODRecovery');
+    assert.deepEqual(lockReleases, [{
+      payload: {
+        orderId: 'order-1',
+        caseType: 'RETURN_REFUND',
+        caseId: 'request-1',
+        terminalStatus: 'ClosedByCODRecovery',
+        closePermanently: true,
+      },
+      session: { id: 'session-1' },
+    }]);
+  });
+
+  it('closes an Exchange lock with the exact held case identity and transaction session', async () => {
+    repository.requests[0]._caseType = 'EXCHANGE';
+    await service.recordCollectionEvidence('order-1', {
+      eventId: 'collection-zero-exchange', customerCollectedAmount: 0, collectionTiming: 'AFTER_DELIVERY',
+      occurredAt: '2026-07-23T11:00:00.000Z', evidenceReference: 'pod-zero-exchange',
+    });
+    const receipt = await service.recordGoodsRecovery('warehouse-1', 'order-1', {
+      receiptId: 'warehouse-receipt-zero-exchange', evidenceReference: 'warehouse-photo-zero-exchange',
+      items: [{ orderDetailId: 'detail-1', receivedQuantity: 2 }],
+    });
+
+    await service.finalizeRecovery('staff-1', 'order-1', {
+      goodsRecoveryReceiptId: receipt.receipt.receiptId,
+    });
+
+    assert.deepEqual(lockReleases, [{
+      payload: {
+        orderId: 'order-1',
+        caseType: 'EXCHANGE',
+        caseId: 'request-1',
+        terminalStatus: 'ClosedByCODRecovery',
+        closePermanently: true,
+      },
+      session: { id: 'session-1' },
+    }]);
+  });
+
+  it('rolls back terminal request and order updates when the lock CAS fails', async () => {
+    const snapshotTransactionManager = {
+      async withTransaction(work) {
+        const snapshot = structuredClone({
+          orders: repository.orders,
+          payments: repository.payments,
+          attempts: repository.attempts,
+          requests: repository.requests,
+          refunds: repository.refunds,
+        });
+        try {
+          return await work({ id: 'rollback-session' });
+        } catch (error) {
+          for (const [key, values] of Object.entries(snapshot)) {
+            repository[key].splice(0, repository[key].length, ...values);
+          }
+          throw error;
+        }
+      },
+    };
+    lockReleaseResult = null;
+    service = createCodReconciliationService({
+      repository,
+      transactionManager: snapshotTransactionManager,
+      clock: () => new Date('2026-07-23T12:00:00.000Z'),
+      auditLogger: { async log() {} },
+      afterSalesLockService: {
+        async release(payload, session) {
+          lockReleases.push({ payload, session });
+          return lockReleaseResult;
+        },
+        async find(orderId, session) {
+          lockFinds.push({ orderId, session });
+          return lockFindResult;
+        },
+      },
+    });
+    await service.recordCollectionEvidence('order-1', {
+      eventId: 'collection-zero-lock-race', customerCollectedAmount: 0, collectionTiming: 'AFTER_DELIVERY',
+      occurredAt: '2026-07-23T11:00:00.000Z', evidenceReference: 'pod-zero-lock-race',
+    });
+    const receipt = await service.recordGoodsRecovery('warehouse-1', 'order-1', {
+      receiptId: 'warehouse-receipt-lock-race', evidenceReference: 'warehouse-photo-lock-race',
+      items: [{ orderDetailId: 'detail-1', receivedQuantity: 2 }],
+    });
+    const before = structuredClone({
+      order: repository.orders[0],
+      request: repository.requests[0],
+    });
+
+    await assert.rejects(
+      () => service.finalizeRecovery('staff-1', 'order-1', {
+        goodsRecoveryReceiptId: receipt.receipt.receiptId,
+      }),
+      /after-sales lock|changed/i,
+    );
+
+    assert.deepEqual(repository.orders[0], before.order);
+    assert.deepEqual(repository.requests[0], before.request);
+  });
+
+  it('repairs a legacy terminal Return request whose exact shared lock is still Active', async () => {
+    repository.orders[0].orderStatus = 'Returned';
+    repository.orders[0].codDiscrepancyStatus = 'Closed';
+    repository.requests[0].status = 'ClosedByCODRecovery';
+    repository.requests[0].recoveryCompletedAt = new Date('2026-07-23T11:30:00.000Z');
+    const beforeRequest = structuredClone(repository.requests[0]);
+
+    const result = await service.finalizeRecovery('staff-1', 'order-1');
+
+    assert.equal(result.idempotentReplay, true);
+    assert.deepEqual(repository.requests[0], beforeRequest);
+    assert.equal(repository.requestUpdates.length, 0);
+    assert.deepEqual(lockReleases, [{
+      payload: {
+        orderId: 'order-1',
+        caseType: 'RETURN_REFUND',
+        caseId: 'request-1',
+        terminalStatus: 'ClosedByCODRecovery',
+        closePermanently: true,
+      },
+      session: { id: 'session-1' },
+    }]);
+    assert.deepEqual(lockFinds, []);
+  });
+
+  it('replays a terminal Exchange closure when the exact shared lock is already closed', async () => {
+    repository.orders[0].orderStatus = 'Returned';
+    repository.orders[0].codDiscrepancyStatus = 'Closed';
+    repository.requests[0]._caseType = 'EXCHANGE';
+    repository.requests[0].status = 'ClosedByCODRecovery';
+    repository.requests[0].recoveryCompletedAt = new Date('2026-07-23T11:30:00.000Z');
+    lockReleaseResult = null;
+    lockFindResult = {
+      orderId: 'order-1',
+      status: 'ClosedPermanently',
+      terminalStatus: 'ClosedByCODRecovery',
+      caseType: 'EXCHANGE',
+      caseId: 'request-1',
+    };
+    const beforeRequest = structuredClone(repository.requests[0]);
+
+    const result = await service.finalizeRecovery('staff-1', 'order-1');
+
+    assert.equal(result.idempotentReplay, true);
+    assert.deepEqual(repository.requests[0], beforeRequest);
+    assert.equal(repository.requestUpdates.length, 0);
+    assert.deepEqual(lockFinds, [{
+      orderId: 'order-1',
+      session: { id: 'session-1' },
+    }]);
+  });
+
+  it('rejects an idempotent terminal repair when the closed lock belongs to another case', async () => {
+    repository.orders[0].orderStatus = 'Returned';
+    repository.orders[0].codDiscrepancyStatus = 'Closed';
+    repository.requests[0].status = 'ClosedByCODRecovery';
+    lockReleaseResult = null;
+    lockFindResult = {
+      orderId: 'order-1',
+      status: 'ClosedPermanently',
+      terminalStatus: 'ClosedByCODRecovery',
+      caseType: 'RETURN_REFUND',
+      caseId: 'different-request',
+    };
+
+    await assert.rejects(
+      () => service.finalizeRecovery('staff-1', 'order-1'),
+      /after-sales lock|changed/i,
+    );
+    assert.equal(repository.requestUpdates.length, 0);
   });
 
   it('lets Warehouse prove complete goods recovery once and rejects incomplete line recovery', async () => {
