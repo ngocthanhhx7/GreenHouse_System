@@ -27,6 +27,34 @@ describe('notification service', () => {
     assert.equal(saved[0].userId, 'customer-1');
   });
 
+  it('queues a payment notification idempotently when a callback event identity is supplied', async () => {
+    const saved = [];
+    const service = createNotificationService({
+      notificationRepository: {
+        async createIdempotent(data) {
+          const existing = saved.find((entry) => entry.eventId === data.eventId);
+          if (existing) return existing;
+          const created = { _id: `noti-${saved.length + 1}`, ...data };
+          saved.push(created);
+          return created;
+        },
+      },
+    });
+    const input = {
+      userId: 'customer-1',
+      orderCode: 'ORD-1',
+      paymentStatus: 'Paid',
+      eventId: 'PAYMENT_CALLBACK:event-1:NOTIFICATION',
+    };
+
+    const first = await service.notifyPaymentStatus(input);
+    const replay = await service.notifyPaymentStatus(input);
+
+    assert.equal(first.id, replay.id);
+    assert.equal(saved.length, 1);
+    assert.equal(saved[0].eventId, input.eventId);
+  });
+
   it('lists only notifications for the current user with unread count', async () => {
     const notifications = [
       { _id: 'noti-1', userId: 'customer-1', type: 'PAYMENT_STATUS', channel: 'InApp', subject: 'Paid', content: 'Paid', deliveryStatus: 'Sent', isRead: false },

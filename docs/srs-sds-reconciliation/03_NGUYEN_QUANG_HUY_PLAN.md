@@ -166,4 +166,14 @@ Traceability chính:
 | Cart price evidence and stale refresh | `server/src/services/cart.service.js`, `server/src/models/cartItem.model.js` | `cart.service.test.js`, `cartItem.model.test.js` |
 | Migration/repeat safety | `server/src/scripts/migrateSl003OrderPaymentCancellation.js` | migration test |
 
-Verification: server `511/511`, client `168/168`, production build exit code `0`. Handoff detail is kept in the local-only `docs/superpowers/reconciliation/SL-003_HANDOFF.md` and `SL-003_G3_TRACEABILITY.md`; those files are intentionally not added to Git per project policy.
+## SL-003 Hardening Addendum 2026-07-23
+
+Independent review hardening closed the payment/provider race, callback replay, COD, refund-destination and Staff stock-export edge cases:
+
+- PayOS link creation is bounded by immutable `Order.paymentDeadlineAt`; a provider link created during an Order race is retired best-effort and a Paid Payment projection is never downgraded.
+- Callback evidence is write-once and validates provider, attempt identity, amount and transaction identity. Replays return the stored processing result; late/excess payment repairs or creates one refund obligation without reopening the Order.
+- COD checkout creates an `Unpaid` `PaymentAttempt`; pre-delivery COD cancellation keeps Payment/Attempt `Unpaid`. Payment, PaymentAttempt, Order and OrderDetail identity/snapshot fields are immutable.
+- Paid customer cancellation creates `ReadyForRefund` with a linked `RefundPending` obligation, supports destination/payout without a Warehouse receipt, keeps the historical Order `Cancelled`, and settles the obligation only after payout.
+- Staff confirmation verifies reservation and deduplicates the open `StockExportRequest`; cancellation closes open requests, Warehouse approval advances the request lifecycle, and migration safely enforces one open request per Order.
+
+Verification: server `529/529`, client `170/170`, production build exit code `0`, and `git diff --check` passed. Handoff detail is kept in the local-only `docs/superpowers/reconciliation/SL-003_HANDOFF.md` and `SL-003_G3_TRACEABILITY.md`; those files are intentionally not added to Git per project policy.

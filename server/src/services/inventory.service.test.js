@@ -222,6 +222,18 @@ describe('inventory service', () => {
     assert.equal(repository.transactions.at(-1).relatedCollection, 'StockExportRequest');
   });
 
+  it('moves a Confirmed order to StockExportRequested when its confirmed export is approved', async () => {
+    repository.orders[0].orderStatus = 'Confirmed';
+
+    const result = await service.updateStockExportStatus('warehouse-1', 'export-1', {
+      status: 'Approved',
+      note: 'Confirmed order accepted by warehouse',
+    });
+
+    assert.equal(result.order.orderStatus, 'StockExportRequested');
+    assert.equal(repository.orders[0].orderStatus, 'StockExportRequested');
+  });
+
   it('conditionally decides a pending export and reopens the order after rejection', async () => {
     repository.updateStockExport = async () => {
       throw new Error('unsafe unconditional decision');

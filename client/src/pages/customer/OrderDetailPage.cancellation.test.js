@@ -17,4 +17,10 @@ describe('customer order cancellation UI contract', () => {
     assert.doesNotMatch(source, /\['Pending', 'WaitingForPayment'\]/);
     assert.match(source, /\['Unpaid', 'Pending', 'Failed', 'Paid'\]/);
   });
+
+  it('shows the persisted cancellation reason and distinguishes a replayed command', () => {
+    assert.match(source, /order\.cancelReason/);
+    assert.match(source, /idempotentReplay/);
+    assert.match(source, /Yêu cầu hủy đơn đã được ghi nhận trước đó/);
+  });
 });

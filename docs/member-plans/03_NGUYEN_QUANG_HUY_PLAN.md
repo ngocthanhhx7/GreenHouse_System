@@ -320,3 +320,14 @@ Phạm vi đã triển khai:
 - UI checkout/order detail hiển thị lỗi giá/giỏ và lý do hủy rõ ràng; shared cart indicator chỉ dành cho Customer.
 
 Regression evidence: server `511/511`, client `168/168`, production build đạt; `git diff --check` đạt. Các log kiểm thử runtime không được đưa vào commit.
+## SL-003 Hardening Addendum 2026-07-23
+
+Sau vòng review độc lập, SL-003 được harden thêm trước khi tạo PR:
+
+- PayOS link chỉ được tạo trước `Order.paymentDeadlineAt`; thời điểm hết hạn của provider lấy từ deadline bất biến của Order. Nếu Order bị hủy/đã Paid trong lúc provider tạo link, link được retire best-effort và attempt đóng cục bộ, không hạ Payment đã Paid về Pending.
+- Callback kiểm tra provider, provider order code, amount của attempt và identity giao dịch; evidence của attempt chỉ ghi một lần. Replay trả lại `processingResult` đã lưu; excess-payment obligation được tự khôi phục nếu worker dừng sau khi ghi Paid.
+- COD checkout tạo PaymentAttempt `COD/Unpaid` để phục vụ reconciliation; hủy COD trước giao vẫn giữ Payment/Attempt `Unpaid`. PaymentAttempt, Payment và OrderDetail khóa các snapshot/identity bất biến; RefundPending không còn là payment state.
+- Customer paid cancellation tạo `ReturnRefundRequest` `ReadyForRefund`, liên kết `RefundPending`, hiển thị lý do/trạng thái cho Customer và cho phép nhập destination/payout mà không chuyển Order Cancelled thành Returned. `moneyObligationsSettled` chỉ trở lại `true` sau payout thành công.
+- Staff confirm kiểm tra đủ reservation, tạo duy nhất một StockExportRequest và hỗ trợ replay bằng Idempotency-Key; hủy Staff đóng request mở. Warehouse approve request Confirmed sẽ chuyển sang `StockExportRequested`. Migration tạo partial unique index một-request-mở-mỗi-order, preflight duplicate và lặp an toàn.
+
+Regression hardening: server `529/529`, client `170/170`, Vite build exit `0`; log runtime vẫn local-only.

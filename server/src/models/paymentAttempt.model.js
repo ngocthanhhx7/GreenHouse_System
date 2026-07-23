@@ -2,20 +2,23 @@ const mongoose = require('mongoose');
 
 const paymentAttemptSchema = new mongoose.Schema(
   {
-    orderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Order', required: true },
-    attemptCode: { type: String, required: true, unique: true, trim: true },
-    paymentMethod: { type: String, enum: ['COD', 'ONLINE'], required: true },
-    paymentProvider: { type: String, default: '', trim: true },
-    providerOrderCode: { type: Number, default: null },
+    orderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Order', required: true, immutable: true },
+    attemptCode: { type: String, required: true, unique: true, trim: true, immutable: true },
+    paymentMethod: { type: String, enum: ['COD', 'ONLINE'], required: true, immutable: true },
+    paymentProvider: { type: String, default: '', trim: true, immutable: true },
+    providerOrderCode: { type: Number, default: null, immutable: true },
     paymentLinkId: { type: String, default: '', trim: true },
     checkoutUrl: { type: String, default: '', trim: true },
     qrCode: { type: String, default: '', trim: true },
     expiresAt: { type: Date, default: null },
-    amount: { type: Number, required: true, min: 0 },
-    currency: { type: String, default: 'VND', trim: true },
+    amount: { type: Number, required: true, min: 0, immutable: true },
+    currency: { type: String, default: 'VND', trim: true, immutable: true },
     paymentStatus: {
       type: String,
-      enum: ['Unpaid', 'Pending', 'Paid', 'Failed', 'Cancelled', 'Expired', 'RefundPending', 'Refunded'],
+      // Refund obligations are represented by RefundPending, never by a
+      // mutable payment-attempt state.  An attempt only records provider
+      // settlement evidence and its own lifecycle.
+      enum: ['Unpaid', 'Pending', 'Paid', 'Failed', 'Cancelled', 'Expired'],
       required: true,
     },
     transactionId: { type: String, default: '', trim: true },

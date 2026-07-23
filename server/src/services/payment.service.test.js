@@ -13,6 +13,7 @@ function createPaymentRepository() {
       paymentMethod: 'ONLINE',
       paymentStatus: 'Pending',
       orderStatus: 'Pending',
+      paymentDeadlineAt: new Date('2099-01-01T00:00:00.000Z'),
     },
   ];
   const payments = [
@@ -48,6 +49,14 @@ function createPaymentRepository() {
       Object.assign(payment, data);
       return payment;
     },
+    async updatePendingPayment(id, data) {
+      const payment = payments.find((entry) => (
+        entry._id === id && ['Unpaid', 'Pending', 'Failed'].includes(entry.paymentStatus)
+      ));
+      if (!payment) return null;
+      Object.assign(payment, data);
+      return payment;
+    },
     async updateOrder(id, data) {
       const order = orders.find((entry) => entry._id === id);
       Object.assign(order, data);
@@ -65,6 +74,9 @@ function createPaymentRepository() {
     },
     async findLatestAttemptByOrder(id) {
       return attempts.filter((attempt) => attempt.orderId === id).at(-1) || null;
+    },
+    async findPrimaryPaidPaymentAttemptByOrder(id) {
+      return attempts.find((attempt) => attempt.orderId === id && attempt.paymentStatus === 'Paid') || null;
     },
     async findPaymentAttemptById(id) { return attempts.find((attempt) => attempt._id === id) || null; },
     async findPaymentAttemptByProviderOrderCode(provider, providerOrderCode) {
@@ -280,6 +292,38 @@ describe('payment service', () => {
     assert.equal(paymentRepository.refunds[0].obligationKey, 'EXCESS_PAYMENT:attempt-2');
   });
 
+  it('does not create a provider link at or after the immutable order deadline', async () => {
+    paymentRepository.orders[0].paymentDeadlineAt = new Date('2020-01-01T00:00:00.000Z');
+
+    await assert.rejects(
+      () => paymentService.createOnlinePaymentRequest('customer-1', 'order-online'),
+      (error) => error.errorCode === 'PAYMENT_DEADLINE_EXPIRED',
+    );
+    assert.equal(paymentRepository.attempts.length, 1);
+  });
+
+  it('retires a newly-created provider link if the order closes during link creation', async () => {
+    payosGateway.createPaymentLink = async ({ providerOrderCode }) => {
+      paymentRepository.orders[0].orderStatus = 'Cancelled';
+      paymentRepository.orders[0].paymentStatus = 'Cancelled';
+      return {
+        paymentLinkId: `link-${providerOrderCode}`,
+        checkoutUrl: `https://pay.payos.vn/web/${providerOrderCode}`,
+        qrCode: 'payos-qr-payload',
+        expiredAt: Math.floor(Date.now() / 1000) + 900,
+      };
+    };
+
+    await assert.rejects(
+      () => paymentService.createOnlinePaymentRequest('customer-1', 'order-online'),
+      (error) => error.errorCode === 'PAYMENT_ORDER_STATE_CHANGED',
+    );
+
+    assert.equal(paymentRepository.attempts.at(-1).paymentStatus, 'Cancelled');
+    assert.equal(payosGateway.cancelledLinks.length, 1);
+    assert.equal(paymentRepository.payments[0].paymentStatus, 'Pending');
+  });
+
   it('creates one EXCESS_PAYMENT obligation for each distinct later paid attempt without replaying side effects', async () => {
     paymentRepository.orders[0].paymentStatus = 'Paid';
     paymentRepository.orders[0].orderStatus = 'Pending';
@@ -380,6 +424,135 @@ describe('payment service', () => {
     assert.equal(paymentRepository.events.length, 1);
     assert.equal(auditLogger.entries[0].action, 'PAYMENT_CALLBACK_PAID');
     assert.equal(notificationService.notifications[0].paymentStatus, 'Paid');
+  });
+
+  it('commits callback business writes atomically and publishes side effects only after commit', async () => {
+    const session = { id: 'payment-callback-session' };
+    const seenSessions = [];
+    let insideTransaction = false;
+    let transactionCalls = 0;
+
+    for (const methodName of [
+      'updatePaymentAttempt',
+      'claimOrderPayment',
+      'updatePendingPayment',
+      'markCallbackEventProcessed',
+    ]) {
+      const original = paymentRepository[methodName].bind(paymentRepository);
+      paymentRepository[methodName] = async (...args) => {
+        seenSessions.push({ methodName, session: args.at(-1) });
+        return original(...args);
+      };
+    }
+
+    const transactionalNotificationService = {
+      notifications: [],
+      async notifyPaymentStatus(input) {
+        assert.equal(insideTransaction, false, 'notification must run after the business transaction commits');
+        this.notifications.push(input);
+      },
+    };
+    const transactionalAuditLogger = {
+      entries: [],
+      async log(input) {
+        assert.equal(insideTransaction, false, 'audit publication must run after the business transaction commits');
+        this.entries.push(input);
+      },
+    };
+    const transactionalService = createPaymentService({
+      paymentRepository,
+      notificationService: transactionalNotificationService,
+      auditLogger: transactionalAuditLogger,
+      callbackSecret: 'test-callback-secret',
+      payosGateway,
+      transactionManager: {
+        async withTransaction(work) {
+          transactionCalls += 1;
+          insideTransaction = true;
+          try {
+            return await work(session);
+          } finally {
+            insideTransaction = false;
+          }
+        },
+      },
+    });
+
+    const result = await transactionalService.handlePaymentCallback({
+      orderId: 'order-online',
+      paymentAttemptId: 'attempt-1',
+      transactionId: 'TXN-ATOMIC',
+      providerMessageId: 'MSG-ATOMIC',
+      amount: 50,
+      status: 'Paid',
+      callbackSecret: 'test-callback-secret',
+    });
+
+    assert.equal(result.paymentStatus, 'Paid');
+    assert.equal(transactionCalls, 1);
+    assert.deepEqual(
+      seenSessions.map(({ methodName }) => methodName).sort(),
+      ['claimOrderPayment', 'markCallbackEventProcessed', 'updatePaymentAttempt', 'updatePendingPayment'].sort(),
+    );
+    assert.ok(
+      seenSessions
+        .filter((entry) => entry.methodName !== 'markCallbackEventProcessed')
+        .every((entry) => entry.session === session),
+    );
+    assert.notEqual(
+      seenSessions.find((entry) => entry.methodName === 'markCallbackEventProcessed').session,
+      session,
+      'the callback is marked processed only after post-commit effects are queued',
+    );
+    assert.equal(transactionalAuditLogger.entries.length, 1);
+    assert.equal(transactionalNotificationService.notifications.length, 1);
+  });
+
+  it('retries idempotent post-commit effects after notification enqueue fails without repeating business writes', async () => {
+    const auditEvents = new Map();
+    let notificationAttempts = 0;
+    const resilientService = createPaymentService({
+      paymentRepository,
+      callbackSecret: 'test-callback-secret',
+      payosGateway,
+      callbackProcessingLeaseMs: 1,
+      auditLogger: {
+        async log(input) {
+          if (!auditEvents.has(input.eventId)) auditEvents.set(input.eventId, input);
+        },
+      },
+      notificationService: {
+        async notifyPaymentStatus(input) {
+          notificationAttempts += 1;
+          if (notificationAttempts === 1) throw new Error('notification queue unavailable');
+          return input;
+        },
+      },
+      transactionManager: { async withTransaction(work) { return work({ id: 'retry-session' }); } },
+    });
+    const input = {
+      orderId: 'order-online',
+      paymentAttemptId: 'attempt-1',
+      transactionId: 'TXN-POST-COMMIT-RETRY',
+      providerMessageId: 'MSG-POST-COMMIT-RETRY',
+      amount: 50,
+      status: 'Paid',
+      callbackSecret: 'test-callback-secret',
+    };
+
+    await assert.rejects(() => resilientService.handlePaymentCallback(input), /notification queue unavailable/);
+    assert.equal(paymentRepository.orders[0].paymentStatus, 'Paid');
+    assert.equal(paymentRepository.attempts[0].paymentStatus, 'Paid');
+    assert.equal(paymentRepository.events[0].eventStatus, 'Processing');
+
+    paymentRepository.events[0].processingStartedAt = new Date(Date.now() - 1000);
+    const replayed = await resilientService.handlePaymentCallback(input);
+
+    assert.equal(replayed.paymentStatus, 'Paid');
+    assert.equal(paymentRepository.events[0].eventStatus, 'Processed');
+    assert.equal(auditEvents.size, 1);
+    assert.equal(notificationAttempts, 2);
+    assert.equal(paymentRepository.refunds.length, 0);
   });
 
   it('records duplicate callback once and does not repeat mutation, audit, notification, or refund', async () => {
@@ -485,6 +658,72 @@ describe('payment service', () => {
     assert.equal(notificationService.notifications.length, 1);
   });
 
+  it('repairs a missing excess-payment obligation when a worker crashed after persisting Paid evidence', async () => {
+    paymentRepository.orders[0].paymentStatus = 'Paid';
+    paymentRepository.payments[0].paymentStatus = 'Paid';
+    Object.assign(paymentRepository.attempts[0], {
+      paymentStatus: 'Paid',
+      providerMessageId: 'MSG-PRIMARY',
+      transactionId: 'TXN-PRIMARY',
+      paidAt: new Date('2026-07-23T00:00:00.000Z'),
+    });
+    paymentRepository.attempts.push({
+      _id: 'attempt-2',
+      orderId: 'order-online',
+      attemptCode: 'PAY-2',
+      paymentMethod: 'ONLINE',
+      paymentProvider: 'MOCK',
+      paymentStatus: 'Paid',
+      amount: 50,
+      currency: 'VND',
+      providerMessageId: 'MSG-CRASHED',
+      transactionId: 'TXN-CRASHED',
+      paidAt: new Date('2026-07-23T00:01:00.000Z'),
+    });
+
+    const result = await paymentService.handlePaymentCallback({
+      orderId: 'order-online',
+      paymentAttemptId: 'attempt-2',
+      transactionId: 'TXN-CRASHED',
+      providerMessageId: 'MSG-CRASHED',
+      amount: 50,
+      status: 'Paid',
+      callbackSecret: 'test-callback-secret',
+    });
+
+    assert.equal(result.duplicatePayment, true);
+    assert.equal(result.refundPending, true);
+    assert.deepEqual(
+      paymentRepository.refunds.map(({ obligationType, obligationKey }) => ({ obligationType, obligationKey })),
+      [{ obligationType: 'EXCESS_PAYMENT', obligationKey: 'EXCESS_PAYMENT:attempt-2' }],
+    );
+  });
+
+  it('repairs the legacy payment projection after Paid evidence won before a worker crash', async () => {
+    paymentRepository.orders[0].paymentStatus = 'Paid';
+    Object.assign(paymentRepository.attempts[0], {
+      paymentStatus: 'Paid',
+      providerMessageId: 'MSG-PRIMARY-CRASH',
+      transactionId: 'TXN-PRIMARY-CRASH',
+      paidAt: new Date('2026-07-23T00:00:00.000Z'),
+    });
+    paymentRepository.payments[0].paymentStatus = 'Pending';
+
+    const result = await paymentService.handlePaymentCallback({
+      orderId: 'order-online',
+      paymentAttemptId: 'attempt-1',
+      transactionId: 'TXN-PRIMARY-CRASH',
+      providerMessageId: 'MSG-PRIMARY-CRASH',
+      amount: 50,
+      status: 'Paid',
+      callbackSecret: 'test-callback-secret',
+    });
+
+    assert.equal(result.paymentStatus, 'Paid');
+    assert.equal(paymentRepository.payments[0].paymentStatus, 'Paid');
+    assert.equal(paymentRepository.refunds.length, 0);
+  });
+
   it('lets a cancellation committed after the callback read win without losing paid provider evidence', async () => {
     const claimOrderPayment = paymentRepository.claimOrderPayment;
     paymentRepository.claimOrderPayment = async (id, data) => {
@@ -571,6 +810,23 @@ describe('payment service', () => {
       () => paymentService.handlePaymentCallback({ orderId: 'order-online', amount: 50, status: 'Paid', callbackSecret: 'test-callback-secret' }),
       /provider message identity is required/
     );
+  });
+
+  it('rejects callbacks whose provider identity does not match the immutable attempt', async () => {
+    await assert.rejects(
+      () => paymentService.handlePaymentCallback({
+        orderId: 'order-online',
+        paymentAttemptId: 'attempt-1',
+        paymentProvider: 'PAYOS',
+        transactionId: 'TXN-WRONG-PROVIDER',
+        providerMessageId: 'MSG-WRONG-PROVIDER',
+        amount: 50,
+        status: 'Paid',
+        callbackSecret: 'test-callback-secret',
+      }),
+      (error) => error.errorCode === 'PAYMENT_PROVIDER_MISMATCH',
+    );
+    assert.equal(paymentRepository.events.length, 0);
   });
 
   it('rejects callbacks without the configured secret and preserves a paid order on later failure', async () => {

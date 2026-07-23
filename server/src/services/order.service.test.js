@@ -202,6 +202,7 @@ describe('order service', () => {
   let cartRepository;
   let inventoryRepository;
   let emailEvents;
+  let retiredPaymentLinks;
 
   beforeEach(() => {
     orderRepository = createOrderRepository();
@@ -213,6 +214,7 @@ describe('order service', () => {
       async release(_productId, quantity) { this.reservedQuantity -= quantity; },
     };
     emailEvents = [];
+    retiredPaymentLinks = [];
     orderService = createOrderService({
       transactionManager: { async withTransaction(work) { return work({ id: 'test-session' }); } },
       cartRepository,
@@ -223,6 +225,11 @@ describe('order service', () => {
       auditLogger,
       customerRepository: { async findEmail() { return 'customer@example.com'; } },
       emailOutboxService: { async enqueue(event) { emailEvents.push(event); return event; } },
+      payosGateway: {
+        async cancelPaymentLink(paymentLinkId, reason) {
+          retiredPaymentLinks.push({ paymentLinkId, reason });
+        },
+      },
       settingsService: { async listSettings() { return { PAYMENT_TIMEOUT_MINUTES: 20 }; } },
       clock: () => new Date('2026-07-23T08:00:00.000Z'),
     });
@@ -359,8 +366,8 @@ describe('order service', () => {
     });
 
     assert.equal(cancelled.orderStatus, 'Cancelled');
-    assert.equal(cancelled.paymentStatus, 'Cancelled');
-    assert.equal(orderRepository.payments[0].paymentStatus, 'Cancelled');
+    assert.equal(cancelled.paymentStatus, 'Unpaid');
+    assert.equal(orderRepository.payments[0].paymentStatus, 'Unpaid');
     assert.equal(inventoryRepository.reservedQuantity, 0);
     assert.equal(auditLogger.entries.at(-1).action, 'ORDER_CANCEL');
     const replay = await orderService.cancelOrder('customer-1', order.id, {
@@ -368,6 +375,7 @@ describe('order service', () => {
       idempotencyKey: 'cancel-command-001',
     });
     assert.equal(replay.id, cancelled.id);
+    assert.equal(replay.idempotentReplay, true);
     assert.equal(inventoryRepository.reservedQuantity, 0);
   });
 
@@ -378,7 +386,14 @@ describe('order service', () => {
     }));
     orderRepository.attempts.push(
       { _id: 'attempt-old', orderId: order.id, paymentStatus: 'Failed', amount: 50, currency: 'VND' },
-      { _id: 'attempt-active', orderId: order.id, paymentStatus: 'Pending', amount: 50, currency: 'VND' }
+      {
+        _id: 'attempt-active',
+        orderId: order.id,
+        paymentStatus: 'Pending',
+        amount: 50,
+        currency: 'VND',
+        paymentLinkId: 'payos-link-active',
+      }
     );
 
     const cancelled = await orderService.cancelOrder('customer-1', order.id, {
@@ -389,6 +404,10 @@ describe('order service', () => {
     assert.equal(cancelled.paymentStatus, 'Cancelled');
     assert.equal(orderRepository.attempts[0].paymentStatus, 'Failed');
     assert.equal(orderRepository.attempts[1].paymentStatus, 'Cancelled');
+    assert.deepEqual(retiredPaymentLinks, [{
+      paymentLinkId: 'payos-link-active',
+      reason: 'Customer cancelled order',
+    }]);
   });
 
   it('rejects reuse of a cancellation idempotency key with a different reason', async () => {

@@ -5,6 +5,7 @@ const OrderDetail = require('../models/orderDetail.model');
 const Payment = require('../models/payment.model');
 const PaymentAttempt = require('../models/paymentAttempt.model');
 const Inventory = require('../models/inventory.model');
+const { createPayOSGateway } = require('../config/payos');
 const { logAudit } = require('../utils/auditLogger');
 const { notificationService } = require('./notification.service');
 
@@ -115,6 +116,7 @@ function createOrderPaymentExpiryService({
       });
     },
   },
+  payosGateway = createPayOSGateway(),
   clock = () => new Date(),
 } = {}) {
   async function expireCandidate(candidate, now) {
@@ -130,28 +132,41 @@ function createOrderPaymentExpiryService({
 
       const details = await repository.listOrderDetails(claimed._id, session);
       await repository.cancelPendingPayment(claimed._id, session);
-      await repository.expireActivePaymentAttempt(claimed._id, session);
+      const expiredAttempt = await repository.expireActivePaymentAttempt(claimed._id, session);
       for (const detail of details) {
         const released = await inventoryRepository.release(detail.productId, detail.quantity, session);
         if (!released) throw new Error(`Order ${claimed.orderCode} reservation could not be released`);
       }
-      return claimed;
+      return { order: claimed, expiredAttempt };
     });
 
     if (!expired) return false;
+    if (expired.expiredAttempt?.paymentLinkId && payosGateway?.cancelPaymentLink) {
+      try {
+        await payosGateway.cancelPaymentLink(
+          expired.expiredAttempt.paymentLinkId,
+          'Order payment deadline expired',
+        );
+      } catch {
+        // The immutable local expiry already won. Provider retirement is
+        // best-effort and late paid evidence is handled as a refund
+        // obligation by the callback service.
+      }
+    }
+    const expiredOrder = expired.order;
     // Side effects intentionally follow the committed transition, never the transaction body.
     await auditLogger.log({
-      userId: expired.customerId,
+      userId: expiredOrder.customerId,
       action: 'ORDER_PAYMENT_EXPIRED',
       targetEntity: 'Order',
-      targetId: String(expired._id),
-      description: `Online payment deadline expired: ${expired.orderCode}`,
+      targetId: String(expiredOrder._id),
+      description: `Online payment deadline expired: ${expiredOrder.orderCode}`,
     });
     await notificationPublisher.publish({
-      userId: expired.customerId,
-      orderId: String(expired._id),
-      orderCode: expired.orderCode,
-      eventId: `ORDER_PAYMENT_EXPIRED:${String(expired._id)}`,
+      userId: expiredOrder.customerId,
+      orderId: String(expiredOrder._id),
+      orderCode: expiredOrder.orderCode,
+      eventId: `ORDER_PAYMENT_EXPIRED:${String(expiredOrder._id)}`,
     });
     return true;
   }

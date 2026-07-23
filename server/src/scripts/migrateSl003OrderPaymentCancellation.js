@@ -9,6 +9,13 @@ const MISSING_DEADLINE_FILTER = Object.freeze([
   Object.freeze({ paymentDeadlineAt: null }),
   Object.freeze({ paymentDeadlineAt: '' }),
 ]);
+const STOCK_EXPORT_OPEN_INDEX = Object.freeze({
+  key: Object.freeze({ orderId: 1 }),
+  name: 'stock_export_one_open_per_order',
+  partialFilterExpression: Object.freeze({
+    status: Object.freeze({ $in: Object.freeze(['Pending', 'Approved', 'Processing']) }),
+  }),
+});
 
 function isMissing(value) {
   return value === undefined || value === null || value === '';
@@ -118,6 +125,49 @@ async function migrateSl003OrderPaymentCancellation({
   return result;
 }
 
+async function ensureStockExportOpenIndex({ collection } = {}) {
+  if (!collection) throw new Error('A stock export requests collection is required');
+  const duplicates = await collection.aggregate([
+    { $match: STOCK_EXPORT_OPEN_INDEX.partialFilterExpression },
+    { $group: { _id: '$orderId', count: { $sum: 1 } } },
+    { $match: { count: { $gt: 1 } } },
+    { $limit: 1 },
+  ]).toArray();
+  if (duplicates.length) {
+    throw new Error(`Order ${String(duplicates[0]._id)} has multiple open stock export requests`);
+  }
+
+  let indexes;
+  try {
+    indexes = await collection.indexes();
+  } catch (error) {
+    if (!['NamespaceNotFound', 'ns not found'].includes(error?.codeName)
+      && !/namespace.*not found/i.test(String(error?.message || ''))) {
+      throw error;
+    }
+    indexes = [];
+  }
+  const existing = indexes.find((index) => index.name === STOCK_EXPORT_OPEN_INDEX.name);
+  if (existing) {
+    const expectedStatuses = STOCK_EXPORT_OPEN_INDEX.partialFilterExpression.status.$in;
+    const actualStatuses = existing.partialFilterExpression?.status?.$in || [];
+    const compatible = existing.unique === true
+      && JSON.stringify(existing.key) === JSON.stringify(STOCK_EXPORT_OPEN_INDEX.key)
+      && JSON.stringify(actualStatuses) === JSON.stringify(expectedStatuses);
+    if (!compatible) {
+      throw new Error(`${STOCK_EXPORT_OPEN_INDEX.name} exists with an incompatible definition`);
+    }
+    return { created: false };
+  }
+
+  await collection.createIndex(STOCK_EXPORT_OPEN_INDEX.key, {
+    name: STOCK_EXPORT_OPEN_INDEX.name,
+    unique: true,
+    partialFilterExpression: STOCK_EXPORT_OPEN_INDEX.partialFilterExpression,
+  });
+  return { created: true };
+}
+
 async function runCli({
   loadEnv = () => require('dotenv').config(),
   connect = connectDatabase,
@@ -131,12 +181,15 @@ async function runCli({
     : validatePaymentTimeoutMinutes(env.PAYMENT_TIMEOUT_MINUTES);
   await connect();
   try {
+    const stockExportIndex = await ensureStockExportOpenIndex({
+      collection: mongooseClient.connection.collection('stockexportrequests'),
+    });
     const result = await migrateSl003OrderPaymentCancellation({
       collection: mongooseClient.connection.collection('orders'),
       paymentTimeoutMinutes,
     });
     logger.log('SL-003 Order migration completed.');
-    logger.table([result]);
+    logger.table([{ ...result, stockExportIndexCreated: stockExportIndex.created }]);
   } finally {
     await mongooseClient.disconnect();
   }
@@ -153,7 +206,9 @@ module.exports = {
   DEFAULT_PAYMENT_TIMEOUT_MINUTES,
   MISSING_DEADLINE_FILTER,
   PRE_CONFIRMATION_STATUSES,
+  STOCK_EXPORT_OPEN_INDEX,
   buildMigrationPlan,
+  ensureStockExportOpenIndex,
   migrateSl003OrderPaymentCancellation,
   runCli,
   validatePaymentTimeoutMinutes,

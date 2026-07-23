@@ -3,6 +3,8 @@ const { describe, it } = require('node:test');
 
 const {
   DEFAULT_PAYMENT_TIMEOUT_MINUTES,
+  STOCK_EXPORT_OPEN_INDEX,
+  ensureStockExportOpenIndex,
   migrateSl003OrderPaymentCancellation,
 } = require('./migrateSl003OrderPaymentCancellation');
 
@@ -57,6 +59,35 @@ function createOrdersCollection(documents) {
     },
     async dropIndex(name) {
       calls.dropIndex.push(name);
+    },
+  };
+}
+
+function createStockExportCollection(documents, initialIndexes = []) {
+  const indexes = clone(initialIndexes);
+  const calls = { createIndex: [] };
+  return {
+    calls,
+    aggregate() {
+      return {
+        async toArray() {
+          const openCounts = new Map();
+          for (const document of documents) {
+            if (!STOCK_EXPORT_OPEN_INDEX.partialFilterExpression.status.$in.includes(document.status)) continue;
+            openCounts.set(document.orderId, (openCounts.get(document.orderId) || 0) + 1);
+          }
+          return [...openCounts.entries()]
+            .filter(([, count]) => count > 1)
+            .slice(0, 1)
+            .map(([_id, count]) => ({ _id, count }));
+        },
+      };
+    },
+    async indexes() { return clone(indexes); },
+    async createIndex(key, options) {
+      calls.createIndex.push({ key: clone(key), options: clone(options) });
+      indexes.push({ key: clone(key), ...clone(options) });
+      return options.name;
     },
   };
 }
@@ -242,5 +273,34 @@ describe('SL-003 Order migration', () => {
     assert.deepEqual(collection.calls.find, []);
     assert.deepEqual(collection.calls.updateOne, []);
     assert.deepEqual(collection.calls.dropIndex, []);
+  });
+
+  it('creates the one-open-stock-export index once and is repeat-safe', async () => {
+    const collection = createStockExportCollection([
+      { orderId: 'order-1', status: 'Pending' },
+      { orderId: 'order-1', status: 'Cancelled' },
+    ]);
+
+    assert.deepEqual(await ensureStockExportOpenIndex({ collection }), { created: true });
+    assert.deepEqual(await ensureStockExportOpenIndex({ collection }), { created: false });
+    assert.equal(collection.calls.createIndex.length, 1);
+    assert.equal(collection.calls.createIndex[0].options.unique, true);
+    assert.deepEqual(
+      collection.calls.createIndex[0].options.partialFilterExpression,
+      STOCK_EXPORT_OPEN_INDEX.partialFilterExpression,
+    );
+  });
+
+  it('stops before index creation when an order already has multiple open export requests', async () => {
+    const collection = createStockExportCollection([
+      { orderId: 'order-duplicate', status: 'Pending' },
+      { orderId: 'order-duplicate', status: 'Approved' },
+    ]);
+
+    await assert.rejects(
+      () => ensureStockExportOpenIndex({ collection }),
+      /multiple open stock export requests/i,
+    );
+    assert.deepEqual(collection.calls.createIndex, []);
   });
 });

@@ -179,6 +179,9 @@ function createRepository() {
       return pending;
     },
     async findRefundPending(obligationKey) { return state.refunds.find((entry) => entry.obligationKey === obligationKey) || null; },
+    async findRefundPendingByRequestId(returnRefundRequestId) {
+      return state.refunds.find((entry) => entry.returnRefundRequestId === returnRefundRequestId) || null;
+    },
     async updateRefundPending(id, data) {
       const refund = state.refunds.find((entry) => entry._id === id);
       if (!refund) return null;
@@ -876,7 +879,7 @@ describe('return/refund service', () => {
         idempotencyKey: 'payout-request-001', method: 'MANUAL', providerReference: 'bank-001',
         status: 'Succeeded', occurredAt: now, reconciliationNote: 'Verified bank receipt',
       }),
-      /Warehouse receipt/i,
+      /received or ready for refund/i,
     );
     await recordHandoff(requestId);
     await inspectRequest(requestId);
@@ -1027,6 +1030,74 @@ describe('return/refund service', () => {
       }),
       /idempotency key.*different/i,
     );
+  });
+
+  it('pays a cancellation refund without a warehouse receipt and keeps the cancelled order closed', async () => {
+    repository.orders.push({
+      _id: 'order-cancelled',
+      orderCode: 'GH-CANCELLED-001',
+      customerId: 'customer-1',
+      totalAmount: 120,
+      currency: 'VND',
+      paymentMethod: 'ONLINE',
+      paymentStatus: 'Paid',
+      orderStatus: 'Cancelled',
+      moneyObligationsSettled: false,
+    });
+    repository.payments.push({
+      _id: 'payment-cancelled',
+      orderId: 'order-cancelled',
+      amount: 120,
+      paymentStatus: 'Paid',
+    });
+    repository.attempts.push({
+      _id: 'attempt-cancelled',
+      orderId: 'order-cancelled',
+      amount: 120,
+      currency: 'VND',
+      paymentStatus: 'Paid',
+    });
+    repository.requests.push({
+      _id: 'request-cancelled',
+      orderId: 'order-cancelled',
+      requestCode: 'CAN-GH-CANCELLED-001',
+      customerId: 'customer-1',
+      reason: 'Customer cancellation: no longer needed',
+      evidenceImages: [],
+      status: 'ReadyForRefund',
+      refundAmount: 120,
+      requestedAt: now,
+    });
+    repository.refunds.push({
+      _id: 'refund-cancelled',
+      orderId: 'order-cancelled',
+      paymentAttemptId: 'attempt-cancelled',
+      customerId: 'customer-1',
+      returnRefundRequestId: 'request-cancelled',
+      amount: 120,
+      currency: 'VND',
+      reason: 'Customer cancellation: no longer needed',
+      status: 'RefundPending',
+      payoutStatus: 'NotStarted',
+      obligationType: 'PAYMENT_REVERSAL',
+      obligationKey: 'PAYMENT_REVERSAL:attempt-cancelled',
+    });
+
+    await submitAndVerifyDestination('request-cancelled');
+    const result = await service.recordPayoutEvidence('staff-1', 'request-cancelled', {
+      idempotencyKey: 'cancel-refund-payout-001',
+      method: 'MANUAL',
+      providerReference: 'bank-cancel-refund-001',
+      status: 'Succeeded',
+      occurredAt: now,
+      reconciliationNote: 'Verified cancellation refund receipt',
+    });
+
+    assert.equal(result.request.status, 'Completed');
+    assert.equal(repository.refunds.at(-1).status, 'Refunded');
+    assert.equal(repository.orders.at(-1).orderStatus, 'Cancelled');
+    assert.equal(repository.orders.at(-1).paymentStatus, 'Paid');
+    assert.equal(repository.orders.at(-1).moneyObligationsSettled, true);
   });
 
   it('opens Customer-responsibility recovery without creating an automatic second payout for the exact confirmed destination', async () => {

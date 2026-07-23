@@ -18,10 +18,16 @@ function createFixture() {
     { productId: 'product-b', quantity: 1 },
   ];
   const releases = [];
-  const attempts = [{ _id: 'attempt-active', orderId: 'order-1', paymentStatus: 'Pending' }];
+  const attempts = [{
+    _id: 'attempt-active',
+    orderId: 'order-1',
+    paymentStatus: 'Pending',
+    paymentLinkId: 'payos-link-active',
+  }];
   const payments = [{ _id: 'payment-1', orderId: 'order-1', paymentStatus: 'Pending' }];
   const auditEntries = [];
   const notifications = [];
+  const retiredLinks = [];
   let committed = false;
 
   const repository = {
@@ -62,9 +68,15 @@ function createFixture() {
     inventoryRepository: { async release(productId, quantity) { releases.push({ productId, quantity }); return true; } },
     auditLogger: { async log(entry) { assert.equal(committed, true); auditEntries.push(entry); } },
     notificationPublisher: { async publish(entry) { assert.equal(committed, true); notifications.push(entry); } },
+    payosGateway: {
+      async cancelPaymentLink(paymentLinkId, reason) {
+        assert.equal(committed, true);
+        retiredLinks.push({ paymentLinkId, reason });
+      },
+    },
     clock: () => new Date('2026-07-23T08:00:01.000Z'),
   });
-  return { service, order, payments, attempts, releases, auditEntries, notifications };
+  return { service, order, payments, attempts, releases, auditEntries, notifications, retiredLinks };
 }
 
 describe('order payment expiry service', () => {
@@ -84,6 +96,10 @@ describe('order payment expiry service', () => {
     ]);
     assert.equal(fixture.auditEntries[0].action, 'ORDER_PAYMENT_EXPIRED');
     assert.equal(fixture.notifications[0].eventId, 'ORDER_PAYMENT_EXPIRED:order-1');
+    assert.deepEqual(fixture.retiredLinks, [{
+      paymentLinkId: 'payos-link-active',
+      reason: 'Order payment deadline expired',
+    }]);
   });
 
   it('does not release, audit, or notify when another committed transition wins the expiry race', async () => {

@@ -421,6 +421,9 @@ function createModelRepository() {
     async findRefundPending(obligationKey, session) {
       return withOptionalSession(RefundPending.findOne({ obligationKey }), session).lean();
     },
+    async findRefundPendingByRequestId(returnRefundRequestId, session) {
+      return withOptionalSession(RefundPending.findOne({ returnRefundRequestId }), session).lean();
+    },
     async updateRefundPending(id, data, session) {
       return withOptionalSession(RefundPending.findByIdAndUpdate(id, { $set: data }, { new: true, runValidators: true }), session).lean();
     },
@@ -623,8 +626,19 @@ function createReturnRefundService({
     }, session);
   }
 
+  async function findRequestRefundObligation(request, session) {
+    const normalReturn = await repository.findRefundPending(`NORMAL_RETURN:${String(request._id)}`, session);
+    if (normalReturn) return normalReturn;
+    if (repository.findRefundPendingByRequestId) {
+      return repository.findRefundPendingByRequestId(request._id, session);
+    }
+    return null;
+  }
+
   async function finalizeSuccessfulPayout(staffId, loaded, refund, evidence, note, session) {
     const completedAt = new Date(clock());
+    const isCancellationRefund = loaded.request.status === 'ReadyForRefund'
+      && loaded.order.orderStatus === 'Cancelled';
     const updatedRefund = await repository.updateRefundPending(refund._id, {
       status: 'Refunded',
       payoutStatus: 'Succeeded',
@@ -649,9 +663,16 @@ function createReturnRefundService({
       }, session);
     if (!completed) throw new ApiError(409, 'Return/refund request changed while payout was being completed');
 
-    const updatedOrder = await repository.updateOrder(loaded.order._id, { orderStatus: 'Returned' }, session);
+    const updatedOrder = await repository.updateOrder(
+      loaded.order._id,
+      {
+        ...(isCancellationRefund ? {} : { orderStatus: 'Returned' }),
+        moneyObligationsSettled: true,
+      },
+      session
+    );
     if (!updatedOrder) throw new ApiError(409, 'Order changed while payout was being completed');
-    if (repository.releaseOrderLock) {
+    if (!isCancellationRefund && repository.releaseOrderLock) {
       const closedLock = await repository.releaseOrderLock(
         loaded.order._id,
         loaded.request._id,
@@ -777,7 +798,7 @@ function createReturnRefundService({
       return { ...toPayoutResponse(existing, 'Staff'), replay: true };
     }
     if (request.status === 'Completed') throw new ApiError(409, 'Refund was already completed; use the original payout evidence');
-    if (!RECEIVED_STATUSES.includes(request.status)) throw new ApiError(409, 'Warehouse receipt is required before payout');
+    if (!RECEIVED_STATUSES.includes(request.status)) throw new ApiError(409, 'Request must be received or ready for refund before payout');
     if (!request.verifiedDestinationId) throw new ApiError(409, 'A verified refund destination is required before payout');
     if (payoutIncident?.status === 'Open') {
       if (payoutIncident.responsibility === 'Customer') {
@@ -800,7 +821,7 @@ function createReturnRefundService({
     if (occurredAt.getTime() > new Date(clock()).getTime() + FUTURE_TOLERANCE_MS) throw new ApiError(400, 'occurredAt cannot be in the future');
     const reconciliationNote = String(input.reconciliationNote || '').trim();
     if (method === 'MANUAL' && !reconciliationNote) throw new ApiError(400, 'Manual payout evidence requires a reconciliation note');
-    const refund = await repository.findRefundPending(`NORMAL_RETURN:${String(request._id)}`);
+    const refund = await findRequestRefundObligation(request);
     if (!refund || String(refund.returnRefundRequestId || request._id) !== String(request._id)) throw new ApiError(409, 'Normal return refund obligation not found');
     if (refund.status === 'Refunded') throw new ApiError(409, 'Refund payout was already completed');
     const authorizedCorrectivePayout = payoutIncident?.status === 'Open'
@@ -1417,7 +1438,7 @@ function createReturnRefundService({
       if (!evidence || !['Succeeded', 'Unknown'].includes(evidence.status)) {
         throw new ApiError(409, 'A successful or mismatched payout evidence record is required before opening recovery');
       }
-      const refund = await repository.findRefundPending(`NORMAL_RETURN:${String(request._id)}`);
+      const refund = await findRequestRefundObligation(request);
       if (!refund) throw new ApiError(409, 'Normal return refund obligation not found');
       const destination = await repository.findDestinationById(request.verifiedDestinationId);
       if (!destination) throw new ApiError(409, 'Verified refund destination not found');
@@ -1453,7 +1474,7 @@ function createReturnRefundService({
       const loaded = await loadRequest(id);
       const { request, order, payoutIncident } = loaded;
       if (request.status === 'Completed') throw new ApiError(409, 'Refund was already completed');
-      if (!RECEIVED_STATUSES.includes(request.status)) throw new ApiError(409, 'Warehouse receipt is required before payout');
+      if (!RECEIVED_STATUSES.includes(request.status)) throw new ApiError(409, 'Request must be received or ready for refund before payout');
       if (!request.verifiedDestinationId) throw new ApiError(409, 'A verified refund destination is required before payout');
       if (payoutIncident?.status === 'Open') {
         if (payoutIncident.responsibility === 'Customer') {
@@ -1472,7 +1493,7 @@ function createReturnRefundService({
       }
       if (!destination.accountNumberEncrypted) throw new ApiError(409, 'The verified payout destination cannot be decrypted');
       if (!payosGateway?.isConfigured?.()) throw new ApiError(503, 'payOS payout is not configured for this server');
-      const refund = await repository.findRefundPending(`NORMAL_RETURN:${String(request._id)}`);
+      const refund = await findRequestRefundObligation(request);
       if (!refund || String(refund.returnRefundRequestId || request._id) !== String(request._id)) throw new ApiError(409, 'Normal return refund obligation not found');
       if (refund.status === 'Refunded') throw new ApiError(409, 'Refund payout was already completed');
       const correctiveRecovery = payoutIncident?.status === 'Open'
@@ -1575,7 +1596,7 @@ function createReturnRefundService({
       }
       const expectedAmount = normalizeRefundAmount(order.totalAmount, 'stored order total');
       if (Number(successfulEvidence.amount) !== expectedAmount) throw new ApiError(409, 'Payout evidence amount does not match the server-derived order total');
-      const refund = await repository.findRefundPending(`NORMAL_RETURN:${String(request._id)}`);
+      const refund = await findRequestRefundObligation(request);
       if (!refund) throw new ApiError(409, 'Normal return refund obligation not found');
 
       await transactionManager.withTransaction(async (session) => {

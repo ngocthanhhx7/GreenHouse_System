@@ -17,4 +17,9 @@ describe('Customer return/refund UI contract', () => {
   it('does not show a speculative refund amount in request history', () => {
     assert.doesNotMatch(historySource, /Số tiền hoàn|formatCurrency\(item\.refundAmount\)/);
   });
+
+  it('allows a cancellation refund that is ready for payout to collect a destination', () => {
+    assert.match(historySource, /ReadyForRefund/);
+    assert.match(historySource, /submitDestination/);
+  });
 });

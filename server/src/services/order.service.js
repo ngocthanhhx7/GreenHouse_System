@@ -10,8 +10,10 @@ const OrderDetail = require('../models/orderDetail.model');
 const Payment = require('../models/payment.model');
 const PaymentAttempt = require('../models/paymentAttempt.model');
 const RefundPending = require('../models/refundPending.model');
+const ReturnRefundRequest = require('../models/returnRefundRequest.model');
 const User = require('../models/user.model');
 const UserAddress = require('../models/userAddress.model');
+const { createPayOSGateway } = require('../config/payos');
 const { logAudit } = require('../utils/auditLogger');
 const { createEmailOutboxService } = require('./email.service');
 const { systemSettingService } = require('./systemSetting.service');
@@ -36,6 +38,7 @@ function toOrderResponse(order, details = []) {
     exchangeDeadlineAt: order.exchangeDeadlineAt || null,
     paymentMethod: order.paymentMethod,
     paymentStatus: order.paymentStatus,
+    moneyObligationsSettled: order.moneyObligationsSettled !== false,
     orderStatus: order.orderStatus,
     shippingAddress: order.shippingAddress,
     receiverName: order.receiverName || '',
@@ -265,6 +268,16 @@ function createModelOrderRepository() {
       const [attempt] = await PaymentAttempt.create([data], session ? { session } : undefined);
       return attempt.toObject();
     },
+    async createRefundRequest(data, session) {
+      const [request] = await ReturnRefundRequest.create([data], session ? { session } : undefined);
+      return request.toObject();
+    },
+    async updateRefundRequest(id, data, session) {
+      return withOptionalSession(
+        ReturnRefundRequest.findByIdAndUpdate(id, { $set: data }, { new: true, runValidators: true }),
+        session
+      ).lean();
+    },
     async listByCustomer(customerId) {
       return Order.find({ customerId }).sort({ createdAt: -1 }).lean();
     },
@@ -323,6 +336,12 @@ function createModelOrderRepository() {
         session
       ).lean();
     },
+    async markMoneyObligationsUnsettled(orderId, session) {
+      return withOptionalSession(
+        Order.findByIdAndUpdate(orderId, { $set: { moneyObligationsSettled: false } }, { new: true, runValidators: true }),
+        session
+      ).lean();
+    },
   };
 }
 
@@ -355,6 +374,7 @@ function createOrderService({
   emailOutboxService = null,
   addressRepository = createModelAddressRepository(),
   settingsService = systemSettingService,
+  payosGateway = createPayOSGateway(),
   clock = () => new Date(),
 } = {}) {
   function normalizeIdempotencyKey(input = {}, operation = 'checkout') {
@@ -450,6 +470,7 @@ function createOrderService({
         unitSnapshot: product.unit || '',
         productImageSnapshot: Array.isArray(product.imageUrls) ? product.imageUrls[0] || '' : '',
         priceSnapshot: product.price,
+        priceVersionSnapshot: currentPriceVersion,
         quantity: item.quantity,
         subtotal: product.price * item.quantity,
       });
@@ -606,6 +627,17 @@ function createOrderService({
             paymentStatus: initialPaymentStatus,
           };
           await orderRepository.createPayment(paymentPayload, session);
+          if (paymentMethod === 'COD' && orderRepository.createPaymentAttempt) {
+            await orderRepository.createPaymentAttempt({
+              orderId: order._id,
+              attemptCode: `COD-${order.orderCode}`,
+              paymentMethod: 'COD',
+              paymentProvider: 'COD',
+              amount: totalAmount,
+              currency: 'VND',
+              paymentStatus: 'Unpaid',
+            }, session);
+          }
           const clearedCart = await cartRepository.clearExactCart(cart._id, session);
           if (!clearedCart) throw new ApiError(409, 'Cart was changed during checkout. Please retry with a new key.');
           return { order, lines, replay: false };
@@ -694,9 +726,14 @@ function createOrderService({
         if (isPaid && !paidAttempt) {
           throw new ApiError(409, 'A verified paid attempt is required before cancelling a paid order');
         }
+        const cancelledPaymentStatus = isPaid
+          ? 'Paid'
+          : order.paymentMethod === 'COD'
+            ? 'Unpaid'
+            : 'Cancelled';
         const cancelData = {
           orderStatus: 'Cancelled',
-          paymentStatus: isPaid ? 'Paid' : 'Cancelled',
+          paymentStatus: cancelledPaymentStatus,
           cancelReason,
           cancelIdempotencyKey: idempotencyKey,
           cancelRequestHash: requestHash,
@@ -718,23 +755,40 @@ function createOrderService({
         }
 
         const details = await orderRepository.listDetails(orderId, session);
+        let retiredPaymentLinkId = '';
         const payment = orderRepository.findPaymentByOrderId
           ? await orderRepository.findPaymentByOrderId(orderId, session)
           : null;
         if (!isPaid && payment && orderRepository.updatePayment) {
-          await orderRepository.updatePayment(payment._id, { paymentStatus: 'Cancelled' }, session);
+          await orderRepository.updatePayment(payment._id, { paymentStatus: cancelledPaymentStatus }, session);
         }
         if (!isPaid && orderRepository.findActivePaymentAttemptByOrder) {
           const activeAttempt = await orderRepository.findActivePaymentAttemptByOrder(orderId, session);
           if (activeAttempt) {
-            await orderRepository.updatePaymentAttempt(activeAttempt._id, { paymentStatus: 'Cancelled' }, session);
+            await orderRepository.updatePaymentAttempt(activeAttempt._id, {
+              paymentStatus: order.paymentMethod === 'COD' ? 'Unpaid' : 'Cancelled',
+            }, session);
+            retiredPaymentLinkId = activeAttempt.paymentLinkId || '';
           }
         }
         if (isPaid) {
-          await orderRepository.upsertRefundPending({
+          const refundRequest = orderRepository.createRefundRequest
+            ? await orderRepository.createRefundRequest({
+              orderId: order._id,
+              requestCode: `CAN-${order.orderCode}`,
+              customerId: order.customerId,
+              paymentId: payment?._id || null,
+              reason: `Customer cancellation: ${cancelReason}`,
+              status: 'ReadyForRefund',
+              refundAmount: order.totalAmount,
+              originalRequestedAt: new Date(),
+            }, session)
+            : null;
+          const refund = await orderRepository.upsertRefundPending({
             orderId: order._id,
             paymentAttemptId: paidAttempt._id,
             customerId: order.customerId,
+            returnRefundRequestId: refundRequest?._id || null,
             amount: order.totalAmount,
             currency: order.currency || paidAttempt.currency || 'VND',
             reason: `Customer cancellation: ${cancelReason}`,
@@ -742,13 +796,32 @@ function createOrderService({
             obligationType: 'PAYMENT_REVERSAL',
             obligationKey: `PAYMENT_REVERSAL:${String(paidAttempt._id)}`,
           }, session);
+          if (refundRequest && orderRepository.updateRefundRequest) {
+            await orderRepository.updateRefundRequest(refundRequest._id, { refundPendingId: refund._id }, session);
+          }
+          if (orderRepository.markMoneyObligationsUnsettled) {
+            await orderRepository.markMoneyObligationsUnsettled(order._id, session);
+          }
         }
         for (const detail of details) {
           await inventoryRepository.release(detail.productId, detail.quantity, session);
         }
-        return { cancelled, orderCode: order.orderCode, replay: false };
+        return {
+          cancelled,
+          orderCode: order.orderCode,
+          replay: false,
+          retiredPaymentLinkId,
+        };
       });
       if (!result.replay) {
+        if (result.retiredPaymentLinkId && payosGateway?.cancelPaymentLink) {
+          try {
+            await payosGateway.cancelPaymentLink(result.retiredPaymentLinkId, 'Customer cancelled order');
+          } catch {
+            // Local cancellation is authoritative. A provider callback that
+            // still reports Paid becomes an explicit refund obligation.
+          }
+        }
         await auditLogger.log({
           userId: customerId,
           action: 'ORDER_CANCEL',
@@ -757,7 +830,10 @@ function createOrderService({
           description: `Order cancelled: ${result.orderCode}`,
         });
       }
-      return toOrderResponse(result.cancelled);
+      return {
+        ...toOrderResponse(result.cancelled),
+        idempotentReplay: Boolean(result.replay),
+      };
     },
   };
 }

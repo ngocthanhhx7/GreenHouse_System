@@ -116,11 +116,15 @@ export default function OrderDetailPage() {
     setIsCancelling(true);
     setError('');
     try {
-      setOrder(await orderService.cancelOrder(id, {
+      const cancelledOrder = await orderService.cancelOrder(id, {
         cancelReason,
         idempotencyKey: cancelIdempotencyKey.current,
-      }));
-      setMessage('Đơn hàng đã được hủy.');
+      });
+      setOrder(cancelledOrder);
+      setMessage(cancelledOrder.idempotentReplay
+        ? 'Yêu cầu hủy đơn đã được ghi nhận trước đó.'
+        : 'Đơn hàng đã được hủy.');
+      await loadOrder();
     } catch (err) {
       setError(err.message);
     } finally {
@@ -269,6 +273,7 @@ export default function OrderDetailPage() {
             <dt className="col-sm-3">Địa chỉ giao hàng</dt><dd className="col-sm-9">{order.shippingAddress}</dd>
             <dt className="col-sm-3">Người nhận</dt><dd className="col-sm-9">{order.receiverName || '-'} · {order.receiverPhone || '-'}</dd>
             {order.customerNote && <><dt className="col-sm-3">Ghi chú</dt><dd className="col-sm-9">{order.customerNote}</dd></>}
+            {order.cancelReason && <><dt className="col-sm-3">Lý do hủy</dt><dd className="col-sm-9">{order.cancelReason}</dd></>}
           </dl>
           <h2>Sản phẩm trong đơn</h2>
           <ul className="order-item-list">

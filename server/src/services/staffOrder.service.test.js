@@ -31,12 +31,16 @@ function createOrderRepository() {
   const invoices = [];
   let reservedQuantity = 2;
   let releaseCalls = 0;
+  const inventories = [{ productId: 'p1', stockQuantity: 10, reservedQuantity: 2 }];
+  let cancelExportCalls = 0;
   const confirmationMutationSessions = [];
 
   return {
     orders, exports, payments, attempts, refunds, invoices,
     get reservedQuantity() { return reservedQuantity; },
     get releaseCalls() { return releaseCalls; },
+    get cancelExportCalls() { return cancelExportCalls; },
+    inventories,
     confirmationMutationSessions,
     async listOrders(query = {}) { return orders.filter((order) => !query.status || order.orderStatus === query.status); },
     async findOrderById(id) { return orders.find((order) => order._id === id) || null; },
@@ -61,7 +65,17 @@ function createOrderRepository() {
       reservedQuantity -= quantity;
       return { productId, reservedQuantity };
     },
+    async findInventoryByProductId(productId) {
+      return inventories.find((inventory) => inventory.productId === productId) || null;
+    },
     async findOpenStockExportRequest(orderId) { return exports.find((entry) => entry.orderId === orderId && ['Pending', 'Approved', 'Processing'].includes(entry.status)) || null; },
+    async cancelOpenStockExportRequest(orderId, data) {
+      const request = exports.find((entry) => entry.orderId === orderId && ['Pending', 'Approved'].includes(entry.status));
+      if (!request) return null;
+      Object.assign(request, { status: 'Cancelled', ...data });
+      cancelExportCalls += 1;
+      return request;
+    },
     async findCompletedStockExportRequest(orderId) {
       return exports.find((entry) => entry.orderId === orderId && (entry.status === 'Exported' || entry.exportedAt)) || null;
     },
@@ -146,6 +160,34 @@ describe('staff order service', () => {
     assert.equal(orderRepository.exports.length, 0);
   });
 
+  it('rejects confirmation when the exact reservation is no longer intact', async () => {
+    orderRepository.inventories[0].reservedQuantity = 1;
+
+    await assert.rejects(
+      () => service.confirmOrder('staff-1', 'order-1', {}),
+      /full reservation|reservation.*intact/i,
+    );
+
+    assert.equal(orderRepository.orders[0].orderStatus, 'Pending');
+    assert.equal(orderRepository.exports.length, 0);
+  });
+
+  it('replays a staff confirmation under the same idempotency key without creating another request', async () => {
+    const first = await service.confirmOrder('staff-1', 'order-1', {
+      idempotencyKey: 'staff-confirm-001',
+      note: 'Reviewed',
+    });
+    const replay = await service.confirmOrder('staff-1', 'order-1', {
+      idempotencyKey: 'staff-confirm-001',
+      note: 'Reviewed',
+    });
+
+    assert.equal(first.orderStatus, 'Confirmed');
+    assert.equal(replay.orderStatus, 'Confirmed');
+    assert.equal(replay.idempotentReplay, true);
+    assert.equal(orderRepository.exports.length, 1);
+  });
+
   it('does not allow generic status update to bypass stock export request creation', async () => {
     await service.confirmOrder('staff-1', 'order-1', {});
     await assert.rejects(
@@ -211,6 +253,43 @@ describe('staff order service', () => {
     assert.equal(orderRepository.releaseCalls, 1);
     assert.equal(orderRepository.refunds.length, 1);
     assert.equal(auditLogger.entries.filter((entry) => entry.action === 'STAFF_ORDER_CANCEL').length, 1);
+  });
+
+  it('cancels an open stock export request when Staff cancels a confirmed order', async () => {
+    orderRepository.orders[0].orderStatus = 'Confirmed';
+    orderRepository.exports.push({
+      _id: 'export-open',
+      orderId: 'order-1',
+      requestedBy: 'staff-1',
+      status: 'Pending',
+      exportedAt: null,
+    });
+
+    const cancelled = await service.cancelOrder('staff-1', 'order-1', {
+      idempotencyKey: 'staff-cancel-001',
+      cancelReason: 'Customer requested cancellation',
+    });
+
+    assert.equal(cancelled.orderStatus, 'Cancelled');
+    assert.equal(orderRepository.exports[0].status, 'Cancelled');
+    assert.equal(orderRepository.cancelExportCalls, 1);
+  });
+
+  it('replays a Staff cancellation under the same idempotency key', async () => {
+    orderRepository.orders[0].orderStatus = 'Confirmed';
+    const first = await service.cancelOrder('staff-1', 'order-1', {
+      idempotencyKey: 'staff-cancel-002',
+      cancelReason: 'Duplicate request',
+    });
+    const replay = await service.cancelOrder('staff-1', 'order-1', {
+      idempotencyKey: 'staff-cancel-002',
+      cancelReason: 'Duplicate request',
+    });
+
+    assert.equal(first.orderStatus, 'Cancelled');
+    assert.equal(replay.orderStatus, 'Cancelled');
+    assert.equal(replay.idempotentReplay, true);
+    assert.equal(orderRepository.releaseCalls, 1);
   });
 
   it('releases a confirmed unpaid COD reservation without creating a refund', async () => {

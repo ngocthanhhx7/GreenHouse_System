@@ -33,13 +33,40 @@ const orderSchema = new mongoose.Schema(
       default: '',
       trim: true,
     },
+    staffConfirmIdempotencyKey: {
+      type: String,
+      default: '',
+      trim: true,
+      maxlength: 128,
+      immutable: true,
+    },
+    staffConfirmRequestHash: {
+      type: String,
+      default: '',
+      trim: true,
+      maxlength: 128,
+      immutable: true,
+    },
+    staffCancelIdempotencyKey: {
+      type: String,
+      default: '',
+      trim: true,
+      maxlength: 128,
+    },
+    staffCancelRequestHash: {
+      type: String,
+      default: '',
+      trim: true,
+      maxlength: 128,
+    },
     totalAmount: {
       type: Number,
       required: true,
       min: 0,
+      immutable: true,
     },
     // Server-derived once at checkout. Clients and Staff never choose a COD amount.
-    codExpectedAmount: { type: Number, min: 0, default: null },
+    codExpectedAmount: { type: Number, min: 0, default: null, immutable: true },
     customerCollectedAmount: { type: Number, min: 0, default: 0 },
     customerCollectedAt: { type: Date, default: null },
     customerCollectionEvidenceId: { type: String, default: '', trim: true, maxlength: 160 },
@@ -74,8 +101,12 @@ const orderSchema = new mongoose.Schema(
     },
     paymentStatus: {
       type: String,
-      enum: ['Unpaid', 'Pending', 'Paid', 'Failed', 'Cancelled', 'RefundPending', 'Refunded'],
+      enum: ['Unpaid', 'Pending', 'Paid', 'Failed', 'Cancelled'],
       default: 'Pending',
+    },
+    moneyObligationsSettled: {
+      type: Boolean,
+      default: true,
     },
     paymentDeadlineAt: {
       type: Date,

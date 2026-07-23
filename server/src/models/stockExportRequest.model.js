@@ -36,5 +36,13 @@ const stockExportRequestSchema = new mongoose.Schema(
 );
 
 stockExportRequestSchema.index({ orderId: 1, status: 1 });
+stockExportRequestSchema.index(
+  { orderId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { status: { $in: ['Pending', 'Approved', 'Processing'] } },
+    name: 'stock_export_one_open_per_order',
+  }
+);
 
 module.exports = mongoose.model('StockExportRequest', stockExportRequestSchema);
