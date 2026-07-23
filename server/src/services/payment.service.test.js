@@ -100,7 +100,9 @@ function createPaymentRepository() {
       return event;
     },
     async upsertRefundPending(data) {
-      const existing = refunds.find((refund) => refund.orderId === data.orderId);
+      const existing = refunds.find((refund) => data.obligationKey
+        ? refund.obligationKey === data.obligationKey
+        : refund.orderId === data.orderId && refund.obligationType === data.obligationType);
       if (existing) return existing;
       const refund = { _id: `refund-${refunds.length + 1}`, ...data };
       refunds.push(refund);
@@ -223,6 +225,8 @@ describe('payment service', () => {
     assert.equal(result.refundPending, true);
     assert.equal(paymentRepository.orders[0].orderStatus, 'WaitingForPayment');
     assert.equal(paymentRepository.refunds.length, 1);
+    assert.equal(paymentRepository.refunds[0].obligationType, 'PAYMENT_REVERSAL');
+    assert.equal(paymentRepository.refunds[0].obligationKey, 'PAYMENT_REVERSAL:attempt-1');
   });
 
   it('does not overwrite a paid order when another payOS attempt is also paid', async () => {
@@ -381,6 +385,8 @@ describe('payment service', () => {
     assert.equal(paymentRepository.attempts[0].paymentStatus, 'RefundPending');
     assert.equal(paymentRepository.refunds.length, 1);
     assert.equal(paymentRepository.refunds[0].status, 'RefundPending');
+    assert.equal(paymentRepository.refunds[0].obligationType, 'PAYMENT_REVERSAL');
+    assert.equal(paymentRepository.refunds[0].obligationKey, 'PAYMENT_REVERSAL:attempt-1');
     assert.equal(auditLogger.entries.length, 1);
     assert.equal(notificationService.notifications.length, 1);
   });

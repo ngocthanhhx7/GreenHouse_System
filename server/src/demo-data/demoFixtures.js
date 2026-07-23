@@ -104,7 +104,7 @@ const orderStates = [
   ['StockExportRequested', 'Unpaid', 'COD'], ['Packed', 'Paid', 'ONLINE'], ['Packed', 'Unpaid', 'COD'],
   ['Shipped', 'Paid', 'ONLINE'], ['Delivered', 'Paid', 'COD'], ['Delivered', 'Paid', 'ONLINE'],
   ...Array.from({ length: 6 }, () => ['Delivered', 'Paid', 'COD']),
-  ['Returned', 'Refunded', 'ONLINE'], ['Cancelled', 'Unpaid', 'COD'], ['Cancelled', 'RefundPending', 'ONLINE'],
+  ['Returned', 'Paid', 'ONLINE'], ['Cancelled', 'Unpaid', 'COD'], ['Cancelled', 'RefundPending', 'ONLINE'],
   ['Expired', 'Failed', 'ONLINE'],
 ];
 
@@ -302,7 +302,7 @@ const returnItems = returnRequests.filter((request) => ['ReadyForRefund', 'Compl
 );
 const refundPendings = [
   { key: 'refund-pending-01', orderKey: 'order-17', paymentAttemptKey: 'payment-attempt-17', status: 'RefundPending' },
-  { key: 'refund-pending-02', orderKey: 'order-19', paymentAttemptKey: 'payment-attempt-19', status: 'RefundPending' },
+  { key: 'refund-pending-02', orderKey: 'order-19', paymentAttemptKey: 'payment-attempt-19', status: 'Refunded' },
   { key: 'refund-pending-03', orderKey: 'order-21', paymentAttemptKey: 'payment-attempt-21', status: 'RefundPending' },
 ].map((entry) => ({ ...entry, customerKey: orders[Number(entry.orderKey.slice(-2)) - 1].customerKey, amount: orders[Number(entry.orderKey.slice(-2)) - 1].totalAmount, currency: 'VND', reason: 'Bàn giao hoàn tiền theo kịch bản demo.' }));
 

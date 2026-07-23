@@ -2,11 +2,11 @@
 
 **Date:** 2026-07-22
 
-**Status:** Business design approved; implementation not started
+**Status:** Business design approved; SL-001 implemented and verified locally; production PayOS, evidence-pipeline configuration and SL-002 shared-lock integration remain explicit external conditions
 
 **Business approver:** Project Business Approver (user in this Codex task)
 
-**Implementation baseline:** `2cd0b9518b42a6d1860951b20cdcfdfa2e398ca5`
+**Implementation baseline:** isolated worktree on `feature/sl-001-return-refund`, based on `1e625cfbbddf8c2ef4f17dbcb1b103f00899356f`; not deployed
 
 **SRS baseline:** Google Docs revision `AIroW372r8j-BncuGRhIEqFwCQa2PLXsnMT53H_cxn5r7E_t-NkRjh2gJg2UEves9dhsAFtoTr0qoSWM8Lt1qYAOQzSFBEWVaj2Ap2eXHQI`; one tab `t.0`; read back 2026-07-23
 
@@ -18,7 +18,7 @@ Exchange is outside this slice and is governed by `SL-002`. One Order may have o
 
 | Slice | G0 | G1 | G2 | G3 | G4 | G5 | G6 | G7 | Next evidence |
 |---|---|---|---|---|---|---|---|---|---|
-| SL-001 | passed | passed | passed | ready | not-started | not-started | not-started | not-started | Complete exact G3 API/interface/code/test/release-evidence mapping against the reconciled SRS revision |
+| SL-001 | passed | passed | passed | passed | passed | passed | passed-local | passed-local | Production owner verifies PayOS Payout and evidence-pipeline configuration; SL-002 consumes the shared active-case lock when implemented |
 
 No unresolved business decision remains inside `SL-001`.
 
@@ -28,7 +28,7 @@ No unresolved business decision remains inside `SL-001`.
 |---|---|---|---|---|---|---|
 | SRC-001 | [Google SRS](https://docs.google.com/document/d/1j_1Qg_DoFC6Dk5zk_UZcnMnjjqW2wjKPNAH1ZNxNwtE/edit?tab=t.0) | Google Docs revision `AIroW372r8j-BncuGRhIEqFwCQa2PLXsnMT53H_cxn5r7E_t-NkRjh2gJg2UEves9dhsAFtoTr0qoSWM8Lt1qYAOQzSFBEWVaj2Ap2eXHQI`; one tab `t.0`; read back 2026-07-23 | Candidate UC-CS-12, FR-RR, BR-RR, state, and acceptance text plus the adopted CR-001 v2.1 addendum | Candidate source except where an approved decision adopts it; CR-001 v2.1 is normative for its bounded cross-slice rules | SRS contributors; Project Business Approver approves policy | Legacy paragraphs remain candidate; the normative v2.1 addendum supersedes conflicting Return/COD wording |
 | SRC-002 | Explicit approvals in this Codex task | 2026-07-22 | BD-001 through BD-005 | Normative business authority for the first SL-001 decisions | Project Business Approver | Approver display name is not recorded |
-| SRC-003 | Repository `D:\GreenHouse_System-main` | HEAD `2cd0b9518b42a6d1860951b20cdcfdfa2e398ca5`; inspected 2026-07-22 | Current Return/Refund routes, models, services, UI, and tests | `observed-behavior` only | Engineering team | Current inspection, Inventory, destination, payout, and amount-presentation behavior conflict with this design |
+| SRC-003 | Repository worktree `D:\GreenHouse_System-main\.worktrees\sl-001-return-refund` | Branch `feature/sl-001-return-refund` based on `1e625cf`; verified 2026-07-23 | Implemented Return/Refund routes, models, services, UI, migration, local Mongo lifecycle, and actor walkthrough | Implementation evidence only; business authority remains the approved decisions | Engineering team | Isolated from the original mixed working tree; use the scoped handoff manifest for review |
 | SRC-004 | `docs/RETURN_REFUND_RECONCILIATION.md` | Repository baseline above | Existing local implementation boundary | Historical design evidence only | Engineering team | Its no-Inventory-mutation inspection rule conflicts with BD-001 |
 | SRC-005 | [payOS API](https://payos.vn/docs/api/) and [Node SDK](https://payos.vn/docs/sdks/back-end/node/) | Accessed 2026-07-22 | Payout destination, idempotency, validation, processing, and reconciliation capabilities | Provider evidence, not GreenHouse business authority | payOS | Payout is not an assumed reversal to the original payer account |
 | SRC-006 | Archived SWR material, Hassan Gomaa Chapter 6 and SWR Chapter 17 | Local archive accessed 2026-07-22 | Actor/use-case structure and validation guidance | Method guidance only | SWR archive | Does not decide GreenHouse policy |
@@ -44,7 +44,7 @@ No unresolved business decision remains inside `SL-001`.
 | BD-002 | SL-001 | Who owns each responsibility? | Shared ownership; explicit Customer/Staff/Warehouse/payOS boundaries | Customer initiates and confirms destination; Staff/CSKH decides and verifies; Warehouse inspects; payOS executes authorized Payout; System enforces rules | Make permissions, prohibitions, handoffs, and failures testable | Project Business Approver | 2026-07-22 | All SL-001 requirements |
 | BD-003 | SL-001 | How is the refund destination obtained? | Payer data; separate CSKH actor; secure Customer form | CSKH is Staff. Staff opens a secure authenticated form; Customer confirms bank destination; payout waits for `Received + DestinationVerified` | Avoid unknown destinations and keep Warehouse outside financial personal data | Project Business Approver | 2026-07-22 | BR-RR-05, BR-RR-06, BR-RR-09, BR-RR-15 |
 | BD-004 | SL-001 | What is valid destination data and who bears wrong-data responsibility? | Customer always; Shop always; causation-based | Store an immutable Customer-confirmed snapshot. Staff may verify/reject but not edit. Customer bears direct consequence only when the exact wrong Customer-confirmed snapshot was used; Staff/System/payOS mismatch is not Customer responsibility | Tie responsibility to attributable evidence and prevent automatic duplicate payout | Project Business Approver | 2026-07-22 | BR-RR-06, BR-RR-10, BR-RR-11 |
-| BD-005 | SL-001 | Where is the refund amount shown? | Every form; read-only form; final receipt only | Customer forms neither display nor accept the amount. Backend derives `Order.TotalAmount`; final receipt shows actual transferred amount | Avoid implying Customer control while preserving final evidence | Project Business Approver | 2026-07-22 | BR-RR-02, BR-RR-12 |
+| BD-005 | SL-001 | Where is the refund amount shown? | Every form; read-only form; final receipt only | Customer and Staff forms neither display nor accept the amount. Backend derives `Order.TotalAmount` and stores the exact amount in Refund/Payout evidence; Customer UI only needs the attributable completion result and masked destination | Avoid implying actor control while preserving exact financial evidence in the system of record | Project Business Approver | 2026-07-22 | BR-RR-02, BR-RR-12 |
 | BD-006 | SL-001 | Who decides acceptable reasons? | Fixed catalogue; automated policy; Staff judgment | Customer supplies free-text reason and evidence. System checks completeness and eligibility, not the truth of the reason. Staff decides and records a reason | Preserve business discretion while keeping each decision attributable | Project Business Approver | 2026-07-22 | BR-RR-03, BR-RR-04 |
 | BD-007 | SL-001 | What are the request and physical-handoff deadlines? | One five-day deadline; no handoff deadline; separate deadlines | Submit at or before `DeliveredAt + 5 days`. After approval, hand off to carrier/shop at or before `ShipByAt = ApprovedAt + 3 days`. Timely handoff proof controls; Warehouse receipt may occur later | A day-five request still needs time to ship, while approved cases cannot remain open indefinitely | Project Business Approver | 2026-07-22 | BR-RR-01, BR-RR-04 |
 | BD-008 | SL-001 | When is the destination form opened? | Initial request; after approval; outside System | Open only after Staff approval, through the authenticated Customer account, in parallel with physical return | Minimize financial-data exposure without delaying the return | Project Business Approver | 2026-07-22 | BR-RR-05, BR-RR-06 |
@@ -82,7 +82,7 @@ Admin, engineering owners, and the Project Business Approver are not runtime act
 | BR-RR-09 | Payout readiness requires both `Received` and `DestinationVerified`. Payout uses the exact immutable destination snapshot and backend amount under one idempotency identity. | BD-001, BD-003, BD-004 |
 | BR-RR-10 | Provider processing, failure, timeout, or unknown remains non-terminal and append-only. Manual transfer is allowed only after reconciliation clears duplicate-payment risk and uses the same snapshot with processor/reference/amount/time evidence. | BD-001, BD-003 |
 | BR-RR-11 | If the exact wrong Customer-confirmed snapshot was used, no automatic second payout is made and Staff opens recovery. If Staff/System/payOS altered or misrouted it, Customer is not responsible. | BD-004 |
-| BR-RR-12 | Request and destination forms neither display nor accept amount. Final receipt/notification shows actual transferred amount and masked destination. | BD-005 |
+| BR-RR-12 | Customer and Staff request, destination, decision, and payout forms neither display nor accept amount. Backend alone derives and stores the exact amount in Refund/Payout evidence; Customer receives the attributable completion result and masked destination without an amount-entry surface. | BD-005 |
 | BR-RR-13 | One active after-sales case is allowed per Order across Return/Refund and Exchange; duplicate commands return the existing case or deterministic conflict without duplicate effects. | BD-001, BD-021 |
 | BR-RR-14 | Normal paid-Return completion requires goods `Received`, the Return Refund obligation `Refunded`, the accepted primary collection still `Paid`, aggregate `MoneyObligationsSettled=true`, request `Completed`, and Order `Returned` exactly once. A Carrier settlement mismatch does not change a valid primary `Paid` fact. CR `BR-107` owns the separate Customer under-collection recovery closure. | BD-001, BD-110, BD-114, BD-117 |
 | BR-RR-15 | Warehouse never receives refund-destination data; Customer sees only owned cases; full destination values are restricted to authorized Staff and masked elsewhere. | BD-002, BD-003 |
@@ -113,7 +113,7 @@ Admin, engineering owners, and the Project Business Approver are not runtime act
 13. When `Received + DestinationVerified` are both true, System starts or resumes the idempotent payout workflow.
 14. Verified automatic or manual success sets the Return Refund obligation to `Refunded` once, retains the accepted primary collection as `Paid`, and updates aggregate settlement without substituting the payment state.
 15. System completes the request and sets the Order to `Returned` once.
-16. System issues the final receipt/notification with actual amount and masked destination.
+16. System issues one attributable final completion notification; the exact transferred amount remains in Refund/Payout evidence and the destination remains masked outside authorized Staff detail.
 
 ### Alternative and Failure Paths
 
@@ -160,6 +160,7 @@ Key invariants:
 - Customer Order detail exposes one **Đổi/Trả hàng** entry and then the separate Return/Refund option when eligible.
 - Return request shows whole-Order items, deadline, reason, and evidence; it has no amount input or display.
 - Secure destination form appears only for an owned approved request and has no amount input or display.
+- Evidence images are loaded only through the authenticated evidence API; direct `/uploads/return-evidence` access is not public.
 - Staff sees case evidence, decision controls, destination verification, payout/recovery state, and masked/full destination only according to authorization.
 - Warehouse sees only the minimum Order-line and condition evidence needed for receipt; no bank, amount-selection, or payout controls.
 - Repeated submit displays processing or already-recorded feedback and links to the existing case.
@@ -188,19 +189,19 @@ Key invariants:
 | AT-017 | Given Staff/System/payOS changed or misrouted the destination, when reconciled, then Customer is not assigned responsibility and false completion is blocked/corrected. | `approved-requirement` |
 | AT-018 | Given verified payout success and processed goods, when completion or notification is retried, then exactly one `Refunded/Completed/Returned` outcome and one final receipt exist. | `approved-requirement` |
 
-## 11. Preliminary G3 Traceability and Known Conflicts
+## 11. Final Traceability and Local Verification
 
 | Decision | Requirements | Use case/interface | Current implementation evidence | Acceptance | Status |
 |---|---|---|---|---|---|
-| BD-001, BD-006, BD-007 | BR-RR-01 through BR-RR-04 | Customer request; Staff decision; handoff | Current request service has no complete five-day/three-day lifecycle | AT-001 through AT-006 | ready |
-| BD-003, BD-004, BD-008 | BR-RR-05, BR-RR-06, BR-RR-09 through BR-RR-11, BR-RR-15 | Destination form; Staff verification; payout/recovery | Current models contain no immutable verified destination versions | AT-007 through AT-010, AT-013 through AT-017 | ready |
-| BD-001, BD-002 | BR-RR-07, BR-RR-08, BR-RR-14 | Warehouse inspection; Inventory; completion | Current service permits partial receipt and does not perform approved atomic Inventory outcome | AT-011, AT-012, AT-018 | ready |
-| BD-005 | BR-RR-02, BR-RR-12 | Customer forms; final receipt | Current Staff flow accepts refund amount and current Customer form presentation conflicts | AT-001, AT-013, AT-018 | ready |
-| BD-001, BD-021 | BR-RR-13 | Shared Return/Exchange active-case guard | Current combined flow lacks approved cross-use-case lock and terminal release rules | AT-002; CR AT-213, AT-214 | ready |
-| BD-001, BD-002 | BR-RR-16 | Decision, receipt, payout, completion notification outbox | Current notification calls are not one complete idempotent after-sales contract | AT-018; CR AT-220 | ready |
-| BD-110, BD-112, BD-113, BD-116, BD-117 | CR BR-106 through BR-108, BR-110 through BR-112, BR-117, BR-118, BR-121 | COD hold; collection/settlement separation; conversion handoff; resubmission; evidence/destination security | Return/Refund, Payment, Carrier reconciliation, Inventory, upload, destination, and shared lock surfaces | CR AT-205 through AT-214, AT-221 through AT-226 | ready; governed by SRC-055 |
+| BD-001, BD-006, BD-007 | BR-RR-01 through BR-RR-04 | Customer request; Staff decision; handoff | Five-day request deadline, Staff reason, three-day handoff, expiry and late integration reconciliation implemented | AT-001 through AT-006 | verified |
+| BD-003, BD-004, BD-008 | BR-RR-05, BR-RR-06, BR-RR-09 through BR-RR-11, BR-RR-15 | Destination form; Staff verification; payout/recovery | Immutable encrypted destination versions, role redaction, PayOS/manual payout and causal recovery implemented | AT-007 through AT-010, AT-013 through AT-017 | verified-local |
+| BD-001, BD-002 | BR-RR-07, BR-RR-08, BR-RR-14 | Warehouse inspection; Inventory; completion | Exact full-order validation and one Mongo transaction create receipt, movements and one Refund obligation | AT-011, AT-012, AT-018 | verified |
+| BD-005 | BR-RR-02, BR-RR-12 | Customer/Staff forms; system-of-record evidence | API rejects Staff-supplied amount; backend derives amount; actor forms have zero amount inputs | AT-001, AT-013, AT-018 | verified |
+| BD-001, BD-021 | BR-RR-13 | Shared Return/Exchange active-case guard | Return duplicate lock and idempotent effects implemented; Exchange consumer remains conditional until SL-002 exists | AT-002; CR AT-213, AT-214 | verified-conditional |
+| BD-001, BD-002 | BR-RR-16 | Decision, receipt, payout, recovery and completion notifications | Notifications are outside transactions and terminal/recovery identities cannot suppress the corrected final event | AT-018; CR AT-220 | verified |
+| BD-110, BD-112, BD-113, BD-116, BD-117 | CR BR-106 through BR-108, BR-110 through BR-112, BR-117, BR-118, BR-121 | COD hold; collection/settlement separation; resubmission; evidence/destination security | COD evidence/recovery seam, protected owner-bound/scanned uploads, retention disposal and destination boundaries implemented for SL-001; Exchange conversion remains SL-002 scope | CR AT-205 through AT-214, AT-221 through AT-226 | verified for SL-001 seam |
 
-Before implementation, G3 must map every row to exact SRS paragraphs, API contracts, model/service/UI locations, red tests, and release evidence. Existing passing tests remain `observed-behavior` until reconciled with this design.
+The exact file/test/evidence map and local gate results are recorded in `../reconciliation/SL-001_G3_TRACEABILITY.md`. Final observed evidence is 368/368 server tests, 123/123 client tests, a successful 134-module production build, two idempotent migration runs, a live Mongo lifecycle/recovery verification, and a three-actor browser walkthrough.
 
 ## 12. CR-001 v2.1 Cross-Slice Addendum
 
@@ -210,8 +211,8 @@ Before implementation, G3 must map every row to exact SRS paragraphs, API contra
 4. Terminal resubmission and replacement-unit windows follow CR `BR-111/BR-112`; completion of a whole Return permits no later after-sales case.
 5. Evidence and destination data must satisfy CR `BR-117/BR-118` before G4 tests or implementation can pass.
 
-## 13. Method Basis and Next Phase
+## 13. Method Basis and Handoff
 
 The archived SWR guidance requires functional requirements to be structured by actors and use cases and validated for correctness, completeness, consistency, feasibility, and verifiability. GreenHouse policy in this document comes only from the Project Business Approver, not from the archive or current code.
 
-No implementation plan or code change is authorized by this document alone. CR-001 v2.1 records the completed cross-system closure and COD terminology/settlement clarification; the next step is exact G3 mapping before red tests or implementation.
+CR-001 v2.1 records the cross-system closure and COD terminology/settlement clarification. SL-001 is now locally implemented and verified. The next engineering action is review and scoped commit using `../reconciliation/SL-001_HANDOFF.md`; production release remains conditional on real PayOS Payout entitlement/credential verification plus evidence-scanner/claim/retention configuration, and SL-002 must later consume the shared active-case seam.

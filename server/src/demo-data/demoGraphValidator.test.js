@@ -73,7 +73,7 @@ describe('demo graph validator', () => {
     ['future timestamp', (graph) => { graph.auditLogs[0].timestamp = '2026-07-23T00:00:00.000Z'; }, /thời gian.*tương lai/i],
     ['invalid support actor', (graph) => { const item = graph.supportRequests.find((support) => support.status === 'New'); item.handledByKey = 'user-staff'; }, /support.*New/i],
     ['awaiting return without refund amount', (graph) => { graph.returnRequests.find((item) => item.status === 'AwaitingInspection').refundAmount = 0; }, /AwaitingInspection.*số tiền hoàn/i],
-    ['unsupported durable refund state', (graph) => { graph.refundPendings[0].status = 'Refunded'; }, /RefundPending.*service hiện tại/i],
+    ['unsupported durable refund state', (graph) => { graph.refundPendings[0].status = 'Refunded'; }, /RefundPending.*không khớp hand-off/i],
     ['missing low-stock scenarios', (graph) => { for (const inventory of graph.inventories) inventory.lowStockThreshold = 0; }, /ít nhất hai sản phẩm sắp hết/i],
     ['incomplete invoice detail snapshot', (graph) => { graph.invoices[0].orderDetailKeys.pop(); graph.invoices[0].items.pop(); }, /đầy đủ chính xác.*dòng hàng/i],
     ['invoice item drift', (graph) => { graph.invoices[0].items[0].subtotal += 1; }, /invoice item snapshot/i],

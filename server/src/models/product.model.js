@@ -38,6 +38,7 @@ const productSchema = new mongoose.Schema(
       type: Number,
       default: 0,
       min: 0,
+      validate: { validator: Number.isInteger, message: 'stockQuantity must be a non-negative integer' },
     },
     unit: {
       type: String,

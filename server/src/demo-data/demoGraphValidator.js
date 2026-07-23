@@ -131,7 +131,7 @@ function validateDemoGraph(graph) {
     if (subtotal !== order.subtotal || subtotal + order.shippingFee !== order.totalAmount) fail(`${order.orderCode} có tổng tiền không khớp.`);
     if (order.orderStatus === 'WaitingForPayment' && (order.paymentMethod !== 'ONLINE' || order.paymentStatus !== 'Pending')) fail('WaitingForPayment phải là ONLINE/Pending.');
     if (order.orderStatus === 'Delivered' && order.paymentStatus !== 'Paid') fail('Đơn Delivered bắt buộc có paymentStatus Paid.');
-    if (order.orderStatus === 'Returned' && order.paymentStatus !== 'Refunded') fail('Đơn Returned bắt buộc có paymentStatus Refunded.');
+    if (order.orderStatus === 'Returned' && !['Paid', 'Cancelled'].includes(order.paymentStatus)) fail('Đơn Returned phải giữ Paid cho Return thường hoặc Cancelled cho COD recovery.');
     if (order.paymentMethod === 'COD' && order.orderStatus !== 'Delivered' && order.paymentStatus !== 'Unpaid') fail(`${order.orderCode} COD chưa giao phải Unpaid.`);
     if (order.orderStatus === 'Cancelled' && !String(order.cancelReason || '').trim()) fail(`${order.orderCode} Cancelled phải có lý do.`);
     if (order.paymentMethod === 'ONLINE' && ['Confirmed', 'StockExportRequested', 'Packed', 'Shipped', 'Delivered'].includes(order.orderStatus) && order.paymentStatus !== 'Paid') fail(`${order.orderCode} ONLINE sau xác nhận phải Paid.`);
@@ -229,7 +229,7 @@ function validateDemoGraph(graph) {
     const order = orders.get(request.orderKey);
     const items = graph.returnItems.filter((item) => item.returnRequestKey === request.key);
     if (request.customerKey !== order.customerKey) fail(`${request.key} không thuộc customer của order.`);
-    if (request.status === 'Completed' && (order.orderStatus !== 'Returned' || order.paymentStatus !== 'Refunded' || items.length === 0)) fail(`${request.key} Completed bắt buộc order Returned/Refunded và có inspection items.`);
+    if (request.status === 'Completed' && (order.orderStatus !== 'Returned' || order.paymentStatus !== 'Paid' || items.length === 0)) fail(`${request.key} Completed bắt buộc order Returned, giữ primary payment Paid và có inspection items.`);
     if (request.status === 'Completed' && (request.completedByKey !== 'user-staff' || !request.completedAt || !request.inspectionNote || items.some((item) => Date.parse(item.inspectedAt) > Date.parse(request.completedAt)))) fail(`${request.key} Completed thiếu actor/timestamp/inspection hợp lệ.`);
     if (request.status === 'ReadyForRefund' && (order.orderStatus !== 'Delivered' || order.paymentStatus !== 'Paid' || items.length === 0)) fail(`${request.key} ReadyForRefund phải giữ order Delivered/Paid và có inspection items.`);
     if (request.status === 'ReadyForRefund' && !request.inspectionNote) fail(`${request.key} ReadyForRefund thiếu inspection note.`);
@@ -241,9 +241,9 @@ function validateDemoGraph(graph) {
   for (const pending of graph.refundPendings) {
     const order = orders.get(pending.orderKey);
     const request = graph.returnRequests.find((item) => item.orderKey === order.key);
-    if (pending.status !== 'RefundPending') fail(`${pending.key} phải phản ánh trạng thái RefundPending mà service hiện tại đang lưu.`);
-    const validHandoff = ['ReadyForRefund', 'Completed'].includes(request?.status)
-      || (order.orderStatus === 'Cancelled' && order.paymentStatus === 'RefundPending');
+    const validHandoff = (request?.status === 'ReadyForRefund' && pending.status === 'RefundPending')
+      || (request?.status === 'Completed' && pending.status === 'Refunded')
+      || (order.orderStatus === 'Cancelled' && order.paymentStatus === 'RefundPending' && pending.status === 'RefundPending');
     if (!validHandoff) fail(`${pending.key} RefundPending không khớp hand-off hiện tại.`);
   }
   for (const review of graph.reviews) {

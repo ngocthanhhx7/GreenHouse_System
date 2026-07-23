@@ -2,12 +2,12 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import { returnRefundService } from '../../services/returnRefundService.js';
-import { formatCurrency, translateRequestStatus } from '../../utils/formatters.js';
+import { translateRequestStatus } from '../../utils/formatters.js';
 
-const STATUS_OPTIONS = ['', 'Pending', 'AwaitingInspection', 'ReadyForRefund', 'Rejected', 'Completed'];
+const STATUS_OPTIONS = ['', 'New', 'AwaitingCODReconciliation', 'Approved', 'Received', 'Rejected', 'Expired', 'Completed'];
 
 export default function ReturnRefundQueuePage() {
-  const [status, setStatus] = useState('Pending');
+  const [status, setStatus] = useState('New');
   const [items, setItems] = useState([]);
   const [error, setError] = useState('');
 
@@ -50,7 +50,6 @@ export default function ReturnRefundQueuePage() {
             <tr>
               <th>Đơn hàng</th>
               <th>Trạng thái</th>
-              <th>Số tiền hoàn</th>
               <th>Lý do</th>
               <th></th>
             </tr>
@@ -60,7 +59,6 @@ export default function ReturnRefundQueuePage() {
               <tr key={item.id}>
                 <td>{item.orderCode}</td>
                 <td>{translateRequestStatus(item.status)}</td>
-                <td>{formatCurrency(item.refundAmount)}</td>
                 <td>{item.reason}</td>
                 <td>
                   <Link className="btn btn-outline-success btn-sm" to={`/staff/return-refunds/${item.id}`}>
@@ -71,7 +69,7 @@ export default function ReturnRefundQueuePage() {
             ))}
             {!items.length && (
               <tr>
-                <td colSpan="5" className="text-center text-muted">Không có yêu cầu trong trạng thái này.</td>
+                <td colSpan="4" className="text-center text-muted">Không có yêu cầu trong trạng thái này.</td>
               </tr>
             )}
           </tbody>

@@ -15,4 +15,8 @@ describe('upload route authorization contract', () => {
     assert.match(source, /router\.post\('\/profile\/avatar', authenticate, uploadAvatar/);
     assert.match(source, /router\.delete\('\/profile\/avatar', authenticate/);
   });
+
+  it('protects return evidence reads with actor authentication and explicit roles', () => {
+    assert.match(source, /router\.get\([\s\S]*'\/return-refunds\/evidence\/:filename',[\s\S]*authenticate,[\s\S]*authorizeRoles\('Customer', 'Staff', 'WarehouseManager'\)/);
+  });
 });

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
 import { orderService } from '../../services/orderService.js';
@@ -9,6 +9,9 @@ export default function OrderDetailPage() {
   const { id } = useParams();
   const [order, setOrder] = useState(null);
   const [returnReason, setReturnReason] = useState('');
+  const [returnEvidenceFiles, setReturnEvidenceFiles] = useState([]);
+  const [isSubmittingReturn, setIsSubmittingReturn] = useState(false);
+  const returnSubmissionInFlight = useRef(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
@@ -36,18 +39,32 @@ export default function OrderDetailPage() {
 
   async function requestReturnRefund(event) {
     event.preventDefault();
+    if (returnSubmissionInFlight.current) {
+      setMessage('Yêu cầu đang được xử lý, vui lòng không bấm gửi nhiều lần.');
+      return;
+    }
+    returnSubmissionInFlight.current = true;
+    setIsSubmittingReturn(true);
     setError('');
     setMessage('');
     try {
-      await returnRefundService.createCustomerRequest(id, { reason: returnReason });
+      if (!returnEvidenceFiles.length) throw new Error('Vui lòng đính kèm ít nhất một ảnh bằng chứng.');
+      const uploaded = await returnRefundService.uploadEvidence(returnEvidenceFiles);
+      const evidenceImages = (uploaded.items || []).map((item) => item.url);
+      await returnRefundService.createCustomerRequest(id, { reason: returnReason, evidenceImages });
       setReturnReason('');
+      setReturnEvidenceFiles([]);
       setMessage('Đã gửi yêu cầu đổi trả / hoàn tiền.');
     } catch (err) {
       setError(err.message);
+    } finally {
+      returnSubmissionInFlight.current = false;
+      setIsSubmittingReturn(false);
     }
   }
 
   if (!order && !error) return <div className="page-center">Đang tải đơn hàng...</div>;
+  const returnWindowExpired = Boolean(order?.returnDeadlineAt && Date.now() > new Date(order.returnDeadlineAt).getTime());
 
   return (
     <div className="surface">
@@ -93,6 +110,11 @@ export default function OrderDetailPage() {
             ))}
           </ul>
           <strong className="order-total">Tổng cộng: {formatCurrency(order.totalAmount)}</strong>
+          {order.paymentMethod === 'COD' && order.orderStatus === 'Delivered' && order.codDiscrepancyStatus === 'Open' && (
+            <div className="alert alert-warning mt-3">
+              Đơn đã giao nhưng bằng chứng thu tiền COD đang được đối soát. Bạn vẫn có thể gửi yêu cầu trong thời hạn; hệ thống sẽ giữ yêu cầu và chưa thực hiện hoàn tiền cho tới khi đối soát xong.
+            </div>
+          )}
           {order.paymentMethod === 'ONLINE' && order.paymentStatus === 'Pending' && (
             <div className="mt-3">
               <Link className="btn btn-success" to={`/orders/${order.id}/payment`}>
@@ -107,9 +129,13 @@ export default function OrderDetailPage() {
               </button>
             </div>
           )}
-          {order.orderStatus === 'Delivered' && (
+          {order.orderStatus === 'Delivered' && returnWindowExpired && (
+            <div className="alert alert-secondary mt-4">Đơn hàng đã quá thời hạn 5 ngày để gửi yêu cầu trả hàng / hoàn tiền.</div>
+          )}
+          {order.orderStatus === 'Delivered' && !returnWindowExpired && (
             <form className="mt-4" onSubmit={requestReturnRefund}>
               <h2>Yêu cầu đổi trả / hoàn tiền</h2>
+              {order.returnDeadlineAt && <p className="text-secondary">Hạn gửi yêu cầu: {new Date(order.returnDeadlineAt).toLocaleString('vi-VN')}</p>}
               <label className="form-label" htmlFor="returnReason">Lý do</label>
               <textarea
                 id="returnReason"
@@ -119,9 +145,21 @@ export default function OrderDetailPage() {
                 onChange={(event) => setReturnReason(event.target.value)}
                 required
               />
-              <button className="btn btn-outline-danger mt-3" type="submit">
-                Gửi yêu cầu
+              <label className="form-label mt-3" htmlFor="returnEvidence">Ảnh bằng chứng</label>
+              <input
+                id="returnEvidence"
+                className="form-control"
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                multiple
+                onChange={(event) => setReturnEvidenceFiles(Array.from(event.target.files || []).slice(0, 5))}
+                required
+              />
+              <div className="form-text">Tối đa 5 ảnh JPG, PNG hoặc WebP; mỗi ảnh không quá 5 MB.</div>
+              <button className="btn btn-outline-danger mt-3" type="submit" disabled={isSubmittingReturn}>
+                {isSubmittingReturn ? 'Đang gửi...' : 'Gửi yêu cầu'}
               </button>
+              <span className="visually-hidden" aria-live="polite">{isSubmittingReturn ? 'Yêu cầu đang được xử lý.' : message}</span>
             </form>
           )}
         </>

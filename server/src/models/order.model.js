@@ -23,6 +23,20 @@ const orderSchema = new mongoose.Schema(
       required: true,
       min: 0,
     },
+    // Server-derived once at checkout. Clients and Staff never choose a COD amount.
+    codExpectedAmount: { type: Number, min: 0, default: null },
+    customerCollectedAmount: { type: Number, min: 0, default: 0 },
+    customerCollectedAt: { type: Date, default: null },
+    customerCollectionEvidenceId: { type: String, default: '', trim: true, maxlength: 160 },
+    carrierSettlementAmount: { type: Number, min: 0, default: 0 },
+    carrierSettledAt: { type: Date, default: null },
+    carrierSettlementEvidenceId: { type: String, default: '', trim: true, maxlength: 160 },
+    codDiscrepancyStatus: { type: String, enum: ['None', 'Open', 'Resolved', 'RecoveryInProgress', 'Closed'], default: 'None' },
+    codDiscrepancyOpenedAt: { type: Date, default: null },
+    codRecoveryReceiptId: { type: String, default: '', trim: true, maxlength: 160 },
+    codRecoveryReceivedAt: { type: Date, default: null },
+    settlementReconciliationStatus: { type: String, enum: ['NotApplicable', 'Open', 'Settled'], default: 'NotApplicable' },
+    completedSaleAt: { type: Date, default: null },
     subtotal: {
       type: Number,
       default: 0,
@@ -98,6 +112,7 @@ const orderSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    returnDeadlineAt: { type: Date, default: null },
   },
   { timestamps: true }
 );

@@ -1,7 +1,9 @@
 const ApiError = require('../utils/apiError');
 const { profileService } = require('../services/profile.service');
 const { productMediaService } = require('../services/productMedia.service');
-const { uploadService } = require('../services/upload.service');
+const { returnEvidenceAccessService } = require('../services/returnEvidence.service');
+const { uploadService, validateReturnEvidenceBatch } = require('../services/upload.service');
+const { returnEvidenceClaim } = require('../utils/returnEvidenceClaim');
 const { sendSuccess } = require('../utils/apiResponse');
 
 async function uploadProductImages(req, res, next) {
@@ -28,6 +30,44 @@ async function uploadAvatar(req, res, next) {
   }
 }
 
+async function uploadReturnEvidence(req, res, next) {
+  let items = [];
+  try {
+    if (!req.files || !req.files.length) throw new ApiError(400, 'At least one return evidence image is required');
+    validateReturnEvidenceBatch(req.files);
+    items = await uploadService.storeImages(req.files, 'return-evidence');
+    const claimedItems = items.map((item) => ({
+      ...item,
+      url: returnEvidenceClaim.sign(req.user.id, item.url, item.size),
+    }));
+    return sendSuccess(res, { items: claimedItems }, 'Return evidence uploaded', 201);
+  } catch (error) {
+    if (items.length) await Promise.all(items.map((item) => uploadService.removeManagedFile(item.url).catch(() => {})));
+    return next(error);
+  }
+}
+
+async function getReturnEvidence(req, res, next) {
+  try {
+    const access = await returnEvidenceAccessService.authorize(req.user.id, req.user.role, req.params.filename);
+    const managed = uploadService.resolveManagedFile(`/api/return-refunds/evidence/${access.filename}`, 'return-evidence');
+    res.set({
+      'Cache-Control': 'private, no-store',
+      'Content-Type': managed.mimeType,
+      'Content-Disposition': `inline; filename="${access.filename}"`,
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Security-Policy': "default-src 'none'; sandbox",
+    });
+    return res.sendFile(managed.path, (error) => {
+      if (!error) return;
+      if (!res.headersSent) return next(new ApiError(404, 'Return evidence not found'));
+      return next(error);
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 async function deleteAvatar(req, res, next) {
   try {
     const result = await profileService.removeAvatar(req.user.id);
@@ -49,6 +89,8 @@ async function deleteProductImage(req, res, next) {
 module.exports = {
   uploadProductImages,
   uploadAvatar,
+  uploadReturnEvidence,
+  getReturnEvidence,
   deleteAvatar,
   deleteProductImage,
 };

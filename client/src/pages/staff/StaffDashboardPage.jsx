@@ -33,7 +33,7 @@ export default function StaffDashboardPage() {
       try {
         const [orders, returns, newSupport, openSupport, inProgressSupport] = await Promise.all([
           staffOrderService.listOrders({ status: 'Pending' }),
-          returnRefundService.listStaffRequests({ status: 'Pending' }),
+          returnRefundService.listStaffRequests({ status: 'New' }),
           supportService.listStaffRequests({ status: 'New' }),
           supportService.listStaffRequests({ status: 'Open' }),
           supportService.listStaffRequests({ status: 'InProgress' }),

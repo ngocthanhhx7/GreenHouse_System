@@ -54,9 +54,9 @@ function buildRedirectUrl(template, orderId) {
   return url.toString();
 }
 
-function createPayOSGateway(configuration = {}) {
+function createPayOSGateway(configuration = {}, dependencies = {}) {
   const config = normalizeConfig(configuration);
-  let client;
+  let client = dependencies.client;
 
   function getClient(options) {
     assertConfigured(config, options);
@@ -95,6 +95,21 @@ function createPayOSGateway(configuration = {}) {
 
     async cancelPaymentLink(paymentLinkId, reason) {
       return getClient().paymentRequests.cancel(paymentLinkId, reason);
+    },
+
+    async createPayout({ referenceId, amount, description, toBin, toAccountNumber, idempotencyKey }) {
+      return getClient().payouts.create({
+        referenceId,
+        amount,
+        description,
+        toBin,
+        toAccountNumber,
+        category: ['refund'],
+      }, idempotencyKey);
+    },
+
+    async getPayout(payoutId) {
+      return getClient().payouts.get(payoutId);
     },
 
     async confirmWebhook() {

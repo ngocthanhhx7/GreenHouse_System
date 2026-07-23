@@ -1,4 +1,4 @@
-import { DEFAULT_BASE_URL, apiRequest } from './apiClient.js';
+import { DEFAULT_BASE_URL, TOKEN_KEY, apiRequest } from './apiClient.js';
 
 async function parseResponse(response) {
   const payload = await response.json();
@@ -16,12 +16,42 @@ function buildQuery(params = {}) {
   return query.toString();
 }
 
+function evidenceApiPath(value) {
+  const match = /^\/(?:api\/return-refunds\/evidence|uploads\/return-evidence)\/([0-9a-f-]{36}\.(?:jpg|png|webp))$/.exec(String(value || '').toLowerCase());
+  if (!match) throw new Error('Đường dẫn ảnh bằng chứng không hợp lệ');
+  return `/return-refunds/evidence/${match[1]}`;
+}
+
 export function createReturnRefundService({ baseUrl = DEFAULT_BASE_URL, fetcher } = {}) {
+  const directFetcher = fetcher || fetch;
   const request = fetcher
     ? async (path, options = {}) => parseResponse(await fetcher(`${baseUrl}${path}`, options))
     : apiRequest;
 
   return {
+    async uploadEvidence(files) {
+      const body = new FormData();
+      Array.from(files || []).forEach((file) => body.append('images', file));
+      const token = typeof window === 'undefined' ? '' : window.localStorage.getItem(TOKEN_KEY);
+      return parseResponse(await directFetcher(`${baseUrl}/return-refunds/evidence`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body,
+      }));
+    },
+    async fetchEvidence(url) {
+      const token = typeof window === 'undefined' ? '' : window.localStorage.getItem(TOKEN_KEY);
+      const response = await directFetcher(`${baseUrl}${evidenceApiPath(url)}`, {
+        method: 'GET',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!response.ok) {
+        let message = 'Không thể mở ảnh bằng chứng';
+        try { message = (await response.json()).message || message; } catch { /* binary/non-JSON error */ }
+        throw new Error(message);
+      }
+      return response.blob();
+    },
     async createCustomerRequest(orderId, input) {
       return request(`/orders/${orderId}/return-refund`, {
         method: 'POST',
@@ -39,6 +69,12 @@ export function createReturnRefundService({ baseUrl = DEFAULT_BASE_URL, fetcher 
       const query = buildQuery(params);
       return request(`/warehouse/return-refunds${query ? `?${query}` : ''}`);
     },
+    async listCodRecoveryCandidates() {
+      return request('/warehouse/cod-recoveries');
+    },
+    async getCodRecoveryCandidate(orderId) {
+      return request(`/warehouse/cod-recoveries/${orderId}`);
+    },
     async getWarehouseRequest(id) {
       return request(`/warehouse/return-refunds/${id}`);
     },
@@ -51,8 +87,56 @@ export function createReturnRefundService({ baseUrl = DEFAULT_BASE_URL, fetcher 
         body: JSON.stringify(input),
       });
     },
+    async recordHandoffProof(id, input) {
+      return request(`/return-refunds/${id}/handoff-proof`, {
+        method: 'POST',
+        body: JSON.stringify(input),
+      });
+    },
+    async submitDestination(id, input) {
+      return request(`/return-refunds/${id}/destination`, {
+        method: 'POST',
+        body: JSON.stringify(input),
+      });
+    },
+    async verifyDestination(id, input) {
+      return request(`/staff/return-refunds/${id}/destination`, {
+        method: 'PATCH',
+        body: JSON.stringify(input),
+      });
+    },
+    async expireRequest(id) {
+      return request(`/staff/return-refunds/${id}/expire`, { method: 'POST' });
+    },
+    async recordPayoutEvidence(id, input) {
+      return request(`/staff/return-refunds/${id}/payout-evidence`, {
+        method: 'POST',
+        body: JSON.stringify(input),
+      });
+    },
+    async startPayOSPayout(id, input) {
+      return request(`/staff/return-refunds/${id}/payos-payout`, {
+        method: 'POST',
+        body: JSON.stringify(input),
+      });
+    },
+    async reconcilePayOSPayout(id) {
+      return request(`/staff/return-refunds/${id}/payos-reconcile`, { method: 'POST' });
+    },
+    async reportPayoutIncident(id, input) {
+      return request(`/staff/return-refunds/${id}/payout-incident`, {
+        method: 'POST',
+        body: JSON.stringify(input),
+      });
+    },
     async inspectRequest(id, input) {
       return request(`/warehouse/return-refunds/${id}/inspection`, {
+        method: 'POST',
+        body: JSON.stringify(input),
+      });
+    },
+    async recordCodRecoveryReceipt(orderId, input) {
+      return request(`/warehouse/orders/${orderId}/cod-recovery-receipt`, {
         method: 'POST',
         body: JSON.stringify(input),
       });

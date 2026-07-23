@@ -13,7 +13,7 @@ const { logAudit } = require('../utils/auditLogger');
 const { canTransitionOrderStatus, getAllowedOrderStatusTransitions } = require('../utils/orderStateMachine');
 
 const INVOICE_ELIGIBLE_STATUSES = new Set(['Confirmed', 'StockExportRequested', 'Packed', 'Shipped', 'Delivered']);
-const COD_COLLECTION_STATUSES = new Set(['Packed', 'Shipped']);
+const RETURN_WINDOW_MS = 5 * 24 * 60 * 60 * 1000;
 
 function withOptionalSession(query, session) {
   return session ? query.session(session) : query;
@@ -48,6 +48,17 @@ function toOrderSummary(order) {
     paymentMethod: order.paymentMethod,
     paymentStatus: order.paymentStatus,
     orderStatus: order.orderStatus,
+    codExpectedAmount: Number(order.codExpectedAmount ?? order.totalAmount ?? 0),
+    customerCollectedAmount: Number(order.customerCollectedAmount || 0),
+    customerCollectedAt: order.customerCollectedAt || null,
+    carrierSettlementAmount: Number(order.carrierSettlementAmount || 0),
+    carrierSettledAt: order.carrierSettledAt || null,
+    codDiscrepancyStatus: order.codDiscrepancyStatus || 'None',
+    codRecoveryReceiptId: order.codRecoveryReceiptId || '',
+    codRecoveryReceivedAt: order.codRecoveryReceivedAt || null,
+    settlementReconciliationStatus: order.settlementReconciliationStatus || 'NotApplicable',
+    completedSaleAt: order.completedSaleAt || null,
+    returnDeadlineAt: order.returnDeadlineAt || null,
     shippingAddress: order.shippingAddress,
     receiverName: order.receiverName || '',
     receiverPhone: order.receiverPhone || '',
@@ -115,7 +126,10 @@ function createModelOrderRepository() {
     async findLatestPaymentAttemptByOrder(orderId, session) { return withOptionalSession(PaymentAttempt.findOne({ orderId }).sort({ createdAt: -1 }), session).lean(); },
     async updatePaymentAttempt(id, data, session) { return withOptionalSession(PaymentAttempt.findByIdAndUpdate(id, data, { new: true, runValidators: true }), session).lean(); },
     async upsertRefundPending(data, session) {
-      return withOptionalSession(RefundPending.findOneAndUpdate({ orderId: data.orderId }, { $setOnInsert: data }, { new: true, upsert: true, runValidators: true }), session).lean();
+      const identity = data.obligationKey
+        ? { obligationKey: data.obligationKey }
+        : { orderId: data.orderId, obligationType: data.obligationType || 'PAYMENT_REVERSAL' };
+      return withOptionalSession(RefundPending.findOneAndUpdate(identity, { $setOnInsert: data }, { new: true, upsert: true, runValidators: true }), session).lean();
     },
     async findInvoiceByOrderId(orderId) { return Invoice.findOne({ orderId }).lean(); },
     async createInvoice(data) { return Invoice.create(data); },
@@ -144,6 +158,8 @@ function createStaffOrderService({ orderRepository = createModelOrderRepository(
       currency: order.currency || attempt.currency || 'VND',
       reason,
       status: 'RefundPending',
+      obligationType: 'PAYMENT_REVERSAL',
+      obligationKey: `PAYMENT_REVERSAL:${String(attempt._id)}`,
     }, session);
   }
 
@@ -185,10 +201,16 @@ function createStaffOrderService({ orderRepository = createModelOrderRepository(
         throw new ApiError(409, 'Use the stock export request action before entering StockExportRequested');
       }
       if (!canTransitionOrderStatus(order.orderStatus, nextStatus)) throw new ApiError(409, 'Invalid order status transition');
-      if (nextStatus === 'Delivered' && order.paymentMethod === 'COD' && order.paymentStatus !== 'Paid') {
-        throw new ApiError(409, 'COD order must be paid before delivery');
-      }
-      const timestamps = nextStatus === 'Shipped' ? { shippedAt: new Date() } : nextStatus === 'Delivered' ? { deliveredAt: new Date() } : {};
+      const transitionAt = new Date();
+      const timestamps = nextStatus === 'Shipped' ? { shippedAt: transitionAt } : nextStatus === 'Delivered' ? {
+        deliveredAt: transitionAt,
+        returnDeadlineAt: new Date(transitionAt.getTime() + RETURN_WINDOW_MS),
+        ...(order.paymentMethod === 'COD' ? {
+          codExpectedAmount: Number(order.codExpectedAmount ?? order.totalAmount),
+          codDiscrepancyStatus: order.paymentStatus === 'Paid' ? 'Resolved' : 'Open',
+          ...(order.paymentStatus === 'Paid' ? {} : { codDiscrepancyOpenedAt: transitionAt }),
+        } : {}),
+      } : {};
       const updated = await orderRepository.updateOrder(orderId, { orderStatus: nextStatus, ...timestamps });
       await writeAudit(staffId, 'STAFF_ORDER_STATUS_UPDATE', updated, `Staff updated order ${updated.orderCode} to ${nextStatus}`);
       return toOrderDetail(updated, await orderRepository.listOrderDetails(orderId));
@@ -230,18 +252,8 @@ function createStaffOrderService({ orderRepository = createModelOrderRepository(
     },
 
     async markCodCollected(staffId, orderId, input = {}) {
-      const order = await getOrderOrThrow(orderId);
-      if (order.paymentMethod !== 'COD') throw new ApiError(400, 'Only COD orders can be marked collected');
-      if (order.paymentStatus === 'Paid') return { ...toOrderDetail(order, await orderRepository.listOrderDetails(orderId)), idempotentReplay: true };
-      if (!COD_COLLECTION_STATUSES.has(order.orderStatus)) throw new ApiError(409, 'COD can only be collected after packing and before delivery');
-      const payment = await orderRepository.findPaymentByOrderId(order._id);
-      const attempt = await orderRepository.findLatestPaymentAttemptByOrder(order._id);
-      const paidAt = new Date();
-      if (payment) await orderRepository.updatePayment(payment._id, { paymentStatus: 'Paid', paidAt });
-      if (attempt) await orderRepository.updatePaymentAttempt(attempt._id, { paymentStatus: 'Paid', paidAt });
-      const updated = await orderRepository.updateOrder(order._id, { paymentStatus: 'Paid' });
-      await writeAudit(staffId, 'STAFF_COD_COLLECTED', updated, `Staff marked COD collected for ${updated.orderCode}. ${String(input.note || '').trim()}`.trim());
-      return toOrderDetail(updated, await orderRepository.listOrderDetails(orderId));
+      await getOrderOrThrow(orderId);
+      throw new ApiError(409, 'Carrier evidence is required; Staff cannot mark COD as collected');
     },
 
     async getInvoice(staffId, orderId) {

@@ -288,6 +288,14 @@ export default function App() {
           }
         />
         <Route
+          path="warehouse/cod-recoveries/:id"
+          element={
+            <RoleRoute allowedRoles={['WarehouseManager']}>
+              <ReturnRefundInspectionPage />
+            </RoleRoute>
+          }
+        />
+        <Route
           path="admin"
           element={
             <RoleRoute allowedRoles={['Admin']}>

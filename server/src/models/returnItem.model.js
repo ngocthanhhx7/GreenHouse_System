@@ -13,6 +13,8 @@ const returnItemSchema = new mongoose.Schema(
     warehouseNote: { type: String, default: '', trim: true },
     inspectedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     inspectedAt: { type: Date, required: true, default: Date.now },
+    inventoryAppliedAt: { type: Date, default: null },
+    inventoryMovementKey: { type: String, default: '', trim: true, maxlength: 200, immutable: true },
   },
   { timestamps: true }
 );
