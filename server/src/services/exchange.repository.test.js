@@ -3,6 +3,8 @@ const { test } = require('node:test');
 
 const { createModelRepository } = require('./exchange.service');
 const ExchangeUnitLineage = require('../models/exchangeUnitLineage.model');
+const ExchangeCase = require('../models/exchangeCase.model');
+const ExchangeShipment = require('../models/exchangeShipment.model');
 
 test('maps each inspected physical unit to exactly one matching Inventory movement', async () => {
   const originalFind = ExchangeUnitLineage.find;
@@ -61,4 +63,53 @@ test('maps each inspected physical unit to exactly one matching Inventory moveme
     ExchangeUnitLineage.find = originalFind;
     ExchangeUnitLineage.findByIdAndUpdate = originalFindByIdAndUpdate;
   }
+});
+
+test('serializes Shipment outcomes through the Exchange case and claims only an InTransit Shipment', async () => {
+  const originalCaseUpdate = ExchangeCase.findOneAndUpdate;
+  const originalShipmentUpdate = ExchangeShipment.findOneAndUpdate;
+  const calls = [];
+  ExchangeCase.findOneAndUpdate = (filter, update, options) => {
+    calls.push({ model: 'case', filter, update, options });
+    return { async lean() { return { _id: 'case-1', shipmentOutcomeVersion: 4 }; } };
+  };
+  ExchangeShipment.findOneAndUpdate = (filter, update, options) => {
+    calls.push({ model: 'shipment', filter, update, options });
+    return { async lean() { return { _id: 'shipment-1', status: 'Delivered' }; } };
+  };
+
+  try {
+    const repository = createModelRepository();
+    await repository.touchShipmentOutcome('case-1', ['ReplacementShipped', 'DeliveryIncident']);
+    await repository.claimShipmentOutcome('shipment-1', 'InTransit', {
+      status: 'Delivered',
+      deliveredAt: new Date('2026-07-23T10:00:00.000Z'),
+    });
+  } finally {
+    ExchangeCase.findOneAndUpdate = originalCaseUpdate;
+    ExchangeShipment.findOneAndUpdate = originalShipmentUpdate;
+  }
+
+  assert.deepEqual(calls, [
+    {
+      model: 'case',
+      filter: {
+        _id: 'case-1',
+        status: { $in: ['ReplacementShipped', 'DeliveryIncident'] },
+      },
+      update: { $inc: { shipmentOutcomeVersion: 1 } },
+      options: { new: true, runValidators: true },
+    },
+    {
+      model: 'shipment',
+      filter: { _id: 'shipment-1', status: 'InTransit' },
+      update: {
+        $set: {
+          status: 'Delivered',
+          deliveredAt: new Date('2026-07-23T10:00:00.000Z'),
+        },
+      },
+      options: { new: true, runValidators: true },
+    },
+  ]);
 });

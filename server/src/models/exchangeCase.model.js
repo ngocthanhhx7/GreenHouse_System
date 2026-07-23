@@ -68,7 +68,13 @@ const exchangeCaseSchema = new mongoose.Schema(
     stockFailureReason: { type: String, default: '', trim: true, maxlength: 1000 },
     waitingFor: {
       type: String,
-      enum: ['', 'INITIAL_APPROVAL', 'INCIDENT_RESEND', 'REJECTED_ORIGINAL_RECONCILIATION'],
+      enum: [
+        '',
+        'INITIAL_APPROVAL',
+        'INCIDENT_RESEND',
+        'INCIDENT_RESEND_IN_TRANSIT',
+        'REJECTED_ORIGINAL_RECONCILIATION',
+      ],
       default: '',
     },
     incidentShipmentId: {
@@ -76,6 +82,7 @@ const exchangeCaseSchema = new mongoose.Schema(
       ref: 'ExchangeShipment',
       default: null,
     },
+    shipmentOutcomeVersion: { type: Number, default: 0, min: 0 },
     incidentReason: { type: String, default: '', trim: true, maxlength: 1000 },
     convertedReturnRefundRequestId: {
       type: mongoose.Schema.Types.ObjectId,

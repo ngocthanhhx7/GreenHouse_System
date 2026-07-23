@@ -11,6 +11,7 @@ const ExchangeShipment = require('../models/exchangeShipment.model');
 const ExchangeShipmentEvent = require('../models/exchangeShipmentEvent.model');
 const ExchangeConversion = require('../models/exchangeConversion.model');
 const InventoryTransaction = require('../models/inventoryTransaction.model');
+const AuditLog = require('../models/auditLog.model');
 const Order = require('../models/order.model');
 const ReturnRefundRequest = require('../models/returnRefundRequest.model');
 
@@ -24,9 +25,31 @@ function createMigrationRepository() {
   const indexedModels = [
     AfterSalesOrderLock, ExchangeCase, ExchangeLine, ExchangeUnitLineage,
     StockReservation, ExchangeInspection, ExchangeShipment,
-    ExchangeShipmentEvent, ExchangeConversion, InventoryTransaction,
+    ExchangeShipmentEvent, ExchangeConversion, InventoryTransaction, AuditLog,
   ];
   return {
+    async loadAuditEventIdConflicts() {
+      return AuditLog.aggregate([
+        { $match: { eventId: { $type: 'string', $ne: '' } } },
+        {
+          $group: {
+            _id: '$eventId',
+            count: { $sum: 1 },
+            ids: { $push: '$_id' },
+          },
+        },
+        { $match: { count: { $gt: 1 } } },
+        {
+          $project: {
+            _id: 0,
+            eventId: '$_id',
+            count: 1,
+            ids: 1,
+          },
+        },
+        { $sort: { eventId: 1 } },
+      ]);
+    },
     async loadReturnCasesForLockBackfill() {
       return ReturnRefundRequest.find({
         status: { $in: [...ACTIVE_RETURN_STATUSES, 'Completed'] },
@@ -85,6 +108,18 @@ function createLockBackfillConflict(orderId, activeCount, completedCount) {
   return error;
 }
 
+function createAuditEventIdConflict(conflicts) {
+  const context = conflicts
+    .map((item) => (
+      `eventId=${item.eventId}; count=${Number(item.count)}; ids=${(item.ids || []).map(String).join(',')}`
+    ))
+    .join(' | ');
+  const error = new Error(`SL-002 AuditLog eventId preflight conflict: ${context}`);
+  error.code = 'SL002_AUDIT_EVENT_ID_CONFLICT';
+  error.conflicts = conflicts;
+  return error;
+}
+
 function planReturnLockBackfill(returnCases, { clock = () => new Date() } = {}) {
   const grouped = new Map();
   for (const item of returnCases) {
@@ -121,6 +156,11 @@ async function migrateSl002Exchange({
   repository = createMigrationRepository(),
   clock = () => new Date(),
 } = {}) {
+  const auditEventIdConflicts = await repository.loadAuditEventIdConflicts();
+  if (auditEventIdConflicts.length) {
+    throw createAuditEventIdConflict(auditEventIdConflicts);
+  }
+
   const returnCases = await repository.loadReturnCasesForLockBackfill();
   const lockPlan = planReturnLockBackfill(returnCases, { clock });
 
@@ -163,15 +203,22 @@ async function migrateSl002Exchange({
   };
 }
 
-async function runCli() {
-  require('dotenv').config();
-  await connectDatabase();
+async function runCli({
+  loadEnv = () => require('dotenv').config(),
+  mongooseClient = mongoose,
+  connect = connectDatabase,
+  migrate = migrateSl002Exchange,
+  logger = console,
+} = {}) {
+  loadEnv();
+  mongooseClient.set('autoIndex', false);
+  await connect();
   try {
-    const result = await migrateSl002Exchange();
-    console.log('SL-002 Exchange migration completed.');
-    console.table([result]);
+    const result = await migrate();
+    logger.log('SL-002 Exchange migration completed.');
+    logger.table([result]);
   } finally {
-    await mongoose.disconnect();
+    await mongooseClient.disconnect();
   }
 }
 
@@ -187,4 +234,5 @@ module.exports = {
   createMigrationRepository,
   migrateSl002Exchange,
   planReturnLockBackfill,
+  runCli,
 };
