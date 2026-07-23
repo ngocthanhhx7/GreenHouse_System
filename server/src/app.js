@@ -20,30 +20,39 @@ const damageReportRoutes = require('./routes/damageReport.routes');
 const profileRoutes = require('./routes/profile.routes');
 const uploadRoutes = require('./routes/upload.routes');
 const contactRoutes = require('./routes/contact.routes');
+const codRoutes = require('./routes/cod.routes');
 const path = require('node:path');
 const { notFound, errorHandler } = require('./middlewares/error.middleware');
 const { requestId } = require('./middlewares/requestId.middleware');
 const { sendSuccess } = require('./utils/apiResponse');
 const { resolveCorsOrigins, createCorsOptions, createRateLimiter } = require('./middlewares/security.middleware');
 
-function createApp({ rateLimit = true } = {}) {
+function createApp({ rateLimit = true, uploadsRoot = path.resolve(__dirname, '../uploads') } = {}) {
   const app = express();
 
   app.use(requestId);
   app.use(cors(createCorsOptions(resolveCorsOrigins())));
-  app.use(express.json({ limit: '100kb' }));
+  app.use(express.json({
+    limit: '100kb',
+    verify(req, res, buffer) {
+      // Carrier HMAC verification needs the exact bytes received on the wire.
+      req.rawBody = Buffer.from(buffer);
+    },
+  }));
   if (rateLimit) {
     app.use('/api/auth', createRateLimiter({ max: 30 }));
     app.use('/api/contact', createRateLimiter({ max: 5, message: 'Bạn đã gửi quá nhiều yêu cầu liên hệ, vui lòng thử lại sau.' }));
   }
-  app.use('/uploads', express.static(path.resolve(__dirname, '../uploads'), {
+  const publicMediaOptions = {
     dotfiles: 'deny',
     index: false,
     setHeaders(res) {
       res.setHeader('X-Content-Type-Options', 'nosniff');
       res.setHeader('Cache-Control', 'public, max-age=86400');
     },
-  }));
+  };
+  app.use('/uploads/products', express.static(path.join(uploadsRoot, 'products'), publicMediaOptions));
+  app.use('/uploads/avatars', express.static(path.join(uploadsRoot, 'avatars'), publicMediaOptions));
 
   app.get('/api/health', (req, res) => {
     return sendSuccess(res, null, 'GreenHome API is running');
@@ -54,6 +63,7 @@ function createApp({ rateLimit = true } = {}) {
   app.use('/api', categoryRoutes);
   app.use('/api', orderRoutes);
   app.use('/api', paymentRoutes);
+  app.use('/api', codRoutes);
   app.use('/api', productRoutes);
   app.use('/api', staffOrderRoutes);
   app.use('/api', inventoryRoutes);

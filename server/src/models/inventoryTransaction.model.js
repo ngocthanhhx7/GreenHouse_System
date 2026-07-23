@@ -14,7 +14,7 @@ const inventoryTransactionSchema = new mongoose.Schema(
     },
     relatedCollection: {
       type: String,
-      enum: ['', 'Inventory', 'StockExportRequest', 'ReplenishmentRequest', 'DamageReport'],
+      enum: ['', 'Inventory', 'StockExportRequest', 'ReplenishmentRequest', 'DamageReport', 'ReturnRefundRequest'],
       default: '',
       trim: true,
     },
@@ -29,7 +29,7 @@ const inventoryTransactionSchema = new mongoose.Schema(
     },
     transactionType: {
       type: String,
-      enum: ['ADJUSTMENT', 'STOCK_EXPORT', 'REPLENISHMENT_RECEIVE', 'DAMAGE_CONFIRMED'],
+      enum: ['ADJUSTMENT', 'STOCK_EXPORT', 'REPLENISHMENT_RECEIVE', 'DAMAGE_CONFIRMED', 'RETURN_IN', 'RETURN_DAMAGED_IN'],
       required: true,
     },
     quantity: {
@@ -54,6 +54,12 @@ const inventoryTransactionSchema = new mongoose.Schema(
       default: '',
       trim: true,
     },
+    movementKey: {
+      type: String,
+      default: '',
+      trim: true,
+      maxlength: 240,
+    },
   },
   { timestamps: true }
 );
@@ -61,5 +67,9 @@ const inventoryTransactionSchema = new mongoose.Schema(
 inventoryTransactionSchema.index({ productId: 1, createdAt: -1 });
 inventoryTransactionSchema.index({ orderId: 1, createdAt: -1 });
 inventoryTransactionSchema.index({ relatedCollection: 1, relatedId: 1, createdAt: -1 });
+inventoryTransactionSchema.index(
+  { movementKey: 1 },
+  { unique: true, partialFilterExpression: { movementKey: { $type: 'string', $gt: '' } }, name: 'inventory_movement_key_unique' }
+);
 
 module.exports = mongoose.model('InventoryTransaction', inventoryTransactionSchema);

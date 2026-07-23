@@ -55,7 +55,7 @@ function createOrderRepository() {
     async updatePayment(id, data) { const payment = payments.find((entry) => entry._id === id); Object.assign(payment, data); return payment; },
     async findLatestPaymentAttemptByOrder(orderId) { return attempts.filter((attempt) => attempt.orderId === orderId).at(-1) || null; },
     async updatePaymentAttempt(id, data) { const attempt = attempts.find((entry) => entry._id === id); Object.assign(attempt, data); return attempt; },
-    async upsertRefundPending(data) { let refund = refunds.find((entry) => entry.orderId === data.orderId); if (!refund) { refund = { _id: `refund-${refunds.length + 1}`, ...data }; refunds.push(refund); } return refund; },
+    async upsertRefundPending(data) { let refund = refunds.find((entry) => data.obligationKey ? entry.obligationKey === data.obligationKey : entry.orderId === data.orderId && entry.obligationType === data.obligationType); if (!refund) { refund = { _id: `refund-${refunds.length + 1}`, ...data }; refunds.push(refund); } return refund; },
     async findInvoiceByOrderId(orderId) { return invoices.find((invoice) => invoice.orderId === orderId) || null; },
     async createInvoice(data) { const invoice = { _id: `invoice-${invoices.length + 1}`, ...data }; invoices.push(invoice); return invoice; },
   };
@@ -120,20 +120,18 @@ describe('staff order service', () => {
     await assert.rejects(() => service.updateStatus('staff-1', 'order-1', { nextStatus: 'Packed' }), /Invalid order status transition/);
   });
 
-  it('blocks COD delivery until collection and idempotently records collection before delivery', async () => {
+  it('allows physical COD delivery without fabricating payment and opens one discrepancy', async () => {
     orderRepository.orders[0].orderStatus = 'Packed';
-    await assert.rejects(() => service.updateStatus('staff-1', 'order-1', { nextStatus: 'Shipped' }).then(() => service.updateStatus('staff-1', 'order-1', { nextStatus: 'Delivered' })), /COD order must be paid before delivery/);
-
-    orderRepository.orders[0].orderStatus = 'Packed';
-    const collected = await service.markCodCollected('staff-1', 'order-1', { note: 'Collected on handoff' });
-    const replay = await service.markCodCollected('staff-1', 'order-1', {});
-    assert.equal(collected.paymentStatus, 'Paid');
-    assert.equal(replay.idempotentReplay, true);
-    assert.equal(orderRepository.payments[0].paymentStatus, 'Paid');
-    assert.equal(orderRepository.attempts[0].paymentStatus, 'Paid');
     await service.updateStatus('staff-1', 'order-1', { nextStatus: 'Shipped' });
     const delivered = await service.updateStatus('staff-1', 'order-1', { nextStatus: 'Delivered' });
     assert.equal(delivered.orderStatus, 'Delivered');
+    assert.equal(delivered.paymentStatus, 'Unpaid');
+    assert.equal(orderRepository.orders[0].codDiscrepancyStatus, 'Open');
+    assert.ok(orderRepository.orders[0].returnDeadlineAt);
+    await assert.rejects(
+      () => service.markCodCollected('staff-1', 'order-1', { note: 'Collected on handoff' }),
+      /Carrier evidence|required/i,
+    );
   });
 
   it('requires a cancel reason and creates one refund hand-off for a paid cancellation', async () => {
@@ -147,6 +145,8 @@ describe('staff order service', () => {
     assert.equal(cancelled.paymentStatus, 'RefundPending');
     assert.equal(orderRepository.reservedQuantity, 0);
     assert.equal(orderRepository.refunds.length, 1);
+    assert.equal(orderRepository.refunds[0].obligationType, 'PAYMENT_REVERSAL');
+    assert.equal(orderRepository.refunds[0].obligationKey, 'PAYMENT_REVERSAL:attempt-1');
     await assert.rejects(() => service.cancelOrder('staff-1', 'order-1', { cancelReason: 'Retry' }), /Only Pending or Confirmed orders can be cancelled/);
     assert.equal(orderRepository.reservedQuantity, 0);
     assert.equal(orderRepository.refunds.length, 1);

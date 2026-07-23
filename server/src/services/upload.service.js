@@ -3,10 +3,12 @@ const path = require('node:path');
 const { mkdir, unlink, writeFile } = require('node:fs/promises');
 
 const ApiError = require('../utils/apiError');
+const { MAX_RETURN_EVIDENCE_TOTAL_SIZE } = require('../utils/returnEvidenceClaim');
 
 const DEFAULT_UPLOADS_ROOT = path.resolve(__dirname, '../../uploads');
-const ALLOWED_COLLECTIONS = new Set(['avatars', 'products']);
+const ALLOWED_COLLECTIONS = new Set(['avatars', 'products', 'return-evidence']);
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
+const MIME_BY_EXTENSION = { jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp' };
 
 function detectImageType(buffer) {
   if (!Buffer.isBuffer(buffer)) return null;
@@ -26,7 +28,92 @@ function cleanOriginalName(value) {
   return path.basename(String(value || 'image')).replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 180) || 'image';
 }
 
-function createUploadService({ uploadsRoot = DEFAULT_UPLOADS_ROOT } = {}) {
+function managedUrl(collection, filename) {
+  return collection === 'return-evidence'
+    ? `/api/return-refunds/evidence/${filename}`
+    : `/uploads/${collection}/${filename}`;
+}
+
+function parseManagedUrl(url) {
+  const value = String(url || '');
+  const publicMatch = /^\/uploads\/(avatars|products|return-evidence)\/([0-9a-f-]{36})\.(jpg|png|webp)$/.exec(value);
+  if (publicMatch) return { collection: publicMatch[1], filename: `${publicMatch[2]}.${publicMatch[3]}`, extension: publicMatch[3] };
+  const privateMatch = /^\/api\/return-refunds\/evidence\/([0-9a-f-]{36})\.(jpg|png|webp)$/.exec(value);
+  if (privateMatch) return { collection: 'return-evidence', filename: `${privateMatch[1]}.${privateMatch[2]}`, extension: privateMatch[2] };
+  return null;
+}
+
+function validateReturnEvidenceBatch(files) {
+  const total = (files || []).reduce((sum, file) => (
+    sum + Number(Buffer.isBuffer(file?.buffer) ? file.buffer.length : file?.size || 0)
+  ), 0);
+  if (total > MAX_RETURN_EVIDENCE_TOTAL_SIZE) {
+    throw new ApiError(413, 'Return evidence must not exceed 20 MiB per upload');
+  }
+  return total;
+}
+
+function createEvidenceScanner({
+  endpoint = process.env.RETURN_EVIDENCE_SCANNER_URL || '',
+  apiKey = process.env.RETURN_EVIDENCE_SCANNER_API_KEY || '',
+  runtime = process.env.NODE_ENV || 'development',
+  fetcher = global.fetch,
+} = {}) {
+  const scannerUrl = String(endpoint || '').trim();
+  return {
+    async scan(file) {
+      if (!scannerUrl) {
+        if (runtime === 'production') {
+          throw new ApiError(503, 'A return-evidence malware scanner is required in production');
+        }
+        // Local/test fallback is deliberately labelled as signature-only. It
+        // keeps development usable while production remains fail-closed.
+        const eicar = Buffer.from('EICAR-STANDARD-ANTIVIRUS-TEST-FILE', 'ascii');
+        return { clean: !file.buffer.includes(eicar), engine: 'local-signature-only' };
+      }
+
+      let parsed;
+      try {
+        parsed = new URL(scannerUrl);
+      } catch (_) {
+        throw new ApiError(503, 'Return-evidence malware scanner URL is invalid');
+      }
+      if (runtime === 'production' && parsed.protocol !== 'https:') {
+        throw new ApiError(503, 'Return-evidence malware scanner must use HTTPS in production');
+      }
+      if (typeof fetcher !== 'function') throw new ApiError(503, 'Return-evidence malware scanner is unavailable');
+
+      let response;
+      try {
+        response = await fetcher(parsed, {
+          method: 'POST',
+          headers: {
+            'Content-Type': file.mimetype || 'application/octet-stream',
+            'X-Original-Filename': cleanOriginalName(file.originalname),
+            ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+          },
+          body: file.buffer,
+          signal: AbortSignal.timeout(10000),
+        });
+      } catch (_) {
+        throw new ApiError(503, 'Return-evidence malware scanner is unavailable');
+      }
+      if (!response.ok) throw new ApiError(503, 'Return-evidence malware scanner rejected the scan request');
+      let result;
+      try {
+        result = await response.json();
+      } catch (_) {
+        throw new ApiError(503, 'Return-evidence malware scanner returned an invalid result');
+      }
+      if (result?.clean !== true && result?.clean !== false) {
+        throw new ApiError(503, 'Return-evidence malware scanner returned no verdict');
+      }
+      return result;
+    },
+  };
+}
+
+function createUploadService({ uploadsRoot = DEFAULT_UPLOADS_ROOT, evidenceScanner = createEvidenceScanner() } = {}) {
   const resolvedRoot = path.resolve(uploadsRoot);
 
   function resolveCollection(collection) {
@@ -53,6 +140,16 @@ function createUploadService({ uploadsRoot = DEFAULT_UPLOADS_ROOT } = {}) {
       if (normalizedMime && normalizedMime !== detected.mimeType) {
         throw new ApiError(400, 'Image content does not match its MIME type');
       }
+      if (collection === 'return-evidence') {
+        let verdict;
+        try {
+          verdict = await evidenceScanner.scan({ ...file, mimetype: detected.mimeType });
+        } catch (error) {
+          if (error instanceof ApiError) throw error;
+          throw new ApiError(503, 'Return-evidence malware scanner is unavailable');
+        }
+        if (verdict?.clean !== true) throw new ApiError(400, 'Return evidence failed malware scan');
+      }
 
       const directory = resolveCollection(collection);
       await mkdir(directory, { recursive: true });
@@ -60,7 +157,7 @@ function createUploadService({ uploadsRoot = DEFAULT_UPLOADS_ROOT } = {}) {
       const targetPath = path.join(directory, filename);
       await writeFile(targetPath, file.buffer, { flag: 'wx' });
       return {
-        url: `/uploads/${collection}/${filename}`,
+        url: managedUrl(collection, filename),
         originalName: cleanOriginalName(file.originalname),
         mimeType: detected.mimeType,
         size: file.buffer.length,
@@ -78,14 +175,29 @@ function createUploadService({ uploadsRoot = DEFAULT_UPLOADS_ROOT } = {}) {
       }
     },
 
+    resolveManagedFile(url, expectedCollection) {
+      const parsed = parseManagedUrl(url);
+      if (!parsed || (expectedCollection && parsed.collection !== expectedCollection)) {
+        throw new ApiError(404, 'Managed file not found');
+      }
+      const collectionDirectory = resolveCollection(parsed.collection);
+      const targetPath = path.resolve(collectionDirectory, parsed.filename);
+      if (!targetPath.startsWith(`${path.resolve(collectionDirectory)}${path.sep}`)) {
+        throw new ApiError(404, 'Managed file not found');
+      }
+      return { path: targetPath, mimeType: MIME_BY_EXTENSION[parsed.extension], ...parsed };
+    },
+
     async removeManagedFile(url) {
-      const match = /^\/uploads\/(avatars|products)\/([0-9a-f-]{36})\.(jpg|png|webp)$/.exec(String(url || ''));
-      if (!match) return false;
-      const collectionDirectory = resolveCollection(match[1]);
-      const targetPath = path.resolve(collectionDirectory, `${match[2]}.${match[3]}`);
-      if (!targetPath.startsWith(`${path.resolve(collectionDirectory)}${path.sep}`)) return false;
+      let managed;
       try {
-        await unlink(targetPath);
+        managed = this.resolveManagedFile(url);
+      } catch (error) {
+        if (error instanceof ApiError && error.statusCode === 404) return false;
+        throw error;
+      }
+      try {
+        await unlink(managed.path);
         return true;
       } catch (error) {
         if (error.code === 'ENOENT') return false;
@@ -99,6 +211,9 @@ module.exports = {
   createUploadService,
   uploadService: createUploadService(),
   detectImageType,
+  createEvidenceScanner,
+  validateReturnEvidenceBatch,
   DEFAULT_UPLOADS_ROOT,
   MAX_IMAGE_SIZE,
+  MAX_EVIDENCE_TOTAL_SIZE: MAX_RETURN_EVIDENCE_TOTAL_SIZE,
 };

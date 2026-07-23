@@ -8,6 +8,7 @@ export default function StaffOrderDetailPage() {
   const { id } = useParams();
   const [order, setOrder] = useState(null);
   const [cancelReason, setCancelReason] = useState('');
+  const [destinationReference, setDestinationReference] = useState('');
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
 
@@ -60,13 +61,45 @@ export default function StaffOrderDetailPage() {
             {order.orderStatus === 'Confirmed' && (
               <button className="btn btn-success" type="button" onClick={() => runAction(() => staffOrderService.requestStockExport(order.id), 'Đã gửi yêu cầu xuất kho.')}>Yêu cầu xuất kho</button>
             )}
-            {order.paymentMethod === 'COD' && ['Packed', 'Shipped'].includes(order.orderStatus) && order.paymentStatus !== 'Paid' && (
-              <button className="btn btn-outline-success" type="button" onClick={() => runAction(() => staffOrderService.markCodCollected(order.id, { note: 'Nhân viên xác nhận đã thu COD.' }), 'Đã ghi nhận thu tiền COD.')}>Đã thu COD</button>
-            )}
             {(order.allowedNextStatuses || []).map((nextStatus) => (
               <button key={nextStatus} className="btn btn-outline-success" type="button" onClick={() => runAction(() => staffOrderService.updateStatus(order.id, nextStatus), `Đã chuyển sang ${translateOrderStatus(nextStatus)}.`)}>Chuyển sang {translateOrderStatus(nextStatus)}</button>
             ))}
           </div>
+          {order.paymentMethod === 'COD' && order.orderStatus === 'Delivered' && (
+            <div className={`alert mt-3 ${order.codDiscrepancyStatus === 'Open' ? 'alert-warning' : 'alert-success'}`}>
+              <strong>Đối soát COD:</strong>{' '}
+              {order.codDiscrepancyStatus === 'Open'
+                ? 'Đang chờ bằng chứng Carrier về số tiền khách thực tế đã trả. Staff không thể tự đánh dấu đã thu tiền.'
+                : 'Bằng chứng thu tiền khách đã được đối soát.'}
+              {order.settlementReconciliationStatus === 'Open' && (
+                <div>Carrier chưa quyết toán đủ cho Shop; việc này không thay đổi trạng thái thanh toán của khách.</div>
+              )}
+            </div>
+          )}
+          {order.paymentMethod === 'COD' && order.orderStatus === 'Delivered' && order.paymentStatus === 'Unpaid' && order.codDiscrepancyStatus === 'RecoveryInProgress' && order.codRecoveryReceiptId && (
+            <div className="row g-2 mt-3 align-items-end">
+              <div className="col-md-4"><strong>Biên nhận kho:</strong> {order.codRecoveryReceiptId}</div>
+              <div className="col-md-4">
+                <label className="form-label" htmlFor="destinationReference">Mã xác minh đích hoàn (nếu khách đã trả một phần)</label>
+                <input id="destinationReference" className="form-control" value={destinationReference} onChange={(event) => setDestinationReference(event.target.value)} disabled={Number(order.customerCollectedAmount || 0) === 0} />
+              </div>
+              <div className="col-md-4">
+                <button
+                  className="btn btn-outline-danger"
+                  type="button"
+                  disabled={Number(order.customerCollectedAmount || 0) > 0 && !destinationReference}
+                  onClick={() => runAction(() => staffOrderService.finalizeCodRecovery(order.id, {
+                    goodsRecoveryReceiptId: order.codRecoveryReceiptId,
+                    destinationVerified: Number(order.customerCollectedAmount || 0) > 0 && Boolean(destinationReference),
+                    destinationReference,
+                    note: 'Staff hoàn tất điều phối thu hồi COD theo bằng chứng kho.',
+                  }), 'Đã chốt kết quả thu hồi COD theo số tiền hệ thống xác định.')}
+                >
+                  Hoàn tất thu hồi COD
+                </button>
+              </div>
+            </div>
+          )}
           {['Pending', 'Confirmed'].includes(order.orderStatus) && (
             <div className="row g-2 mt-3 align-items-end">
               <div className="col-md-8">

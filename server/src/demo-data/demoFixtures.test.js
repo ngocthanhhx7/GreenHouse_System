@@ -124,7 +124,7 @@ describe('deterministic demo fixture graph', () => {
     }
     const completed = DEMO_GRAPH.returnRequests.find((request) => request.status === 'Completed');
     const completedOrder = DEMO_GRAPH.orders.find((order) => order.key === completed.orderKey);
-    assert.deepEqual([completedOrder.orderStatus, completedOrder.paymentStatus], ['Returned', 'Refunded']);
+    assert.deepEqual([completedOrder.orderStatus, completedOrder.paymentStatus], ['Returned', 'Paid']);
     assert.ok(DEMO_GRAPH.returnItems.some((item) => item.returnRequestKey === completed.key));
     assert.ok(completed.completedByKey === 'user-staff' && completed.completedAt && completed.inspectionNote);
     assert.ok(Date.parse(completed.requestedAt) <= Date.parse(completed.completedAt));

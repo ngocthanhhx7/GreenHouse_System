@@ -3,7 +3,7 @@ const express = require('express');
 const uploadController = require('../controller/upload.controller');
 const { authenticate } = require('../middlewares/auth.middleware');
 const { authorizeRoles } = require('../middlewares/authorize.middleware');
-const { uploadAvatar, uploadProductImages } = require('../middlewares/upload.middleware');
+const { uploadAvatar, uploadProductImages, uploadReturnEvidence } = require('../middlewares/upload.middleware');
 
 const router = express.Router();
 
@@ -19,6 +19,13 @@ router.delete(
   authenticate,
   authorizeRoles('Admin', 'Staff'),
   uploadController.deleteProductImage
+);
+router.post('/return-refunds/evidence', authenticate, authorizeRoles('Customer'), uploadReturnEvidence, uploadController.uploadReturnEvidence);
+router.get(
+  '/return-refunds/evidence/:filename',
+  authenticate,
+  authorizeRoles('Customer', 'Staff', 'WarehouseManager'),
+  uploadController.getReturnEvidence
 );
 router.post('/profile/avatar', authenticate, uploadAvatar, uploadController.uploadAvatar);
 router.delete('/profile/avatar', authenticate, uploadController.deleteAvatar);

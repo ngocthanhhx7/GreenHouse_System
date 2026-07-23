@@ -88,7 +88,10 @@ function createModelPaymentRepository() {
       return PaymentCallbackEvent.findByIdAndUpdate(id, { eventStatus: 'Processed', processingResult }, { new: true }).lean();
     },
     async upsertRefundPending(data) {
-      return RefundPending.findOneAndUpdate({ orderId: data.orderId }, { $setOnInsert: data }, { new: true, upsert: true, runValidators: true }).lean();
+      const identity = data.obligationKey
+        ? { obligationKey: data.obligationKey }
+        : { orderId: data.orderId, obligationType: data.obligationType || 'PAYMENT_REVERSAL' };
+      return RefundPending.findOneAndUpdate(identity, { $setOnInsert: data }, { new: true, upsert: true, runValidators: true }).lean();
     },
   };
 }
@@ -191,6 +194,8 @@ function createPaymentService({
         currency: updatedAttempt.currency || 'VND',
         reason: 'Duplicate successful payment received after the order was already paid',
         status: 'RefundPending',
+        obligationType: 'EXCESS_PAYMENT',
+        obligationKey: `EXCESS_PAYMENT:${String(updatedAttempt._id)}`,
       });
       const result = toPaymentResponse(order, updatedAttempt, { callbackEventId: String(event._id), refundPending: true, duplicatePayment: true });
       await persistCallbackResult(event, result);
@@ -234,6 +239,8 @@ function createPaymentService({
           ? 'Payment transaction occurred after the PayOS link expired'
           : `Late paid callback received after ${order.orderStatus.toLowerCase()} order`,
         status: 'RefundPending',
+        obligationType: 'PAYMENT_REVERSAL',
+        obligationKey: `PAYMENT_REVERSAL:${String(updatedAttempt._id)}`,
       });
       const result = toPaymentResponse(updatedOrder, updatedAttempt, { callbackEventId: String(event._id), refundPending: true });
       await persistCallbackResult(event, result);
