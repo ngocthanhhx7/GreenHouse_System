@@ -19,6 +19,7 @@ const { createPayOSGateway } = require('../config/payos');
 const { logAudit } = require('../utils/auditLogger');
 const { createEmailOutboxService } = require('./email.service');
 const { systemSettingService } = require('./systemSetting.service');
+const { lowStockAlertLifecycle } = require('./lowStockAlertLifecycle.service');
 
 function toOrderResponse(order, details = []) {
   return {
@@ -226,7 +227,13 @@ function createModelInventoryRepository() {
         Inventory.findOneAndUpdate(
           {
             productId,
-            $expr: { $gte: [{ $subtract: ['$stockQuantity', '$reservedQuantity'] }, Number(quantity)] },
+            inventoryHealth: { $ne: 'ReconciliationRequired' },
+            $expr: {
+              $gte: [
+                { $subtract: [{ $ifNull: ['$sellableQuantity', '$stockQuantity'] }, '$reservedQuantity'] },
+                Number(quantity),
+              ],
+            },
           },
           { $inc: { reservedQuantity: Number(quantity) } },
           { new: true, runValidators: true }
@@ -463,6 +470,7 @@ function createOrderService({
   addressRepository = createModelAddressRepository(),
   settingsService = systemSettingService,
   payosGateway = createPayOSGateway(),
+  lowStockLifecycle = null,
   clock = () => new Date(),
 } = {}) {
   const localPostCommitWork = new Map();
@@ -618,9 +626,6 @@ function createOrderService({
           [{ field: `expectedItems.${productId}.priceVersion`, message: 'Refresh the cart to confirm the latest price' }],
           'PRICE_CHANGED'
         );
-      }
-      if (product.stockQuantity !== undefined && item.quantity > product.stockQuantity) {
-        throw new ApiError(400, `Product quantity exceeds available stock: ${product.name}`);
       }
       lines.push({
         productId: item.productId,
@@ -798,8 +803,9 @@ function createOrderService({
             session
           );
 
+          const inventories = [];
           for (const line of lines) {
-            await inventoryRepository.reserve(line.productId, line.quantity, session);
+            inventories.push(await inventoryRepository.reserve(line.productId, line.quantity, session));
             const detail = await orderRepository.createOrderDetail({ orderId: order._id, ...line }, session);
             if (detail?._id && orderRepository.createReservation) {
               await orderRepository.createReservation({
@@ -834,7 +840,7 @@ function createOrderService({
           }
           const clearedCart = await cartRepository.clearExactCart(cart._id, session);
           if (!clearedCart) throw new ApiError(409, 'Cart was changed during checkout. Please retry with a new key.');
-          return { order, lines, replay: false };
+          return { order, lines, inventories, replay: false };
         });
       } catch (error) {
         if (error && error.code === 11000) {
@@ -845,6 +851,9 @@ function createOrderService({
       }
 
       if (!result.replay) {
+        for (const inventory of result.inventories) {
+          await lowStockLifecycle?.evaluate?.(inventory, { eventKey: `order-reservation:${result.order._id}` });
+        }
         await auditLogger.log({
           userId: customerId,
           action: 'ORDER_CREATE',
@@ -1003,11 +1012,13 @@ function createOrderService({
             await orderRepository.markMoneyObligationsUnsettled(order._id, session);
           }
         }
+        const inventories = [];
         for (const detail of details) {
           const released = await releaseOrderReservation(orderId, detail, session, 'Customer cancelled order');
           if (orderRepository.claimReservationRelease && !released) {
             throw new ApiError(409, 'Order reservation lineage is missing or already released');
           }
+          if (released) inventories.push(released);
         }
         await schedulePostCommitWork('ORDER_CANCEL_AUDIT', {
           userId: customerId,
@@ -1022,9 +1033,13 @@ function createOrderService({
           orderCode: order.orderCode,
           replay: false,
           retiredPaymentLinkId,
+          inventories,
         };
       });
       if (!result.replay) {
+        for (const inventory of result.inventories) {
+          await lowStockLifecycle?.evaluate?.(inventory, { eventKey: `order-reservation-release:${orderId}` });
+        }
         if (result.retiredPaymentLinkId && payosGateway?.cancelPaymentLink) {
           try {
             await payosGateway.cancelPaymentLink(result.retiredPaymentLinkId, 'Customer cancelled order');
@@ -1045,5 +1060,9 @@ function createOrderService({
 
 module.exports = {
   createOrderService,
-  orderService: createOrderService({ customerRepository: createModelCustomerRepository(), emailOutboxService: createEmailOutboxService() }),
+  orderService: createOrderService({
+    customerRepository: createModelCustomerRepository(),
+    emailOutboxService: createEmailOutboxService(),
+    lowStockLifecycle: lowStockAlertLifecycle,
+  }),
 };

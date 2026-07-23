@@ -43,6 +43,7 @@ import ExchangeQueuePage from './pages/staff/ExchangeQueuePage.jsx';
 import StaffExchangeDetailPage from './pages/staff/ExchangeDetailPage.jsx';
 import SupportQueuePage from './pages/staff/SupportQueuePage.jsx';
 import SupportDetailPage from './pages/staff/SupportDetailPage.jsx';
+import StaffDamageReportsPage from './pages/staff/DamageReportsPage.jsx';
 import WarehouseDashboardPage from './pages/warehouse/WarehouseDashboardPage.jsx';
 import InventoryListPage from './pages/warehouse/InventoryListPage.jsx';
 import LowStockPage from './pages/warehouse/LowStockPage.jsx';
@@ -54,6 +55,7 @@ import ReturnRefundInspectionPage from './pages/warehouse/ReturnRefundInspection
 import WarehouseExchangeQueuePage from './pages/warehouse/ExchangeQueuePage.jsx';
 import ExchangeInspectionPage from './pages/warehouse/ExchangeInspectionPage.jsx';
 import ReplenishmentAdminPage from './pages/admin/ReplenishmentAdminPage.jsx';
+import WarehouseDamageReportsPage from './pages/warehouse/DamageReportsPage.jsx';
 
 export default function App() {
   return (
@@ -262,6 +264,14 @@ export default function App() {
           }
         />
         <Route
+          path="staff/damage-reports"
+          element={
+            <RoleRoute allowedRoles={['Staff']}>
+              <StaffDamageReportsPage />
+            </RoleRoute>
+          }
+        />
+        <Route
           path="warehouse"
           element={
             <RoleRoute allowedRoles={['WarehouseManager']}>
@@ -274,6 +284,14 @@ export default function App() {
           element={
             <RoleRoute allowedRoles={['WarehouseManager']}>
               <InventoryListPage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="warehouse/damage-reports"
+          element={
+            <RoleRoute allowedRoles={['WarehouseManager']}>
+              <WarehouseDamageReportsPage />
             </RoleRoute>
           }
         />

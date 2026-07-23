@@ -64,7 +64,15 @@ function createReportService({ repository = createModelRepository() } = {}) {
         orders: { total: periodOrders.length, delivered: periodOrders.filter((order) => order.orderStatus === 'Delivered').length, returned: periodOrders.filter((order) => order.orderStatus === 'Returned').length, byStatus: groupCount(periodOrders, 'orderStatus') },
         revenue: { grossSales, refunded: refunds, netSales: grossSales - refunds, paid: grossSales },
         products: { total: productCount },
-        inventory: { totalRecords: inventory.length, lowStock: inventory.filter((item) => Number(item.stockQuantity || 0) - Number(item.reservedQuantity || 0) <= Number(item.lowStockThreshold || 0)).length },
+        inventory: {
+          totalRecords: inventory.length,
+          lowStock: inventory.filter((item) => (
+            item.inventoryHealth === 'ReconciliationRequired'
+              ? true
+              : Number(item.sellableQuantity ?? item.stockQuantity ?? 0) - Number(item.reservedQuantity || 0)
+                <= Number(item.lowStockThreshold || 0)
+          )).length,
+        },
         support: { total: periodSupportRequests.length, open: periodSupportRequests.filter((request) => ['New', 'Open', 'InProgress'].includes(request.status)).length, resolved: periodSupportRequests.filter((request) => request.status === 'Resolved').length },
         reviews: { total: periodReviews.length, averageRating: periodReviews.length ? totalRating / periodReviews.length : 0 },
       };

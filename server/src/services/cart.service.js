@@ -1,5 +1,6 @@
 const ApiError = require('../utils/apiError');
 const Product = require('../models/product.model');
+const Inventory = require('../models/inventory.model');
 const Cart = require('../models/cart.model');
 const CartItem = require('../models/cartItem.model');
 
@@ -25,7 +26,21 @@ function toCartResponse(cart, items) {
 function createModelProductRepository() {
   return {
     async findSellableById(id) {
-      return Product.findOne({ _id: id, status: 'Active' }).lean();
+      const [product, inventory] = await Promise.all([
+        Product.findOne({ _id: id, status: 'Active' }).lean(),
+        Inventory.findOne({ productId: id }).lean(),
+      ]);
+      if (!product || !inventory) return null;
+      return {
+        ...product,
+        availableQuantity: inventory.inventoryHealth === 'ReconciliationRequired'
+          ? 0
+          : Math.max(
+            0,
+            Number(inventory.sellableQuantity ?? inventory.stockQuantity ?? 0)
+              - Number(inventory.reservedQuantity || 0),
+          ),
+      };
     },
   };
 }
@@ -79,7 +94,7 @@ function createCartService({
     if (!Number.isInteger(Number(quantity)) || Number(quantity) <= 0) {
       throw new ApiError(400, 'Quantity must be a positive integer');
     }
-    if (product.stockQuantity !== undefined && Number(quantity) > Number(product.stockQuantity)) {
+    if (product.availableQuantity !== undefined && Number(quantity) > Number(product.availableQuantity)) {
       throw new ApiError(400, 'Requested quantity exceeds available stock');
     }
   }

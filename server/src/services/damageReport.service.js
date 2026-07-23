@@ -3,8 +3,11 @@ const ApiError = require('../utils/apiError');
 const DamageReport = require('../models/damageReport.model');
 const Inventory = require('../models/inventory.model');
 const InventoryTransaction = require('../models/inventoryTransaction.model');
+const Order = require('../models/order.model');
+const OrderDetail = require('../models/orderDetail.model');
 const { logAudit } = require('../utils/auditLogger');
 const { notificationService } = require('./notification.service');
+const { lowStockAlertLifecycle: defaultLowStockLifecycle } = require('./lowStockAlertLifecycle.service');
 
 const DAMAGE_REPORT_STATUSES = new Set([
   'PendingWarehouseConfirmation',
@@ -46,42 +49,54 @@ function createModelRepository() { return {
   async updateReport(id, data, session) { return withOptionalSession(DamageReport.findByIdAndUpdate(id, data, { new: true, runValidators: true }), session).lean(); },
   async claimDamageReport(id, patch, session) {
     return withOptionalSession(
-      DamageReport.findOneAndUpdate({ _id: id, status: { $in: ['PendingReview', 'PendingWarehouseConfirmation'] } }, { $set: patch }, { new: true, runValidators: true }),
+      DamageReport.findOneAndUpdate({ _id: id, status: 'PendingReview' }, { $set: patch }, { new: true, runValidators: true }),
       session,
     ).lean();
   },
   async findReportById(id, session) { return withOptionalSession(DamageReport.findById(id), session).lean(); },
-  async claimConfirmation(id, warehouseId, session) { return withOptionalSession(DamageReport.findOneAndUpdate({ _id: id, status: 'PendingWarehouseConfirmation' }, { $set: { status: 'Confirming', confirmedBy: warehouseId } }, { new: true, runValidators: true }), session).lean(); },
-  async completeConfirmation(id, session) { return withOptionalSession(DamageReport.findOneAndUpdate({ _id: id, status: 'Confirming' }, { $set: { status: 'Confirmed', confirmedAt: new Date() } }, { new: true, runValidators: true }), session).lean(); },
   async findInventoryById(id, session) { return withOptionalSession(Inventory.findById(id), session).lean(); },
   async findInventoryByProductId(productId, session) { return withOptionalSession(Inventory.findOne({ productId }), session).lean(); },
   async updateInventory(id, patch, session) { return withOptionalSession(Inventory.findByIdAndUpdate(id, patch, { new: true, runValidators: true }), session).lean(); },
-  async quarantineInventory(id, reportedQuantity, actorId, session) {
+  async quarantineInventory(id, reportedQuantity, actorId, patch, session) {
     return withOptionalSession(Inventory.findOneAndUpdate(
       {
         _id: id,
-        $expr: { $gte: [{ $subtract: ['$stockQuantity', '$reservedQuantity'] }, reportedQuantity] },
+        $expr: { $gte: [{ $ifNull: ['$sellableQuantity', '$stockQuantity'] }, reportedQuantity] },
       },
       {
         $inc: { stockQuantity: -reportedQuantity, sellableQuantity: -reportedQuantity, quarantinedQuantity: reportedQuantity },
-        $set: { lastUpdatedBy: actorId },
+        $set: { lastUpdatedBy: actorId, ...patch },
       },
       { new: true, runValidators: false },
     ), session).lean();
   },
-  async applyDamage(id, quantity, warehouseId, session) { return withOptionalSession(Inventory.findOneAndUpdate({ _id: id, $expr: { $gte: [{ $subtract: ['$stockQuantity', '$reservedQuantity'] }, quantity] } }, { $inc: { stockQuantity: -quantity, damagedQuantity: quantity }, $set: { lastUpdatedBy: warehouseId } }, { new: true, runValidators: true }), session).lean(); },
   async createTransaction(data, session) { const [transaction] = await InventoryTransaction.create([data], session ? { session } : undefined); return transaction.toObject(); },
   async findTransactionByIdempotencyKey(key, session) { return withOptionalSession(InventoryTransaction.findOne({ idempotencyKey: key }), session).lean(); },
+  async findAffectedOrderIds(productId, session) {
+    const details = await withOptionalSession(OrderDetail.find({ productId }).select('orderId'), session).lean();
+    const orderIds = [...new Set(details.map((detail) => String(detail.orderId)))];
+    if (!orderIds.length) return [];
+    const orders = await withOptionalSession(Order.find({
+      _id: { $in: orderIds },
+      orderStatus: { $nin: ['Delivered', 'Cancelled', 'Returned'] },
+    }).select('_id'), session).lean();
+    return orders.map((order) => order._id);
+  },
 }; }
 function createDamageReportService({
   repository = createModelRepository(),
   transactionManager = createModelTransactionManager(),
   auditLogger = { log: logAudit },
   eventPublisher = null,
+  lowStockLifecycle = null,
 } = {}) {
   async function emitEvent(event) {
     try {
-      if (eventPublisher?.createInAppNotification && event.recipientId) {
+      if (eventPublisher?.publishDomainEvent) {
+        await eventPublisher.publishDomainEvent(event);
+      } else if (eventPublisher?.createRoleNotifications && event.recipientRole) {
+        await eventPublisher.createRoleNotifications(event);
+      } else if (eventPublisher?.createInAppNotification && event.recipientId) {
         await eventPublisher.createInAppNotification({
           userId: event.recipientId,
           type: event.type,
@@ -116,41 +131,45 @@ function createDamageReportService({
       const quantity = Number(input.reportedQuantity ?? input.quantity);
       if (!Number.isInteger(quantity) || quantity <= 0) throw new ApiError(400, 'Damage quantity must be a positive integer');
       if (!String(input.reason || '').trim()) throw new ApiError(400, 'Damage reason is required');
+      if (!Array.isArray(input.evidence) || input.evidence.length === 0) throw new ApiError(400, 'Damage evidence is required');
+      const idempotencyKey = String(input.idempotencyKey || '').trim();
+      if (!idempotencyKey) throw new ApiError(400, 'Damage report idempotencyKey is required');
       const inventory = input.inventoryId
         ? await repository.findInventoryById(input.inventoryId)
         : (repository.findInventoryByProductId ? await repository.findInventoryByProductId(input.productId) : null);
       if (!inventory) throw new ApiError(404, 'Inventory record not found');
-      const isNewContract = input.evidence !== undefined || input.idempotencyKey !== undefined;
-      if (isNewContract) {
-        if (!Array.isArray(input.evidence) || input.evidence.length === 0) throw new ApiError(400, 'Damage evidence is required');
-        const idempotencyKey = String(input.idempotencyKey || '').trim();
-        if (!idempotencyKey) throw new ApiError(400, 'Damage report idempotencyKey is required');
-        if (repository.findReportByIdempotencyKey) {
-          const existing = await repository.findReportByIdempotencyKey(idempotencyKey);
-          if (existing) return { ...toResponse(existing), replay: true };
-        }
-        const sellable = Number(inventory.sellableQuantity ?? inventory.stockQuantity ?? 0);
-        if (quantity > sellable) throw new ApiError(400, 'Damage quantity exceeds sellable inventory');
-        const result = await transactionManager.withTransaction(async (session) => {
-          const current = await repository.findInventoryById(input.inventoryId, session);
+      const inventoryId = inventory._id;
+      if (repository.findReportByIdempotencyKey) {
+        const existing = await repository.findReportByIdempotencyKey(idempotencyKey);
+        if (existing) return { ...toResponse(existing), replay: true };
+      }
+      const sellable = Number(inventory.sellableQuantity ?? inventory.stockQuantity ?? 0);
+      if (quantity > sellable) throw new ApiError(400, 'Damage quantity exceeds sellable inventory');
+      let result;
+      try {
+        result = await transactionManager.withTransaction(async (session) => {
+          const current = await repository.findInventoryById(inventoryId, session);
           if (!current) throw new ApiError(404, 'Inventory record not found');
           const currentSellable = Number(current.sellableQuantity ?? current.stockQuantity ?? 0);
           if (quantity > currentSellable) throw new ApiError(409, 'Damage quantity exceeds sellable inventory');
+          const nextSellable = currentSellable - quantity;
+          const inventoryHealth = nextSellable < Number(current.reservedQuantity || 0)
+            ? 'ReconciliationRequired'
+            : 'Normal';
+          const affectedOrderIds = inventoryHealth === 'ReconciliationRequired' && repository.findAffectedOrderIds
+            ? await repository.findAffectedOrderIds(current.productId, session)
+            : [];
+          const healthPatch = { inventoryHealth, affectedOrderIds };
           const updated = repository.quarantineInventory
-            ? await repository.quarantineInventory(input.inventoryId, quantity, staffId, session)
-            : await repository.updateInventory(input.inventoryId, {
-              stockQuantity: currentSellable - quantity,
-              sellableQuantity: currentSellable - quantity,
+            ? await repository.quarantineInventory(inventoryId, quantity, staffId, healthPatch, session)
+            : await repository.updateInventory(inventoryId, {
+              stockQuantity: nextSellable,
+              sellableQuantity: nextSellable,
               quarantinedQuantity: Number(current.quarantinedQuantity || 0) + quantity,
               lastUpdatedBy: staffId,
-              inventoryHealth: (currentSellable - quantity) < Number(current.reservedQuantity || 0) ? 'ReconciliationRequired' : (current.inventoryHealth || 'Normal'),
+              ...healthPatch,
             }, session);
           if (!updated) throw new ApiError(409, 'Inventory changed while reporting damage');
-          if (repository.updateInventory && repository.quarantineInventory) {
-            await repository.updateInventory(input.inventoryId, {
-              inventoryHealth: (currentSellable - quantity) < Number(current.reservedQuantity || 0) ? 'ReconciliationRequired' : (current.inventoryHealth || 'Normal'),
-            }, session);
-          }
           const report = await repository.createReport({
             inventoryId: current._id,
             productId: current.productId,
@@ -183,19 +202,24 @@ function createDamageReportService({
           }, session);
           return { report, updated, transaction };
         });
-        await auditLogger.log({ userId: staffId, action: 'DAMAGE_REPORT_CREATE', targetEntity: 'DamageReport', targetId: String(result.report._id), description: `Quarantined ${quantity} item(s)` });
-        await emitEvent({
-          idempotencyKey: `damage-report:${idempotencyKey}`,
-          recipientId: staffId,
-          type: 'DAMAGE_REPORTED',
-          subject: 'Damage report submitted',
-          content: `Damage report ${result.report._id} is pending Warehouse review.`,
-        });
-        return toResponse(result.report);
+      } catch (error) {
+        if (error?.code !== 11000 || !repository.findReportByIdempotencyKey) throw error;
+        const existing = await repository.findReportByIdempotencyKey(idempotencyKey);
+        if (!existing) throw error;
+        return { ...toResponse(existing), replay: true };
       }
-      const report = await repository.createReport({ inventoryId: inventory._id, productId: inventory.productId, reportedBy: staffId, quantity, reason: String(input.reason).trim(), status: 'PendingWarehouseConfirmation' });
-      await auditLogger.log({ userId: staffId, action: 'DAMAGE_REPORT_CREATE', targetEntity: 'DamageReport', targetId: String(report._id), description: `Reported ${quantity} damaged item(s)` });
-      return toResponse(report);
+      await auditLogger.log({ userId: staffId, action: 'DAMAGE_REPORT_CREATE', targetEntity: 'DamageReport', targetId: String(result.report._id), description: `Quarantined ${quantity} item(s)` });
+      await lowStockLifecycle?.evaluate(result.updated, { eventKey: `damage-quarantine:${idempotencyKey}` });
+      await emitEvent({
+        idempotencyKey: `damage-report:${idempotencyKey}`,
+        recipientRole: 'WarehouseManager',
+        targetCollection: 'DamageReport',
+        targetId: result.report._id,
+        type: 'DAMAGE_REPORTED',
+        subject: 'Damage report submitted',
+        content: `Damage report ${result.report._id} is pending Warehouse review.`,
+      });
+      return toResponse(result.report);
     },
     async resolveWarehouseReport(warehouseId, id, input = {}) {
       const confirmedQuantity = Number(input.confirmedQuantity);
@@ -203,12 +227,22 @@ function createDamageReportService({
       const decisionReason = String(input.decisionReason || '').trim();
       if (!decisionReason) throw new ApiError(400, 'Damage decision reason is required');
       if (!Array.isArray(input.evidence) || input.evidence.length === 0) throw new ApiError(400, 'Damage decision evidence is required');
+      const decisionKey = String(input.idempotencyKey || '').trim();
+      if (!decisionKey) throw new ApiError(400, 'Damage decision idempotencyKey is required');
+      const transactionKey = `damage-decision:${decisionKey}`;
+      if (repository.findTransactionByIdempotencyKey) {
+        const existingTransaction = await repository.findTransactionByIdempotencyKey(transactionKey);
+        if (existingTransaction) {
+          const existingReport = await repository.findReportById(id);
+          if (!existingReport) throw new ApiError(404, 'Damage report not found');
+          return { ...toResponse(existingReport), transaction: existingTransaction, replay: true };
+        }
+      }
 
       const result = await transactionManager.withTransaction(async (session) => {
         const current = await repository.findReportById(id, session);
         if (!current) throw new ApiError(404, 'Damage report not found');
-        const status = current.status === 'PendingWarehouseConfirmation' ? 'PendingReview' : current.status;
-        if (status !== 'PendingReview') throw new ApiError(409, 'Only PendingReview damage reports can be decided');
+        if (current.status !== 'PendingReview') throw new ApiError(409, 'Only PendingReview damage reports can be decided');
         const reportedQuantity = Number(current.reportedQuantity ?? current.quantity);
         if (confirmedQuantity > reportedQuantity) throw new ApiError(400, 'confirmedQuantity cannot exceed reportedQuantity');
         const claimed = repository.claimDamageReport
@@ -220,15 +254,21 @@ function createDamageReportService({
         const sellable = Number(inventory.sellableQuantity ?? inventory.stockQuantity ?? 0);
         const quarantined = Number(inventory.quarantinedQuantity || 0);
         if (quarantined < reportedQuantity) throw new ApiError(409, 'Damage report quarantine is inconsistent');
+        const nextSellable = sellable + (reportedQuantity - confirmedQuantity);
+        const inventoryHealth = nextSellable < Number(inventory.reservedQuantity || 0)
+          ? 'ReconciliationRequired'
+          : 'Normal';
+        const affectedOrderIds = inventoryHealth === 'ReconciliationRequired' && repository.findAffectedOrderIds
+          ? await repository.findAffectedOrderIds(current.productId, session)
+          : [];
         const updated = await repository.updateInventory(current.inventoryId, {
-          stockQuantity: sellable + (reportedQuantity - confirmedQuantity),
-          sellableQuantity: sellable + (reportedQuantity - confirmedQuantity),
+          stockQuantity: nextSellable,
+          sellableQuantity: nextSellable,
           quarantinedQuantity: quarantined - reportedQuantity,
           damagedQuantity: Number(inventory.damagedQuantity || 0) + confirmedQuantity,
           lastUpdatedBy: warehouseId,
-          inventoryHealth: (sellable + (reportedQuantity - confirmedQuantity)) < Number(inventory.reservedQuantity || 0)
-            ? 'ReconciliationRequired'
-            : 'Normal',
+          inventoryHealth,
+          affectedOrderIds,
         }, session);
         if (!updated) throw new ApiError(409, 'Inventory changed while deciding damage');
         const terminalStatus = confirmedQuantity === 0
@@ -270,13 +310,15 @@ function createDamageReportService({
           dimension: confirmedQuantity ? 'damaged' : 'sellable',
           reason: decisionReason,
           evidence: input.evidence,
-          idempotencyKey: String(input.idempotencyKey || `damage-decision:${id}`),
+          idempotencyKey: transactionKey,
         }, session);
-        return { completed, transaction };
+        return { completed, transaction, updated };
       });
       await auditLogger.log({ userId: warehouseId, action: 'DAMAGE_REPORT_DECIDE', targetEntity: 'DamageReport', targetId: String(id), description: result.completed.status });
+      await lowStockLifecycle?.evaluate(result.updated, { eventKey: transactionKey });
       await emitEvent({
         idempotencyKey: `damage-decision:${id}`,
+        recipientRole: 'WarehouseManager',
         recipientId: result.completed.reportedBy,
         type: 'DAMAGE_DECIDED',
         subject: 'Damage report decided',
@@ -290,8 +332,7 @@ function createDamageReportService({
       const result = await transactionManager.withTransaction(async (session) => {
         const report = await repository.findReportById(id, session);
         if (!report) throw new ApiError(404, 'Damage report not found');
-        const status = report.status === 'PendingWarehouseConfirmation' ? 'PendingReview' : report.status;
-        if (status !== 'PendingReview') throw new ApiError(409, 'Only PendingReview damage reports can be withdrawn');
+        if (report.status !== 'PendingReview') throw new ApiError(409, 'Only PendingReview damage reports can be withdrawn');
         if (String(report.reportedBy) !== String(staffId)) throw new ApiError(403, 'Only the reporting Staff member can withdraw this report');
         const inventory = await repository.findInventoryById(report.inventoryId, session);
         if (!inventory) throw new ApiError(404, 'Inventory record not found');
@@ -299,11 +340,20 @@ function createDamageReportService({
         const sellable = Number(inventory.sellableQuantity ?? inventory.stockQuantity ?? 0);
         const quarantined = Number(inventory.quarantinedQuantity || 0);
         if (quarantined < quantity) throw new ApiError(409, 'Damage report quarantine is inconsistent');
+        const nextSellable = sellable + quantity;
+        const inventoryHealth = nextSellable < Number(inventory.reservedQuantity || 0)
+          ? 'ReconciliationRequired'
+          : 'Normal';
+        const affectedOrderIds = inventoryHealth === 'ReconciliationRequired' && repository.findAffectedOrderIds
+          ? await repository.findAffectedOrderIds(report.productId, session)
+          : [];
         const updated = await repository.updateInventory(report.inventoryId, {
-          stockQuantity: sellable + quantity,
-          sellableQuantity: sellable + quantity,
+          stockQuantity: nextSellable,
+          sellableQuantity: nextSellable,
           quarantinedQuantity: quarantined - quantity,
           lastUpdatedBy: staffId,
+          inventoryHealth,
+          affectedOrderIds,
         }, session);
         if (!updated) throw new ApiError(409, 'Inventory changed while withdrawing damage report');
         const withdrawn = repository.updateReport
@@ -325,10 +375,11 @@ function createDamageReportService({
           dimension: 'sellable',
           reason,
         }, session);
-        return withdrawn;
+        return { withdrawn, updated };
       });
       await auditLogger.log({ userId: staffId, action: 'DAMAGE_REPORT_WITHDRAW', targetEntity: 'DamageReport', targetId: String(id), description: reason });
-      return toResponse(result);
+      await lowStockLifecycle?.evaluate(result.updated, { eventKey: `damage-withdrawal:${id}` });
+      return toResponse(result.withdrawn);
     },
     async disposeConfirmedDamage(warehouseId, inventoryId, input = {}) {
       const quantity = Number(input.quantity);
@@ -372,29 +423,20 @@ function createDamageReportService({
         return { updated, transaction };
       });
       await auditLogger.log({ userId: warehouseId, action, targetEntity: 'Inventory', targetId: String(inventoryId), description: reason });
+      await lowStockLifecycle?.evaluate(result.updated, { eventKey: key });
       return result;
     },
     async confirmWarehouseReport(warehouseId, id, input = {}) {
-      if (input && (input.confirmedQuantity !== undefined || input.decisionReason || input.evidence)) {
-        return api.resolveWarehouseReport(warehouseId, id, input);
-      }
-      const result = await transactionManager.withTransaction(async (session) => {
-        const claimed = await repository.claimConfirmation(id, warehouseId, session);
-        if (!claimed) throw new ApiError(409, 'Only pending damage reports can be confirmed once');
-        const inventory = await repository.findInventoryById(claimed.inventoryId, session);
-        if (!inventory) throw new ApiError(404, 'Inventory record not found');
-        const updated = await repository.applyDamage(inventory._id, Number(claimed.quantity), warehouseId, session);
-        if (!updated) throw new ApiError(409, 'Damage confirmation would violate available inventory');
-        await repository.createTransaction({ productId: inventory.productId, orderId: null, relatedCollection: 'DamageReport', relatedId: claimed._id, performedBy: warehouseId, transactionType: 'DAMAGE_CONFIRMED', quantity: -Number(claimed.quantity), beforeQuantity: Number(inventory.stockQuantity), afterQuantity: Number(updated.stockQuantity), reason: `Damage report ${claimed._id}: ${claimed.reason}` }, session);
-        const completed = await repository.completeConfirmation(id, session);
-        if (!completed) throw new ApiError(409, 'Damage report could not be completed');
-        return completed;
-      });
-      await auditLogger.log({ userId: warehouseId, action: 'DAMAGE_REPORT_CONFIRM', targetEntity: 'DamageReport', targetId: String(id), description: `Confirmed damage report ${id}` });
-      return toResponse(result);
+      return api.resolveWarehouseReport(warehouseId, id, input);
     },
   };
   return api;
 }
 
-module.exports = { createDamageReportService, damageReportService: createDamageReportService({ eventPublisher: notificationService }) };
+module.exports = {
+  createDamageReportService,
+  damageReportService: createDamageReportService({
+    eventPublisher: notificationService,
+    lowStockLifecycle: defaultLowStockLifecycle,
+  }),
+};

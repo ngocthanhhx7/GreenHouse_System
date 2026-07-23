@@ -18,10 +18,12 @@ const ROLE_LINKS = {
     { to: '/staff/return-refunds', label: 'Đổi trả / hoàn tiền' },
     { to: '/staff/exchanges', label: 'Đổi hàng' },
     { to: '/staff/support-requests', label: 'Yêu cầu hỗ trợ' },
+    { to: '/staff/damage-reports', label: 'Báo hàng hư hỏng' },
   ],
   WarehouseManager: [
     { to: '/warehouse', label: 'Tổng quan kho' },
     { to: '/warehouse/inventory', label: 'Tồn kho' },
+    { to: '/warehouse/damage-reports', label: 'Duyệt hàng hư hỏng' },
     { to: '/warehouse/stock-exports', label: 'Phiếu xuất kho' },
     { to: '/warehouse/return-refunds', label: 'Kiểm hàng đổi trả' },
     { to: '/warehouse/exchanges', label: 'Kiểm hàng đổi hàng' },

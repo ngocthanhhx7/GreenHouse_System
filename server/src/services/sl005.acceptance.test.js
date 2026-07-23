@@ -106,12 +106,22 @@ function createReplenishmentRepository() {
       Object.assign(request, patch);
       return request;
     },
-    async claimReceipt(id, data) {
-      const request = requests.find((entry) => entry._id === id && ['Approved', 'PartiallyReceived'].includes(entry.status));
-      if (!request) return null;
-      const receipt = { _id: `receipt-${receipts.length + 1}`, requestId: id, ...data };
+    async createReceipt(data) {
+      const receipt = { _id: `receipt-${receipts.length + 1}`, ...data };
       receipts.push(receipt);
-      return { request, receipt };
+      return receipt;
+    },
+    async findReceiptByIdempotencyKey(key) {
+      return receipts.find((receipt) => receipt.idempotencyKey === key) || null;
+    },
+    async claimReceiptProjection(id, expected, patch, receipt) {
+      const request = requests.find((entry) => entry._id === id
+        && ['Approved', 'PartiallyReceived'].includes(entry.status)
+        && Number(entry.netAcceptedQuantity || 0) === Number(expected.netAcceptedQuantity || 0));
+      if (!request) return null;
+      Object.assign(request, patch);
+      request.receipts = [...(request.receipts || []), receipt];
+      return request;
     },
     async updateRequest(id, patch) {
       const request = requests.find((entry) => entry._id === id);
@@ -176,6 +186,7 @@ describe('SL-005 acceptance contracts', () => {
       confirmedQuantity: 1,
       decisionReason: 'One unit is damaged',
       evidence: [{ file: 'inspection.jpg' }],
+      idempotencyKey: 'damage-decision-1',
     });
     assert.equal(decision.status, 'PartiallyConfirmed');
     assert.equal(repository.inventory.sellableQuantity, 9);

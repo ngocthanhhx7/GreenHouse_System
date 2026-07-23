@@ -10,6 +10,7 @@ const OrderReservation = require('../models/orderReservation.model');
 const LowStockAlert = require('../models/lowStockAlert.model');
 const { notificationService } = require('./notification.service');
 const { systemSettingService } = require('./systemSetting.service');
+const { lowStockAlertLifecycle: defaultLowStockLifecycle } = require('./lowStockAlertLifecycle.service');
 const { logAudit } = require('../utils/auditLogger');
 
 function withOptionalSession(query, session) { return session ? query.session(session) : query; }
@@ -82,7 +83,7 @@ function createModelRepository() {
       if (!idempotencyKey) return null;
       return withOptionalSession(InventoryTransaction.findOne({ idempotencyKey }), session).lean();
     },
-    async claimPhysicalCount(id, countedSellableQuantity, userId, session) {
+    async claimPhysicalCount(id, countedSellableQuantity, userId, patch, session) {
       return withOptionalSession(Inventory.findByIdAndUpdate(
         id,
         {
@@ -90,6 +91,7 @@ function createModelRepository() {
             stockQuantity: countedSellableQuantity,
             sellableQuantity: countedSellableQuantity,
             lastUpdatedBy: userId,
+            ...patch,
           },
         },
         { new: true, runValidators: false },
@@ -107,7 +109,6 @@ function createModelRepository() {
         { new: true, runValidators: true }
       ).populate('productId'), session).lean();
     },
-    async updateProductStock(productId, stockQuantity, session) { return withOptionalSession(Product.findByIdAndUpdate(productId, { stockQuantity }, { new: true, runValidators: true }), session).lean(); },
     async createTransaction(data, session) { const [transaction] = await InventoryTransaction.create([data], session ? { session } : undefined); return transaction.toObject(); },
     async listTransactions() { return InventoryTransaction.find({}).sort({ createdAt: -1 }).lean(); },
     async listLowStockAlerts(query = {}) { return LowStockAlert.find(query).sort({ updatedAt: -1 }).lean(); },
@@ -169,6 +170,7 @@ function createInventoryService({
   transactionManager = createModelTransactionManager(),
   eventPublisher = notificationService,
   thresholdProvider = null,
+  lowStockLifecycle = null,
 } = {}) {
   const physicalCountResults = new Map();
   async function getInventoryOrThrow(id) { const inventory = await repository.findInventoryById(id); if (!inventory) throw new ApiError(404, 'Inventory record not found'); return inventory; }
@@ -204,7 +206,9 @@ function createInventoryService({
   }
   async function emitEvent(event) {
     try {
-      if (event.recipientId && eventPublisher && eventPublisher.createInAppNotification) await eventPublisher.createInAppNotification({ userId: event.recipientId, type: event.type, subject: event.subject, content: event.content, eventId: event.idempotencyKey });
+      if (eventPublisher?.publishDomainEvent) await eventPublisher.publishDomainEvent(event);
+      else if (eventPublisher?.createRoleNotifications && event.recipientRole) await eventPublisher.createRoleNotifications(event);
+      else if (event.recipientId && eventPublisher && eventPublisher.createInAppNotification) await eventPublisher.createInAppNotification({ userId: event.recipientId, type: event.type, subject: event.subject, content: event.content, eventId: event.idempotencyKey });
     } catch (_) { /* Notification delivery is intentionally outside the inventory transaction. */ }
   }
   async function ensureInventoryRecords() {
@@ -243,14 +247,16 @@ function createInventoryService({
       const reason = String(input.reason || '').trim();
       if (!reason) throw new ApiError(400, 'Physical count reason is required');
       if (!evidenceRequired(input.evidence)) throw new ApiError(400, 'Physical count evidence is required');
+      const idempotencyKey = String(input.idempotencyKey || '').trim();
+      if (!idempotencyKey) throw new ApiError(400, 'Physical count idempotencyKey is required');
 
-      if (input.idempotencyKey && physicalCountResults.has(String(input.idempotencyKey))) {
-        const existing = physicalCountResults.get(String(input.idempotencyKey));
+      if (physicalCountResults.has(idempotencyKey)) {
+        const existing = physicalCountResults.get(idempotencyKey);
         const inventory = await repository.findInventoryById(id);
         return { inventory: toInventoryResponse(inventory), transaction: existing, replay: true };
       }
-      if (input.idempotencyKey && repository.findTransactionByIdempotencyKey) {
-        const existing = await repository.findTransactionByIdempotencyKey(String(input.idempotencyKey));
+      if (repository.findTransactionByIdempotencyKey) {
+        const existing = await repository.findTransactionByIdempotencyKey(idempotencyKey);
         if (existing) {
           const inventory = await repository.findInventoryById(id);
           return { inventory: toInventoryResponse(inventory), transaction: existing, replay: true };
@@ -277,19 +283,12 @@ function createInventoryService({
           patch.affectedOrderIds = [];
         }
         const updated = repository.claimPhysicalCount
-          ? await repository.claimPhysicalCount(id, countedSellableQuantity, userId, session)
-          : await repository.updateInventory(id, patch, session);
-        if (!updated) throw new ApiError(409, 'Inventory changed while recording physical count');
-        if (repository.claimPhysicalCount && repository.updateInventory) {
-          const healthUpdated = await repository.updateInventory(id, {
+          ? await repository.claimPhysicalCount(id, countedSellableQuantity, userId, {
             inventoryHealth: patch.inventoryHealth,
             affectedOrderIds: patch.affectedOrderIds,
-            stockQuantity: countedSellableQuantity,
-            sellableQuantity: countedSellableQuantity,
-            lastUpdatedBy: userId,
-          }, session);
-          if (healthUpdated) Object.assign(updated, healthUpdated);
-        }
+          }, session)
+          : await repository.updateInventory(id, patch, session);
+        if (!updated) throw new ApiError(409, 'Inventory changed while recording physical count');
         // Some test/dummy repositories only implement claimPhysicalCount and do not
         // apply health fields; preserve the derived result in the returned object.
         Object.assign(updated, { ...patch });
@@ -303,16 +302,16 @@ function createInventoryService({
           dimension: 'sellable',
           reason,
           evidence: input.evidence,
-          idempotencyKey: String(input.idempotencyKey || ''),
+          idempotencyKey,
           relatedCollection: 'Inventory',
           relatedId: id,
         }, session);
         return { updated, transaction };
       });
       await auditLogger.log({ userId, action: 'INVENTORY_PHYSICAL_COUNT', targetEntity: 'Inventory', targetId: String(id), description: `Recorded sellable count ${countedSellableQuantity}` });
-      if (input.idempotencyKey) physicalCountResults.set(String(input.idempotencyKey), result.transaction);
+      physicalCountResults.set(idempotencyKey, result.transaction);
       const response = toInventoryResponse(result.updated);
-      if (response.isLowStock) await emitEvent({ idempotencyKey: `inventory-low-stock:${id}:${input.idempotencyKey || response.updatedAt || response.sellableQuantity}`, recipientId: userId, type: 'LOW_STOCK', subject: 'Low stock alert', content: `${response.productName || response.productId} has ${response.availableQuantity} available.` });
+      await lowStockLifecycle?.evaluate(result.updated, { eventKey: idempotencyKey });
       return { inventory: response, transaction: result.transaction };
     },
     async setThresholdOverride(userId, id, input = {}) {
@@ -333,6 +332,7 @@ function createInventoryService({
       const updated = await repository.updateInventory(id, { lowStockThreshold: threshold === null ? fallbackThreshold : threshold, lowStockThresholdOverride: threshold, lastUpdatedBy: userId }, null);
       if (!updated) throw new ApiError(409, 'Inventory threshold changed concurrently');
       await auditLogger.log({ userId, action: 'INVENTORY_THRESHOLD_OVERRIDE', targetEntity: 'Inventory', targetId: String(id), description: reason });
+      await lowStockLifecycle?.evaluate(updated, { eventKey: `threshold-override:${id}:${updated.updatedAt || threshold}` });
       return { inventory: toInventoryResponse(updated) };
     },
     async adjustInventory(userId, id, input = {}) {
@@ -342,25 +342,29 @@ function createInventoryService({
       const result = await transactionManager.withTransaction(async (session) => {
         const inventory = await repository.findInventoryById(id, session);
         if (!inventory) throw new ApiError(404, 'Inventory record not found');
-        if (Number(inventory.stockQuantity) + delta < 0) throw new ApiError(400, 'Inventory stock cannot be negative');
-        if (delta < 0 && Number(inventory.stockQuantity) - Number(inventory.reservedQuantity) < -delta) {
+        const beforeSellable = Number(inventory.sellableQuantity ?? inventory.stockQuantity ?? 0);
+        if (beforeSellable + delta < 0) throw new ApiError(400, 'Inventory stock cannot be negative');
+        if (delta < 0 && beforeSellable - Number(inventory.reservedQuantity || 0) < -delta) {
           throw new ApiError(400, 'Inventory adjustment would violate available inventory');
         }
         const updated = repository.claimAdjustment
           ? await repository.claimAdjustment(id, delta, userId, session)
-          : await repository.updateInventory(id, { stockQuantity: Number(inventory.stockQuantity) + delta, lastUpdatedBy: userId }, session);
+          : await repository.updateInventory(id, {
+            stockQuantity: beforeSellable + delta,
+            sellableQuantity: beforeSellable + delta,
+            lastUpdatedBy: userId,
+          }, session);
         if (!updated) throw new ApiError(409, 'Inventory adjustment would violate available inventory');
         const updatedResponse = toInventoryResponse(updated);
-        await repository.updateProductStock(updatedResponse.productId, updatedResponse.stockQuantity, session);
         await createTransaction(userId, inventory, {
           transactionType: 'ADJUSTMENT', quantity: delta,
-          beforeQuantity: Number(inventory.stockQuantity), afterQuantity: updatedResponse.stockQuantity,
+          beforeQuantity: beforeSellable, afterQuantity: updatedResponse.stockQuantity,
           reason: String(input.reason).trim(), relatedCollection: 'Inventory', relatedId: id,
         }, session);
         return { updated, updatedResponse };
       });
       await auditLogger.log({ userId, action: 'INVENTORY_ADJUST', targetEntity: 'Inventory', targetId: String(id), description: `Adjusted stock by ${delta}` });
-      if (result.updatedResponse.isLowStock) await emitEvent({ idempotencyKey: `low-stock:${id}:${result.updated.updatedAt || result.updatedResponse.stockQuantity}`, recipientId: userId, type: 'LOW_STOCK', subject: 'Cảnh báo tồn kho thấp', content: `${result.updatedResponse.productName} còn ${result.updatedResponse.availableQuantity} khả dụng.` });
+      await lowStockLifecycle?.evaluate(result.updated, { eventKey: `legacy-adjustment:${id}:${result.updated.updatedAt || result.updatedResponse.stockQuantity}` });
       return { inventory: result.updatedResponse };
     },
     async listLowStock() { const inventory = await this.listInventory(); const items = inventory.items.filter((item) => item.isLowStock); return { items, total: items.length }; },
@@ -452,14 +456,24 @@ function createInventoryService({
             }
           }
           const before = await repository.findInventoryByProductId(detail.productId, session);
-          if (!before || Number(before.stockQuantity) < quantity) throw new ApiError(409, 'Insufficient stock for export');
+          if (before?.inventoryHealth === 'ReconciliationRequired') {
+            throw new ApiError(409, 'Stock export is blocked while Inventory reconciliation is required');
+          }
+          const beforeSellable = Number(before?.sellableQuantity ?? before?.stockQuantity ?? 0);
+          if (!before || beforeSellable < quantity) throw new ApiError(409, 'Insufficient stock for export');
           if (!before || Number(before.reservedQuantity) < quantity) throw new ApiError(409, 'Stock export requires a full reservation');
-          const after = repository.captureReservation ? await repository.captureReservation(detail.productId, quantity, userId, session) : await repository.updateInventory(before._id, { stockQuantity: Number(before.stockQuantity) - quantity, reservedQuantity: Number(before.reservedQuantity) - quantity, lastUpdatedBy: userId }, session);
+          const after = repository.captureReservation
+            ? await repository.captureReservation(detail.productId, quantity, userId, session)
+            : await repository.updateInventory(before._id, {
+              stockQuantity: beforeSellable - quantity,
+              sellableQuantity: beforeSellable - quantity,
+              reservedQuantity: Number(before.reservedQuantity) - quantity,
+              lastUpdatedBy: userId,
+            }, session);
           if (!after) throw new ApiError(409, 'Stock export requires a full reservation');
           const afterResponse = toInventoryResponse(after);
-          await repository.updateProductStock(afterResponse.productId, afterResponse.stockQuantity, session);
-          await createTransaction(userId, before, { transactionType: 'STOCK_EXPORT', quantity: -quantity, beforeQuantity: Number(before.stockQuantity), afterQuantity: afterResponse.stockQuantity, reason: `Stock export for order ${order.orderCode}`, orderId: order._id, relatedCollection: 'StockExportRequest', relatedId: id }, session);
-          transactions.push(afterResponse);
+          await createTransaction(userId, before, { transactionType: 'STOCK_EXPORT', quantity: -quantity, beforeQuantity: beforeSellable, afterQuantity: afterResponse.stockQuantity, reason: `Stock export for order ${order.orderCode}`, orderId: order._id, relatedCollection: 'StockExportRequest', relatedId: id }, session);
+          transactions.push(after);
         }
         const packed = repository.markOrderPacked ? await repository.markOrderPacked(order._id, session) : await repository.updateOrder(order._id, { orderStatus: 'Packed', packedAt: new Date() }, session);
         if (!packed) throw new ApiError(409, 'Order changed while stock export was being processed');
@@ -468,6 +482,9 @@ function createInventoryService({
         return { exported, packed, details, inventories: transactions };
       });
       await auditLogger.log({ userId, action: 'INVENTORY_EXPORT', targetEntity: 'StockExportRequest', targetId: String(id), description: `Exported stock for order ${result.packed.orderCode}` });
+      for (const inventory of result.inventories) {
+        await lowStockLifecycle?.evaluate(inventory, { eventKey: `stock-export:${id}` });
+      }
       await emitEvent({ idempotencyKey: `stock-export:${id}`, recipientId: result.packed.customerId, type: 'STOCK_EXPORT', subject: 'Đơn hàng đã được xuất kho', content: `Đơn ${result.packed.orderCode} đã được xuất kho.` });
       const stockExport = toStockExportResponse(result.exported, result.packed, result.details);
       return { stockExport, order: { id: String(result.packed._id), orderStatus: result.packed.orderStatus } };
@@ -475,4 +492,10 @@ function createInventoryService({
   };
 }
 
-module.exports = { createInventoryService, inventoryService: createInventoryService({ thresholdProvider: systemSettingService }) };
+module.exports = {
+  createInventoryService,
+  inventoryService: createInventoryService({
+    thresholdProvider: systemSettingService,
+    lowStockLifecycle: defaultLowStockLifecycle,
+  }),
+};

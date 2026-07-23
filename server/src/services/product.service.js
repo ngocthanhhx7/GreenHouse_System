@@ -46,7 +46,17 @@ function hasActivePopulatedCategory(product) {
   return Boolean(product.categoryId && typeof product.categoryId === 'object' && product.categoryId.status === 'Active');
 }
 
-function toPlainProduct(product) {
+function availableQuantityOf(inventory) {
+  if (!inventory) return 0;
+  if (inventory.inventoryHealth === 'ReconciliationRequired') return 0;
+  return Math.max(
+    0,
+    Number(inventory.sellableQuantity ?? inventory.stockQuantity ?? 0)
+      - Number(inventory.reservedQuantity || 0),
+  );
+}
+
+function toPlainProduct(product, inventory = null) {
   return {
     id: String(product._id),
     name: product.name,
@@ -55,7 +65,7 @@ function toPlainProduct(product) {
     description: product.description || '',
     imageUrls: product.imageUrls || [],
     price: product.price,
-    stockQuantity: product.stockQuantity || 0,
+    stockQuantity: availableQuantityOf(inventory),
     unit: product.unit,
     categoryId: product.categoryId && product.categoryId._id ? String(product.categoryId._id) : product.categoryId ? String(product.categoryId) : undefined,
     category: product.categoryId && product.categoryId.name ? { id: String(product.categoryId._id), name: product.categoryId.name } : undefined,
@@ -134,6 +144,8 @@ function createProductService({
         return created;
       },
       async deleteByProductId(productId) { return Inventory.deleteOne({ productId }); },
+      async findByProductId(productId) { return Inventory.findOne({ productId }).lean(); },
+      async findByProductIds(productIds) { return Inventory.find({ productId: { $in: productIds } }).lean(); },
     };
   }
   if (!transactionManager && productRepository?.isPersistent) {
@@ -160,12 +172,18 @@ function createProductService({
   return {
     async listPublicProducts(query = {}) {
       const products = await productRepository.list();
+      const inventories = inventoryRepository?.findByProductIds
+        ? await inventoryRepository.findByProductIds(products.map((product) => product._id))
+        : [];
+      const inventoryByProductId = new Map(
+        inventories.map((inventory) => [String(inventory.productId), inventory]),
+      );
       const items = products
         .filter((product) => product.status === 'Active' && hasActivePopulatedCategory(product))
         .filter((product) => !query.categoryId || String(product.categoryId && product.categoryId._id ? product.categoryId._id : product.categoryId) === String(query.categoryId))
         .filter((product) => matchesKeyword(product, query.keyword))
         .filter((product) => matchesPrice(product, query.minPrice, query.maxPrice))
-        .map(toPlainProduct);
+        .map((product) => toPlainProduct(product, inventoryByProductId.get(String(product._id))));
 
       return {
         items,
@@ -176,12 +194,24 @@ function createProductService({
     async getPublicProductById(id) {
       const product = await productRepository.findPublicById(id);
       if (!product || !hasActivePopulatedCategory(product)) throw new ApiError(404, 'Product not found');
-      return toPlainProduct(product);
+      const inventory = inventoryRepository?.findByProductId
+        ? await inventoryRepository.findByProductId(product._id)
+        : null;
+      return toPlainProduct(product, inventory);
     },
 
     async listAdminProducts() {
       const products = await productRepository.list();
-      return products.map(toPlainProduct);
+      const inventories = inventoryRepository?.findByProductIds
+        ? await inventoryRepository.findByProductIds(products.map((product) => product._id))
+        : [];
+      const inventoryByProductId = new Map(
+        inventories.map((inventory) => [String(inventory.productId), inventory]),
+      );
+      return products.map((product) => toPlainProduct(
+        product,
+        inventoryByProductId.get(String(product._id)),
+      ));
     },
 
     async createProduct(input, actor = {}) {
@@ -201,13 +231,14 @@ function createProductService({
         };
       const createProductAndInventory = async (session) => {
         let created;
+        let createdInventory = null;
         try {
           created = await productRepository.create(productData, session);
         } catch (error) {
           rethrowProductRepositoryError(error);
         }
         try {
-          if (inventoryRepository) await inventoryRepository.create({
+          if (inventoryRepository) createdInventory = await inventoryRepository.create({
           productId: created._id,
           stockQuantity: 0,
           sellableQuantity: 0,
@@ -224,13 +255,16 @@ function createProductService({
           else if (inventoryRepository?.deleteByProductId) await inventoryRepository.deleteByProductId(created._id);
           throw error;
         }
-        return created;
+        return { created, createdInventory };
       };
       let product;
+      let inventory;
       try {
-        product = productRepository?.isPersistent && transactionManager
+        const result = productRepository?.isPersistent && transactionManager
           ? await transactionManager.withTransaction(createProductAndInventory)
           : await createProductAndInventory(null);
+        product = result.created;
+        inventory = result.createdInventory;
       } catch (error) {
         rethrowProductRepositoryError(error);
       }
@@ -243,7 +277,7 @@ function createProductService({
         description: `Product created: ${product.name}`,
       });
 
-      return toPlainProduct(product);
+      return toPlainProduct(product, inventory);
     },
 
     async updateProduct(id, input, actor = {}) {
@@ -289,7 +323,10 @@ function createProductService({
         description: `Product updated: ${product.name}`,
       });
 
-      return toPlainProduct(product);
+      const inventory = inventoryRepository?.findByProductId
+        ? await inventoryRepository.findByProductId(product._id)
+        : null;
+      return toPlainProduct(product, inventory);
     },
   };
 }

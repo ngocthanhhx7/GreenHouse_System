@@ -11,9 +11,10 @@ function createProductRepository() {
       price: 25,
       status: 'Active',
       stockQuantity: 5,
+      availableQuantity: 5,
       updatedAt: new Date('2026-07-23T00:00:00.000Z'),
     },
-    { _id: 'p2', name: 'Hidden Plate', price: 10, status: 'Inactive', stockQuantity: 5 },
+    { _id: 'p2', name: 'Hidden Plate', price: 10, status: 'Inactive', stockQuantity: 5, availableQuantity: 5 },
   ];
   return {
     async findSellableById(id) {

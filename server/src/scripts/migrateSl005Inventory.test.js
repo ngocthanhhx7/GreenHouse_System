@@ -26,7 +26,10 @@ describe('SL-005 inventory migration', () => {
 
   it('maps legacy damage and replenishment lifecycle fields', () => {
     assert.deepEqual(normalizeDamageDocument({ quantity: 3, status: 'PendingWarehouseConfirmation' }), {
-      quantity: 3, reportedQuantity: 3, status: 'PendingReview',
+      quantity: 3,
+      reportedQuantity: 3,
+      evidence: [{ type: 'migration', reference: 'sl005-migration-damage:' }],
+      status: 'PendingReview',
     });
     assert.deepEqual(normalizeReplenishmentDocument({ quantity: 5, receivedQuantity: 2, status: 'Receiving' }), {
       quantity: 5,
@@ -36,22 +39,28 @@ describe('SL-005 inventory migration', () => {
       receivedQuantity: 2,
       status: 'PartiallyReceived',
     });
+    assert.equal(
+      normalizeReplenishmentDocument({ quantity: 5, receivedQuantity: 0, status: 'Pending' }).status,
+      'PendingApproval',
+    );
   });
 
-  it('runs all backfills and verifies indexes', async () => {
+  it('preflights active-request conflicts and reconciles legacy quarantine before indexes', async () => {
     const calls = [];
     const result = await migrateSl005Inventory({
       repository: {
+        async assertNoActiveReplenishmentConflicts() { calls.push('preflight'); },
         async backfillInventories() { calls.push('inventory'); return 2; },
-        async backfillDamageReports() { calls.push('damage'); return 1; },
+        async reconcileDamageReports() { calls.push('damage'); return { reports: 1, quarantines: 1 }; },
         async backfillReplenishments() { calls.push('replenishment'); return 3; },
         async verifyIndexes() { calls.push('indexes'); return 4; },
       },
     });
-    assert.deepEqual(calls, ['inventory', 'damage', 'replenishment', 'indexes']);
+    assert.deepEqual(calls, ['preflight', 'inventory', 'damage', 'replenishment', 'indexes']);
     assert.deepEqual(result, {
       inventoriesBackfilled: 2,
       damageReportsBackfilled: 1,
+      damageQuarantinesCreated: 1,
       replenishmentsBackfilled: 3,
       indexesVerified: 4,
     });

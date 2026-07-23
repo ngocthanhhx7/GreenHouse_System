@@ -5,7 +5,6 @@ const ApiError = require('../utils/apiError');
 const Order = require('../models/order.model');
 const OrderDetail = require('../models/orderDetail.model');
 const Inventory = require('../models/inventory.model');
-const Product = require('../models/product.model');
 const InventoryTransaction = require('../models/inventoryTransaction.model');
 const ExchangeCase = require('../models/exchangeCase.model');
 const ExchangeLine = require('../models/exchangeLine.model');
@@ -25,6 +24,7 @@ const {
 const { returnEvidenceClaim, MAX_RETURN_EVIDENCE_TOTAL_SIZE } = require('../utils/returnEvidenceClaim');
 const { logAudit } = require('../utils/auditLogger');
 const { notificationService } = require('./notification.service');
+const { lowStockAlertLifecycle } = require('./lowStockAlertLifecycle.service');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const EXCHANGE_WINDOW_MS = 5 * DAY_MS;
@@ -237,7 +237,13 @@ function createModelRepository({ lockService = afterSalesLockService } = {}) {
       return withSession(Inventory.findOneAndUpdate(
         {
           productId,
-          $expr: { $gte: [{ $subtract: ['$stockQuantity', '$reservedQuantity'] }, quantity] },
+          inventoryHealth: { $ne: 'ReconciliationRequired' },
+          $expr: {
+            $gte: [
+              { $subtract: [{ $ifNull: ['$sellableQuantity', '$stockQuantity'] }, '$reservedQuantity'] },
+              quantity,
+            ],
+          },
         },
         { $inc: { reservedQuantity: quantity }, $set: { lastUpdatedBy: userId } },
         { new: true, runValidators: true }
@@ -251,40 +257,29 @@ function createModelRepository({ lockService = afterSalesLockService } = {}) {
       ), session).lean();
     },
     async consumeInventory(productId, quantity, userId, session) {
-      const inventory = await withSession(Inventory.findOneAndUpdate(
-        { productId, reservedQuantity: { $gte: quantity }, stockQuantity: { $gte: quantity } },
+      return withSession(Inventory.findOneAndUpdate(
         {
-          $inc: { reservedQuantity: -quantity, stockQuantity: -quantity },
+          productId,
+          inventoryHealth: { $ne: 'ReconciliationRequired' },
+          reservedQuantity: { $gte: quantity },
+          sellableQuantity: { $gte: quantity },
+        },
+        {
+          $inc: { reservedQuantity: -quantity, stockQuantity: -quantity, sellableQuantity: -quantity },
           $set: { lastUpdatedBy: userId },
         },
         { new: true, runValidators: true }
       ), session).lean();
-      if (inventory) {
-        await withSession(Product.findByIdAndUpdate(
-          productId,
-          { $set: { stockQuantity: inventory.stockQuantity } },
-          { new: true, runValidators: true }
-        ), session);
-      }
-      return inventory;
     },
     async receiveInventory(productId, sellable, damaged, userId, session) {
-      const inventory = await withSession(Inventory.findOneAndUpdate(
+      return withSession(Inventory.findOneAndUpdate(
         { productId },
         {
-          $inc: { stockQuantity: sellable, damagedQuantity: damaged },
+          $inc: { stockQuantity: sellable, sellableQuantity: sellable, damagedQuantity: damaged },
           $set: { lastUpdatedBy: userId },
         },
         { new: true, runValidators: true }
       ), session).lean();
-      if (inventory) {
-        await withSession(Product.findByIdAndUpdate(
-          productId,
-          { $set: { stockQuantity: inventory.stockQuantity } },
-          { new: true, runValidators: true }
-        ), session);
-      }
-      return inventory;
     },
     async createReservations(items, session) {
       const created = await StockReservation.insertMany(items, session ? { session } : undefined);
@@ -449,6 +444,7 @@ function createExchangeService({
   repository = createModelRepository(),
   transactionManager = createModelTransactionManager(),
   evidenceVerifier = normalizeEvidenceDefault,
+  lowStockLifecycle = null,
   auditLogger = { log: logAudit },
   notifier = {
     notify: async ({ userId, type, subject, content, caseId }, session) => notificationService.createInAppNotification({
@@ -483,6 +479,21 @@ function createExchangeService({
       targetId: String(caseId),
       description,
     }, session);
+  }
+
+  async function evaluateInventoryLifecycles(inventories = []) {
+    if (!lowStockLifecycle?.evaluate) return;
+    const seen = new Set();
+    for (const inventory of inventories.filter(Boolean)) {
+      const productId = String(inventory.productId && inventory.productId._id
+        ? inventory.productId._id
+        : inventory.productId || '');
+      if (!productId || seen.has(productId)) continue;
+      seen.add(productId);
+      await lowStockLifecycle.evaluate(inventory, {
+        eventKey: `exchange:${productId}:${inventory.updatedAt || inventory.stockQuantity || inventory.sellableQuantity || 0}`,
+      });
+    }
   }
 
   function isInitialStockChoice(exchangeCase) {
@@ -708,21 +719,26 @@ function createExchangeService({
 
   async function releaseReservations(caseId, actorId, reason, session) {
     const reservations = await repository.listReservations(caseId, session);
+    const inventories = [];
     for (const reservation of reservations.filter((item) => item.status === 'Reserved')) {
       const released = await repository.releaseInventory(reservation.productId, Number(reservation.quantity), actorId, session);
       if (!released) throw new ApiError(409, 'Reserved Inventory changed while releasing Exchange stock');
+      inventories.push(released);
       await repository.updateReservation(reservation._id, {
         status: 'Released', releasedAt: new Date(clock()), releaseReason: reason,
       }, session);
     }
+    return inventories;
   }
 
   async function reserveAll(exchangeCase, lines, staffId, session) {
     const reservedAt = new Date(clock());
     const reservationInputs = [];
+    const inventories = [];
     for (const line of lines) {
       const inventory = await repository.reserveInventory(line.productId, Number(line.requestedQuantity), staffId, session);
       if (!inventory) throw new NoExactStockError(line.productId);
+      inventories.push(inventory);
       reservationInputs.push({
         reservationKey: `${String(exchangeCase._id)}:${String(line._id)}`,
         exchangeCaseId: exchangeCase._id,
@@ -733,19 +749,20 @@ function createExchangeService({
         reservedAt,
       });
     }
-    return repository.createReservations(reservationInputs, session);
+    const reservations = await repository.createReservations(reservationInputs, session);
+    return { reservations, inventories };
   }
 
   async function attemptApproval(staffId, exchangeCase, data) {
     try {
-      return await transactionManager.withTransaction(async (session) => {
+      const result = await transactionManager.withTransaction(async (session) => {
         const fresh = await repository.findCaseById(exchangeCase._id, session);
         if (!fresh || !['Submitted', 'WaitingForExactStock'].includes(fresh.status)) {
           throw new ApiError(409, 'Exchange request changed while Staff was approving it');
         }
         const lines = await repository.listLines(fresh._id, session);
         if (!lines.length) throw new ApiError(409, 'Exchange lines are missing');
-        await reserveAll(fresh, lines, staffId, session);
+        const reserved = await reserveAll(fresh, lines, staffId, session);
         const approvedAt = new Date(clock());
         const approved = await repository.claimCase(fresh._id, ['Submitted', 'WaitingForExactStock'], {
             ...data,
@@ -759,8 +776,10 @@ function createExchangeService({
             incidentShipmentId: null,
         }, session);
         if (!approved) throw new ApiError(409, 'Exchange request changed while Staff was approving it');
-        return approved;
+        return { approved, inventories: reserved.inventories };
       });
+      await evaluateInventoryLifecycles(result.inventories);
+      return result.approved;
     } catch (error) {
       if (!(error instanceof NoExactStockError)) throw error;
       const failedAt = new Date(clock());
@@ -1264,7 +1283,7 @@ function createExchangeService({
         }
         throw new ApiError(409, 'This Exchange cannot convert without an exact-stock failure');
       }
-      const converted = await transactionManager.withTransaction(async (session) => {
+      const convertedResult = await transactionManager.withTransaction(async (session) => {
         const claimed = await repository.claimCase(id, [
           'AwaitingExactStockChoice', 'WaitingForExactStock',
         ], {
@@ -1274,7 +1293,7 @@ function createExchangeService({
           terminalAt: new Date(clock()),
         }, session);
         if (!claimed) throw new ApiError(409, 'Exchange changed while Customer was converting it');
-        await releaseReservations(id, customerId, 'Converted to Return/Refund', session);
+        const releasedInventories = await releaseReservations(id, customerId, 'Converted to Return/Refund', session);
         const [lines, movements] = await Promise.all([
           repository.listLines(id, session),
           repository.listInventoryTransactions
@@ -1324,8 +1343,10 @@ function createExchangeService({
         await repository.updateCase(id, {
           convertedReturnRefundRequestId: returnRequest._id,
         }, session);
-        return returnRequest;
+        return { returnRequest, releasedInventories };
       });
+      await evaluateInventoryLifecycles(convertedResult.releasedInventories);
+      const converted = convertedResult.returnRequest;
       await writeAudit(customerId, 'EXCHANGE_CONVERTED_TO_RETURN', id, `Converted to Return ${converted.requestCode}`);
       return load(id);
     },
@@ -1361,7 +1382,7 @@ function createExchangeService({
       if (!['Submitted', 'AwaitingExactStockChoice', 'WaitingForExactStock', 'ApprovedAwaitingShipment'].includes(exchangeCase.status)) {
         throw new ApiError(409, 'Customer cannot cancel after Carrier handoff');
       }
-      await transactionManager.withTransaction(async (session) => {
+      const cancellationResult = await transactionManager.withTransaction(async (session) => {
         const cancelledAt = new Date(clock());
         const cancelled = await repository.claimCase(id, [
           'Submitted', 'AwaitingExactStockChoice', 'WaitingForExactStock', 'ApprovedAwaitingShipment',
@@ -1371,10 +1392,12 @@ function createExchangeService({
           terminalAt: cancelledAt,
         }, session);
         if (!cancelled) throw new ApiError(409, 'Exchange changed before cancellation could be recorded');
-        await releaseReservations(id, customerId, 'Customer cancelled before handoff', session);
+        const releasedInventories = await releaseReservations(id, customerId, 'Customer cancelled before handoff', session);
         await repository.releaseUnitClaims(id, session);
         await repository.releaseOrderLock(exchangeCase.orderId, exchangeCase._id, 'Cancelled', false, session);
+        return { releasedInventories };
       });
+      await evaluateInventoryLifecycles(cancellationResult.releasedInventories);
       await writeAudit(customerId, 'EXCHANGE_CANCELLED', id, 'Customer cancelled before Carrier handoff');
       return load(id);
     },
@@ -1386,15 +1409,17 @@ function createExchangeService({
       if (exchangeCase.status !== 'ApprovedAwaitingShipment' || exchangeCase.handoffAt) throw new ApiError(409, 'Only an unshipped approved Exchange can expire');
       const now = new Date(clock());
       if (!exchangeCase.shipByAt || now.getTime() <= new Date(exchangeCase.shipByAt).getTime()) throw new ApiError(409, 'Exchange handoff deadline has not expired');
-      await transactionManager.withTransaction(async (session) => {
+      const expiryResult = await transactionManager.withTransaction(async (session) => {
         const expired = await repository.claimCase(id, ['ApprovedAwaitingShipment'], {
           status: 'Expired', terminalAt: now,
         }, session);
         if (!expired) throw new ApiError(409, 'Exchange changed before expiry could be recorded');
-        await releaseReservations(id, actorId, 'Customer missed ShipByAt', session);
+        const releasedInventories = await releaseReservations(id, actorId, 'Customer missed ShipByAt', session);
         await repository.releaseUnitClaims(id, session);
         await repository.releaseOrderLock(exchangeCase.orderId, exchangeCase._id, 'Expired', false, session);
+        return { releasedInventories };
       });
+      await evaluateInventoryLifecycles(expiryResult.releasedInventories);
       await writeAudit(actorId, 'EXCHANGE_EXPIRED', id, 'No timely Customer handoff');
       return load(id, 'Staff');
     },
@@ -1486,6 +1511,7 @@ function createExchangeService({
         };
       });
 
+      const updatedInventories = [];
       await transactionManager.withTransaction(async (session) => {
         const reservations = await repository.listReservations(id, session);
         const inspectionRecords = [];
@@ -1509,6 +1535,7 @@ function createExchangeService({
           }, session);
           const receivedInventory = await repository.receiveInventory(item.line.productId, item.sellable, item.damaged, warehouseId, session);
           if (!receivedInventory) throw new ApiError(409, 'Inventory record is missing for accepted Exchange goods');
+          updatedInventories.push(receivedInventory);
           let sellableMovementKey;
           if (item.sellable > 0) {
             const key = `${String(id)}:${String(item.line._id)}:EXCHANGE_RETURN_IN`;
@@ -1585,6 +1612,7 @@ function createExchangeService({
         }, session);
         if (!finalized) throw new ApiError(409, 'Exchange changed before Warehouse inspection could be finalized');
       });
+      await evaluateInventoryLifecycles(updatedInventories);
       await writeAudit(warehouseId, 'EXCHANGE_INSPECTION_FINALIZED', id, 'Warehouse accounted for every requested unit');
       return load(id, 'Warehouse');
     },
@@ -1660,6 +1688,7 @@ function createExchangeService({
         throw new ApiError(400, 'shippedAt cannot be before Warehouse receipt');
       }
       let shipment;
+      let consumedInventory = null;
       await transactionManager.withTransaction(async (session) => {
         if (direction === 'REPLACEMENT_TO_CUSTOMER') {
           const reservations = await repository.listReservations(id, session);
@@ -1668,6 +1697,7 @@ function createExchangeService({
           const before = await repository.findInventory(line.productId, session);
           const inventory = await repository.consumeInventory(line.productId, quantity, warehouseId, session);
           if (!before || !inventory) throw new ApiError(409, 'Reserved replacement stock changed before Shipment creation');
+          consumedInventory = inventory;
           await repository.updateReservation(reservation._id, { status: 'Consumed', consumedAt: new Date(clock()) }, session);
           await repository.createInventoryTransaction({
             productId: line.productId,
@@ -1707,6 +1737,7 @@ function createExchangeService({
           if (!progressed) throw new ApiError(409, 'Exchange changed while outbound Shipment was being created');
         }
       });
+      await evaluateInventoryLifecycles(consumedInventory ? [consumedInventory] : []);
       await writeAudit(warehouseId, 'EXCHANGE_OUTBOUND_CREATED', id, `${direction} ${trackingCode}`);
       return { shipment, request: await load(id, 'Warehouse'), idempotentReplay: false };
     },
@@ -1991,6 +2022,7 @@ function createExchangeService({
       const line = lines.find((item) => String(item._id) === String(incidentShipment.exchangeLineId));
       if (!line) throw new ApiError(409, 'Incident Exchange line is missing');
       let shipment;
+      let consumedInventory = null;
       try {
         await transactionManager.withTransaction(async (session) => {
           const currentActiveLeaves = activeIncidentLeaves(
@@ -2018,6 +2050,7 @@ function createExchangeService({
           const before = await repository.findInventory(line.productId, session);
           const consumed = await repository.consumeInventory(line.productId, quantity, staffId, session);
           if (!before || !consumed) throw new ApiError(409, 'Resend reservation changed before Shipment creation');
+          consumedInventory = consumed;
           await repository.updateReservation(reservation._id, { status: 'Consumed', consumedAt: new Date(clock()) }, session);
           await repository.createInventoryTransaction({
             productId: line.productId,
@@ -2073,6 +2106,7 @@ function createExchangeService({
         await writeAudit(staffId, 'EXCHANGE_RESEND_NO_STOCK', id, error.message);
         return { shipment: null, request: await load(id, 'Staff'), idempotentReplay: false };
       }
+      await evaluateInventoryLifecycles(consumedInventory ? [consumedInventory] : []);
       await writeAudit(staffId, 'EXCHANGE_RESEND_CREATED', id, `${trackingCode}; Shop responsibility`);
       return { shipment, request: await load(id, 'Staff'), idempotentReplay: false };
     },
@@ -2083,7 +2117,7 @@ function createExchangeService({
 
 module.exports = {
   createExchangeService,
-  exchangeService: createExchangeService(),
+  exchangeService: createExchangeService({ lowStockLifecycle: lowStockAlertLifecycle }),
   createModelRepository,
   createModelTransactionManager,
   EXCHANGE_WINDOW_MS,
