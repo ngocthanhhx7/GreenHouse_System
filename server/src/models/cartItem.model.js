@@ -31,6 +31,10 @@ const cartItemSchema = new mongoose.Schema(
       required: true,
       min: 0,
     },
+    priceVersion: {
+      type: Date,
+      required: true,
+    },
   },
   { timestamps: true }
 );

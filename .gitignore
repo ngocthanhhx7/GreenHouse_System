@@ -17,3 +17,4 @@ stitch
 .gstack/
 .local-mongodb/
 /artifacts/
+.github/workflows/

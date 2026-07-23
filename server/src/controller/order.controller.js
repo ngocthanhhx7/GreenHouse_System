@@ -35,7 +35,14 @@ async function getMyOrder(req, res, next) {
 
 async function cancelOrder(req, res, next) {
   try {
-    return sendSuccess(res, await orderService.cancelOrder(req.user.id, req.params.id, req.body), 'Order cancelled');
+    return sendSuccess(
+      res,
+      await orderService.cancelOrder(req.user.id, req.params.id, {
+        ...req.body,
+        idempotencyKey: req.get('Idempotency-Key') || req.body.idempotencyKey,
+      }),
+      'Order cancelled'
+    );
   } catch (error) {
     return next(error);
   }

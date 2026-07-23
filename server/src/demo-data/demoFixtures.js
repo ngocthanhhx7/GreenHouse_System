@@ -96,16 +96,17 @@ const carts = Array.from({ length: 12 }, (_, index) => ({
 const cartItems = Array.from({ length: 20 }, (_, index) => ({
   key: `cart-item-${two(index + 1)}`, cartKey: `cart-${two((index % 10) + 1)}`, productKey: `product-${two((index % products.length) + 1)}`,
   productName: products[index % products.length].name, quantity: (index % 3) + 1, unitPrice: products[index % products.length].price,
+  priceVersion: day(0),
 }));
 
 const orderStates = [
-  ['Pending', 'Unpaid', 'COD'], ['WaitingForPayment', 'Pending', 'ONLINE'], ['Pending', 'Paid', 'ONLINE'],
+  ['Pending', 'Unpaid', 'COD'], ['Pending', 'Pending', 'ONLINE'], ['Pending', 'Paid', 'ONLINE'],
   ['Confirmed', 'Paid', 'ONLINE'], ['Confirmed', 'Unpaid', 'COD'], ['StockExportRequested', 'Paid', 'ONLINE'],
   ['StockExportRequested', 'Unpaid', 'COD'], ['Packed', 'Paid', 'ONLINE'], ['Packed', 'Unpaid', 'COD'],
   ['Shipped', 'Paid', 'ONLINE'], ['Delivered', 'Paid', 'COD'], ['Delivered', 'Paid', 'ONLINE'],
   ...Array.from({ length: 6 }, () => ['Delivered', 'Paid', 'COD']),
-  ['Returned', 'Paid', 'ONLINE'], ['Cancelled', 'Unpaid', 'COD'], ['Cancelled', 'RefundPending', 'ONLINE'],
-  ['Expired', 'Failed', 'ONLINE'],
+  ['Returned', 'Paid', 'ONLINE'], ['Cancelled', 'Unpaid', 'COD'], ['Cancelled', 'Paid', 'ONLINE'],
+  ['Cancelled', 'Cancelled', 'ONLINE'],
 ];
 
 const orders = [];
@@ -114,7 +115,7 @@ for (let index = 0; index < 22; index += 1) {
   const orderKey = `order-${two(index + 1)}`;
   const customerNumber = (index % 10) + 1;
   const [orderStatus] = orderStates[index];
-  const reservesInventory = ['Pending', 'WaitingForPayment', 'Confirmed', 'StockExportRequested'].includes(orderStatus);
+  const reservesInventory = ['Pending', 'Confirmed', 'StockExportRequested'].includes(orderStatus);
   const orderProductPool = reservesInventory ? products.slice(0, -2) : products;
   const lineProducts = [
     orderProductPool[(index * 2) % orderProductPool.length],
@@ -137,7 +138,13 @@ for (let index = 0; index < 22; index += 1) {
     currency: 'VND', paymentMethod, paymentStatus, orderStatus,
     receiverName: customerNames[customerNumber - 1], receiverPhone: `09120000${two(customerNumber)}`,
     shippingAddress: `${12 + customerNumber} đường Bếp Việt, ${provinces[(customerNumber - 1) % provinces.length]}`,
-    cancelReason: orderStatus === 'Cancelled' ? (paymentStatus === 'RefundPending' ? 'Khách đổi nhu cầu sau khi đã thanh toán.' : 'Khách chủ động hủy trước khi xuất kho.') : orderStatus === 'Expired' ? 'Phiên thanh toán đã hết hạn.' : '',
+    cancelReason: orderStatus === 'Cancelled'
+      ? paymentStatus === 'Paid'
+        ? 'Khách đổi nhu cầu sau khi đã thanh toán.'
+        : paymentMethod === 'ONLINE'
+          ? 'Thời hạn thanh toán trực tuyến đã hết.'
+          : 'Khách chủ động hủy trước khi xuất kho.'
+      : '',
     createdAt: day(index * 2), confirmedAt: ['Confirmed', 'StockExportRequested', 'Packed', 'Shipped', 'Delivered', 'Returned'].includes(orderStatus) ? day(index * 2 + 1) : null,
     packedAt: ['Packed', 'Shipped', 'Delivered', 'Returned'].includes(orderStatus) ? day(index * 2 + 2) : null,
     shippedAt: ['Shipped', 'Delivered', 'Returned'].includes(orderStatus) ? day(index * 2 + 3) : null,
@@ -153,13 +160,13 @@ const payments = orders.map((order, index) => ({
 const paymentAttempts = payments.map((payment, index) => ({
   key: `payment-attempt-${two(index + 1)}`, attemptCode: `PAY-DEMO-20${two(index + 1)}`, orderKey: payment.orderKey,
   paymentMethod: payment.paymentMethod, paymentProvider: payment.paymentProvider, amount: payment.amount, currency: 'VND',
-  paymentStatus: payment.paymentStatus, transactionId: payment.transactionId, paidAt: payment.paidAt,
+  paymentStatus: index === 21 ? 'Expired' : payment.paymentStatus, transactionId: payment.transactionId, paidAt: payment.paidAt,
 }));
 const callbackOrderNumbers = [2, 3, 4, 6, 8, 10, 12, 19, 21, 22];
 const paymentCallbacks = callbackOrderNumbers.map((number, index) => {
   const order = orders[number - 1];
   const isReceivedOnly = order.paymentStatus === 'Pending';
-  const gatewayStatus = order.paymentStatus === 'Failed' ? 'Failed' : 'Paid';
+  const gatewayStatus = number === 22 || order.paymentStatus === 'Failed' ? 'Failed' : 'Paid';
   return {
     key: `payment-callback-${two(index + 1)}`, orderKey: `order-${two(number)}`, paymentAttemptKey: `payment-attempt-${two(number)}`,
     paymentProvider: 'GreenPayDemo', providerMessageId: `greenpay-message-${two(index + 1)}`,
@@ -270,7 +277,7 @@ transactionSpecs
 for (const inventory of inventories) {
   inventory.stockQuantity = ledger.get(inventory.productKey);
   inventory.reservedQuantity = orders
-    .filter((order) => ['Pending', 'WaitingForPayment', 'Confirmed', 'StockExportRequested'].includes(order.orderStatus))
+    .filter((order) => ['Pending', 'Confirmed', 'StockExportRequested'].includes(order.orderStatus))
     .flatMap((order) => orderDetails.filter((detail) => detail.orderKey === order.key && detail.productKey === inventory.productKey))
     .reduce((sum, detail) => sum + detail.quantity, 0);
   inventory.damagedQuantity = confirmedDamage.productKey === inventory.productKey ? confirmedDamage.quantity : 0;

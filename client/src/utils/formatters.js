@@ -23,15 +23,12 @@ export function formatProductSku(sku) {
 export function translateOrderStatus(status) {
   const labels = {
     Pending: 'Chờ xác nhận',
-    WaitingForPayment: 'Chờ thanh toán',
     Confirmed: 'Đã xác nhận',
     StockExportRequested: 'Đang yêu cầu xuất kho',
     Packed: 'Đã đóng gói',
     Shipped: 'Đang giao',
     Delivered: 'Đã giao',
     Cancelled: 'Đã hủy',
-    Expired: 'Đã hết hạn',
-    Expired: 'Đã hết hạn thanh toán',
     Returned: 'Đã hoàn trả',
   };
   return labels[status] || status || 'Chưa xác định';

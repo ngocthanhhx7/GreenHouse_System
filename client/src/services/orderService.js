@@ -43,11 +43,17 @@ export function createOrderService({ baseUrl = DEFAULT_BASE_URL, fetcher = fetch
     async getOrder(id) {
       return apiRequest(`/orders/${id}`);
     },
-    async cancelOrder(id, { cancelReason = '' } = {}) {
-      return apiRequest(`/orders/${id}/cancel`, {
-        method: 'PATCH',
-        body: JSON.stringify({ cancelReason }),
-      });
+    async cancelOrder(id, {
+      cancelReason = '',
+      idempotencyKey = createCheckoutIdempotencyKey(),
+    } = {}) {
+      return parseResponse(
+        await fetcher(`${baseUrl}/orders/${id}/cancel`, {
+          method: 'PATCH',
+          headers: { ...authHeaders(), 'Idempotency-Key': idempotencyKey },
+          body: JSON.stringify({ cancelReason }),
+        })
+      );
     },
   };
 }

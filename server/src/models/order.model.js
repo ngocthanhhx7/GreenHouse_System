@@ -18,6 +18,21 @@ const orderSchema = new mongoose.Schema(
       trim: true,
       maxlength: 128,
     },
+    checkoutRequestHash: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    cancelIdempotencyKey: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    cancelRequestHash: {
+      type: String,
+      default: '',
+      trim: true,
+    },
     totalAmount: {
       type: Number,
       required: true,
@@ -62,9 +77,14 @@ const orderSchema = new mongoose.Schema(
       enum: ['Unpaid', 'Pending', 'Paid', 'Failed', 'Cancelled', 'RefundPending', 'Refunded'],
       default: 'Pending',
     },
+    paymentDeadlineAt: {
+      type: Date,
+      default: null,
+      immutable: true,
+    },
     orderStatus: {
       type: String,
-      enum: ['Pending', 'WaitingForPayment', 'Confirmed', 'StockExportRequested', 'Packed', 'Shipped', 'Delivered', 'Cancelled', 'Expired', 'Returned'],
+      enum: ['Pending', 'Confirmed', 'StockExportRequested', 'Packed', 'Shipped', 'Delivered', 'Cancelled', 'Returned'],
       default: 'Pending',
     },
     shippingAddress: {

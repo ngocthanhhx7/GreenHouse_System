@@ -298,3 +298,25 @@ Huy bổ sung trạng thái giỏ hàng dùng chung cho luồng Customer:
 - `CartProvider` nạp lại giỏ theo Customer đăng nhập, xóa trạng thái khi logout/chuyển role và đồng bộ sau add, cập nhật số lượng, xóa item hoặc tạo đơn thành công.
 - Mỗi lần đổi tài khoản hoặc reset sau checkout sẽ tăng generation và thay hàng đợi; các cart operation trong cùng generation chạy tuần tự theo thứ tự người dùng khởi tạo, còn operation cũ đang chờ sẽ bị bỏ qua trước khi gọi API.
 - Header là shared-shell do Thành khởi tạo, nhưng thay đổi này thuộc Cart flow của Huy; không làm thay đổi menu hoặc quyền của role nội bộ.
+
+## SL-003 Implementation Addendum 2026-07-23
+
+Branch triển khai: `feature/sl-003-order-payment-cancellation`
+Owner/commit identity: Nguyễn Quang Huy `<quanghuyn267@gmail.com>`
+
+Các quyết định nghiệp vụ đã được Business Approver duyệt và áp dụng:
+
+1. Customer hủy đơn online chưa thanh toán: Order/Payment chuyển `Cancelled`, PaymentAttempt đang `Pending` chuyển `Cancelled`; attempt lịch sử không bị sửa. Deadline tự động chuyển Order/Payment thành `Cancelled` và attempt đang `Pending` thành `Expired`.
+2. Transition đầu tiên được commit thắng race. Callback `Paid` đến muộn hoặc thanh toán dư không mở lại Order/reservation; bằng chứng Paid bất biến và tạo Refund obligation riêng.
+3. Checkout gửi `expectedItems` gồm `productId`, `quantity`, `unitPrice`, `priceVersion`; lệch giá hoặc version trả `409 PRICE_CHANGED`, lệch giỏ trả `409 CART_CHANGED`, không tự đổi giá im lặng.
+4. Cùng actor và idempotency key nhưng payload/reason khác trả `409 IDEMPOTENCY_KEY_REUSED`; fingerprint giống nhau replay kết quả cũ.
+
+Phạm vi đã triển khai:
+
+- Checkout Pending/COD/online, snapshot giá và version, hash idempotency, deadline bất biến và migration lặp an toàn.
+- PaymentAttempt/PaymentCallbackEvent append-only, late/excess payment refund obligation và race-safe callback.
+- Customer cancellation có reason + `Idempotency-Key`; Staff confirm atomically tạo một StockExportRequest; không hủy sau khi export hoàn tất.
+- Cart lưu `priceVersion` và refresh stale price; Order expiry worker conditional claim, release reservation đúng một lần, audit/notification sau commit.
+- UI checkout/order detail hiển thị lỗi giá/giỏ và lý do hủy rõ ràng; shared cart indicator chỉ dành cho Customer.
+
+Regression evidence: server `511/511`, client `168/168`, production build đạt; `git diff --check` đạt. Các log kiểm thử runtime không được đưa vào commit.

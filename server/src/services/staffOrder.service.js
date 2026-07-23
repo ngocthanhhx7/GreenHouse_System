@@ -106,6 +106,17 @@ function createModelOrderRepository() {
     async findOrderById(id, session) { return withOptionalSession(Order.findById(id), session).lean(); },
     async listOrderDetails(orderId, session) { return withOptionalSession(OrderDetail.find({ orderId }), session).lean(); },
     async updateOrder(id, data, session) { return withOptionalSession(Order.findByIdAndUpdate(id, data, { new: true, runValidators: true }), session).lean(); },
+    async claimStaffConfirmation(id, data, session) {
+      return withOptionalSession(Order.findOneAndUpdate(
+        {
+          _id: id,
+          orderStatus: 'Pending',
+          $or: [{ paymentMethod: 'COD' }, { paymentStatus: 'Paid' }],
+        },
+        { $set: data },
+        { new: true, runValidators: true }
+      ), session).lean();
+    },
     async claimStaffCancellation(id, expectedPaymentStatus, data, session) {
       return withOptionalSession(Order.findOneAndUpdate(
         { _id: id, orderStatus: { $in: ['Pending', 'Confirmed'] }, paymentStatus: expectedPaymentStatus },
@@ -121,10 +132,23 @@ function createModelOrderRepository() {
       ), session).lean();
     },
     async findOpenStockExportRequest(orderId) { return StockExportRequest.findOne({ orderId, status: { $in: ['Pending', 'Approved', 'Processing'] } }).lean(); },
-    async createStockExportRequest(data) { return StockExportRequest.create(data); },
+    async findCompletedStockExportRequest(orderId, session) {
+      return withOptionalSession(StockExportRequest.findOne({
+        orderId,
+        $or: [{ status: 'Exported' }, { exportedAt: { $ne: null } }],
+      }), session).lean();
+    },
+    async createStockExportRequest(data, session) {
+      if (!session) return StockExportRequest.create(data);
+      const [request] = await StockExportRequest.create([data], { session });
+      return request;
+    },
     async findPaymentByOrderId(orderId, session) { return withOptionalSession(Payment.findOne({ orderId }), session).lean(); },
     async updatePayment(id, data, session) { return withOptionalSession(Payment.findByIdAndUpdate(id, data, { new: true, runValidators: true }), session).lean(); },
     async findLatestPaymentAttemptByOrder(orderId, session) { return withOptionalSession(PaymentAttempt.findOne({ orderId }).sort({ createdAt: -1 }), session).lean(); },
+    async findPrimaryPaidPaymentAttemptByOrder(orderId, session) {
+      return withOptionalSession(PaymentAttempt.findOne({ orderId, paymentStatus: 'Paid' }).sort({ createdAt: 1, _id: 1 }), session).lean();
+    },
     async updatePaymentAttempt(id, data, session) { return withOptionalSession(PaymentAttempt.findByIdAndUpdate(id, data, { new: true, runValidators: true }), session).lean(); },
     async upsertRefundPending(data, session) {
       const identity = data.obligationKey
@@ -149,7 +173,7 @@ function createStaffOrderService({ orderRepository = createModelOrderRepository(
   }
 
   async function buildRefundHandoff(order, reason, session, paymentAttempt) {
-    const attempt = paymentAttempt || await orderRepository.findLatestPaymentAttemptByOrder(order._id, session);
+    const attempt = paymentAttempt || await orderRepository.findPrimaryPaidPaymentAttemptByOrder(order._id, session);
     if (!attempt) throw new ApiError(409, 'A payment attempt is required before creating a refund hand-off');
     return orderRepository.upsertRefundPending({
       orderId: order._id,
@@ -176,12 +200,27 @@ function createStaffOrderService({ orderRepository = createModelOrderRepository(
     },
 
     async confirmOrder(staffId, orderId, input = {}) {
-      const order = await getOrderOrThrow(orderId);
-      if (order.paymentMethod === 'ONLINE' && order.paymentStatus !== 'Paid') throw new ApiError(409, 'Online order must be paid before confirmation');
-      if (order.orderStatus !== 'Pending') throw new ApiError(409, 'Only Pending orders can be confirmed');
-      const updated = await orderRepository.updateOrder(orderId, { orderStatus: 'Confirmed', confirmedAt: new Date() });
-      await writeAudit(staffId, 'STAFF_ORDER_CONFIRM', updated, `Staff confirmed order ${updated.orderCode}. ${input.note || ''}`.trim());
-      return toOrderDetail(updated, await orderRepository.listOrderDetails(orderId));
+      const note = String(input.note || '').trim();
+      const result = await transactionManager.withTransaction(async (session) => {
+        const order = await getOrderOrThrow(orderId, session);
+        if (order.paymentMethod === 'ONLINE' && order.paymentStatus !== 'Paid') throw new ApiError(409, 'Online order must be paid before confirmation');
+        if (order.orderStatus !== 'Pending') throw new ApiError(409, 'Only Pending orders can be confirmed');
+        const updated = await orderRepository.claimStaffConfirmation(
+          orderId,
+          { orderStatus: 'Confirmed', confirmedAt: new Date() },
+          session
+        );
+        if (!updated) throw new ApiError(409, 'Order changed while confirmation was being processed');
+        await orderRepository.createStockExportRequest({
+          orderId,
+          requestedBy: staffId,
+          status: 'Pending',
+          note,
+        }, session);
+        return { updated, details: await orderRepository.listOrderDetails(orderId, session) };
+      });
+      await writeAudit(staffId, 'STAFF_ORDER_CONFIRM', result.updated, `Staff confirmed order ${result.updated.orderCode}. ${note}`.trim());
+      return toOrderDetail(result.updated, result.details);
     },
 
     async requestStockExport(staffId, orderId, input = {}) {
@@ -224,12 +263,13 @@ function createStaffOrderService({ orderRepository = createModelOrderRepository(
       const result = await transactionManager.withTransaction(async (session) => {
         const order = await getOrderOrThrow(orderId, session);
         if (!['Pending', 'Confirmed'].includes(order.orderStatus)) throw new ApiError(409, 'Only Pending or Confirmed orders can be cancelled before stock export');
+        const completedExport = await orderRepository.findCompletedStockExportRequest(order._id, session);
+        if (completedExport) throw new ApiError(409, 'Stock export is complete; the order can no longer be cancelled');
 
         const isPaid = order.paymentStatus === 'Paid';
-        const payment = isPaid ? await orderRepository.findPaymentByOrderId(order._id, session) : null;
-        const attempt = isPaid ? await orderRepository.findLatestPaymentAttemptByOrder(order._id, session) : null;
+        const attempt = isPaid ? await orderRepository.findPrimaryPaidPaymentAttemptByOrder(order._id, session) : null;
         if (isPaid && !attempt) throw new ApiError(409, 'A payment attempt is required before cancelling a paid order');
-        const nextPaymentStatus = isPaid ? 'RefundPending' : order.paymentStatus === 'Pending' ? 'Cancelled' : order.paymentStatus;
+        const nextPaymentStatus = order.paymentStatus === 'Pending' ? 'Cancelled' : order.paymentStatus;
         const cancelData = { orderStatus: 'Cancelled', paymentStatus: nextPaymentStatus, cancelReason };
         const updated = orderRepository.claimStaffCancellation
           ? await orderRepository.claimStaffCancellation(orderId, order.paymentStatus, cancelData, session)
@@ -237,8 +277,6 @@ function createStaffOrderService({ orderRepository = createModelOrderRepository(
         if (!updated) throw new ApiError(409, 'Order changed while cancellation was being processed');
 
         if (isPaid) {
-          if (payment) await orderRepository.updatePayment(payment._id, { paymentStatus: 'RefundPending' }, session);
-          await orderRepository.updatePaymentAttempt(attempt._id, { paymentStatus: 'RefundPending' }, session);
           await buildRefundHandoff(order, `Staff cancellation: ${cancelReason}`, session, attempt);
         }
 

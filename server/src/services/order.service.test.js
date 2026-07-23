@@ -16,6 +16,9 @@ function checkoutInput(overrides = {}) {
       ...deliveryAddress,
     },
     paymentMethod: 'COD',
+    expectedItems: [
+      { productId: 'p1', quantity: 2, unitPrice: 25, priceVersion: '2026-07-23T00:00:00.000Z' },
+    ],
     ...inputOverrides,
   };
 }
@@ -62,6 +65,7 @@ function createProductRepository() {
         price: 25,
         status: 'Active',
         stockQuantity: 5,
+        updatedAt: new Date('2026-07-23T00:00:00.000Z'),
       };
     },
   };
@@ -71,10 +75,14 @@ function createOrderRepository() {
   const orders = [];
   const details = [];
   const payments = [];
+  const attempts = [];
+  const refunds = [];
   return {
     orders,
     details,
     payments,
+    attempts,
+    refunds,
     async createOrder(data) {
       const order = { _id: `order-${orders.length + 1}`, orderCode: `ORD-${orders.length + 1}`, ...data };
       orders.push(order);
@@ -87,8 +95,8 @@ function createOrderRepository() {
       payments.push({ _id: `payment-${payments.length + 1}`, ...data });
     },
     async createPaymentAttempt(data) {
-      payments.push({ _id: `attempt-${payments.length + 1}`, ...data });
-      return payments.at(-1);
+      attempts.push({ _id: `attempt-${attempts.length + 1}`, ...data });
+      return attempts.at(-1);
     },
     async findCompletedByIdempotencyKey(customerId, idempotencyKey) {
       return orders.find((order) => order.customerId === customerId && order.idempotencyKey === idempotencyKey) || null;
@@ -102,12 +110,12 @@ function createOrderRepository() {
     async listDetails(orderId) {
       return details.filter((detail) => detail.orderId === orderId);
     },
-    async claimCustomerCancellation(customerId, id, data) {
+    async claimCustomerCancellation(customerId, id, expectedPaymentStatus, data) {
       const order = orders.find((entry) => (
         entry._id === id
         && entry.customerId === customerId
-        && ['Pending', 'WaitingForPayment'].includes(entry.orderStatus)
-        && ['Unpaid', 'Pending', 'Failed'].includes(entry.paymentStatus)
+        && entry.orderStatus === 'Pending'
+        && entry.paymentStatus === expectedPaymentStatus
       ));
       if (!order) return null;
       Object.assign(order, data);
@@ -117,6 +125,32 @@ function createOrderRepository() {
       const order = orders.find((entry) => entry._id === id);
       Object.assign(order, data);
       return order;
+    },
+    async findPaymentByOrderId(orderId) {
+      return payments.find((payment) => payment.orderId === orderId) || null;
+    },
+    async updatePayment(id, data) {
+      const payment = payments.find((entry) => entry._id === id);
+      Object.assign(payment, data);
+      return payment;
+    },
+    async findActivePaymentAttemptByOrder(orderId) {
+      return attempts.findLast((attempt) => attempt.orderId === orderId && attempt.paymentStatus === 'Pending') || null;
+    },
+    async findPrimaryPaidPaymentAttemptByOrder(orderId) {
+      return attempts.find((attempt) => attempt.orderId === orderId && attempt.paymentStatus === 'Paid') || null;
+    },
+    async updatePaymentAttempt(id, data) {
+      const attempt = attempts.find((entry) => entry._id === id);
+      Object.assign(attempt, data);
+      return attempt;
+    },
+    async upsertRefundPending(data) {
+      const existing = refunds.find((refund) => refund.obligationKey === data.obligationKey);
+      if (existing) return existing;
+      const refund = { _id: `refund-${refunds.length + 1}`, ...data };
+      refunds.push(refund);
+      return refund;
     },
   };
 }
@@ -189,6 +223,8 @@ describe('order service', () => {
       auditLogger,
       customerRepository: { async findEmail() { return 'customer@example.com'; } },
       emailOutboxService: { async enqueue(event) { emailEvents.push(event); return event; } },
+      settingsService: { async listSettings() { return { PAYMENT_TIMEOUT_MINUTES: 20 }; } },
+      clock: () => new Date('2026-07-23T08:00:00.000Z'),
     });
   });
 
@@ -208,6 +244,57 @@ describe('order service', () => {
     assert.equal(orderRepository.payments[0].paymentMethod, 'COD');
     assert.equal(cartRepository.items.length, 0);
     assert.equal(auditLogger.entries[0].action, 'ORDER_CREATE');
+  });
+
+  it('creates an online checkout as Pending without creating a synthetic provider attempt', async () => {
+    const result = await orderService.placeOrder('customer-1', checkoutInput({
+      paymentMethod: 'ONLINE',
+      idempotencyKey: 'checkout-online-001',
+    }));
+
+    assert.equal(result.orderStatus, 'Pending');
+    assert.equal(result.paymentStatus, 'Pending');
+    assert.equal(result.paymentDeadlineAt, '2026-07-23T08:20:00.000Z');
+    assert.equal(orderRepository.payments.length, 1);
+    assert.equal(orderRepository.attempts.length, 0);
+  });
+
+  it('rejects a stale displayed line price before reserving stock', async () => {
+    await assert.rejects(
+      () => orderService.placeOrder('customer-1', checkoutInput({
+        idempotencyKey: 'checkout-stale-price-001',
+        expectedItems: [
+          { productId: 'p1', quantity: 2, unitPrice: 24, priceVersion: '2026-07-22T00:00:00.000Z' },
+        ],
+      })),
+      (error) => {
+        assert.equal(error.statusCode, 409);
+        assert.equal(error.errorCode, 'PRICE_CHANGED');
+        assert.equal(error.errors[0].field, 'expectedItems.p1.unitPrice');
+        return true;
+      }
+    );
+
+    assert.equal(inventoryRepository.reservedQuantity, 0);
+    assert.equal(orderRepository.orders.length, 0);
+  });
+
+  it('rejects a stale displayed price version even when the numeric price matches', async () => {
+    await assert.rejects(
+      () => orderService.placeOrder('customer-1', checkoutInput({
+        idempotencyKey: 'checkout-stale-price-version-001',
+        expectedItems: [
+          { productId: 'p1', quantity: 2, unitPrice: 25, priceVersion: '2026-07-22T00:00:00.000Z' },
+        ],
+      })),
+      (error) => {
+        assert.equal(error.statusCode, 409);
+        assert.equal(error.errorCode, 'PRICE_CHANGED');
+        assert.equal(error.errors[0].field, 'expectedItems.p1.priceVersion');
+        return true;
+      }
+    );
+    assert.equal(inventoryRepository.reservedQuantity, 0);
   });
 
   it('enqueues one idempotent ORDER_CREATED email after checkout commits', async () => {
@@ -266,13 +353,91 @@ describe('order service', () => {
   it('cancels a Pending unpaid customer order', async () => {
     const order = await orderService.placeOrder('customer-1', checkoutInput({ idempotencyKey: 'cancel-001' }));
 
-    const cancelled = await orderService.cancelOrder('customer-1', order.id);
+    const cancelled = await orderService.cancelOrder('customer-1', order.id, {
+      cancelReason: 'Changed my mind',
+      idempotencyKey: 'cancel-command-001',
+    });
 
     assert.equal(cancelled.orderStatus, 'Cancelled');
+    assert.equal(cancelled.paymentStatus, 'Cancelled');
+    assert.equal(orderRepository.payments[0].paymentStatus, 'Cancelled');
     assert.equal(inventoryRepository.reservedQuantity, 0);
     assert.equal(auditLogger.entries.at(-1).action, 'ORDER_CANCEL');
-    await assert.rejects(() => orderService.cancelOrder('customer-1', order.id), /Only unpaid pre-confirmation orders/);
+    const replay = await orderService.cancelOrder('customer-1', order.id, {
+      cancelReason: 'Changed my mind',
+      idempotencyKey: 'cancel-command-001',
+    });
+    assert.equal(replay.id, cancelled.id);
     assert.equal(inventoryRepository.reservedQuantity, 0);
+  });
+
+  it('retires only the active online attempt when a customer cancels an unpaid order', async () => {
+    const order = await orderService.placeOrder('customer-1', checkoutInput({
+      paymentMethod: 'ONLINE',
+      idempotencyKey: 'cancel-online-checkout-001',
+    }));
+    orderRepository.attempts.push(
+      { _id: 'attempt-old', orderId: order.id, paymentStatus: 'Failed', amount: 50, currency: 'VND' },
+      { _id: 'attempt-active', orderId: order.id, paymentStatus: 'Pending', amount: 50, currency: 'VND' }
+    );
+
+    const cancelled = await orderService.cancelOrder('customer-1', order.id, {
+      cancelReason: 'No longer needed',
+      idempotencyKey: 'cancel-online-command-001',
+    });
+
+    assert.equal(cancelled.paymentStatus, 'Cancelled');
+    assert.equal(orderRepository.attempts[0].paymentStatus, 'Failed');
+    assert.equal(orderRepository.attempts[1].paymentStatus, 'Cancelled');
+  });
+
+  it('rejects reuse of a cancellation idempotency key with a different reason', async () => {
+    const order = await orderService.placeOrder('customer-1', checkoutInput({ idempotencyKey: 'cancel-conflict-checkout-001' }));
+    await orderService.cancelOrder('customer-1', order.id, {
+      cancelReason: 'Ordered twice',
+      idempotencyKey: 'cancel-conflict-command-001',
+    });
+
+    await assert.rejects(
+      () => orderService.cancelOrder('customer-1', order.id, {
+        cancelReason: 'Price changed',
+        idempotencyKey: 'cancel-conflict-command-001',
+      }),
+      (error) => {
+        assert.equal(error.statusCode, 409);
+        assert.equal(error.errorCode, 'IDEMPOTENCY_KEY_REUSED');
+        return true;
+      }
+    );
+  });
+
+  it('keeps paid evidence immutable and creates one refund obligation for customer cancellation', async () => {
+    const order = await orderService.placeOrder('customer-1', checkoutInput({
+      paymentMethod: 'ONLINE',
+      idempotencyKey: 'cancel-paid-checkout-001',
+    }));
+    orderRepository.orders[0].paymentStatus = 'Paid';
+    orderRepository.payments[0].paymentStatus = 'Paid';
+    orderRepository.attempts.push({
+      _id: 'attempt-paid',
+      orderId: order.id,
+      paymentStatus: 'Paid',
+      amount: 50,
+      currency: 'VND',
+    });
+
+    const cancelled = await orderService.cancelOrder('customer-1', order.id, {
+      cancelReason: 'Customer requested cancellation',
+      idempotencyKey: 'cancel-paid-command-001',
+    });
+
+    assert.equal(cancelled.orderStatus, 'Cancelled');
+    assert.equal(cancelled.paymentStatus, 'Paid');
+    assert.equal(orderRepository.payments[0].paymentStatus, 'Paid');
+    assert.equal(orderRepository.attempts[0].paymentStatus, 'Paid');
+    assert.equal(orderRepository.refunds.length, 1);
+    assert.equal(orderRepository.refunds[0].obligationType, 'PAYMENT_REVERSAL');
+    assert.equal(orderRepository.refunds[0].paymentAttemptId, 'attempt-paid');
   });
 
   it('generates unique order codes when orders are placed in the same millisecond', async () => {
@@ -313,10 +478,14 @@ describe('order service', () => {
         auditLogger,
       });
 
-      const first = await orderService.placeOrder('customer-1', checkoutInput({ idempotencyKey: 'unique-001' }));
+      const first = await orderService.placeOrder('customer-1', checkoutInput({
+        idempotencyKey: 'unique-001',
+        expectedItems: [{ productId: 'p1', quantity: 1, unitPrice: 25, priceVersion: '2026-07-23T00:00:00.000Z' }],
+      }));
       const second = await orderService.placeOrder('customer-2', checkoutInput({
         deliveryAddress: { province: 'Đà Nẵng', district: 'Hải Châu', ward: 'Hòa Cường', addressLine: '12 Bạch Đằng' },
         idempotencyKey: 'unique-002',
+        expectedItems: [{ productId: 'p1', quantity: 1, unitPrice: 25, priceVersion: '2026-07-23T00:00:00.000Z' }],
       }));
 
       assert.notEqual(first.orderCode, second.orderCode);
@@ -340,6 +509,23 @@ describe('order service', () => {
     assert.equal(second.id, first.id);
     assert.equal(orderRepository.orders.length, 1);
     assert.equal(orderRepository.details.length, 1);
+  });
+
+  it('rejects an idempotency key replay when the checkout facts have changed', async () => {
+    await orderService.placeOrder('customer-1', checkoutInput({ idempotencyKey: 'retry-conflict-001' }));
+
+    await assert.rejects(
+      () => orderService.placeOrder('customer-1', checkoutInput({
+        idempotencyKey: 'retry-conflict-001',
+        paymentMethod: 'ONLINE',
+      })),
+      (error) => {
+        assert.equal(error.statusCode, 409);
+        assert.equal(error.errorCode, 'IDEMPOTENCY_KEY_REUSED');
+        return true;
+      }
+    );
+    assert.equal(orderRepository.orders.length, 1);
   });
 
   it('does not let an idempotency replay bypass the required checkout address source', async () => {
@@ -391,14 +577,37 @@ describe('order service', () => {
     assert.equal(auditLogger.entries.length, 0);
   });
 
-  it('persists a supplied cancel reason and rejects paid or confirmed orders', async () => {
+  it('persists a supplied cancel reason and rejects confirmed orders', async () => {
     const order = await orderService.placeOrder('customer-1', checkoutInput({ idempotencyKey: 'reason-001' }));
-    const cancelled = await orderService.cancelOrder('customer-1', order.id, { cancelReason: 'Đổi ý' });
+    const cancelled = await orderService.cancelOrder('customer-1', order.id, {
+      cancelReason: 'Đổi ý',
+      idempotencyKey: 'reason-cancel-001',
+    });
     assert.equal(orderRepository.orders[0].cancelReason, 'Đổi ý');
     assert.equal(cancelled.orderStatus, 'Cancelled');
 
-    orderRepository.orders[0].paymentStatus = 'Paid';
-    await assert.rejects(() => orderService.cancelOrder('customer-1', order.id, {}), /Only unpaid pre-confirmation orders/);
+    const confirmedRepository = createOrderRepository();
+    const confirmedService = createOrderService({
+      transactionManager: { async withTransaction(work) { return work({ id: 'test-session' }); } },
+      cartRepository: createCartRepository(),
+      productRepository: createProductRepository(),
+      inventoryRepository,
+      orderRepository: confirmedRepository,
+      addressRepository: createAddressRepository(),
+      auditLogger,
+    });
+    const confirmed = await confirmedService.placeOrder(
+      'customer-1',
+      checkoutInput({ idempotencyKey: 'reason-confirmed-001' })
+    );
+    confirmedRepository.orders[0].orderStatus = 'Confirmed';
+    await assert.rejects(
+      () => confirmedService.cancelOrder('customer-1', confirmed.id, {
+        cancelReason: 'Too late',
+        idempotencyKey: 'reason-confirmed-cancel-001',
+      }),
+      /Only Pending orders/
+    );
   });
 
   it('validates receiver identity and Vietnamese phone before reserving stock', async () => {
@@ -426,6 +635,7 @@ describe('order service', () => {
       savedAddressId: 'address-owned',
       paymentMethod: 'COD',
       idempotencyKey: 'saved-address-001',
+      expectedItems: [{ productId: 'p1', quantity: 2, unitPrice: 25, priceVersion: '2026-07-23T00:00:00.000Z' }],
     });
 
     assert.equal(result.receiverName, 'Nguyễn Quang Huy');
@@ -484,6 +694,7 @@ describe('order service', () => {
       },
       paymentMethod: 'COD',
       idempotencyKey: 'one-time-address-001',
+      expectedItems: [{ productId: 'p1', quantity: 2, unitPrice: 25, priceVersion: '2026-07-23T00:00:00.000Z' }],
     });
 
     assert.equal(result.receiverName, 'Khách hàng Một lần');

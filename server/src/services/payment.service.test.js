@@ -12,7 +12,7 @@ function createPaymentRepository() {
       totalAmount: 50,
       paymentMethod: 'ONLINE',
       paymentStatus: 'Pending',
-      orderStatus: 'WaitingForPayment',
+      orderStatus: 'Pending',
     },
   ];
   const payments = [
@@ -50,6 +50,16 @@ function createPaymentRepository() {
     },
     async updateOrder(id, data) {
       const order = orders.find((entry) => entry._id === id);
+      Object.assign(order, data);
+      return order;
+    },
+    async claimOrderPayment(id, data) {
+      const order = orders.find((entry) => (
+        entry._id === id
+        && entry.orderStatus === 'Pending'
+        && ['Unpaid', 'Pending', 'Failed'].includes(entry.paymentStatus)
+      ));
+      if (!order) return null;
       Object.assign(order, data);
       return order;
     },
@@ -221,9 +231,12 @@ describe('payment service', () => {
       },
     });
 
-    assert.equal(result.paymentStatus, 'RefundPending');
+    assert.equal(result.paymentStatus, 'Paid');
     assert.equal(result.refundPending, true);
-    assert.equal(paymentRepository.orders[0].orderStatus, 'WaitingForPayment');
+    assert.equal(paymentRepository.orders[0].orderStatus, 'Pending');
+    assert.equal(paymentRepository.orders[0].paymentStatus, 'Pending');
+    assert.equal(paymentRepository.payments[0].paymentStatus, 'Pending');
+    assert.equal(paymentRepository.attempts[0].paymentStatus, 'Paid');
     assert.equal(paymentRepository.refunds.length, 1);
     assert.equal(paymentRepository.refunds[0].obligationType, 'PAYMENT_REVERSAL');
     assert.equal(paymentRepository.refunds[0].obligationKey, 'PAYMENT_REVERSAL:attempt-1');
@@ -257,10 +270,87 @@ describe('payment service', () => {
       },
     });
 
-    assert.equal(result.paymentStatus, 'RefundPending');
+    assert.equal(result.paymentStatus, 'Paid');
     assert.equal(result.duplicatePayment, true);
+    assert.equal(result.refundPending, true);
     assert.equal(paymentRepository.orders[0].paymentStatus, 'Paid');
-    assert.equal(paymentRepository.attempts[1].paymentStatus, 'RefundPending');
+    assert.equal(paymentRepository.attempts[1].paymentStatus, 'Paid');
+    assert.equal(paymentRepository.refunds.length, 1);
+    assert.equal(paymentRepository.refunds[0].obligationType, 'EXCESS_PAYMENT');
+    assert.equal(paymentRepository.refunds[0].obligationKey, 'EXCESS_PAYMENT:attempt-2');
+  });
+
+  it('creates one EXCESS_PAYMENT obligation for each distinct later paid attempt without replaying side effects', async () => {
+    paymentRepository.orders[0].paymentStatus = 'Paid';
+    paymentRepository.orders[0].orderStatus = 'Pending';
+    paymentRepository.payments[0].paymentStatus = 'Paid';
+    paymentRepository.attempts[0].paymentStatus = 'Paid';
+    paymentRepository.attempts.push(
+      {
+        _id: 'attempt-2',
+        orderId: 'order-online',
+        attemptCode: 'PAY-2',
+        paymentMethod: 'ONLINE',
+        paymentProvider: 'MOCK',
+        paymentStatus: 'Pending',
+        amount: 50,
+        currency: 'VND',
+      },
+      {
+        _id: 'attempt-3',
+        orderId: 'order-online',
+        attemptCode: 'PAY-3',
+        paymentMethod: 'ONLINE',
+        paymentProvider: 'MOCK',
+        paymentStatus: 'Pending',
+        amount: 50,
+        currency: 'VND',
+      }
+    );
+    const secondAttempt = {
+      orderId: 'order-online',
+      paymentAttemptId: 'attempt-2',
+      transactionId: 'TXN-EXCESS-2',
+      providerMessageId: 'MSG-EXCESS-2',
+      amount: 50,
+      status: 'Paid',
+      callbackSecret: 'test-callback-secret',
+    };
+    const thirdAttempt = {
+      orderId: 'order-online',
+      paymentAttemptId: 'attempt-3',
+      transactionId: 'TXN-EXCESS-3',
+      providerMessageId: 'MSG-EXCESS-3',
+      amount: 50,
+      status: 'Paid',
+      callbackSecret: 'test-callback-secret',
+    };
+
+    await paymentService.handlePaymentCallback(secondAttempt);
+    await paymentService.handlePaymentCallback(secondAttempt);
+    await paymentService.handlePaymentCallback(thirdAttempt);
+    await paymentService.handlePaymentCallback(thirdAttempt);
+
+    assert.deepEqual(
+      paymentRepository.attempts.map(({ _id, paymentStatus }) => ({ _id, paymentStatus })),
+      [
+        { _id: 'attempt-1', paymentStatus: 'Paid' },
+        { _id: 'attempt-2', paymentStatus: 'Paid' },
+        { _id: 'attempt-3', paymentStatus: 'Paid' },
+      ]
+    );
+    assert.equal(paymentRepository.orders[0].paymentStatus, 'Paid');
+    assert.equal(paymentRepository.payments[0].paymentStatus, 'Paid');
+    assert.deepEqual(
+      paymentRepository.refunds.map(({ obligationType, obligationKey }) => ({ obligationType, obligationKey })),
+      [
+        { obligationType: 'EXCESS_PAYMENT', obligationKey: 'EXCESS_PAYMENT:attempt-2' },
+        { obligationType: 'EXCESS_PAYMENT', obligationKey: 'EXCESS_PAYMENT:attempt-3' },
+      ]
+    );
+    assert.equal(paymentRepository.events.length, 2);
+    assert.equal(auditLogger.entries.length, 2);
+    assert.equal(notificationService.notifications.length, 2);
   });
 
   it('acknowledges a verified payOS webhook used to validate an unknown order code', async () => {
@@ -375,18 +465,99 @@ describe('payment service', () => {
   it('keeps a cancelled order closed and creates one RefundPending hand-off when a paid callback arrives late', async () => {
     paymentRepository.orders[0].orderStatus = 'Cancelled';
     paymentRepository.orders[0].paymentStatus = 'Cancelled';
+    paymentRepository.payments[0].paymentStatus = 'Cancelled';
     const input = { orderId: 'order-online', transactionId: 'TXN-LATE', providerMessageId: 'MSG-LATE', amount: 50, status: 'Paid', callbackSecret: 'test-callback-secret' };
     const result = await paymentService.handlePaymentCallback(input);
     await paymentService.handlePaymentCallback(input);
 
-    assert.equal(result.paymentStatus, 'RefundPending');
+    assert.equal(result.paymentStatus, 'Paid');
+    assert.equal(result.refundPending, true);
     assert.equal(paymentRepository.orders[0].orderStatus, 'Cancelled');
-    assert.equal(paymentRepository.orders[0].paymentStatus, 'RefundPending');
-    assert.equal(paymentRepository.attempts[0].paymentStatus, 'RefundPending');
+    assert.equal(paymentRepository.orders[0].paymentStatus, 'Cancelled');
+    assert.equal(paymentRepository.payments[0].paymentStatus, 'Cancelled');
+    assert.equal(paymentRepository.attempts[0].paymentStatus, 'Paid');
+    assert.equal(paymentRepository.attempts[0].transactionId, 'TXN-LATE');
     assert.equal(paymentRepository.refunds.length, 1);
     assert.equal(paymentRepository.refunds[0].status, 'RefundPending');
     assert.equal(paymentRepository.refunds[0].obligationType, 'PAYMENT_REVERSAL');
     assert.equal(paymentRepository.refunds[0].obligationKey, 'PAYMENT_REVERSAL:attempt-1');
+    assert.equal(auditLogger.entries.length, 1);
+    assert.equal(notificationService.notifications.length, 1);
+  });
+
+  it('lets a cancellation committed after the callback read win without losing paid provider evidence', async () => {
+    const claimOrderPayment = paymentRepository.claimOrderPayment;
+    paymentRepository.claimOrderPayment = async (id, data) => {
+      paymentRepository.orders[0].orderStatus = 'Cancelled';
+      paymentRepository.orders[0].paymentStatus = 'Cancelled';
+      paymentRepository.payments[0].paymentStatus = 'Cancelled';
+      return claimOrderPayment(id, data);
+    };
+
+    const result = await paymentService.handlePaymentCallback({
+      orderId: 'order-online',
+      paymentAttemptId: 'attempt-1',
+      transactionId: 'TXN-CANCEL-RACE',
+      providerMessageId: 'MSG-CANCEL-RACE',
+      amount: 50,
+      status: 'Paid',
+      callbackSecret: 'test-callback-secret',
+    });
+
+    assert.equal(result.paymentStatus, 'Paid');
+    assert.equal(result.refundPending, true);
+    assert.equal(paymentRepository.orders[0].orderStatus, 'Cancelled');
+    assert.equal(paymentRepository.orders[0].paymentStatus, 'Cancelled');
+    assert.equal(paymentRepository.payments[0].paymentStatus, 'Cancelled');
+    assert.equal(paymentRepository.attempts[0].paymentStatus, 'Paid');
+    assert.equal(paymentRepository.attempts[0].transactionId, 'TXN-CANCEL-RACE');
+    assert.deepEqual(
+      paymentRepository.refunds.map(({ obligationType, obligationKey }) => ({ obligationType, obligationKey })),
+      [{ obligationType: 'PAYMENT_REVERSAL', obligationKey: 'PAYMENT_REVERSAL:attempt-1' }]
+    );
+    assert.equal(auditLogger.entries.length, 1);
+    assert.equal(notificationService.notifications.length, 1);
+  });
+
+  it('preserves primary Paid after paid-order cancellation and refunds a distinct later paid attempt as excess', async () => {
+    paymentRepository.orders[0].orderStatus = 'Cancelled';
+    paymentRepository.orders[0].paymentStatus = 'Paid';
+    paymentRepository.payments[0].paymentStatus = 'Paid';
+    paymentRepository.attempts[0].paymentStatus = 'Paid';
+    paymentRepository.attempts.push({
+      _id: 'attempt-2',
+      orderId: 'order-online',
+      attemptCode: 'PAY-2',
+      paymentMethod: 'ONLINE',
+      paymentProvider: 'MOCK',
+      paymentStatus: 'Pending',
+      amount: 50,
+      currency: 'VND',
+    });
+    const input = {
+      orderId: 'order-online',
+      paymentAttemptId: 'attempt-2',
+      transactionId: 'TXN-PAID-CANCELLED-EXCESS',
+      providerMessageId: 'MSG-PAID-CANCELLED-EXCESS',
+      amount: 50,
+      status: 'Paid',
+      callbackSecret: 'test-callback-secret',
+    };
+
+    const result = await paymentService.handlePaymentCallback(input);
+    await paymentService.handlePaymentCallback(input);
+
+    assert.equal(result.paymentStatus, 'Paid');
+    assert.equal(result.refundPending, true);
+    assert.equal(result.duplicatePayment, true);
+    assert.equal(paymentRepository.orders[0].orderStatus, 'Cancelled');
+    assert.equal(paymentRepository.orders[0].paymentStatus, 'Paid');
+    assert.equal(paymentRepository.payments[0].paymentStatus, 'Paid');
+    assert.equal(paymentRepository.attempts[1].paymentStatus, 'Paid');
+    assert.deepEqual(
+      paymentRepository.refunds.map(({ obligationType, obligationKey }) => ({ obligationType, obligationKey })),
+      [{ obligationType: 'EXCESS_PAYMENT', obligationKey: 'EXCESS_PAYMENT:attempt-2' }]
+    );
     assert.equal(auditLogger.entries.length, 1);
     assert.equal(notificationService.notifications.length, 1);
   });

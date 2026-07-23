@@ -12,7 +12,7 @@ function createOrderRepository() {
     },
     {
       _id: 'order-2', orderCode: 'ORD-2', customerId: 'customer-2', totalAmount: 80,
-      paymentMethod: 'ONLINE', paymentStatus: 'Pending', orderStatus: 'WaitingForPayment', shippingAddress: 'Da Nang', createdAt: new Date('2026-06-30T09:00:00Z'),
+      paymentMethod: 'ONLINE', paymentStatus: 'Pending', orderStatus: 'Pending', shippingAddress: 'Da Nang', createdAt: new Date('2026-06-30T09:00:00Z'),
     },
   ];
   const details = [
@@ -30,14 +30,25 @@ function createOrderRepository() {
   const refunds = [];
   const invoices = [];
   let reservedQuantity = 2;
+  let releaseCalls = 0;
+  const confirmationMutationSessions = [];
 
   return {
     orders, exports, payments, attempts, refunds, invoices,
     get reservedQuantity() { return reservedQuantity; },
+    get releaseCalls() { return releaseCalls; },
+    confirmationMutationSessions,
     async listOrders(query = {}) { return orders.filter((order) => !query.status || order.orderStatus === query.status); },
     async findOrderById(id) { return orders.find((order) => order._id === id) || null; },
     async listOrderDetails(orderId) { return details.filter((detail) => detail.orderId === orderId); },
     async updateOrder(id, data) { const order = orders.find((entry) => entry._id === id); Object.assign(order, data); return order; },
+    async claimStaffConfirmation(id, data, session) {
+      const order = orders.find((entry) => entry._id === id && entry.orderStatus === 'Pending');
+      if (!order) return null;
+      Object.assign(order, data);
+      confirmationMutationSessions.push(session);
+      return order;
+    },
     async claimStaffCancellation(id, expectedPaymentStatus, data) {
       const order = orders.find((entry) => entry._id === id && ['Pending', 'Confirmed'].includes(entry.orderStatus) && entry.paymentStatus === expectedPaymentStatus);
       if (!order) return null;
@@ -46,14 +57,26 @@ function createOrderRepository() {
     },
     async releaseReservation(productId, quantity) {
       if (productId !== 'p1' || reservedQuantity < quantity) return null;
+      releaseCalls += 1;
       reservedQuantity -= quantity;
       return { productId, reservedQuantity };
     },
     async findOpenStockExportRequest(orderId) { return exports.find((entry) => entry.orderId === orderId && ['Pending', 'Approved', 'Processing'].includes(entry.status)) || null; },
-    async createStockExportRequest(data) { const request = { _id: `export-${exports.length + 1}`, status: 'Pending', ...data }; exports.push(request); return request; },
+    async findCompletedStockExportRequest(orderId) {
+      return exports.find((entry) => entry.orderId === orderId && (entry.status === 'Exported' || entry.exportedAt)) || null;
+    },
+    async createStockExportRequest(data, session) {
+      const request = { _id: `export-${exports.length + 1}`, status: 'Pending', exportedAt: null, ...data };
+      exports.push(request);
+      confirmationMutationSessions.push(session);
+      return request;
+    },
     async findPaymentByOrderId(orderId) { return payments.find((payment) => payment.orderId === orderId) || null; },
     async updatePayment(id, data) { const payment = payments.find((entry) => entry._id === id); Object.assign(payment, data); return payment; },
     async findLatestPaymentAttemptByOrder(orderId) { return attempts.filter((attempt) => attempt.orderId === orderId).at(-1) || null; },
+    async findPrimaryPaidPaymentAttemptByOrder(orderId) {
+      return attempts.find((attempt) => attempt.orderId === orderId && attempt.paymentStatus === 'Paid') || null;
+    },
     async updatePaymentAttempt(id, data) { const attempt = attempts.find((entry) => entry._id === id); Object.assign(attempt, data); return attempt; },
     async upsertRefundPending(data) { let refund = refunds.find((entry) => data.obligationKey ? entry.obligationKey === data.obligationKey : entry.orderId === data.orderId && entry.obligationType === data.obligationType); if (!refund) { refund = { _id: `refund-${refunds.length + 1}`, ...data }; refunds.push(refund); } return refund; },
     async findInvoiceByOrderId(orderId) { return invoices.find((invoice) => invoice.orderId === orderId) || null; },
@@ -83,14 +106,22 @@ describe('staff order service', () => {
 
   it('lists staff orders by status', async () => {
     const result = await service.listOrders({ status: 'Pending' });
-    assert.equal(result.items.length, 1);
-    assert.equal(result.items[0].orderCode, 'ORD-1');
+    assert.equal(result.items.length, 2);
+    assert.deepEqual(result.items.map((item) => item.orderCode).sort(), ['ORD-1', 'ORD-2']);
   });
 
-  it('confirms a valid pending COD order and records confirmation time', async () => {
+  it('atomically confirms a pending order and creates its single stock export request', async () => {
     const result = await service.confirmOrder('staff-1', 'order-1', { note: 'Reviewed' });
+
     assert.equal(result.orderStatus, 'Confirmed');
     assert.ok(orderRepository.orders[0].confirmedAt);
+    assert.equal(orderRepository.exports.length, 1);
+    assert.equal(orderRepository.exports[0].orderId, 'order-1');
+    assert.equal(orderRepository.exports[0].requestedBy, 'staff-1');
+    assert.equal(orderRepository.exports[0].status, 'Pending');
+    assert.equal(orderRepository.exports[0].note, 'Reviewed');
+    assert.equal(orderRepository.confirmationMutationSessions.length, 2);
+    assert.equal(orderRepository.confirmationMutationSessions[0], orderRepository.confirmationMutationSessions[1]);
     assert.equal(auditLogger.entries[0].action, 'STAFF_ORDER_CONFIRM');
   });
 
@@ -98,11 +129,21 @@ describe('staff order service', () => {
     await assert.rejects(() => service.confirmOrder('staff-1', 'order-2', {}), /Online order must be paid before confirmation/);
   });
 
-  it('creates one stock export request and moves order to stock export requested', async () => {
+  it('does not create a second stock export request for duplicate confirmation', async () => {
     await service.confirmOrder('staff-1', 'order-1', {});
-    const result = await service.requestStockExport('staff-1', 'order-1', { note: 'Prepare shipment' });
-    assert.equal(result.order.orderStatus, 'StockExportRequested');
-    await assert.rejects(() => service.requestStockExport('staff-1', 'order-1', {}), /Stock export request already exists/);
+
+    await assert.rejects(() => service.confirmOrder('staff-1', 'order-1', {}), /Only Pending orders can be confirmed/);
+
+    assert.equal(orderRepository.orders[0].orderStatus, 'Confirmed');
+    assert.equal(orderRepository.exports.length, 1);
+  });
+
+  it('does not create a stock export request for a stale confirmation', async () => {
+    orderRepository.orders[0].orderStatus = 'Confirmed';
+
+    await assert.rejects(() => service.confirmOrder('staff-1', 'order-1', {}), /Only Pending orders can be confirmed/);
+
+    assert.equal(orderRepository.exports.length, 0);
   });
 
   it('does not allow generic status update to bypass stock export request creation', async () => {
@@ -111,7 +152,7 @@ describe('staff order service', () => {
       () => service.updateStatus('staff-1', 'order-1', { nextStatus: 'StockExportRequested' }),
       /Use the stock export request action/,
     );
-    assert.equal(orderRepository.exports.length, 0);
+    assert.equal(orderRepository.exports.length, 1);
     assert.equal(orderRepository.orders[0].orderStatus, 'Confirmed');
   });
 
@@ -134,21 +175,40 @@ describe('staff order service', () => {
     );
   });
 
-  it('requires a cancel reason and creates one refund hand-off for a paid cancellation', async () => {
+  it('requires a cancel reason and creates one fixed refund obligation without rewriting paid records', async () => {
     orderRepository.orders[0].orderStatus = 'Confirmed';
     orderRepository.orders[0].paymentStatus = 'Paid';
     orderRepository.payments[0].paymentStatus = 'Paid';
     orderRepository.attempts[0].paymentStatus = 'Paid';
+    orderRepository.attempts.push({
+      _id: 'attempt-later',
+      orderId: 'order-1',
+      paymentMethod: 'ONLINE',
+      amount: 50,
+      currency: 'VND',
+      paymentStatus: 'Pending',
+    });
+    orderRepository.exports.push({ _id: 'export-1', orderId: 'order-1', requestedBy: 'staff-1', status: 'Pending', exportedAt: null });
     await assert.rejects(() => service.cancelOrder('staff-1', 'order-1', {}), /Cancel reason is required/);
-    const cancelled = await service.cancelOrder('staff-1', 'order-1', { cancelReason: 'Customer requested cancellation' });
+    const cancelled = await service.cancelOrder('staff-1', 'order-1', {
+      cancelReason: 'Customer requested cancellation',
+      refundAmount: 1,
+      obligationType: 'NORMAL_RETURN',
+    });
     assert.equal(cancelled.orderStatus, 'Cancelled');
-    assert.equal(cancelled.paymentStatus, 'RefundPending');
+    assert.equal(cancelled.paymentStatus, 'Paid');
+    assert.equal(orderRepository.payments[0].paymentStatus, 'Paid');
+    assert.equal(orderRepository.attempts[0].paymentStatus, 'Paid');
+    assert.equal(orderRepository.attempts[1].paymentStatus, 'Pending');
     assert.equal(orderRepository.reservedQuantity, 0);
+    assert.equal(orderRepository.releaseCalls, 1);
     assert.equal(orderRepository.refunds.length, 1);
+    assert.equal(orderRepository.refunds[0].amount, 50);
     assert.equal(orderRepository.refunds[0].obligationType, 'PAYMENT_REVERSAL');
     assert.equal(orderRepository.refunds[0].obligationKey, 'PAYMENT_REVERSAL:attempt-1');
     await assert.rejects(() => service.cancelOrder('staff-1', 'order-1', { cancelReason: 'Retry' }), /Only Pending or Confirmed orders can be cancelled/);
     assert.equal(orderRepository.reservedQuantity, 0);
+    assert.equal(orderRepository.releaseCalls, 1);
     assert.equal(orderRepository.refunds.length, 1);
     assert.equal(auditLogger.entries.filter((entry) => entry.action === 'STAFF_ORDER_CANCEL').length, 1);
   });
@@ -162,6 +222,36 @@ describe('staff order service', () => {
     assert.equal(cancelled.paymentStatus, 'Unpaid');
     assert.equal(orderRepository.reservedQuantity, 0);
     assert.equal(orderRepository.refunds.length, 0);
+  });
+
+  it('blocks cancellation after stock export completion with zero mutation', async () => {
+    orderRepository.orders[0].orderStatus = 'Confirmed';
+    orderRepository.orders[0].paymentStatus = 'Paid';
+    orderRepository.payments[0].paymentStatus = 'Paid';
+    orderRepository.attempts[0].paymentStatus = 'Paid';
+    orderRepository.exports.push({
+      _id: 'export-1',
+      orderId: 'order-1',
+      requestedBy: 'staff-1',
+      status: 'Exported',
+      exportedAt: new Date('2026-07-01T08:00:00Z'),
+    });
+    const beforeOrder = structuredClone(orderRepository.orders[0]);
+    const beforePayment = structuredClone(orderRepository.payments[0]);
+    const beforeAttempt = structuredClone(orderRepository.attempts[0]);
+
+    await assert.rejects(
+      () => service.cancelOrder('staff-1', 'order-1', { cancelReason: 'Too late' }),
+      /stock export (?:is complete|was completed)/i,
+    );
+
+    assert.deepEqual(orderRepository.orders[0], beforeOrder);
+    assert.deepEqual(orderRepository.payments[0], beforePayment);
+    assert.deepEqual(orderRepository.attempts[0], beforeAttempt);
+    assert.equal(orderRepository.reservedQuantity, 2);
+    assert.equal(orderRepository.releaseCalls, 0);
+    assert.equal(orderRepository.refunds.length, 0);
+    assert.equal(auditLogger.entries.length, 0);
   });
 
   it('creates one immutable invoice snapshot without mutating fulfillment or payment', async () => {

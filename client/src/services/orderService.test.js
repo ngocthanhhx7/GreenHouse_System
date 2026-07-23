@@ -77,4 +77,27 @@ describe('client order service', () => {
       }
     );
   });
+
+  it('sends a cancellation reason and idempotency key in the customer cancellation command', async () => {
+    const service = createOrderService({
+      baseUrl: 'http://api.test/api',
+      fetcher: async (url, options) => {
+        assert.equal(url, 'http://api.test/api/orders/order-1/cancel');
+        assert.equal(options.method, 'PATCH');
+        assert.equal(options.headers['Idempotency-Key'], 'cancel-command-001');
+        assert.deepEqual(JSON.parse(options.body), { cancelReason: 'Ordered twice' });
+        return {
+          ok: true,
+          json: async () => ({ success: true, data: { id: 'order-1', orderStatus: 'Cancelled' } }),
+        };
+      },
+    });
+
+    const result = await service.cancelOrder('order-1', {
+      cancelReason: 'Ordered twice',
+      idempotencyKey: 'cancel-command-001',
+    });
+
+    assert.equal(result.orderStatus, 'Cancelled');
+  });
 });

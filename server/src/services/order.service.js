@@ -9,10 +9,12 @@ const Order = require('../models/order.model');
 const OrderDetail = require('../models/orderDetail.model');
 const Payment = require('../models/payment.model');
 const PaymentAttempt = require('../models/paymentAttempt.model');
+const RefundPending = require('../models/refundPending.model');
 const User = require('../models/user.model');
 const UserAddress = require('../models/userAddress.model');
 const { logAudit } = require('../utils/auditLogger');
 const { createEmailOutboxService } = require('./email.service');
+const { systemSettingService } = require('./systemSetting.service');
 
 function toOrderResponse(order, details = []) {
   return {
@@ -43,6 +45,7 @@ function toOrderResponse(order, details = []) {
     shippingFee: Number(order.shippingFee || 0),
     currency: order.currency || 'VND',
     cancelReason: order.cancelReason || '',
+    paymentDeadlineAt: order.paymentDeadlineAt ? new Date(order.paymentDeadlineAt).toISOString() : null,
     details,
     createdAt: order.createdAt,
   };
@@ -50,10 +53,6 @@ function toOrderResponse(order, details = []) {
 
 function generateOrderCode() {
   return `ORD-${Date.now()}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
-}
-
-function generateAttemptCode() {
-  return `PAY-${Date.now()}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
 }
 
 function normalizeStructuredDeliveryAddress(address = {}, customerNote = '') {
@@ -95,6 +94,72 @@ function normalizeStructuredDeliveryAddress(address = {}, customerNote = '') {
     shippingAddress: [values.addressLine, values.ward, values.district, values.province].join(', '),
     customerNote: normalizedNote,
   };
+}
+
+function normalizeExpectedItems(expectedItems) {
+  if (!Array.isArray(expectedItems) || expectedItems.length === 0) {
+    throw new ApiError(
+      400,
+      'Checkout price confirmation is required',
+      [{ field: 'expectedItems', message: 'Refresh the cart and confirm the displayed price before checkout' }],
+      'CHECKOUT_PRICE_CONFIRMATION_REQUIRED'
+    );
+  }
+
+  const normalized = [];
+  const seenProductIds = new Set();
+  const errors = [];
+  for (const item of expectedItems) {
+    const productId = String(item?.productId || '').trim();
+    const quantity = Number(item?.quantity);
+    const unitPrice = Number(item?.unitPrice);
+    const priceVersion = String(item?.priceVersion || '').trim();
+    const fieldPrefix = `expectedItems.${productId || normalized.length}`;
+
+    if (!productId) errors.push({ field: `${fieldPrefix}.productId`, message: 'Product is required' });
+    if (seenProductIds.has(productId)) errors.push({ field: `${fieldPrefix}.productId`, message: 'Product must appear only once' });
+    if (!Number.isInteger(quantity) || quantity <= 0) {
+      errors.push({ field: `${fieldPrefix}.quantity`, message: 'Quantity must be a positive integer' });
+    }
+    if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+      errors.push({ field: `${fieldPrefix}.unitPrice`, message: 'Displayed price must be a non-negative number' });
+    }
+    if (!priceVersion) errors.push({ field: `${fieldPrefix}.priceVersion`, message: 'Displayed price version is required' });
+
+    if (productId) seenProductIds.add(productId);
+    normalized.push({ productId, quantity, unitPrice, priceVersion });
+  }
+  if (errors.length) {
+    throw new ApiError(400, 'Checkout price confirmation is invalid', errors, 'CHECKOUT_PRICE_CONFIRMATION_INVALID');
+  }
+  return normalized.sort((left, right) => left.productId.localeCompare(right.productId));
+}
+
+function hashCheckoutRequest({
+  customerId,
+  paymentMethod,
+  savedAddressId,
+  deliveryAddress,
+  customerNote,
+  expectedItems,
+}) {
+  const addressSource = savedAddressId
+    ? { type: 'saved', savedAddressId }
+    : {
+        type: 'one-time',
+        receiverName: deliveryAddress.receiverName,
+        receiverPhone: deliveryAddress.receiverPhone,
+        shippingAddress: deliveryAddress.shippingAddress,
+      };
+  const canonicalPayload = {
+    command: 'PLACE_ORDER',
+    customerId: String(customerId),
+    paymentMethod,
+    addressSource,
+    customerNote: String(customerNote || '').trim(),
+    expectedItems,
+  };
+  return crypto.createHash('sha256').update(JSON.stringify(canonicalPayload)).digest('hex');
 }
 
 function withOptionalSession(query, session) {
@@ -209,20 +274,51 @@ function createModelOrderRepository() {
     async listDetails(orderId, session) {
       return withOptionalSession(OrderDetail.find({ orderId }), session).lean();
     },
-    async updateOrder(id, data) {
-      return Order.findByIdAndUpdate(id, data, { new: true, runValidators: true }).lean();
+    async updateOrder(id, data, session) {
+      return withOptionalSession(Order.findByIdAndUpdate(id, data, { new: true, runValidators: true }), session).lean();
     },
-    async claimCustomerCancellation(customerId, id, data, session) {
+    async claimCustomerCancellation(customerId, id, expectedPaymentStatus, data, session) {
       return withOptionalSession(
         Order.findOneAndUpdate(
           {
             _id: id,
             customerId,
-            orderStatus: { $in: ['Pending', 'WaitingForPayment'] },
-            paymentStatus: { $in: ['Unpaid', 'Pending', 'Failed'] },
+            orderStatus: 'Pending',
+            paymentStatus: expectedPaymentStatus,
           },
           { $set: data },
           { new: true, runValidators: true }
+        ),
+        session
+      ).lean();
+    },
+    async findPaymentByOrderId(orderId, session) {
+      return withOptionalSession(Payment.findOne({ orderId }), session).lean();
+    },
+    async updatePayment(id, data, session) {
+      return withOptionalSession(Payment.findByIdAndUpdate(id, data, { new: true, runValidators: true }), session).lean();
+    },
+    async findActivePaymentAttemptByOrder(orderId, session) {
+      return withOptionalSession(
+        PaymentAttempt.findOne({ orderId, paymentStatus: 'Pending' }).sort({ createdAt: -1, _id: -1 }),
+        session
+      ).lean();
+    },
+    async findPrimaryPaidPaymentAttemptByOrder(orderId, session) {
+      return withOptionalSession(
+        PaymentAttempt.findOne({ orderId, paymentStatus: 'Paid' }).sort({ createdAt: 1, _id: 1 }),
+        session
+      ).lean();
+    },
+    async updatePaymentAttempt(id, data, session) {
+      return withOptionalSession(PaymentAttempt.findByIdAndUpdate(id, data, { new: true, runValidators: true }), session).lean();
+    },
+    async upsertRefundPending(data, session) {
+      return withOptionalSession(
+        RefundPending.findOneAndUpdate(
+          { obligationKey: data.obligationKey },
+          { $setOnInsert: data },
+          { new: true, upsert: true, runValidators: true }
         ),
         session
       ).lean();
@@ -258,21 +354,92 @@ function createOrderService({
   customerRepository = null,
   emailOutboxService = null,
   addressRepository = createModelAddressRepository(),
+  settingsService = systemSettingService,
+  clock = () => new Date(),
 } = {}) {
-  function normalizeIdempotencyKey(input = {}) {
+  function normalizeIdempotencyKey(input = {}, operation = 'checkout') {
     const key = String(input.idempotencyKey || '').trim();
-    if (!key) throw new ApiError(400, 'Idempotency-Key is required for checkout');
+    if (!key) {
+      throw new ApiError(
+        400,
+        `Idempotency-Key is required for ${operation}`,
+        [{ field: 'idempotencyKey', message: 'Provide an Idempotency-Key header for safe retries' }],
+        'IDEMPOTENCY_KEY_REQUIRED'
+      );
+    }
     if (!/^[A-Za-z0-9._:-]{8,128}$/.test(key)) {
-      throw new ApiError(400, 'Idempotency-Key must be 8-128 characters using letters, numbers, ., _, :, or -');
+      throw new ApiError(
+        400,
+        'Idempotency-Key must be 8-128 characters using letters, numbers, ., _, :, or -',
+        [{ field: 'idempotencyKey', message: 'Use 8-128 safe characters' }],
+        'IDEMPOTENCY_KEY_INVALID'
+      );
     }
     return key;
   }
 
-  async function buildOrderLines(cartItems, session) {
+  function normalizeCancellation(input = {}) {
+    const cancelReason = String(input.cancelReason || '').trim();
+    if (!cancelReason) {
+      throw new ApiError(
+        400,
+        'Cancellation reason is required',
+        [{ field: 'cancelReason', message: 'Enter a cancellation reason' }],
+        'CANCEL_REASON_REQUIRED'
+      );
+    }
+    if (cancelReason.length > 500) {
+      throw new ApiError(
+        400,
+        'Cancellation reason is too long',
+        [{ field: 'cancelReason', message: 'Cancellation reason must not exceed 500 characters' }],
+        'CANCEL_REASON_INVALID'
+      );
+    }
+    const idempotencyKey = normalizeIdempotencyKey(input, 'cancellation');
+    const requestHash = crypto.createHash('sha256').update(JSON.stringify({
+      command: 'CANCEL_ORDER',
+      cancelReason,
+    })).digest('hex');
+    return { cancelReason, idempotencyKey, requestHash };
+  }
+
+  async function buildOrderLines(cartItems, expectedItems, session) {
+    const expectedByProductId = new Map(expectedItems.map((item) => [item.productId, item]));
     const lines = [];
     for (const item of cartItems) {
       const product = await productRepository.findSellableById(item.productId, session);
       if (!product) throw new ApiError(400, `Product is no longer available: ${item.productName}`);
+      const productId = String(item.productId);
+      const expected = expectedByProductId.get(productId);
+      if (!expected || expected.quantity !== Number(item.quantity)) {
+        throw new ApiError(
+          409,
+          'Cart contents changed before checkout',
+          [{ field: `expectedItems.${productId}.quantity`, message: 'Refresh the cart before checkout' }],
+          'CART_CHANGED'
+        );
+      }
+      if (expected.unitPrice !== Number(product.price)) {
+        throw new ApiError(
+          409,
+          'Product price changed before checkout',
+          [{
+            field: `expectedItems.${productId}.unitPrice`,
+            message: `Displayed price ${expected.unitPrice} no longer matches current price ${Number(product.price)}`,
+          }],
+          'PRICE_CHANGED'
+        );
+      }
+      const currentPriceVersion = product.updatedAt ? new Date(product.updatedAt).toISOString() : '';
+      if (currentPriceVersion && expected.priceVersion !== currentPriceVersion) {
+        throw new ApiError(
+          409,
+          'Product price changed before checkout',
+          [{ field: `expectedItems.${productId}.priceVersion`, message: 'Refresh the cart to confirm the latest price' }],
+          'PRICE_CHANGED'
+        );
+      }
       if (product.stockQuantity !== undefined && item.quantity > product.stockQuantity) {
         throw new ApiError(400, `Product quantity exceeds available stock: ${product.name}`);
       }
@@ -286,13 +453,31 @@ function createOrderService({
         quantity: item.quantity,
         subtotal: product.price * item.quantity,
       });
+      expectedByProductId.delete(productId);
+    }
+    if (expectedByProductId.size > 0) {
+      const [productId] = expectedByProductId.keys();
+      throw new ApiError(
+        409,
+        'Cart contents changed before checkout',
+        [{ field: `expectedItems.${productId}`, message: 'Refresh the cart before checkout' }],
+        'CART_CHANGED'
+      );
     }
     return lines;
   }
 
-  async function loadExisting(customerId, idempotencyKey) {
+  async function loadExisting(customerId, idempotencyKey, checkoutRequestHash) {
     const existing = await orderRepository.findCompletedByIdempotencyKey(customerId, idempotencyKey);
     if (!existing) return null;
+    if (String(existing.checkoutRequestHash || '') !== checkoutRequestHash) {
+      throw new ApiError(
+        409,
+        'Idempotency-Key was already used with different checkout facts',
+        [{ field: 'idempotencyKey', message: 'Use a new Idempotency-Key for a changed checkout request' }],
+        'IDEMPOTENCY_KEY_REUSED'
+      );
+    }
     const details = orderRepository.listDetails ? await orderRepository.listDetails(existing._id) : [];
     return toOrderResponse(existing, details);
   }
@@ -323,9 +508,6 @@ function createOrderService({
         );
       }
 
-      const existing = await loadExisting(customerId, idempotencyKey);
-      if (existing) return existing;
-
       let deliverySnapshot;
       if (hasSavedAddress) {
         const savedAddress = await addressRepository.findByIdForUser(customerId, savedAddressId);
@@ -348,12 +530,39 @@ function createOrderService({
           'CHECKOUT_ADDRESS_INVALID'
         );
       }
+      const expectedItems = normalizeExpectedItems(input.expectedItems);
+      const checkoutRequestHash = hashCheckoutRequest({
+        customerId,
+        paymentMethod,
+        savedAddressId,
+        deliveryAddress: deliverySnapshot,
+        customerNote: deliverySnapshot.customerNote,
+        expectedItems,
+      });
+      const existing = await loadExisting(customerId, idempotencyKey, checkoutRequestHash);
+      if (existing) return existing;
+
+      let paymentDeadlineAt = null;
+      if (paymentMethod === 'ONLINE') {
+        const settings = await settingsService.listSettings();
+        const configuredTimeout = Number(settings.PAYMENT_TIMEOUT_MINUTES ?? settings.paymentTimeoutMinutes);
+        const paymentTimeoutMinutes = Number.isInteger(configuredTimeout) && configuredTimeout > 0 ? configuredTimeout : 15;
+        paymentDeadlineAt = new Date(clock().getTime() + paymentTimeoutMinutes * 60 * 1000);
+      }
 
       let result;
       try {
         result = await transactionManager.withTransaction(async (session) => {
           const alreadyCompleted = await orderRepository.findCompletedByIdempotencyKey(customerId, idempotencyKey, session);
           if (alreadyCompleted) {
+            if (String(alreadyCompleted.checkoutRequestHash || '') !== checkoutRequestHash) {
+              throw new ApiError(
+                409,
+                'Idempotency-Key was already used with different checkout facts',
+                [{ field: 'idempotencyKey', message: 'Use a new Idempotency-Key for a changed checkout request' }],
+                'IDEMPOTENCY_KEY_REUSED'
+              );
+            }
             const details = orderRepository.listDetails ? await orderRepository.listDetails(alreadyCompleted._id) : [];
             return { order: alreadyCompleted, lines: details, replay: true };
           }
@@ -363,7 +572,7 @@ function createOrderService({
           const cartItems = await cartRepository.listItems(cart._id, session);
           if (!cartItems.length) throw new ApiError(400, 'Cart must have at least one item before checkout');
 
-          const lines = await buildOrderLines(cartItems, session);
+          const lines = await buildOrderLines(cartItems, expectedItems, session);
           const totalAmount = lines.reduce((sum, line) => sum + line.subtotal, 0);
           const initialPaymentStatus = paymentMethod === 'COD' ? 'Unpaid' : 'Pending';
           const order = await orderRepository.createOrder(
@@ -371,12 +580,14 @@ function createOrderService({
               orderCode: generateOrderCode(),
               customerId,
               idempotencyKey,
+              checkoutRequestHash,
               totalAmount,
               codExpectedAmount: paymentMethod === 'COD' ? totalAmount : null,
               subtotal: totalAmount,
               paymentMethod,
               paymentStatus: initialPaymentStatus,
-              orderStatus: paymentMethod === 'ONLINE' ? 'WaitingForPayment' : 'Pending',
+              orderStatus: 'Pending',
+              paymentDeadlineAt,
               ...deliverySnapshot,
             },
             session
@@ -395,17 +606,13 @@ function createOrderService({
             paymentStatus: initialPaymentStatus,
           };
           await orderRepository.createPayment(paymentPayload, session);
-          await orderRepository.createPaymentAttempt(
-            { ...paymentPayload, attemptCode: generateAttemptCode(), paymentProvider: paymentMethod === 'COD' ? 'COD' : 'MOCK' },
-            session
-          );
           const clearedCart = await cartRepository.clearExactCart(cart._id, session);
           if (!clearedCart) throw new ApiError(409, 'Cart was changed during checkout. Please retry with a new key.');
           return { order, lines, replay: false };
         });
       } catch (error) {
         if (error && error.code === 11000) {
-          const replay = await loadExisting(customerId, idempotencyKey);
+          const replay = await loadExisting(customerId, idempotencyKey, checkoutRequestHash);
           if (replay) return replay;
         }
         throw error;
@@ -460,38 +667,96 @@ function createOrderService({
     },
 
     async cancelOrder(customerId, orderId, input = {}) {
+      const { cancelReason, idempotencyKey, requestHash } = normalizeCancellation(input);
       const result = await transactionManager.withTransaction(async (session) => {
         const order = await orderRepository.findById(orderId, session);
         if (!order || String(order.customerId) !== String(customerId)) throw new ApiError(404, 'Order not found');
-        const isPreConfirmation = ['Pending', 'WaitingForPayment'].includes(order.orderStatus);
-        const isUnpaid = ['Unpaid', 'Pending', 'Failed'].includes(order.paymentStatus);
-        if (!isPreConfirmation || !isUnpaid) {
-          throw new ApiError(409, 'Only unpaid pre-confirmation orders can be cancelled');
+        if (order.cancelIdempotencyKey === idempotencyKey) {
+          if (order.cancelRequestHash !== requestHash) {
+            throw new ApiError(
+              409,
+              'Idempotency-Key was already used with different cancellation facts',
+              [{ field: 'idempotencyKey', message: 'Use a new Idempotency-Key for a changed cancellation request' }],
+              'IDEMPOTENCY_KEY_REUSED'
+            );
+          }
+          if (order.orderStatus === 'Cancelled') {
+            return { cancelled: order, orderCode: order.orderCode, replay: true };
+          }
         }
-
+        if (order.orderStatus !== 'Pending' || !['Unpaid', 'Pending', 'Failed', 'Paid'].includes(order.paymentStatus)) {
+          throw new ApiError(409, 'Only Pending orders can be cancelled by the customer');
+        }
+        const isPaid = order.paymentStatus === 'Paid';
+        const paidAttempt = isPaid
+          ? await orderRepository.findPrimaryPaidPaymentAttemptByOrder(orderId, session)
+          : null;
+        if (isPaid && !paidAttempt) {
+          throw new ApiError(409, 'A verified paid attempt is required before cancelling a paid order');
+        }
         const cancelData = {
           orderStatus: 'Cancelled',
-          paymentStatus: order.paymentStatus === 'Pending' ? 'Cancelled' : order.paymentStatus,
-          cancelReason: String(input.cancelReason || '').trim(),
+          paymentStatus: isPaid ? 'Paid' : 'Cancelled',
+          cancelReason,
+          cancelIdempotencyKey: idempotencyKey,
+          cancelRequestHash: requestHash,
         };
         const cancelled = orderRepository.claimCustomerCancellation
-          ? await orderRepository.claimCustomerCancellation(customerId, orderId, cancelData, session)
+          ? await orderRepository.claimCustomerCancellation(customerId, orderId, order.paymentStatus, cancelData, session)
           : await orderRepository.updateOrder(orderId, cancelData, session);
-        if (!cancelled) throw new ApiError(409, 'Only unpaid pre-confirmation orders can be cancelled');
+        if (!cancelled) {
+          const concurrent = await orderRepository.findById(orderId, session);
+          if (
+            concurrent
+            && concurrent.orderStatus === 'Cancelled'
+            && concurrent.cancelIdempotencyKey === idempotencyKey
+            && concurrent.cancelRequestHash === requestHash
+          ) {
+            return { cancelled: concurrent, orderCode: concurrent.orderCode, replay: true };
+          }
+          throw new ApiError(409, 'Order changed while cancellation was being processed');
+        }
 
         const details = await orderRepository.listDetails(orderId, session);
+        const payment = orderRepository.findPaymentByOrderId
+          ? await orderRepository.findPaymentByOrderId(orderId, session)
+          : null;
+        if (!isPaid && payment && orderRepository.updatePayment) {
+          await orderRepository.updatePayment(payment._id, { paymentStatus: 'Cancelled' }, session);
+        }
+        if (!isPaid && orderRepository.findActivePaymentAttemptByOrder) {
+          const activeAttempt = await orderRepository.findActivePaymentAttemptByOrder(orderId, session);
+          if (activeAttempt) {
+            await orderRepository.updatePaymentAttempt(activeAttempt._id, { paymentStatus: 'Cancelled' }, session);
+          }
+        }
+        if (isPaid) {
+          await orderRepository.upsertRefundPending({
+            orderId: order._id,
+            paymentAttemptId: paidAttempt._id,
+            customerId: order.customerId,
+            amount: order.totalAmount,
+            currency: order.currency || paidAttempt.currency || 'VND',
+            reason: `Customer cancellation: ${cancelReason}`,
+            status: 'RefundPending',
+            obligationType: 'PAYMENT_REVERSAL',
+            obligationKey: `PAYMENT_REVERSAL:${String(paidAttempt._id)}`,
+          }, session);
+        }
         for (const detail of details) {
           await inventoryRepository.release(detail.productId, detail.quantity, session);
         }
-        return { cancelled, orderCode: order.orderCode };
+        return { cancelled, orderCode: order.orderCode, replay: false };
       });
-      await auditLogger.log({
-        userId: customerId,
-        action: 'ORDER_CANCEL',
-        targetEntity: 'Order',
-        targetId: String(orderId),
-        description: `Order cancelled: ${result.orderCode}`,
-      });
+      if (!result.replay) {
+        await auditLogger.log({
+          userId: customerId,
+          action: 'ORDER_CANCEL',
+          targetEntity: 'Order',
+          targetId: String(orderId),
+          description: `Order cancelled: ${result.orderCode}`,
+        });
+      }
       return toOrderResponse(result.cancelled);
     },
   };

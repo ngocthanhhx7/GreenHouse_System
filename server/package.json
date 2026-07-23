@@ -9,6 +9,7 @@
     "migrate:product-sku-index": "node src/scripts/migrateProductSkuIndex.js",
     "migrate:cod-reconciliation": "node src/scripts/migrateCodReconciliation.js",
     "migrate:sl002": "node src/scripts/migrateSl002Exchange.js",
+    "migrate:sl003": "node src/scripts/migrateSl003OrderPaymentCancellation.js",
     "verify:sl002": "node src/scripts/verifySl002Exchange.js",
     "verify:sl001": "node src/scripts/verifySl001ReturnRefund.js",
     "ci:actors": "node src/scripts/ciEphemeralActors.js",
