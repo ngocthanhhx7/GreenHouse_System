@@ -55,6 +55,11 @@ export default function NotificationDetailPage() {
       if (user?.role === 'WarehouseManager') return `/warehouse/return-refunds/${notification.targetId}`;
       return '/return-refunds';
     }
+    if (notification.targetCollection === 'ExchangeCase') {
+      if (user?.role === 'Staff') return `/staff/exchanges/${notification.targetId}`;
+      if (user?.role === 'WarehouseManager') return `/warehouse/exchanges/${notification.targetId}`;
+      return `/exchanges/${notification.targetId}`;
+    }
     return '';
   }
 

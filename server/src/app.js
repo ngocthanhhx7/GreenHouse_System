@@ -21,6 +21,7 @@ const profileRoutes = require('./routes/profile.routes');
 const uploadRoutes = require('./routes/upload.routes');
 const contactRoutes = require('./routes/contact.routes');
 const codRoutes = require('./routes/cod.routes');
+const exchangeRoutes = require('./routes/exchange.routes');
 const path = require('node:path');
 const { notFound, errorHandler } = require('./middlewares/error.middleware');
 const { requestId } = require('./middlewares/requestId.middleware');
@@ -69,6 +70,7 @@ function createApp({ rateLimit = true, uploadsRoot = path.resolve(__dirname, '..
   app.use('/api', inventoryRoutes);
   app.use('/api', replenishmentRoutes);
   app.use('/api', returnRefundRoutes);
+  app.use('/api', exchangeRoutes);
   app.use('/api', supportRoutes);
   app.use('/api', reviewRoutes);
   app.use('/api', reportRoutes);

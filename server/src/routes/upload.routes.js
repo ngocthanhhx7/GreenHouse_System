@@ -21,8 +21,21 @@ router.delete(
   uploadController.deleteProductImage
 );
 router.post('/return-refunds/evidence', authenticate, authorizeRoles('Customer'), uploadReturnEvidence, uploadController.uploadReturnEvidence);
+router.post(
+  '/exchanges/evidence',
+  authenticate,
+  authorizeRoles('Customer', 'Staff', 'WarehouseManager'),
+  uploadReturnEvidence,
+  uploadController.uploadReturnEvidence
+);
 router.get(
   '/return-refunds/evidence/:filename',
+  authenticate,
+  authorizeRoles('Customer', 'Staff', 'WarehouseManager'),
+  uploadController.getReturnEvidence
+);
+router.get(
+  '/exchanges/evidence/:filename',
   authenticate,
   authorizeRoles('Customer', 'Staff', 'WarehouseManager'),
   uploadController.getReturnEvidence

@@ -14,7 +14,7 @@ const inventoryTransactionSchema = new mongoose.Schema(
     },
     relatedCollection: {
       type: String,
-      enum: ['', 'Inventory', 'StockExportRequest', 'ReplenishmentRequest', 'DamageReport', 'ReturnRefundRequest'],
+      enum: ['', 'Inventory', 'StockExportRequest', 'ReplenishmentRequest', 'DamageReport', 'ReturnRefundRequest', 'ExchangeCase'],
       default: '',
       trim: true,
     },
@@ -29,7 +29,11 @@ const inventoryTransactionSchema = new mongoose.Schema(
     },
     transactionType: {
       type: String,
-      enum: ['ADJUSTMENT', 'STOCK_EXPORT', 'REPLENISHMENT_RECEIVE', 'DAMAGE_CONFIRMED', 'RETURN_IN', 'RETURN_DAMAGED_IN'],
+      enum: [
+        'ADJUSTMENT', 'STOCK_EXPORT', 'REPLENISHMENT_RECEIVE', 'DAMAGE_CONFIRMED',
+        'RETURN_IN', 'RETURN_DAMAGED_IN', 'EXCHANGE_RETURN_IN',
+        'EXCHANGE_RETURN_DAMAGED_IN', 'EXCHANGE_REPLACEMENT_OUT',
+      ],
       required: true,
     },
     quantity: {

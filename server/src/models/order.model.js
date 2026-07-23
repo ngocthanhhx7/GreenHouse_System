@@ -113,6 +113,7 @@ const orderSchema = new mongoose.Schema(
       default: null,
     },
     returnDeadlineAt: { type: Date, default: null },
+    exchangeDeadlineAt: { type: Date, default: null },
   },
   { timestamps: true }
 );

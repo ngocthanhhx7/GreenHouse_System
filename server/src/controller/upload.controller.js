@@ -40,7 +40,7 @@ async function uploadReturnEvidence(req, res, next) {
       ...item,
       url: returnEvidenceClaim.sign(req.user.id, item.url, item.size),
     }));
-    return sendSuccess(res, { items: claimedItems }, 'Return evidence uploaded', 201);
+    return sendSuccess(res, { items: claimedItems }, 'After-sales evidence uploaded', 201);
   } catch (error) {
     if (items.length) await Promise.all(items.map((item) => uploadService.removeManagedFile(item.url).catch(() => {})));
     return next(error);

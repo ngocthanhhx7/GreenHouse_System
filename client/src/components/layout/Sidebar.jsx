@@ -9,12 +9,14 @@ const ROLE_LINKS = {
     { to: '/cart', label: 'Giỏ hàng' },
     { to: '/orders', label: 'Đơn mua' },
     { to: '/return-refunds', label: 'Đổi trả / hoàn tiền' },
+    { to: '/exchanges', label: 'Yêu cầu đổi hàng' },
     { to: '/support', label: 'Hỗ trợ' },
   ],
   Staff: [
     { to: '/staff', label: 'Tổng quan xử lý đơn' },
     { to: '/staff/orders', label: 'Hàng đợi đơn hàng' },
     { to: '/staff/return-refunds', label: 'Đổi trả / hoàn tiền' },
+    { to: '/staff/exchanges', label: 'Đổi hàng' },
     { to: '/staff/support-requests', label: 'Yêu cầu hỗ trợ' },
   ],
   WarehouseManager: [
@@ -22,6 +24,7 @@ const ROLE_LINKS = {
     { to: '/warehouse/inventory', label: 'Tồn kho' },
     { to: '/warehouse/stock-exports', label: 'Phiếu xuất kho' },
     { to: '/warehouse/return-refunds', label: 'Kiểm hàng đổi trả' },
+    { to: '/warehouse/exchanges', label: 'Kiểm hàng đổi hàng' },
     { to: '/warehouse/low-stock', label: 'Cảnh báo sắp hết' },
     { to: '/warehouse/replenishments', label: 'Bổ sung hàng' },
   ],

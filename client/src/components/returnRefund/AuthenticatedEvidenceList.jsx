@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 
 import { returnRefundService } from '../../services/returnRefundService.js';
 
-function EvidenceItem({ url, index }) {
+function EvidenceItem({ url, index, fetchEvidence }) {
   const [objectUrl, setObjectUrl] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -15,7 +15,7 @@ function EvidenceItem({ url, index }) {
     if (busy || objectUrl) return;
     setBusy(true); setError('');
     try {
-      const blob = await returnRefundService.fetchEvidence(url);
+      const blob = await fetchEvidence(url);
       setObjectUrl(URL.createObjectURL(blob));
     } catch (loadError) {
       setError(loadError.message);
@@ -35,10 +35,14 @@ function EvidenceItem({ url, index }) {
   </li>;
 }
 
-export default function AuthenticatedEvidenceList({ urls = [], label = 'Bằng chứng Customer' }) {
+export default function AuthenticatedEvidenceList({
+  urls = [],
+  label = 'Bằng chứng Customer',
+  fetchEvidence = returnRefundService.fetchEvidence,
+}) {
   if (!urls.length) return null;
   return <section className="mt-3">
     <strong>{label}:</strong>
-    <ul className="list-unstyled mt-2">{urls.map((url, index) => <EvidenceItem key={url} url={url} index={index} />)}</ul>
+    <ul className="list-unstyled mt-2">{urls.map((url, index) => <EvidenceItem key={url} url={url} index={index} fetchEvidence={fetchEvidence} />)}</ul>
   </section>;
 }
