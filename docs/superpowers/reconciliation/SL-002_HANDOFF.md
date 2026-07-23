@@ -1,9 +1,11 @@
 # SL-002 Handoff — Same-SKU Exchange
 
-**Branch:** `feature/sl-002-exchange`
-**Baseline:** `7ba2533de2c81ebb1164ba9846443a1d814590d6`
+**Original branch/owner:** `feature/sl-002-exchange`, Nguyễn Hữu Anh Nhật
+**Closure branch/reviewer:** `feature/sl-002-postmerge-closure`, Nguyễn Ngọc Thành
+**Reviewed baseline:** `main` at `1e2f0945d90fdb5fd10ba27a3eaf821a8f9dfe47`
+**Closure candidate:** `874da318cbd250a3e5f02335686fff09bad9aa4d`
 **Local evidence date:** 2026-07-23
-**Highest formally passed gate:** G5
+**Highest formally passed gate:** G6; G7 release evidence pending
 
 ## Outcome
 
@@ -36,6 +38,10 @@ Order-level after-sales lock:
 | Browser fixture safety | local database, explicit `SL002_BROWSER_FIXTURE_CONFIRM`, and non-production guards pass `2/2` |
 | Login regression found during walkthrough | Login navigation now waits for committed AuthContext state; browser walkthrough passed afterward |
 | Reconstructed G4 baseline demonstration | same probe: baseline `0/3` with the intended missing-contract failures; current implementation `3/3`; see `SL-002_G4_RECONSTRUCTED_RED.md` |
+| Post-merge closure focused suites | server `83/83`; client `40/40` |
+| Post-merge closure full regression | server `484/484`; client `163/163` |
+| Security/build checks | server/client audit: zero vulnerabilities; production build passed; `git diff --check` passed |
+| Expanded G6 actor acceptance | denied routes, foreign ownership, duplicate/replay, partial inspection, no-stock retry/conversion, incident/resend and Warehouse/Staff resend separation passed; see `SL-002_G6_ACTOR_ACCEPTANCE.md` |
 
 An isolated replica set at `127.0.0.1:27018` was created for transaction
 verification and removed afterward. The normal Mongo service at `27017` was not
@@ -45,7 +51,7 @@ changed.
 
 | Slice ID | G0 | G1 | G2 | G3 | G4 | G5 | G6 | G7 | Blocker | Owner | Next evidence |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| SL-002 | passed | passed | passed | passed | passed | passed | blocked | not-started | Expanded denied/alternate actor walkthrough and reviewed release evidence remain pending | Engineering owner `unassigned`; Project Business Approver | Record G6 actor acceptance, then obtain review and reconcile release evidence for G7 |
+| SL-002 | passed | passed | passed | passed | passed | passed | passed | in-review | Closure branch review/merge evidence remains pending | Original owner Nguyễn Hữu Anh Nhật; reviewer/integration owner Nguyễn Ngọc Thành; Project Business Approver | Review and merge the closure candidate, then record G7 release evidence |
 
 G4 is satisfied by the Project Business Approver-approved reconstructed baseline
 demonstration in `SL-002_G4_RECONSTRUCTED_RED.md`. It is explicitly classified as
@@ -54,16 +60,18 @@ log was retained.
 
 ## Remaining acceptance evidence
 
-1. Record browser/API actor acceptance for forbidden routes, duplicate submit,
-   partial inspection, no-stock wait/retry, delivery incident/resend, and
-   Exchange-to-Return conversion. Automated service/route tests cover these
-   contracts, but the expanded G6 actor walkthrough is not yet recorded.
-2. Review the scoped diff against
+1. Review the scoped diff against
    `SL-002_G3_TRACEABILITY.md`; do not infer correctness only from green totals.
-3. Verify production `CARRIER_WEBHOOK_SECRET`, HTTPS malware-scanner endpoint/API
+2. Verify production `CARRIER_WEBHOOK_SECRET`, HTTPS malware-scanner endpoint/API
    key, evidence retention, and worker supervision before release.
-4. Commit only the intended SL-002 manifest, push the branch, obtain review, and
+3. Commit only the intended SL-002 manifest, push the branch, obtain review, and
    reconcile released behavior for G7.
+
+## Checkout isolation
+
+The saved-address checkout correction was already merged independently through
+PR #5 (`8c3542b` -> `f0a0e8b`) and is inherited from `main`. The SL-002 closure
+diff does not modify Checkout, Address Book, Cart, Payment or PayOS files.
 
 ## Worktree cautions
 
