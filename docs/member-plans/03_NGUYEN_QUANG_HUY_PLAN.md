@@ -1,13 +1,13 @@
-# Nguyễn Quang Huy - Cart, Checkout, Order, Payment Plan
+# Nguyễn Quang Huy - Cart, Checkout, Order, Payment, Notification Plan
 
 ## 1. Owner Information
 
 | Field | Detail |
 |---|---|
 | Owner | Nguyễn Quang Huy |
-| Role in team | Customer purchase flow owner |
-| Main responsibility | Cart Management, Checkout, Order Placement, Payment domain state/COD, Customer Order History, Cancel Order; không sở hữu PayOS integration |
-| Git branch | `feature/huy-cart-order-payment` |
+| Role in team | Customer purchase flow và ongoing Notification domain owner |
+| Main responsibility | Cart Management, Checkout, Order Placement, Payment domain state/COD, Customer Order History, Cancel Order; từ 2026-07-23 sở hữu Notification model/service/API, in-app UI và lifecycle; không sở hữu PayOS, EmailOutbox/Gmail, OTP, Contact hoặc Audit |
+| Git branch | `feature/huy-cart-order-payment`; ownership docs: `feature/huy-notification-ownership-docs`; Notification code tương lai: `feature/huy-notification-domain` (TBD) |
 | Priority | Must Have |
 
 ## 2. Business Objective
@@ -23,6 +23,8 @@
 - Customer order history.
 - Customer order detail/status.
 - Cancel Pending unpaid order.
+- Ongoing Notification model/service/API và in-app bell/dropdown/list/detail kể từ 2026-07-23.
+- Notification read/unread/delete, domain-event consumption và retry status; không bao gồm EmailOutbox/Gmail delivery.
 
 ## 4. Important Flows Owned
 
@@ -148,7 +150,8 @@
 | Product active/price/category APIs | Phạm Thành Chung |
 | Inventory available stock | Lê Vũ Cường |
 | Staff processing requires created orders | Nguyễn Hữu Anh Nhật |
-| Notification email hook | Lê Vũ Cường |
+| Notification domain event contract | Nguyễn Quang Huy |
+| Email delivery hook | Nguyễn Ngọc Thành |
 
 ## 12. Phase-by-Phase Task List
 
@@ -251,6 +254,15 @@ Phần tích hợp cổng thanh toán online PayOS đã chuyển sang Nguyễn N
 - Thành sở hữu `@payos/node`, credential/env, tạo payment link, return/cancel URL, public webhook, signature verification, provider response mapping và frontend redirect/result integration.
 - Huy chỉ sở hữu Order/Payment domain state, COD, idempotency, amount/ownership validation, late paid callback và refund hand-off sau khi nhận dữ liệu provider đã được Thành xác minh.
 - Branch PayOS là `feature/thanh-payos-payment`; không commit PayOS bằng identity của Huy.
+
+## Ownership Addendum 2026-07-23 - Notification Domain (Ưu tiên)
+
+Addendum này ưu tiên mọi dòng legacy trái ngược về ownership Notification.
+
+- Nguyễn Quang Huy sở hữu Notification domain foundation: Notification model/service/API, in-app UI (bell/dropdown/list/detail), read/unread/delete, tiêu thụ domain event và retry status.
+- Mọi module khác, gồm Staff/Return/Refund/Support của Nhật và Warehouse/Reports/Settings của Cường, chỉ phát domain event idempotent theo Notification contract của Huy; không tự tạo Notification model, bell hay read/unread/delete rule.
+- Nguyễn Ngọc Thành vẫn sở hữu riêng EmailOutbox, Gmail SMTP/email delivery, OTP/password reset, public contact email, PayOS integration/provider/webhook, Audit và final integration. Email delivery/retry không được chuyển sang Huy.
+- Ownership documentation branch only: `feature/huy-notification-ownership-docs`. Branch code Notification tương lai: `feature/huy-notification-domain` (TBD, chưa tạo). Author: `Nguyễn Quang Huy <quanghuyn267@gmail.com>`.
 
 ## Ownership Addendum 2026-07-22 - Order Created Email Event
 

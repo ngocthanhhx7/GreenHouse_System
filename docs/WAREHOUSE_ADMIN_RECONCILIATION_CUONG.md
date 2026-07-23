@@ -16,4 +16,4 @@ Staff creates a `PendingWarehouseConfirmation` record through `POST /api/staff/d
 
 ## Ownership boundary
 
-Warehouse operations emit idempotent business events through the shared Notification service and do not roll back after a notification failure. Shared email delivery/retry and customer read/delete behavior remain owned by Nguyễn Ngọc Thành under the Account/Media/Notification/Address addendum.
+Warehouse operations emit idempotent business events through the shared Notification contract of Nguyễn Quang Huy and do not roll back after a notification failure. Notification read/delete and retry status remain owned by Huy; separate email delivery/retry remains owned by Nguyễn Ngọc Thành.

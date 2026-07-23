@@ -1,4 +1,4 @@
-# Lê Vũ Cường - Warehouse, After-Sale, Notification, Admin Reports Plan
+# Lê Vũ Cường - Warehouse, After-Sale, Admin Reports Plan
 
 ## 1. Owner Information
 
@@ -6,7 +6,7 @@
 |---|---|
 | Owner | Lê Vũ Cường |
 | Role in team | Warehouse/admin closure owner |
-| Main responsibility | Inventory, Stock Export, Replenishment, Support, Review, Notification, Reports, Settings |
+| Main responsibility | Inventory, Stock Export, Replenishment, Support, Review, Reports, Settings; phát domain event theo Notification contract của Huy |
 | Git branch | `feature/cuong-warehouse-admin-after-sale` |
 | Priority | Must Have + Should Have |
 
@@ -23,7 +23,7 @@ Hoàn thiện phần vận hành kho và các nghiệp vụ sau bán hàng để
 - Replenishment request and receive stock.
 - Support/Complaint Management.
 - Product Review.
-- Notification/Email wrapper.
+- Phát warehouse/admin domain event idempotent theo Notification contract của Huy.
 - Admin Reports.
 - System Settings.
 
@@ -79,7 +79,6 @@ Hoàn thiện phần vận hành kho và các nghiệp vụ sau bán hàng để
 | `client/src/services/replenishmentService.js` | Replenishment APIs |
 | `client/src/services/supportService.js` | Support APIs |
 | `client/src/services/reviewService.js` | Review APIs |
-| `client/src/services/notificationService.js` | Notification APIs |
 | `client/src/services/reportService.js` | Admin report APIs |
 | `client/src/services/systemSettingService.js` | System setting APIs |
 
@@ -95,7 +94,6 @@ Hoàn thiện phần vận hành kho và các nghiệp vụ sau bán hàng để
 | ReplenishmentRequest | productId, requestedBy, approvedBy, quantity, status, reason, receivedAt |
 | SupportRequest | customerId, orderId, subject, content, status, handledBy, response |
 | ProductReview | productId, customerId, orderId, rating, content, status |
-| Notification | userId, type, channel, subject, content, deliveryStatus, isRead, sentAt |
 | SystemSetting | key, value, valueType, description, updatedBy |
 
 ### Routes/Controllers/Services
@@ -107,11 +105,9 @@ Hoàn thiện phần vận hành kho và các nghiệp vụ sau bán hàng để
 | Route | `server/src/routes/replenishment.routes.js` | Replenishment APIs |
 | Route | `server/src/routes/support.routes.js` | Support APIs |
 | Route | `server/src/routes/review.routes.js` | Review APIs |
-| Route | `server/src/routes/notification.routes.js` | Notification APIs |
 | Route | `server/src/routes/report.routes.js` | Admin report APIs |
 | Route | `server/src/routes/systemSetting.routes.js` | Setting APIs |
 | Service | `server/src/services/inventory.service.js` | Non-negative stock and transaction rules |
-| Service | `server/src/services/notification.service.js` | Create/send notification records |
 | Service | `server/src/services/report.service.js` | Aggregate report queries |
 
 ## 7. API Scope
@@ -135,8 +131,6 @@ Hoàn thiện phần vận hành kho và các nghiệp vụ sau bán hàng để
 | PATCH | `/api/staff/support-requests/:id` | Staff | status, response | Updated support request | Invalid transition |
 | POST | `/api/products/:id/reviews` | Customer | rating, content, orderId | Review | Not purchased/not delivered |
 | GET | `/api/products/:id/reviews` | Public | page | Reviews | Product not found |
-| GET | `/api/notifications` | User | filters | Notifications | Unauthorized |
-| PATCH | `/api/notifications/:id/read` | User | id | Updated notification | Forbidden |
 | GET | `/api/admin/reports/revenue` | Admin | date range | Revenue report | Invalid range |
 | GET | `/api/admin/reports/orders` | Admin | date range | Order report | Invalid range |
 | GET | `/api/admin/reports/products` | Admin | date range | Product report | Invalid range |
@@ -153,7 +147,6 @@ Hoàn thiện phần vận hành kho và các nghiệp vụ sau bán hàng để
 | ReplenishmentRequest | productId, status | Receive only after Admin approval |
 | SupportRequest | customerId, status | Customer sees own requests only |
 | ProductReview | productId, customerId, orderId | Review only purchased delivered product |
-| Notification | userId, deliveryStatus, isRead | User sees own notifications only |
 | SystemSetting | key unique | Validate by valueType |
 
 ## 9. UI Screens/Components
@@ -196,12 +189,10 @@ Hoàn thiện phần vận hành kho và các nghiệp vụ sau bán hàng để
 
 ## 12. Phase-by-Phase Task List
 
-### Phase 4 - Notification Support
+### Phase 4 - Notification Event Integration
 
-- [ ] Create Notification model.
-- [ ] Implement notification service wrapper.
-- [ ] Add helper for order/payment/refund emails.
-- [ ] Build notification list/read UI.
+- [ ] Emit idempotent warehouse/admin domain events to Notification contract của Huy.
+- [ ] Verify notification failure does not roll back warehouse/admin operations.
 
 ### Phase 6 - Warehouse Main Delivery
 
@@ -232,7 +223,7 @@ Hoàn thiện phần vận hành kho và các nghiệp vụ sau bán hàng để
 
 | PR | Branch | Content |
 |---|---|---|
-| PR 1 | `feature/cuong-notification-service` | Notification model/service/UI |
+| PR 1 | `feature/cuong-notification-events` | Warehouse/admin event emission theo Notification contract của Huy |
 | PR 2 | `feature/cuong-inventory-stock-export` | Inventory, transaction, stock export |
 | PR 3 | `feature/cuong-replenishment-low-stock` | Low-stock and replenishment |
 | PR 4 | `feature/cuong-support-review` | Support and product review |
@@ -290,7 +281,7 @@ Hoàn thiện phần vận hành kho và các nghiệp vụ sau bán hàng để
 - [ ] Low-stock/replenishment complete.
 - [ ] Support complete.
 - [ ] Review complete.
-- [ ] Notification complete.
+- [ ] Notification domain events integrated with Huy contract.
 - [ ] Admin reports/settings complete.
 - [ ] Manual demo tested.
 
@@ -302,3 +293,11 @@ Cường giữ Warehouse/Reports/Settings và bổ sung integration boundary:
 - Gọi Notification service/contract của Thành; không tạo Notification model, unread rule hoặc bell riêng.
 - Kiểm thử event từ Warehouse/Reports đến notification dropdown bằng integration test.
 - Không sửa AccountLayout, Profile, Avatar, Address Book hay Checkout address selector.
+
+## Ownership Addendum 2026-07-23 - Notification Domain Transfer
+
+Addendum này chỉ supersede ongoing Notification integration ownership kể từ ngày 2026-07-23; addendum 2026-07-20 phía trên vẫn là lịch sử baseline.
+
+- Cường tiếp tục sở hữu Warehouse/Reports/Settings và phát domain event idempotent cho low-stock, replenishment, stock export và report anomaly.
+- Các event của Cường được gửi theo Notification contract do Nguyễn Quang Huy sở hữu; Cường không sở hữu Notification model/service/API, retry status, unread/read/delete hoặc in-app bell.
+- EmailOutbox/Gmail email delivery vẫn thuộc Nguyễn Ngọc Thành, không chuyển cho Cường hoặc Huy.

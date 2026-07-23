@@ -5,7 +5,7 @@
 - Họ tên: Lê Vũ Cường
 - Mã sinh viên: `HE187396`
 - Email commit: `levucuong0319@gmail.com`
-- Vai trò: Warehouse Inventory, Stock Export, Replenishment, Reports, System Settings và warehouse notification event owner.
+- Vai trò: Warehouse Inventory, Stock Export, Replenishment, Reports, System Settings và warehouse domain-event owner theo Notification contract của Huy.
 
 ## Goal
 
@@ -25,11 +25,9 @@
 - `server/src/models/inventoryTransaction.model.js`
 - `server/src/models/stockExportRequest.model.js`
 - `server/src/models/replenishmentRequest.model.js`
-- `server/src/models/notification.model.js`
 - `server/src/models/systemSetting.model.js`
 - `server/src/services/inventory.service.js`
 - `server/src/services/replenishment.service.js`
-- `server/src/services/notification.service.js`
 - `server/src/services/report.service.js`
 - `server/src/services/systemSetting.service.js`
 - `server/src/models/damageReport.model.js`
@@ -50,7 +48,7 @@
 3. Damage report do Staff tạo không đổi tồn; Warehouse confirm mới giảm sellable stock, tăng DamagedQuantity và tạo transaction.
 4. Replenishment flow: Warehouse tạo `PendingApproval`, Admin approve/reject, Warehouse ghi nhận đúng một receipt đầy đủ; không cộng tồn khi approve.
 5. Low-stock alert dùng `AvailableQuantity <= LowStockThreshold`, có refresh/clear state.
-6. Event kho phải có recipient, type, related target, không tạo duplicate cùng business event và không rollback nghiệp vụ khi Notification service lỗi. Delivery/retry/read/delete thuộc ownership dùng chung của Nguyễn Ngọc Thành theo addendum ngày 20/07/2026.
+6. Event kho phải có recipient, type, related target, không tạo duplicate cùng business event và không rollback nghiệp vụ khi Notification service lỗi. Notification retry/read/delete thuộc ownership của Nguyễn Quang Huy; email delivery/retry riêng thuộc Nguyễn Ngọc Thành.
 7. Report dùng Delivered + Paid cho gross sales, Refund completed trong kỳ cho refund, net = gross - refund; không tính pending/cancelled.
 8. System settings phải validate `PAYMENT_TIMEOUT_MINUTES`, `RETURN_WINDOW_DAYS`, low-stock threshold và audit thay đổi.
 9. Cập nhật SDS schema/sequence/query cho inventory, stock export, replenishment, notification, report và settings.

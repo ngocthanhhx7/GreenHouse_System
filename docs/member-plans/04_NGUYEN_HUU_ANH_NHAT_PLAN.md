@@ -142,7 +142,8 @@
 | Order/payment data | Nguyễn Quang Huy |
 | Product/order item detail | Phạm Thành Chung + Nguyễn Quang Huy |
 | Warehouse export continuation | Lê Vũ Cường |
-| Notification/email hook | Lê Vũ Cường |
+| Notification domain event contract | Nguyễn Quang Huy |
+| Email delivery hook | Nguyễn Ngọc Thành |
 | Audit helper | Nguyễn Ngọc Thành |
 
 ## 12. Phase-by-Phase Task List

@@ -16,7 +16,7 @@
 - Homepage tiếng Việt và các tài nguyên dùng chung của storefront; bảo đảm không làm lẫn luồng khách hàng với dashboard nội bộ.
 - Hồ sơ có thể chỉnh sửa, đổi mật khẩu, avatar upload từ máy local và Address Book của Customer.
 - `AccountLayout` dùng chung cho Hồ sơ/Thông báo, tách khỏi sidebar nghiệp vụ Staff/Admin/Warehouse.
-- Notification foundation: unread badge, dropdown trên header, trang danh sách/chi tiết, deep-link và quy tắc chỉ xóa thông báo đã đọc.
+- Notification foundation trong bản reconciliation cũ đã được chuyển cho Huy theo ownership addendum 2026-07-23; Thành không còn sở hữu unread badge, dropdown, trang thông báo, deep-link hay delete rule.
 - Upload foundation dùng chung cho avatar và ảnh sản phẩm; Chung sở hữu phần tích hợp upload vào Product Management.
 - Dữ liệu demo tài khoản, địa chỉ và thông báo để các thành viên clone dự án có cùng baseline kiểm thử.
 - PayOS SDK/configuration, hosted checkout link, return/cancel integration, signature webhook và webhook registration.
@@ -26,7 +26,7 @@
 - [x] Homepage và layout storefront dùng chung.
 - [x] Profile edit, đổi mật khẩu và avatar upload/remove.
 - [x] Customer Address Book API/UI và địa chỉ mặc định.
-- [x] Notification API/UI, dropdown, unread/read/delete guard và deep-link.
+- [x] Historical baseline only: Notification API/UI, dropdown, unread/read/delete guard và deep-link; ownership hiện tại thuộc Huy theo addendum 2026-07-23.
 - [x] Upload foundation có kiểm tra nội dung file, giới hạn kích thước và tên UUID.
 - [x] Seed demo dùng chung và regression test.
 - [ ] Review/merge Product Media của Phạm Thành Chung.

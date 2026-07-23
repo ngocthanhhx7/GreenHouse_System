@@ -25,7 +25,7 @@
 | P0 | Replenishment approval bị giao sai cho Warehouse/Staff thay vì Admin | Lê Vũ Cường |
 | P1 | Account/RBAC/audit/API/error contract chưa có design chi tiết | Nguyễn Ngọc Thành |
 | P1 | Product/Category/Catalog design chưa phản ánh đầy đủ active rule, snapshot và SKU/image | Phạm Thành Chung |
-| P1 | Support, review, notification, reports và settings chưa có contract/design đầy đủ | Lê Vũ Cường |
+| P1 | Support, review, reports và settings chưa có contract/design đầy đủ | Lê Vũ Cường; Notification contract do Nguyễn Quang Huy sở hữu |
 | P1 | SDS thiếu HTTP endpoint, request/response, status code, pagination và retry contract | Nguyễn Ngọc Thành |
 | P2 | Duplicate heading/table number, thiếu version/approval, diagram cũ và Record of Changes trống | Nguyễn Ngọc Thành |
 
@@ -35,9 +35,9 @@
 |---|---|---|---|
 | Nguyễn Ngọc Thành | Baseline governance, RBAC, API/error contract, audit, PayOS provider/webhook và review merge | `server/src/middlewares`, `server/src/utils`, `server/src/config/payos.js`, payment controller/routes, payment frontend integration, `docs` | `feature/thanh-payos-payment` |
 | Phạm Thành Chung | Catalog/Product/Category alignment, active visibility, SKU/image/snapshot | `server/src/models/product.model.js`, `category.model.js`, product/category services, public pages | `feature/chung-catalog-schema-alignment` |
-| Nguyễn Quang Huy | Cart/Order/Payment domain alignment, idempotency, state machine, late callback/refund rule và COD; không sở hữu PayOS adapter/credential/webhook | cart/order/payment domain models/services, checkout/order pages | `feature/huy-payment-order-reconciliation` |
+| Nguyễn Quang Huy | Cart/Order/Payment domain alignment, idempotency, state machine, late callback/refund rule, COD và Notification domain foundation; không sở hữu PayOS adapter/credential/webhook | cart/order/payment/notification domain models/services, checkout/order pages, in-app notification UI | Payment: `feature/huy-payment-order-reconciliation`; Notification ownership docs only: `feature/huy-notification-ownership-docs`; future Notification code: `feature/huy-notification-domain` (TBD, chưa tạo) |
 | Nguyễn Hữu Anh Nhật | Staff order state machine, invoice, return/refund/support ownership | `staffOrder`, `returnRefund`, `support` services/pages | `feature/nhat-order-return-reconciliation` |
-| Lê Vũ Cường | Inventory/reservation/export/replenishment/notification/report/settings | inventory, replenishment, notification, report, system setting modules | `feature/cuong-warehouse-admin-reconciliation` |
+| Lê Vũ Cường | Inventory/reservation/export/replenishment/report/settings và phát Notification domain event | inventory, replenishment, report, system setting modules | `feature/cuong-warehouse-admin-reconciliation` |
 
 ## 5. Dependency Order
 
@@ -45,7 +45,7 @@
 2. Chung chốt Product/Category/Inventory reference để các luồng order dùng đúng snapshot và active rule.
 3. Huy chốt Cart -> Order -> Payment domain, reservation boundary và payment states; Thành chốt PayOS adapter, webhook signature và provider mapping.
 4. Nhật dùng Order/Payment state đã chốt để sửa Staff processing, invoice và return/refund.
-5. Cường dùng reservation/export contract của Huy và Staff status của Nhật để sửa warehouse, replenishment, notification và reports.
+5. Cường dùng reservation/export contract của Huy và Staff status của Nhật để sửa warehouse, replenishment và reports, rồi phát event theo Notification contract của Huy.
 6. Thành review tất cả diff trên `main`, chạy test/build và merge theo thứ tự trên.
 
 ## 6. Branch And Commit Rules
@@ -116,3 +116,12 @@ Các yêu cầu mới về upload ảnh, avatar, hồ sơ, thông báo và sổ 
 - Branch/author: `feature/thanh-payos-payment`, `Nguyễn Ngọc Thành <thanhnnhe186491@fpt.edu.vn>`.
 
 Chi tiết nằm tại `docs/srs-sds-reconciliation/06_ACCOUNT_MEDIA_NOTIFICATION_ADDRESS_PLAN.md`.
+
+## 12. Notification Ownership Transfer Addendum (2026-07-23)
+
+Addendum này chỉ supersede ongoing ownership và maintenance của Notification kể từ ngày 2026-07-23; không thay đổi bằng chứng hay lịch sử baseline do Nguyễn Ngọc Thành triển khai theo addendum 2026-07-20.
+
+- Nguyễn Quang Huy sở hữu Notification model/service/API, in-app bell/dropdown/list/detail, read/unread/delete, domain-event consumption và retry status.
+- Nhật/Cường và các module khác phát domain event idempotent theo Notification contract của Huy.
+- Nguyễn Ngọc Thành vẫn sở hữu EmailOutbox, Gmail SMTP/email delivery, OTP/password reset, public contact email, PayOS, Audit và final integration.
+- `feature/huy-notification-ownership-docs` là branch ownership-docs only. Branch code Notification tương lai là `feature/huy-notification-domain` (TBD, chưa tạo), author `Nguyễn Quang Huy <quanghuyn267@gmail.com>`.

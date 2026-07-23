@@ -28,17 +28,17 @@ Nguồn tham khảo: [Shopify product media](https://help.shopify.com/en/manual/
 
 | Owner | Branch đề xuất | Phạm vi bắt buộc | Kết quả cần pull |
 |---|---|---|---|
-| Nguyễn Ngọc Thành | `feature/thanh-account-media-notification` | User/avatar/profile, upload foundation, Notification API/UI, AccountLayout, integration | API + màn hình Hồ sơ/Thông báo + test |
+| Nguyễn Ngọc Thành | `feature/thanh-account-media-notification` | User/avatar/profile, upload foundation, historical Notification API/UI baseline, AccountLayout, integration | API + màn hình Hồ sơ/Thông báo + test; ongoing Notification ownership chuyển cho Huy từ 2026-07-23 |
 | Phạm Thành Chung | `feature/chung-product-media-upload` | Product image upload UI, preview, chọn ảnh chính, nối Product API | Admin product media + test |
 | Nguyễn Quang Huy | `feature/huy-checkout-address-book` | Address selector tại checkout, địa chỉ mặc định, nhập địa chỉ mới và snapshot | Checkout address flow + test |
 | Nguyễn Hữu Anh Nhật | `feature/nhat-order-return-reconciliation` | Staff order/return/support theo plan riêng | Không sở hữu Notification chung |
-| Lê Vũ Cường | `feature/cuong-warehouse-admin-reconciliation` | Warehouse, Reports, Settings; phát event nghiệp vụ để Thành xử lý notification | Màn hình vận hành + API/test |
+| Lê Vũ Cường | `feature/cuong-warehouse-admin-reconciliation` | Warehouse, Reports, Settings; phát event nghiệp vụ theo Notification contract của Huy | Màn hình vận hành + API/test |
 
 ### Quy tắc ownership
 
-- Thành sở hữu `Notification` dùng chung, `AccountLayout`, Header bell/dropdown và các route profile/account.
+- Thành sở hữu lịch sử triển khai baseline `Notification`, `AccountLayout` và các route profile/account; ongoing ownership của Notification model/service/API và Header bell/dropdown thuộc Huy từ 2026-07-23.
 - Chung chỉ sở hữu media nghiệp vụ sản phẩm và tích hợp endpoint upload do Thành cung cấp; không sửa Header/Footer dùng chung.
-- Huy chỉ tích hợp Address Book vào checkout; không sửa cách lưu snapshot của Order nếu không có contract.
+- Trong historical workstream 2026-07-20, Huy chỉ tích hợp Address Book vào checkout và không sửa Order snapshot nếu chưa có contract. Kể từ addendum 2026-07-23, Huy đồng thời sở hữu ongoing Notification domain theo ranh giới ghi trong tài liệu này.
 - Nhật và Cường tạo event/domain payload, không tự tạo cơ chế notification thứ hai.
 - Mọi PR ghi rõ actor, API, frontend, test evidence và dependency; Thành review rồi mới merge vào `main`.
 
@@ -110,14 +110,14 @@ Nguồn tham khảo: [Shopify product media](https://help.shopify.com/en/manual/
 ## 7. Workstream D - Nhật và Cường
 
 - Nhật giữ ownership Staff order, Return/Refund, Support và chỉ phát sự kiện có `type`, `targetCollection`, `targetId`, `recipientUserId`.
-- Cường giữ ownership Inventory, Stock Export, Replenishment, Reports, Settings; các cảnh báo tồn kho/replenishment gửi qua Notification service của Thành.
+- Cường giữ ownership Inventory, Stock Export, Replenishment, Reports, Settings; các cảnh báo tồn kho/replenishment gửi qua Notification service của Huy.
 - Cường không sửa logic unread/read/delete hoặc UI bell; chỉ kiểm thử integration event -> notification.
 
 ## 8. Dependency và thứ tự thực hiện
 
-1. Thành chốt schema, upload contract, notification contract và AccountLayout.
+1. Thành chốt historical notification baseline, upload contract và AccountLayout; Huy chốt ongoing Notification contract.
 2. Chung tích hợp Product Media; Huy tích hợp Address Book vào Checkout.
-3. Nhật/Cường phát event theo contract; Thành hoàn thiện dropdown/detail và kiểm thử tích hợp.
+3. Trong historical sequence, Nhật/Cường phát event theo contract và Thành hoàn thiện baseline dropdown/detail. Kể từ 2026-07-23, Huy bảo trì/hoàn thiện ongoing Notification dropdown/detail và event-consumption contract; Thành giữ final integration.
 4. Thành review từng PR, chạy regression, merge vào `main`, sau đó xóa branch feature local/remote.
 
 ## 9. Definition of Done
@@ -136,9 +136,17 @@ Nguồn tham khảo: [Shopify product media](https://help.shopify.com/en/manual/
 
 | Owner | Workstream | Trạng thái | Bằng chứng hiện tại |
 |---|---|---|---|
-| Nguyễn Ngọc Thành | Account, avatar, upload foundation, notification, Address Book | Hoàn thành, đã merge `main` | Backend 192/192; frontend 61/61; build pass; seed demo pass |
+| Nguyễn Ngọc Thành | Account, avatar, upload foundation, historical notification baseline, Address Book | Hoàn thành, đã merge `main`; ongoing Notification ownership đã chuyển cho Huy | Backend 192/192; frontend 61/61; build pass; seed demo pass |
 | Phạm Thành Chung | Product Media và dữ liệu catalog production-like | Hoàn thành, đã merge `main` | Backend 196/196; frontend 65/65; build pass; upload-save-remove và desktop/mobile QA pass |
 | Nguyễn Quang Huy | Address Book tại Checkout và Order snapshot | Hoàn thành, đã được Thành review/merge `main` | Backend 197/197; frontend 68/68; build pass; Checkout desktop/mobile QA và console pass; merge `790f132` |
+
+### Notification handoff/maintenance progress — 2026-07-23
+
+Các dòng assignment/evidence phía trên là lịch sử baseline và được giữ nguyên. Từ 2026-07-23, Nguyễn Quang Huy tiếp nhận ongoing ownership/maintenance cho Notification model/service/API, in-app bell/dropdown/list/detail, read/unread/delete, event consumption và retry status. Thành tiếp tục giữ EmailOutbox, Gmail SMTP/email delivery, OTP/password reset, public contact email, PayOS, Audit và final integration.
+
+| Owner | Progress | Branch |
+|---|---|---|
+| Nguyễn Quang Huy | Ownership handoff đã ghi nhận; implementation/maintenance code chưa bắt đầu trong thay đổi tài liệu này | Ownership docs only: `feature/huy-notification-ownership-docs`; future code: `feature/huy-notification-domain` (TBD, chưa tạo) |
 
 ## 10. Checklist pull/merge
 
