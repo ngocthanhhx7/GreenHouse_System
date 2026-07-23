@@ -5,6 +5,7 @@ const {
   normalizeInventoryDocument,
   normalizeDamageDocument,
   normalizeReplenishmentDocument,
+  updateBackfillDocument,
   migrateSl005Inventory,
 } = require('./migrateSl005Inventory');
 
@@ -64,5 +65,28 @@ describe('SL-005 inventory migration', () => {
       replenishmentsBackfilled: 3,
       indexesVerified: 4,
     });
+  });
+
+  it('does not advance timestamps when applying repeat-safe backfills', async () => {
+    const calls = [];
+    const Model = {
+      async updateOne(filter, update, options) {
+        calls.push({ filter, update, options });
+        return { modifiedCount: 0 };
+      },
+    };
+
+    await updateBackfillDocument(
+      Model,
+      { _id: 'inventory-1' },
+      { sellableQuantity: 4 },
+      { session: 'migration-session' },
+    );
+
+    assert.deepEqual(calls, [{
+      filter: { _id: 'inventory-1' },
+      update: { $set: { sellableQuantity: 4 } },
+      options: { session: 'migration-session', timestamps: false },
+    }]);
   });
 });

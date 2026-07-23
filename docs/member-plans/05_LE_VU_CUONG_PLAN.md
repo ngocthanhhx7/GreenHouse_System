@@ -329,14 +329,27 @@ This addendum records the tracked Definition-of-Done evidence for SL-005. The no
 
 - [x] BR-047 through BR-058 implemented and mapped to AT-075 through AT-099.
 - [x] Server acceptance tests were introduced red for the intended missing behavior before the implementation turned them green.
-- [x] Server regression: `494/494` tests passed across `88` suites.
-- [x] Client regression: `164/164` tests passed across `49` suites.
+- [x] Server regression after SL-003 rebase: `586/586` tests passed across `101` suites.
+- [x] Client regression after SL-003 rebase: `175/175` tests passed across `51` suites.
 - [x] Client production build passed; only the existing Vite large-chunk warning remains.
-- [x] SL-005 migration is available as `npm run migrate:sl005` and is covered by an idempotent repository-fake test.
+- [x] SL-005 migration is available as `npm run migrate:sl005`, has a timestamp-preserving repeat-safety test, and passed a disposable `rs0` verification twice with zero business writes on the second run.
 - [x] Detailed handoff and G3 traceability are recorded locally under `docs/superpowers/reconciliation/`.
 - [x] No SL-003 or SL-007 implementation file is included in this delivery.
 - [ ] Deployment owner must run and record `npm run migrate:sl005` on the target database.
-- [ ] SL-003/SL-004 reservation/export owners must consume `ReconciliationRequired` and zero availability.
+- [x] SL-003 reservation/cancellation lineage was regression-tested after rebase while consuming the SL-005 availability/alert hooks.
+- [ ] SL-004 fulfillment/export must continue to consume `ReconciliationRequired` and zero availability.
 - [ ] SL-001/SL-002 return/exchange owners must consume the four-dimension Inventory vocabulary at their integration seams.
 
 This evidence establishes local implementation closure only. It does not claim a production migration, deployment, live Supplier integration, production notification delivery, or a completed browser actor walkthrough.
+
+### Verification refresh 2026-07-24
+
+- Targeted cross-slice regression: `99/99` server tests and `4/4` client tests passed after resolving the SL-003/SL-005 reservation-lineage seam.
+- Full regression: server `586/586`, client `175/175`; production build passed with only the existing large-chunk warning.
+- Disposable MongoDB replica-set migration:
+  - first run: Inventory `1`, damage report `1`, quarantine movement `1`, replenishment `3`, index groups `6`;
+  - second run: Inventory `0`, damage report `0`, quarantine movement `0`, replenishment `0`;
+  - physical custody ended at Sellable `6`, Reserved `8`, Quarantined `4`, `ReconciliationRequired`, with exactly one linked movement;
+  - legacy replenishment states became `PendingApproval`, `PartiallyReceived`, and `Completed`;
+  - duplicate active replenishments were rejected before mutation with an actionable preflight error.
+- Detailed tracked evidence is in `docs/reviews/SL-005_RELEASE_AUDIT.md`, `docs/reviews/SL-005_G3_TRACEABILITY.md`, and `docs/reviews/SL-005_HANDOFF.md`.

@@ -53,6 +53,14 @@ function normalizeReplenishmentDocument(item) {
   };
 }
 
+function updateBackfillDocument(Model, filter, fields, options = {}) {
+  return Model.updateOne(
+    filter,
+    { $set: fields },
+    { ...options, timestamps: false },
+  );
+}
+
 function createMigrationRepository() {
   async function findAffectedOrderIds(productId, session) {
     const details = await OrderDetail.find({ productId }).select('orderId').session(session).lean();
@@ -88,7 +96,11 @@ function createMigrationRepository() {
       const documents = await Inventory.find({}).lean();
       let modified = 0;
       for (const item of documents) {
-        const result = await Inventory.updateOne({ _id: item._id }, { $set: normalizeInventoryDocument(item) });
+        const result = await updateBackfillDocument(
+          Inventory,
+          { _id: item._id },
+          normalizeInventoryDocument(item),
+        );
         modified += result.modifiedCount || 0;
       }
       return modified;
@@ -165,13 +177,12 @@ function createMigrationRepository() {
               }], { session });
               quarantines += 1;
             }
-            const result = await DamageReport.updateOne(
+            const result = await updateBackfillDocument(
+              DamageReport,
               { _id: current._id },
               {
-                $set: {
-                  ...normalizeDamageDocument(current),
-                  idempotencyKey: current.idempotencyKey || `sl005-migrated-damage:${String(current._id)}`,
-                },
+                ...normalizeDamageDocument(current),
+                idempotencyKey: current.idempotencyKey || `sl005-migrated-damage:${String(current._id)}`,
               },
               { session },
             );
@@ -187,7 +198,11 @@ function createMigrationRepository() {
       const documents = await ReplenishmentRequest.find({}).lean();
       let modified = 0;
       for (const item of documents) {
-        const result = await ReplenishmentRequest.updateOne({ _id: item._id }, { $set: normalizeReplenishmentDocument(item) });
+        const result = await updateBackfillDocument(
+          ReplenishmentRequest,
+          { _id: item._id },
+          normalizeReplenishmentDocument(item),
+        );
         modified += result.modifiedCount || 0;
       }
       return modified;
@@ -251,6 +266,7 @@ module.exports = {
   normalizeInventoryDocument,
   normalizeDamageDocument,
   normalizeReplenishmentDocument,
+  updateBackfillDocument,
   createMigrationRepository,
   migrateSl005Inventory,
   runCli,
