@@ -562,7 +562,7 @@ describe('SL-002 Exchange service', () => {
     }));
     await harness.service.decideRequest('staff-1', request.id, {
       idempotencyKey: 'decision-unit-lineage-0001',
-      decision: 'APPROVE', responsibility: 'SHOP_FAULT', reason: 'Lá»—i Shop',
+      decision: 'APPROVE', responsibility: 'SHOP_FAULT', reason: 'Lỗi Shop',
     });
     await harness.service.recordHandoffProof('customer-1', request.id, {
       idempotencyKey: 'handoff-unit-lineage-0001',
@@ -583,8 +583,8 @@ describe('SL-002 Exchange service', () => {
         acceptedSellableQuantity: 1,
         acceptedDamagedQuantity: 1,
         rejectedQuantity: 1,
-        inspectionReason: 'Má»™t sáº£n pháº©m Ä‘á»§ Ä‘iá»u kiá»‡n, má»™t sáº£n pháº©m hÆ° há»ng',
-        rejectionReason: 'Sáº£n pháº©m cÃ²n láº¡i khÃ´ng Ä‘á»§ Ä‘iá»u kiá»‡n Ä‘á»•i',
+        inspectionReason: 'Một món bán lại được, một món hỏng, một món từ chối',
+        rejectionReason: 'Món còn lại không đủ điều kiện đổi',
         evidenceImages: ['/api/exchanges/evidence/unit-lineage.jpg'],
       }],
     });
