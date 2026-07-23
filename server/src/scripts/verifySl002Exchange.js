@@ -214,6 +214,7 @@ async function verifySl002Exchange() {
       ExchangeUnitLineage.findOne({ exchangeCaseId: caseIds[0] }).lean(),
       ExchangeCase.findById(caseIds[0]).lean(),
     ]);
+    assertFact(persistedCase?.status === 'Completed', 'case did not wait for and reach delivered completion');
     assertFact(inventory.stockQuantity === 4 && inventory.reservedQuantity === 0 && inventory.damagedQuantity === 1,
       'Inventory sellable/reserved/damaged quantities are inconsistent');
     assertFact(movements.length === 2, 'expected exactly one damaged-in and one replacement-out movement');

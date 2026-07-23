@@ -303,6 +303,13 @@ function createModelRepository() {
         closePermanently,
       }, session);
     },
+    async reopenOrderLock(orderId, caseId, session) {
+      return afterSalesLockService.reopenCompleted({
+        orderId,
+        caseType: 'RETURN_REFUND',
+        caseId,
+      }, session);
+    },
     async ensureReturnDeadline(id, deadlineAt, session) {
       const updated = await withOptionalSession(Order.findOneAndUpdate(
         { _id: id, returnDeadlineAt: null },
@@ -673,6 +680,16 @@ function createReturnRefundService({
         }, session);
 
         if (responsibility === 'ShopOrProvider' && loaded.request.status === 'Completed') {
+          if (repository.reopenOrderLock) {
+            const reopenedLock = await repository.reopenOrderLock(
+              loaded.order._id,
+              loaded.request._id,
+              session
+            );
+            if (!reopenedLock) {
+              throw new ApiError(409, 'After-sales lock changed while payout recovery was being opened');
+            }
+          }
           await repository.updateRequest(loaded.request._id, {
             status: 'Received',
             completionVoidedAt: openedAt,
