@@ -17,4 +17,10 @@ describe('Staff COD and refund UI contract', () => {
     assert.doesNotMatch(refundDetailSource, /id="refundAmount"|Number\(form\.refundAmount\)|refundAmount:/);
     assert.match(refundDetailSource, /hệ thống tự tính|Hệ thống tự tính/);
   });
+
+  it('locks Staff confirm/cancel commands and supplies a stable idempotency key', () => {
+    assert.match(staffOrderSource, /idempotencyKey/);
+    assert.match(staffOrderSource, /disabled=\{.*submitting/s);
+    assert.match(staffOrderSource, /submittingRef\.current/);
+  });
 });

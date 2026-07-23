@@ -77,19 +77,32 @@ function createOrderRepository() {
   const payments = [];
   const attempts = [];
   const refunds = [];
+  const refundRequests = [];
+  const outbox = [];
+  const reservations = [];
   return {
     orders,
     details,
     payments,
     attempts,
     refunds,
+    refundRequests,
+    outbox,
+    reservations,
     async createOrder(data) {
       const order = { _id: `order-${orders.length + 1}`, orderCode: `ORD-${orders.length + 1}`, ...data };
       orders.push(order);
       return order;
     },
     async createOrderDetail(data) {
-      details.push({ _id: `detail-${details.length + 1}`, ...data });
+      const detail = { _id: `detail-${details.length + 1}`, ...data };
+      details.push(detail);
+      return detail;
+    },
+    async createReservation(data) {
+      const reservation = { _id: `reservation-${reservations.length + 1}`, ...data };
+      reservations.push(reservation);
+      return reservation;
     },
     async createPayment(data) {
       payments.push({ _id: `payment-${payments.length + 1}`, ...data });
@@ -152,6 +165,35 @@ function createOrderRepository() {
       refunds.push(refund);
       return refund;
     },
+    async findRefundRequestByObligationKey(orderId, obligationKey) {
+      return refundRequests.find((request) => (
+        request.orderId === orderId && request.obligationKey === obligationKey
+      )) || null;
+    },
+    async createRefundRequest(data) {
+      const request = { _id: `refund-request-${refundRequests.length + 1}`, ...data };
+      refundRequests.push(request);
+      return request;
+    },
+    async updateRefundRequest(id, data) {
+      const request = refundRequests.find((entry) => entry._id === id);
+      Object.assign(request, data);
+      return request;
+    },
+    async enqueuePostCommitWork(item) {
+      const existing = outbox.find((entry) => entry.identityKey === item.identityKey);
+      if (existing) return existing;
+      outbox.push({ _id: `outbox-${outbox.length + 1}`, ...item });
+      return outbox.at(-1);
+    },
+    async listPendingPostCommitWork() {
+      return outbox.filter((entry) => entry.status !== 'Completed');
+    },
+    async markPostCommitWorkDone(id) {
+      const entry = outbox.find((item) => item._id === id);
+      if (entry) entry.status = 'Completed';
+      return entry;
+    },
   };
 }
 
@@ -189,6 +231,7 @@ function createAddressRepository() {
     },
   ];
   return {
+    addresses,
     async findByIdForUser(userId, id) {
       return addresses.find((address) => address._id === id && address.userId === userId) || null;
     },
@@ -249,6 +292,9 @@ describe('order service', () => {
     assert.equal(orderRepository.details[0].unitSnapshot, 'piece');
     assert.equal(orderRepository.details[0].productImageSnapshot, 'https://cdn.test/pan.jpg');
     assert.equal(orderRepository.payments[0].paymentMethod, 'COD');
+    assert.equal(orderRepository.reservations.length, 1);
+    assert.equal(orderRepository.reservations[0].reservationKey, `ORDER:${result.id}:detail-1`);
+    assert.equal(orderRepository.reservations[0].status, 'Reserved');
     assert.equal(cartRepository.items.length, 0);
     assert.equal(auditLogger.entries[0].action, 'ORDER_CREATE');
   });
@@ -379,6 +425,144 @@ describe('order service', () => {
     assert.equal(inventoryRepository.reservedQuantity, 0);
   });
 
+  it('claims only customer-cancellation audit events from the shared domain outbox', async () => {
+    let requestedTypes = null;
+    const service = createOrderService({
+      orderRepository: {
+        async listPendingPostCommitWork(eventTypes) {
+          requestedTypes = eventTypes;
+          return [];
+        },
+      },
+    });
+
+    await service.drainPostCommitWork();
+
+    assert.deepEqual(requestedTypes, ['ORDER_CANCEL_AUDIT']);
+  });
+
+  it('does not publish a durable cancellation event claimed by another worker', async () => {
+    const entries = [];
+    let claimedId = null;
+    const service = createOrderService({
+      orderRepository: {
+        async listPendingPostCommitWork() {
+          return [{
+            _id: 'outbox-order-lost',
+            identityKey: 'ORDER_CANCEL_AUDIT:lost',
+            eventType: 'ORDER_CANCEL_AUDIT',
+            payload: { action: 'ORDER_CANCEL' },
+          }];
+        },
+        async claimPostCommitWork(id) {
+          claimedId = id;
+          return null;
+        },
+      },
+      auditLogger: { async log(entry) { entries.push(entry); } },
+    });
+
+    await service.drainPostCommitWork();
+
+    assert.equal(claimedId, 'outbox-order-lost');
+    assert.equal(entries.length, 0);
+  });
+
+  it('does not publish a transaction-local cancellation outbox item when commit fails', async () => {
+    const order = await orderService.placeOrder('customer-1', checkoutInput({
+      idempotencyKey: 'cancel-outbox-rollback-checkout-001',
+    }));
+    const rollbackAudit = createAuditLogger();
+    const rollbackRepository = {
+      ...orderRepository,
+      async enqueuePostCommitWork(item) {
+        return { _id: 'transaction-local-outbox', ...item };
+      },
+      async listPendingPostCommitWork() {
+        return [];
+      },
+    };
+    const rollbackService = createOrderService({
+      transactionManager: {
+        async withTransaction(work) {
+          await work({ id: 'rolled-back-session' });
+          throw new Error('commit failed');
+        },
+      },
+      cartRepository,
+      productRepository: createProductRepository(),
+      inventoryRepository,
+      orderRepository: rollbackRepository,
+      auditLogger: rollbackAudit,
+    });
+
+    await assert.rejects(
+      () => rollbackService.cancelOrder('customer-1', order.id, {
+        cancelReason: 'Rollback audit check',
+        idempotencyKey: 'cancel-outbox-rollback-command-001',
+      }),
+      /commit failed/,
+    );
+    await rollbackService.drainPostCommitWork();
+
+    assert.equal(rollbackAudit.entries.length, 0);
+  });
+
+  it('fails closed when an order reservation lineage cannot be claimed during cancellation', async () => {
+    const order = await orderService.placeOrder('customer-1', checkoutInput({ idempotencyKey: 'cancel-missing-lineage-checkout-001' }));
+    orderRepository.details[0]._id = 'detail-lineage-1';
+    let releaseCalls = 0;
+    orderRepository.claimReservationRelease = async () => null;
+    inventoryRepository.release = async () => {
+      releaseCalls += 1;
+    };
+
+    await assert.rejects(
+      () => orderService.cancelOrder('customer-1', order.id, {
+        cancelReason: 'Missing lineage',
+        idempotencyKey: 'cancel-missing-lineage-command-001',
+      }),
+      /reservation lineage is missing or already released/i,
+    );
+    assert.equal(releaseCalls, 0);
+  });
+
+  it('retries a failed cancellation audit from durable post-commit work without repeating cancellation', async () => {
+    const order = await orderService.placeOrder('customer-1', checkoutInput({ idempotencyKey: 'cancel-audit-checkout-001' }));
+    let auditAttempts = 0;
+    const resilientService = createOrderService({
+      transactionManager: { async withTransaction(work) { return work({ id: 'test-session' }); } },
+      cartRepository,
+      productRepository: createProductRepository(),
+      inventoryRepository,
+      orderRepository,
+      auditLogger: {
+        entries: [],
+        async log(entry) {
+          auditAttempts += 1;
+          if (entry.action === 'ORDER_CANCEL' && auditAttempts === 1) throw new Error('audit unavailable');
+          this.entries.push(entry);
+        },
+      },
+    });
+
+    const cancelled = await resilientService.cancelOrder('customer-1', order.id, {
+      cancelReason: 'Audit retry',
+      idempotencyKey: 'cancel-audit-command-001',
+    });
+    assert.equal(cancelled.orderStatus, 'Cancelled');
+    assert.equal(orderRepository.outbox.length, 1);
+    assert.equal(inventoryRepository.reservedQuantity, 0);
+
+    const replay = await resilientService.cancelOrder('customer-1', order.id, {
+      cancelReason: 'Audit retry',
+      idempotencyKey: 'cancel-audit-command-001',
+    });
+    assert.equal(replay.idempotentReplay, true);
+    assert.equal(inventoryRepository.reservedQuantity, 0);
+    assert.equal(orderRepository.outbox[0].status, 'Completed');
+  });
+
   it('retires only the active online attempt when a customer cancels an unpaid order', async () => {
     const order = await orderService.placeOrder('customer-1', checkoutInput({
       paymentMethod: 'ONLINE',
@@ -457,6 +641,15 @@ describe('order service', () => {
     assert.equal(orderRepository.refunds.length, 1);
     assert.equal(orderRepository.refunds[0].obligationType, 'PAYMENT_REVERSAL');
     assert.equal(orderRepository.refunds[0].paymentAttemptId, 'attempt-paid');
+    assert.equal(orderRepository.refundRequests.length, 1);
+    assert.equal(
+      orderRepository.refundRequests[0].obligationKey,
+      'PAYMENT_REVERSAL:attempt-paid',
+    );
+    assert.equal(
+      orderRepository.refunds[0].returnRefundRequestId,
+      orderRepository.refundRequests[0]._id,
+    );
   });
 
   it('generates unique order codes when orders are placed in the same millisecond', async () => {
@@ -660,6 +853,30 @@ describe('order service', () => {
     assert.equal(result.receiverName, 'Nguyễn Quang Huy');
     assert.equal(result.receiverPhone, '0987654321');
     assert.equal(result.shippingAddress, 'Số 12 đường Bếp Việt, Dịch Vọng, Cầu Giấy, Hà Nội');
+  });
+
+  it('replays a saved-address checkout after the saved address is deleted', async () => {
+    const addressRepository = createAddressRepository();
+    const service = createOrderService({
+      transactionManager: { async withTransaction(work) { return work({ id: 'test-session' }); } },
+      cartRepository,
+      productRepository: createProductRepository(),
+      inventoryRepository,
+      orderRepository,
+      addressRepository,
+      auditLogger,
+    });
+    const input = {
+      savedAddressId: 'address-owned',
+      paymentMethod: 'COD',
+      idempotencyKey: 'saved-address-replay-001',
+      expectedItems: [{ productId: 'p1', quantity: 2, unitPrice: 25, priceVersion: '2026-07-23T00:00:00.000Z' }],
+    };
+    const first = await service.placeOrder('customer-1', input);
+    addressRepository.addresses.splice(0, 1);
+    const replay = await service.placeOrder('customer-1', input);
+    assert.equal(replay.id, first.id);
+    assert.equal(replay.shippingAddress, first.shippingAddress);
   });
 
   it('requires exactly one supported checkout address source with typed field errors', async () => {

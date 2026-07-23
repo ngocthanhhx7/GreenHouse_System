@@ -275,6 +275,25 @@ describe('staff order service', () => {
     assert.equal(orderRepository.cancelExportCalls, 1);
   });
 
+  it('rejects cancellation while a stock export request is already Processing', async () => {
+    orderRepository.orders[0].orderStatus = 'Confirmed';
+    orderRepository.exports.push({
+      _id: 'export-processing',
+      orderId: 'order-1',
+      requestedBy: 'staff-1',
+      status: 'Processing',
+      exportedAt: null,
+    });
+
+    await assert.rejects(
+      () => service.cancelOrder('staff-1', 'order-1', { cancelReason: 'Customer requested cancellation' }),
+      /Processing|stock export/i,
+    );
+    assert.equal(orderRepository.orders[0].orderStatus, 'Confirmed');
+    assert.equal(orderRepository.reservedQuantity, 2);
+    assert.equal(orderRepository.releaseCalls, 0);
+  });
+
   it('replays a Staff cancellation under the same idempotency key', async () => {
     orderRepository.orders[0].orderStatus = 'Confirmed';
     const first = await service.cancelOrder('staff-1', 'order-1', {
@@ -301,6 +320,18 @@ describe('staff order service', () => {
     assert.equal(cancelled.paymentStatus, 'Unpaid');
     assert.equal(orderRepository.reservedQuantity, 0);
     assert.equal(orderRepository.refunds.length, 0);
+  });
+
+  it('fails closed when Staff cancellation cannot claim the exact order reservation lineage', async () => {
+    orderRepository.orders[0].orderStatus = 'Confirmed';
+    orderRepository.claimReservationRelease = async () => null;
+
+    await assert.rejects(
+      () => service.cancelOrder('staff-1', 'order-1', { cancelReason: 'Customer changed delivery date' }),
+      /reservation.*missing|reservation.*released|reservation.*intact/i,
+    );
+
+    assert.equal(orderRepository.releaseCalls, 0);
   });
 
   it('blocks cancellation after stock export completion with zero mutation', async () => {

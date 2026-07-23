@@ -6,6 +6,7 @@ const Product = require('../models/product.model');
 const StockExportRequest = require('../models/stockExportRequest.model');
 const Order = require('../models/order.model');
 const OrderDetail = require('../models/orderDetail.model');
+const OrderReservation = require('../models/orderReservation.model');
 const { notificationService } = require('./notification.service');
 const { logAudit } = require('../utils/auditLogger');
 
@@ -99,6 +100,16 @@ function createModelRepository() {
       ), session).lean();
     },
     async listOrderDetails(orderId, session) { return withOptionalSession(OrderDetail.find({ orderId }), session).lean(); },
+    async claimOrderReservationConsumption(orderId, orderDetailId, session) {
+      return withOptionalSession(
+        OrderReservation.findOneAndUpdate(
+          { orderId, orderDetailId, status: 'Reserved' },
+          { $set: { status: 'Consumed' } },
+          { new: true, runValidators: true }
+        ),
+        session
+      ).lean();
+    },
     async listProducts() { return Product.find({ status: 'Active' }).lean(); },
     async createInventory(data) { return Inventory.create(data); },
   };
@@ -220,6 +231,16 @@ function createInventoryService({ repository = createModelRepository(), auditLog
         const transactions = [];
         for (const detail of details) {
           const quantity = Number(detail.quantity);
+          if (repository.claimOrderReservationConsumption) {
+            const reservation = await repository.claimOrderReservationConsumption(
+              order._id,
+              detail._id,
+              session
+            );
+            if (!reservation) {
+              throw new ApiError(409, 'Order reservation lineage is missing or already consumed');
+            }
+          }
           const before = await repository.findInventoryByProductId(detail.productId, session);
           if (!before || Number(before.stockQuantity) < quantity) throw new ApiError(409, 'Insufficient stock for export');
           if (!before || Number(before.reservedQuantity) < quantity) throw new ApiError(409, 'Stock export requires a full reservation');

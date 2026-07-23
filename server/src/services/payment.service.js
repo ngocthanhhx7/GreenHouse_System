@@ -8,6 +8,8 @@ const Payment = require('../models/payment.model');
 const PaymentAttempt = require('../models/paymentAttempt.model');
 const PaymentCallbackEvent = require('../models/paymentCallbackEvent.model');
 const RefundPending = require('../models/refundPending.model');
+const ReturnRefundRequest = require('../models/returnRefundRequest.model');
+const DomainOutbox = require('../models/domainOutbox.model');
 const { createPayOSGateway } = require('../config/payos');
 const { logAudit } = require('../utils/auditLogger');
 const { notificationService: defaultNotificationService } = require('./notification.service');
@@ -203,6 +205,89 @@ function createModelPaymentRepository() {
       }
       return refund;
     },
+    async updateRefundPending(id, data, session) {
+      return withOptionalSession(
+        RefundPending.findByIdAndUpdate(id, { $set: data }, { new: true, runValidators: true }),
+        session
+      ).lean();
+    },
+    async findRefundRequestByObligationKey(orderId, obligationKey, session) {
+      return withOptionalSession(
+        ReturnRefundRequest.findOne({ orderId, obligationKey }),
+        session
+      ).lean();
+    },
+    async createRefundRequest(data, session) {
+      const [request] = await ReturnRefundRequest.create([data], session ? { session } : undefined);
+      return request.toObject();
+    },
+    async updateRefundRequest(id, data, session) {
+      return withOptionalSession(
+        ReturnRefundRequest.findByIdAndUpdate(id, { $set: data }, { new: true, runValidators: true }),
+        session
+      ).lean();
+    },
+    async enqueuePostCommitWork(data, session) {
+      return withOptionalSession(
+        DomainOutbox.findOneAndUpdate(
+          { identityKey: data.identityKey },
+          { $setOnInsert: data },
+          { upsert: true, new: true, runValidators: true }
+        ),
+        session
+      ).lean();
+    },
+    async listPendingPostCommitWork(eventTypes, staleBefore, session) {
+      return withOptionalSession(
+        DomainOutbox.find({
+          eventType: { $in: eventTypes },
+          $or: [
+            { status: { $in: ['Pending', 'Failed'] } },
+            { status: 'Processing', processingStartedAt: { $lte: staleBefore } },
+          ],
+        }).sort({ createdAt: 1 }),
+        session
+      ).lean();
+    },
+    async claimPostCommitWork(id, staleBefore, now, session) {
+      return withOptionalSession(
+        DomainOutbox.findOneAndUpdate(
+          {
+            _id: id,
+            $or: [
+              { status: { $in: ['Pending', 'Failed'] } },
+              { status: 'Processing', processingStartedAt: { $lte: staleBefore } },
+            ],
+          },
+          {
+            $set: { status: 'Processing', processingStartedAt: now, lastError: '' },
+            $inc: { attemptCount: 1 },
+          },
+          { new: true, runValidators: true }
+        ),
+        session
+      ).lean();
+    },
+    async markPostCommitWorkDone(id, processingStartedAt, session) {
+      return withOptionalSession(
+        DomainOutbox.findOneAndUpdate(
+          { _id: id, status: 'Processing', processingStartedAt },
+          { $set: { status: 'Completed', completedAt: new Date(), processingStartedAt: null, lastError: '' } },
+          { new: true }
+        ),
+        session
+      ).lean();
+    },
+    async markPostCommitWorkFailed(id, processingStartedAt, error, session) {
+      return withOptionalSession(
+        DomainOutbox.findOneAndUpdate(
+          { _id: id, status: 'Processing', processingStartedAt },
+          { $set: { status: 'Failed', processingStartedAt: null, lastError: String(error?.message || error || '') } },
+          { new: true }
+        ),
+        session
+      ).lean();
+    },
   };
 }
 
@@ -231,6 +316,40 @@ function createPaymentService({
     || (suppliedPaymentRepository.usesMongooseTransactions
       ? createModelTransactionManager()
       : createPassthroughTransactionManager());
+  const localPostCommitWork = new Map();
+
+  async function ensureRefundObligation(data) {
+    // The repository proxy appends the active AsyncLocalStorage session.
+    // Passing an explicit (undefined) argument here would occupy the adapter's
+    // session parameter and silently move refund writes outside the callback
+    // transaction.
+    const refund = await paymentRepository.upsertRefundPending(data);
+    if (!refund || refund.returnRefundRequestId || !paymentRepository.createRefundRequest) return refund;
+    const obligationKey = String(data.obligationKey || `${data.obligationType || 'PAYMENT_REVERSAL'}:${String(data.paymentAttemptId)}`);
+    let request = paymentRepository.findRefundRequestByObligationKey
+      ? await paymentRepository.findRefundRequestByObligationKey(data.orderId, obligationKey)
+      : null;
+    if (!request) {
+      request = await paymentRepository.createRefundRequest({
+        orderId: data.orderId,
+        requestCode: `PAY-${crypto.createHash('sha256').update(obligationKey).digest('hex').slice(0, 20).toUpperCase()}`,
+        customerId: data.customerId,
+        paymentId: null,
+        obligationKey,
+        reason: data.reason,
+        status: 'ReadyForRefund',
+        refundAmount: Number(data.amount),
+        requestedAt: new Date(clock()),
+      });
+    }
+    const linked = paymentRepository.updateRefundPending
+      ? await paymentRepository.updateRefundPending(refund._id, { returnRefundRequestId: request._id })
+      : null;
+    if (paymentRepository.updateRefundRequest && request.refundPendingId == null) {
+      await paymentRepository.updateRefundRequest(request._id, { refundPendingId: refund._id });
+    }
+    return linked || { ...refund, returnRefundRequestId: request._id };
+  }
 
   async function callbackReplay(paymentProvider, providerMessageId) {
     const existing = await paymentRepository.findCallbackEvent(paymentProvider, providerMessageId);
@@ -243,11 +362,78 @@ function createPaymentService({
     };
   }
 
+  async function runPostCommitWork(item) {
+    if (item.eventType === 'PAYMENT_CALLBACK_AUDIT') {
+      try {
+        await auditLogger.log(item.payload);
+      } catch (error) {
+        if (error?.code !== 11000) throw error;
+      }
+    } else if (item.eventType === 'PAYMENT_CALLBACK_NOTIFICATION') {
+      await notificationService.notifyPaymentStatus(item.payload);
+    }
+  }
+
+  async function drainPostCommitWork() {
+    const drainStartedAt = new Date(clock());
+    const staleBefore = new Date(drainStartedAt.getTime() - 60_000);
+    const items = [
+      ...localPostCommitWork.values(),
+      ...(paymentRepository.listPendingPostCommitWork
+        ? await paymentRepository.listPendingPostCommitWork([
+          'PAYMENT_CALLBACK_AUDIT',
+          'PAYMENT_CALLBACK_NOTIFICATION',
+        ], staleBefore)
+        : []),
+    ];
+    const seen = new Set();
+    for (const item of items) {
+      const key = String(item.identityKey || item._id || '');
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const now = new Date(clock());
+      const claimed = item._id && paymentRepository.claimPostCommitWork
+        ? await paymentRepository.claimPostCommitWork(
+          item._id,
+          staleBefore,
+          now
+        )
+        : item;
+      if (!claimed) {
+        localPostCommitWork.delete(key);
+        continue;
+      }
+      try {
+        await runPostCommitWork(claimed);
+        localPostCommitWork.delete(key);
+        if (claimed._id && paymentRepository.markPostCommitWorkDone) {
+          await paymentRepository.markPostCommitWorkDone(
+            claimed._id,
+            claimed.processingStartedAt
+          );
+        }
+      } catch (error) {
+        localPostCommitWork.set(key, { ...claimed, lastError: error.message });
+        if (claimed._id && paymentRepository.markPostCommitWorkFailed) {
+          try {
+            await paymentRepository.markPostCommitWorkFailed(
+              claimed._id,
+              claimed.processingStartedAt,
+              error
+            );
+          } catch {
+            // Keep the local retry copy if the outbox persistence path is down.
+          }
+        }
+      }
+    }
+  }
+
   async function persistCallbackResult(event, result) {
     return result;
   }
 
-  function queueCallbackSideEffects(effects, {
+  async function queueCallbackSideEffects(effects, {
     event,
     order,
     attempt,
@@ -256,27 +442,44 @@ function createPaymentService({
     paymentStatus,
   }) {
     const eventPrefix = `PAYMENT_CALLBACK:${String(event._id)}`;
-    effects.push(
-      async () => {
-        try {
-          await auditLogger.log({
-            userId: order.customerId,
-            action,
-            eventId: `${eventPrefix}:AUDIT`,
-            targetEntity: 'PaymentAttempt',
-            targetId: String(attempt._id),
-            description,
-          });
-        } catch (error) {
-          if (error?.code !== 11000) throw error;
-        }
-      },
-      () => notificationService.notifyPaymentStatus({
+    const auditPayload = {
+      userId: order.customerId,
+      action,
+      eventId: `${eventPrefix}:AUDIT`,
+      targetEntity: 'PaymentAttempt',
+      targetId: String(attempt._id),
+      description,
+    };
+    const notificationPayload = {
         userId: order.customerId,
         orderCode: order.orderCode,
         paymentStatus,
         eventId: `${eventPrefix}:NOTIFICATION`,
-      })
+    };
+    if (paymentRepository.enqueuePostCommitWork) {
+      await paymentRepository.enqueuePostCommitWork({
+        identityKey: `PAYMENT_CALLBACK_AUDIT:${eventPrefix}`,
+        eventType: 'PAYMENT_CALLBACK_AUDIT',
+        payload: auditPayload,
+        status: 'Pending',
+      });
+      await paymentRepository.enqueuePostCommitWork({
+        identityKey: `PAYMENT_CALLBACK_NOTIFICATION:${eventPrefix}`,
+        eventType: 'PAYMENT_CALLBACK_NOTIFICATION',
+        payload: notificationPayload,
+        status: 'Pending',
+      });
+      // The repository is transaction-bound through AsyncLocalStorage. Let
+      // the post-commit drain query committed rows instead of publishing a
+      // transaction-local mirror when commit later fails.
+      return;
+    }
+    // In-memory repositories from legacy tests do not provide the durable
+    // adapter; retain the process-bounded fallback while production uses the
+    // DomainOutbox model above.
+    effects.push(
+      () => runPostCommitWork({ eventType: 'PAYMENT_CALLBACK_AUDIT', payload: auditPayload }),
+      () => runPostCommitWork({ eventType: 'PAYMENT_CALLBACK_NOTIFICATION', payload: notificationPayload }),
     );
   }
 
@@ -286,6 +489,7 @@ function createPaymentService({
     const providerMessageId = String(input.providerMessageId || input.transactionId || '').trim();
     if (!providerMessageId) throw new ApiError(400, 'Payment provider message identity is required');
 
+    await drainPostCommitWork();
     const replay = await callbackReplay(paymentProvider, providerMessageId);
     if (replay) return replay;
 
@@ -391,7 +595,7 @@ function createPaymentService({
             }
           }
           const repairedResult = toPaymentResponse(order, attempt, { callbackEventId: String(event._id) });
-          queueCallbackSideEffects(postCommitEffects, {
+          await queueCallbackSideEffects(postCommitEffects, {
             event,
             order,
             attempt,
@@ -401,7 +605,7 @@ function createPaymentService({
           });
           return persistCallbackResult(event, repairedResult);
         }
-        const excessRefund = await paymentRepository.upsertRefundPending({
+        const excessRefund = await ensureRefundObligation({
           orderId: order._id,
           paymentAttemptId: attempt._id,
           customerId: order.customerId,
@@ -419,7 +623,7 @@ function createPaymentService({
           refundPendingId: excessRefund?._id ? String(excessRefund._id) : null,
         });
         await persistCallbackResult(event, replayableResult);
-        queueCallbackSideEffects(postCommitEffects, {
+        await queueCallbackSideEffects(postCommitEffects, {
           event,
           order,
           attempt,
@@ -432,7 +636,7 @@ function createPaymentService({
       const updatedAttempt = await paymentRepository.updatePaymentAttempt(attempt._id, {
         ...buildProviderEvidence(attempt, input, rawPayload || callbackPayload, 'Paid'),
       });
-      await paymentRepository.upsertRefundPending({
+      const excessRefund = await ensureRefundObligation({
         orderId: order._id,
         paymentAttemptId: updatedAttempt._id,
         customerId: order.customerId,
@@ -443,9 +647,14 @@ function createPaymentService({
         obligationType: 'EXCESS_PAYMENT',
         obligationKey: `EXCESS_PAYMENT:${String(updatedAttempt._id)}`,
       });
-      const result = toPaymentResponse(order, updatedAttempt, { callbackEventId: String(event._id), refundPending: true, duplicatePayment: true });
+      const result = toPaymentResponse(order, updatedAttempt, {
+        callbackEventId: String(event._id),
+        refundPending: true,
+        duplicatePayment: true,
+        refundPendingId: excessRefund?._id ? String(excessRefund._id) : null,
+      });
       await persistCallbackResult(event, result);
-      queueCallbackSideEffects(postCommitEffects, {
+      await queueCallbackSideEffects(postCommitEffects, {
         event,
         order,
         attempt: updatedAttempt,
@@ -472,7 +681,7 @@ function createPaymentService({
         attempt._id,
         buildProviderEvidence(attempt, input, rawPayload || callbackPayload, 'Paid'),
       );
-      await paymentRepository.upsertRefundPending({
+      const refund = await ensureRefundObligation({
         orderId: order._id,
         paymentAttemptId: updatedAttempt._id,
         customerId: order.customerId,
@@ -487,9 +696,13 @@ function createPaymentService({
         obligationType: 'PAYMENT_REVERSAL',
         obligationKey: `PAYMENT_REVERSAL:${String(updatedAttempt._id)}`,
       });
-      const result = toPaymentResponse(order, updatedAttempt, { callbackEventId: String(event._id), refundPending: true });
+      const result = toPaymentResponse(order, updatedAttempt, {
+        callbackEventId: String(event._id),
+        refundPending: true,
+        refundPendingId: refund?._id ? String(refund._id) : null,
+      });
       await persistCallbackResult(event, result);
-      queueCallbackSideEffects(postCommitEffects, {
+      await queueCallbackSideEffects(postCommitEffects, {
         event,
         order,
         attempt: updatedAttempt,
@@ -514,7 +727,7 @@ function createPaymentService({
         const winningOrder = await paymentRepository.findOrderById(order._id);
         const obligationType = winningOrder.paymentStatus === 'Paid' ? 'EXCESS_PAYMENT' : 'PAYMENT_REVERSAL';
         const duplicatePayment = obligationType === 'EXCESS_PAYMENT';
-        await paymentRepository.upsertRefundPending({
+        const refund = await ensureRefundObligation({
           orderId: winningOrder._id,
           paymentAttemptId: updatedAttempt._id,
           customerId: winningOrder.customerId,
@@ -531,9 +744,10 @@ function createPaymentService({
           callbackEventId: String(event._id),
           refundPending: true,
           ...(duplicatePayment ? { duplicatePayment: true } : {}),
+          refundPendingId: refund?._id ? String(refund._id) : null,
         });
         await persistCallbackResult(event, result);
-        queueCallbackSideEffects(postCommitEffects, {
+        await queueCallbackSideEffects(postCommitEffects, {
           event,
           order: winningOrder,
           attempt: updatedAttempt,
@@ -544,7 +758,12 @@ function createPaymentService({
         return result;
       }
     }
-    const legacyPayment = await paymentRepository.findPaymentByOrder(order._id);
+    // Failed/Cancelled provider callbacks are terminal only for this immutable
+    // attempt. The Order/payment projection intentionally remains Pending so a
+    // customer can start another attempt before the shared deadline.
+    const legacyPayment = nextStatus === 'Paid'
+      ? await paymentRepository.findPaymentByOrder(order._id)
+      : null;
     if (legacyPayment) {
         const paymentData = {
           paymentProvider,
@@ -562,15 +781,15 @@ function createPaymentService({
           await paymentRepository.updatePayment(legacyPayment._id, paymentData);
         }
     }
-    if (!updatedOrder) {
+    if (!updatedOrder && nextStatus === 'Paid') {
       updatedOrder = await paymentRepository.updateOrder(order._id, {
         paymentStatus: nextStatus,
         orderStatus: order.orderStatus,
       });
     }
-    const result = toPaymentResponse(updatedOrder, updatedAttempt, { callbackEventId: String(event._id) });
+    const result = toPaymentResponse(updatedOrder || order, updatedAttempt, { callbackEventId: String(event._id) });
     await persistCallbackResult(event, result);
-    queueCallbackSideEffects(postCommitEffects, {
+    await queueCallbackSideEffects(postCommitEffects, {
       event,
       order,
       attempt: updatedAttempt,
@@ -583,6 +802,7 @@ function createPaymentService({
     ));
 
     for (const effect of postCommitEffects) await effect();
+    await drainPostCommitWork();
     if (paymentRepository.markCallbackEventProcessed) {
       await paymentRepository.markCallbackEventProcessed(event._id, callbackResult);
     }
@@ -590,6 +810,7 @@ function createPaymentService({
   }
 
   return {
+    drainPostCommitWork,
     async createOnlinePaymentRequest(customerId, orderId) {
       const order = await paymentRepository.findOrderById(orderId);
       if (!order || String(order.customerId) !== String(customerId)) throw new ApiError(404, 'Order not found');

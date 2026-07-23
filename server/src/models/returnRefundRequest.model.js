@@ -22,6 +22,16 @@ const returnRefundRequestSchema = new mongoose.Schema(
       ref: 'Payment',
       default: null,
     },
+    // Payment-only refund obligations (late/excess/cancel) use the same
+    // secure destination and payout workflow but must not collide with a
+    // physical return request for the order.
+    obligationKey: {
+      type: String,
+      default: '',
+      trim: true,
+      maxlength: 200,
+      immutable: true,
+    },
     sourceExchangeCaseId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'ExchangeCase',
@@ -219,8 +229,22 @@ returnRefundRequestSchema.index(
           'AwaitingInspection', 'Received', 'ReadyForRefund', 'CODRecoveryInProgress',
         ],
       },
+      // Payment-only obligations have their own immutable identity and may
+      // legitimately coexist with a physical return request for the order.
+      // Keep this legacy one-open-request guard scoped to ordinary returns.
+      obligationKey: { $in: ['', null] },
     },
-    name: 'return_refund_one_open_request_per_order_v2',
+    name: 'return_refund_one_open_physical_per_order_v3',
+  }
+);
+returnRefundRequestSchema.index(
+  { orderId: 1, obligationKey: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      obligationKey: { $type: 'string', $gt: '' },
+    },
+    name: 'return_refund_obligation_identity',
   }
 );
 returnRefundRequestSchema.index({ orderId: 1, status: 1 });
