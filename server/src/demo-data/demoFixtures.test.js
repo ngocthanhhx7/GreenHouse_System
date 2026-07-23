@@ -75,7 +75,13 @@ describe('deterministic demo fixture graph', () => {
     const timestamps = DEMO_GRAPH.orders.map((order) => Date.parse(order.createdAt));
     assert.ok(timestamps.every(Number.isFinite));
     assert.ok(Math.max(...timestamps) - Math.min(...timestamps) >= 21 * 24 * 60 * 60 * 1000);
-    assert.ok(DEMO_GRAPH.orders.some((order) => order.orderStatus === 'Expired' && order.paymentStatus === 'Failed'));
+    assert.ok(!DEMO_GRAPH.orders.some((order) => ['WaitingForPayment', 'Expired'].includes(order.orderStatus)));
+    assert.ok(DEMO_GRAPH.orders.some((order) => (
+      order.orderStatus === 'Cancelled'
+      && order.paymentStatus === 'Cancelled'
+      && order.paymentMethod === 'ONLINE'
+    )));
+    assert.ok(DEMO_GRAPH.cartItems.every((item) => Number.isFinite(Date.parse(item.priceVersion))));
   });
 
   it('makes all ten customers participate in orders, support or reviews', () => {
@@ -98,7 +104,7 @@ describe('deterministic demo fixture graph', () => {
       const product = DEMO_GRAPH.products.find((item) => item.key === inventory.productKey);
       assert.equal(product.stockQuantity, inventory.stockQuantity);
       const held = DEMO_GRAPH.orders
-        .filter((order) => ['Pending', 'WaitingForPayment', 'Confirmed', 'StockExportRequested'].includes(order.orderStatus))
+        .filter((order) => ['Pending', 'Confirmed', 'StockExportRequested'].includes(order.orderStatus))
         .flatMap((order) => DEMO_GRAPH.orderDetails.filter((detail) => detail.orderKey === order.key && detail.productKey === product.key))
         .reduce((sum, detail) => sum + detail.quantity, 0);
       assert.equal(inventory.reservedQuantity, held);
@@ -115,7 +121,7 @@ describe('deterministic demo fixture graph', () => {
     assert.ok(receivedCallback && receivedCallback.processingStartedAt === null && receivedCallback.processingResult === null);
     for (const callback of DEMO_GRAPH.paymentCallbacks.filter((item) => item.eventStatus === 'Processed')) {
       const order = DEMO_GRAPH.orders.find((item) => item.key === callback.orderKey);
-      const expectedGatewayStatus = order.paymentStatus === 'Failed' ? 'Failed' : 'Paid';
+      const expectedGatewayStatus = callback.orderKey === 'order-22' || order.paymentStatus === 'Failed' ? 'Failed' : 'Paid';
       assert.equal(callback.rawPayload.paymentStatus, expectedGatewayStatus);
       assert.equal(callback.processingResult.accepted, expectedGatewayStatus === 'Paid');
     }

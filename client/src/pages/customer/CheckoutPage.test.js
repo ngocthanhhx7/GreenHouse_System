@@ -52,4 +52,18 @@ describe('checkout address book contract', () => {
     assert.match(source, /useCart/);
     assert.match(source, /resetCart\(\);[\s\S]*?navigate\(`\/orders\/\$\{order\.id\}`/);
   });
+
+  it('submits the exact displayed cart quantity, price, and price version', () => {
+    assert.match(source, /expectedItems:\s*cart\.items\.map/);
+    assert.match(source, /productId:\s*item\.productId/);
+    assert.match(source, /quantity:\s*item\.quantity/);
+    assert.match(source, /unitPrice:\s*item\.unitPrice/);
+    assert.match(source, /priceVersion:\s*item\.priceVersion/);
+  });
+
+  it('shows price or cart drift as a distinct checkout warning', () => {
+    assert.match(source, /startsWith\('expectedItems\.'/);
+    assert.match(source, /fieldErrors\.checkoutPrice/);
+    assert.match(source, /role="alert"/);
+  });
 });

@@ -10,6 +10,7 @@ function toCartResponse(cart, items) {
     productName: item.productName,
     quantity: item.quantity,
     unitPrice: item.unitPrice,
+    priceVersion: item.priceVersion ? new Date(item.priceVersion).toISOString() : '',
     subtotal: item.quantity * item.unitPrice,
   }));
   return {
@@ -83,10 +84,38 @@ function createCartService({
     }
   }
 
+  async function refreshPriceEvidence(items) {
+    const refreshed = [];
+    for (const item of items) {
+      const product = await productRepository.findSellableById(item.productId);
+      if (!product) {
+        refreshed.push(item);
+        continue;
+      }
+      const priceVersion = product.updatedAt ? new Date(product.updatedAt) : null;
+      const currentVersion = item.priceVersion ? new Date(item.priceVersion).toISOString() : '';
+      const nextVersion = priceVersion ? priceVersion.toISOString() : '';
+      const priceChanged = Number(item.unitPrice) !== Number(product.price);
+      const nameChanged = item.productName !== product.name;
+      const versionChanged = currentVersion !== nextVersion;
+      if (priceChanged || nameChanged || versionChanged) {
+        const updated = await cartRepository.updateItem(item._id, {
+          productName: product.name,
+          unitPrice: product.price,
+          priceVersion,
+        });
+        refreshed.push(updated);
+      } else {
+        refreshed.push(item);
+      }
+    }
+    return refreshed;
+  }
+
   return {
     async getCart(customerId) {
       const cart = await getOrCreateCart(customerId);
-      const items = await cartRepository.listItems(cart._id);
+      const items = await refreshPriceEvidence(await cartRepository.listItems(cart._id));
       return toCartResponse(cart, items);
     },
 
@@ -101,7 +130,12 @@ function createCartService({
       if (existing) {
         const nextQuantity = Number(existing.quantity) + quantity;
         await assertQuantity(product, nextQuantity);
-        await cartRepository.updateItem(existing._id, { quantity: nextQuantity, unitPrice: product.price, productName: product.name });
+        await cartRepository.updateItem(existing._id, {
+          quantity: nextQuantity,
+          unitPrice: product.price,
+          productName: product.name,
+          priceVersion: product.updatedAt,
+        });
       } else {
         await cartRepository.addItem({
           cartId: cart._id,
@@ -109,6 +143,7 @@ function createCartService({
           productName: product.name,
           quantity,
           unitPrice: product.price,
+          priceVersion: product.updatedAt,
         });
       }
 
@@ -124,7 +159,12 @@ function createCartService({
       const product = await productRepository.findSellableById(item.productId);
       if (!product) throw new ApiError(404, 'Product not found or inactive');
       await assertQuantity(product, Number(input.quantity));
-      await cartRepository.updateItem(itemId, { quantity: Number(input.quantity), unitPrice: product.price, productName: product.name });
+      await cartRepository.updateItem(itemId, {
+        quantity: Number(input.quantity),
+        unitPrice: product.price,
+        productName: product.name,
+        priceVersion: product.updatedAt,
+      });
       return toCartResponse(cart, await cartRepository.listItems(cart._id));
     },
 

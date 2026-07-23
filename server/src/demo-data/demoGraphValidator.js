@@ -129,7 +129,7 @@ function validateDemoGraph(graph) {
     }
     const subtotal = lines.reduce((sum, line) => sum + line.subtotal, 0);
     if (subtotal !== order.subtotal || subtotal + order.shippingFee !== order.totalAmount) fail(`${order.orderCode} có tổng tiền không khớp.`);
-    if (order.orderStatus === 'WaitingForPayment' && (order.paymentMethod !== 'ONLINE' || order.paymentStatus !== 'Pending')) fail('WaitingForPayment phải là ONLINE/Pending.');
+    if (['WaitingForPayment', 'Expired'].includes(order.orderStatus)) fail(`${order.orderCode} dùng trạng thái Order đã bị loại bỏ.`);
     if (order.orderStatus === 'Delivered' && order.paymentStatus !== 'Paid') fail('Đơn Delivered bắt buộc có paymentStatus Paid.');
     if (order.orderStatus === 'Returned' && !['Paid', 'Cancelled'].includes(order.paymentStatus)) fail('Đơn Returned phải giữ Paid cho Return thường hoặc Cancelled cho COD recovery.');
     if (order.paymentMethod === 'COD' && order.orderStatus !== 'Delivered' && order.paymentStatus !== 'Unpaid') fail(`${order.orderCode} COD chưa giao phải Unpaid.`);
@@ -148,7 +148,14 @@ function validateDemoGraph(graph) {
   }
   for (const attempt of graph.paymentAttempts) {
     const order = orders.get(attempt.orderKey);
-    if (attempt.amount !== order.totalAmount || attempt.paymentStatus !== order.paymentStatus) fail(`${attempt.key} không khớp order.`);
+    const isExpiredAttemptForCancelledOrder = (
+      order.orderStatus === 'Cancelled'
+      && order.paymentStatus === 'Cancelled'
+      && attempt.paymentStatus === 'Expired'
+    );
+    if (attempt.amount !== order.totalAmount || (attempt.paymentStatus !== order.paymentStatus && !isExpiredAttemptForCancelledOrder)) {
+      fail(`${attempt.key} không khớp order.`);
+    }
   }
   for (const callback of graph.paymentCallbacks) {
     const order = orders.get(callback.orderKey);
@@ -156,7 +163,7 @@ function validateDemoGraph(graph) {
     if (order.paymentMethod !== 'ONLINE' || attempt.orderKey !== order.key || attempt.paymentMethod !== 'ONLINE') fail(`Callback ${callback.key} chỉ được gắn với ONLINE attempt cùng order.`);
     if (callback.eventStatus === 'Received' && (order.paymentStatus !== 'Pending' || callback.processingStartedAt !== null || callback.processingResult !== null)) fail(`Callback ${callback.key} Received chưa được có kết quả xử lý.`);
     if (callback.eventStatus === 'Processed') {
-      const expectedGatewayStatus = order.paymentStatus === 'Failed' ? 'Failed' : 'Paid';
+      const expectedGatewayStatus = attempt.paymentStatus === 'Expired' || order.paymentStatus === 'Failed' ? 'Failed' : 'Paid';
       if (callback.rawPayload?.paymentStatus !== expectedGatewayStatus || callback.processingResult?.accepted !== (expectedGatewayStatus === 'Paid')) fail(`Callback ${callback.key} Processed không khớp kết quả gateway.`);
     }
   }
@@ -193,7 +200,7 @@ function validateDemoGraph(graph) {
     const finalQuantity = transactions.at(-1)?.afterQuantity;
     if (product.stockQuantity !== inventory.stockQuantity || inventory.stockQuantity !== finalQuantity) fail(`${product.sku} tồn kho product/inventory không được derive từ ledger.`);
     const expectedReserved = graph.orders
-      .filter((order) => ['Pending', 'WaitingForPayment', 'Confirmed', 'StockExportRequested'].includes(order.orderStatus))
+      .filter((order) => ['Pending', 'Confirmed', 'StockExportRequested'].includes(order.orderStatus))
       .flatMap((order) => graph.orderDetails.filter((detail) => detail.orderKey === order.key && detail.productKey === product.key))
       .reduce((sum, detail) => sum + detail.quantity, 0);
     if (inventory.reservedQuantity !== expectedReserved || expectedReserved > inventory.stockQuantity) fail(`${product.sku} reservedQuantity không khớp các đơn đang giữ chỗ.`);
@@ -243,7 +250,7 @@ function validateDemoGraph(graph) {
     const request = graph.returnRequests.find((item) => item.orderKey === order.key);
     const validHandoff = (request?.status === 'ReadyForRefund' && pending.status === 'RefundPending')
       || (request?.status === 'Completed' && pending.status === 'Refunded')
-      || (order.orderStatus === 'Cancelled' && order.paymentStatus === 'RefundPending' && pending.status === 'RefundPending');
+      || (order.orderStatus === 'Cancelled' && order.paymentStatus === 'Paid' && pending.status === 'RefundPending');
     if (!validHandoff) fail(`${pending.key} RefundPending không khớp hand-off hiện tại.`);
   }
   for (const review of graph.reviews) {

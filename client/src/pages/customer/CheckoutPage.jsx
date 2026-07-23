@@ -20,7 +20,9 @@ export function formatShippingAddress(address) {
 
 function toFieldErrors(errors) {
   return (Array.isArray(errors) ? errors : []).reduce((result, entry) => {
-    const field = entry?.field === 'savedAddressId' || entry?.field === 'deliveryAddress'
+    const field = String(entry?.field || '').startsWith('expectedItems.')
+      ? 'checkoutPrice'
+      : entry?.field === 'savedAddressId' || entry?.field === 'deliveryAddress'
       ? 'addressSource'
       : entry?.field;
     if (field && entry?.message && !result[field]) result[field] = entry.message;
@@ -121,6 +123,12 @@ export default function CheckoutPage() {
         ...checkoutAddressPayload,
         customerNote,
         paymentMethod,
+        expectedItems: cart.items.map((item) => ({
+          productId: item.productId,
+          quantity: item.quantity,
+          unitPrice: item.unitPrice,
+          priceVersion: item.priceVersion,
+        })),
       }, { idempotencyKey: checkoutIdempotencyKey });
       resetCart();
       navigate(`/orders/${order.id}`, { replace: true });
@@ -147,6 +155,7 @@ export default function CheckoutPage() {
       </div>
 
       {error && <div className="alert alert-danger" role="alert">{error}</div>}
+      {fieldErrors.checkoutPrice && <div className="alert alert-warning" role="alert">{fieldErrors.checkoutPrice}</div>}
 
       <form className="checkout-grid checkout-form-v2" onSubmit={handleSubmit}>
         <div className="checkout-main-column">

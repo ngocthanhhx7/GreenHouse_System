@@ -38,7 +38,10 @@ describe('schema alignment with ERD', () => {
 
   it('stores product and order line snapshots for stable invoices', () => {
     assertPath(Product, 'sku');
-    ['productNameSnapshot', 'productSkuSnapshot', 'unitSnapshot', 'productImageSnapshot', 'priceSnapshot', 'quantity', 'subtotal'].forEach((field) => assertPath(OrderDetail, field));
+    ['productNameSnapshot', 'productSkuSnapshot', 'unitSnapshot', 'productImageSnapshot', 'priceSnapshot', 'priceVersionSnapshot', 'quantity', 'subtotal'].forEach((field) => {
+      assertPath(OrderDetail, field);
+      assert.equal(OrderDetail.schema.path(field).options.immutable, true);
+    });
   });
 
   it('stores payment attempts, append-only callback identity, and refund hand-off state', () => {
@@ -48,7 +51,15 @@ describe('schema alignment with ERD', () => {
     ['orderId', 'eventId', 'eventType', 'customerCollectedAmount', 'carrierSettlementAmount', 'evidenceReference'].forEach((field) => assertPath(CodEvidence, field));
     ['orderId', 'receiptId', 'recordedBy', 'items', 'evidenceReference', 'status'].forEach((field) => assertPath(CodRecoveryReceipt, field));
     assert.ok(PaymentAttempt.schema.path('paymentStatus').enumValues.includes('Unpaid'));
-    assert.ok(PaymentAttempt.schema.path('paymentStatus').enumValues.includes('RefundPending'));
+    assert.ok(!PaymentAttempt.schema.path('paymentStatus').enumValues.includes('RefundPending'));
+    assert.ok(!PaymentAttempt.schema.path('paymentStatus').enumValues.includes('Refunded'));
+    assertPath(Order, 'moneyObligationsSettled');
+    ['orderId', 'attemptCode', 'paymentMethod', 'paymentProvider', 'providerOrderCode', 'amount', 'currency'].forEach((field) => {
+      assert.equal(PaymentAttempt.schema.path(field).options.immutable, true);
+    });
+    ['orderId', 'paymentMethod', 'amount', 'currency'].forEach((field) => {
+      assert.equal(Payment.schema.path(field).options.immutable, true);
+    });
   });
 
   it('stores after-sale request codes and evidence fields', () => {

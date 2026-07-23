@@ -56,7 +56,8 @@ export default function ReturnRefundPage() {
       <div className="d-grid gap-3">
         {items.map((item) => {
           const form = forms[item.id] || {};
-          const canSubmitDestination = ['Approved', 'Received'].includes(item.status) && (!item.destination || item.destination.status === 'Rejected');
+          const canSubmitDestination = ['Approved', 'Received', 'ReadyForRefund'].includes(item.status)
+            && (!item.destination || item.destination.status === 'Rejected');
           return <article className="card" key={item.id}>
             <div className="card-body">
               <h2 className="h5">Đơn {item.orderCode}</h2>

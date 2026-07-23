@@ -144,3 +144,36 @@ Addendum này chỉ supersede ongoing ownership kể từ 2026-07-23. Các dòng
 - Nguyễn Ngọc Thành tiếp tục sở hữu EmailOutbox, Gmail SMTP/email delivery, OTP/password reset, public contact email, PayOS, Audit và final integration.
 - Ownership docs branch là `feature/huy-notification-ownership-docs`. Notification code branch dự kiến là `feature/huy-notification-domain` (TBD, chưa tạo).
 - Mọi commit thuộc scope Huy phải dùng `Nguyễn Quang Huy <quanghuyn267@gmail.com>`.
+
+## SL-003 Closure Addendum 2026-07-23
+
+`feature/sl-003-order-payment-cancellation` đóng phạm vi Order, Payment và Cancellation theo thiết kế SL-003 và CR-001 v2.1. Các acceptance decision đã được duyệt:
+
+- Online Order khởi tạo `Pending`, không tạo PaymentAttempt giả tại checkout; `paymentDeadlineAt` bất biến và có migration normalize trạng thái legacy.
+- Checkout dùng `expectedItems` với `priceVersion`; mọi mismatch trả conflict có mã riêng, không âm thầm tính lại giá.
+- Cancellation yêu cầu reason và idempotency key; replay cùng fingerprint trả kết quả cũ, payload khác trả `IDEMPOTENCY_KEY_REUSED`.
+- Late/excess Paid evidence không reopen order/reservation; giữ PaymentAttempt bất biến và tạo Refund obligation.
+- Staff confirmation và StockExportRequest là một transaction; expiry worker claim có điều kiện và release reservation exactly once.
+
+Traceability chính:
+
+| Requirement | Implementation evidence | Test evidence |
+|---|---|---|
+| Checkout idempotency, snapshot, price/version conflict | `server/src/services/order.service.js`, `client/src/pages/customer/CheckoutPage.jsx` | `order.service.test.js`, `CheckoutPage.test.js` |
+| Payment callback history, late/excess refund | `server/src/services/payment.service.js` | `payment.service.test.js` |
+| Cancellation reason/idempotency and role boundary | `server/src/controller/order.controller.js`, `OrderDetailPage.jsx` | `order.service.test.js`, `OrderDetailPage.cancellation.test.js` |
+| Deadline expiry and reservation release | `server/src/services/orderPaymentExpiry.service.js`, `server/src/workers/orderPaymentExpiry.worker.js` | matching service/worker tests |
+| Cart price evidence and stale refresh | `server/src/services/cart.service.js`, `server/src/models/cartItem.model.js` | `cart.service.test.js`, `cartItem.model.test.js` |
+| Migration/repeat safety | `server/src/scripts/migrateSl003OrderPaymentCancellation.js` | migration test |
+
+## SL-003 Hardening Addendum 2026-07-23
+
+Independent review hardening closed the payment/provider race, callback replay, COD, refund-destination and Staff stock-export edge cases:
+
+- PayOS link creation is bounded by immutable `Order.paymentDeadlineAt`; a provider link created during an Order race is retired best-effort and a Paid Payment projection is never downgraded.
+- Callback evidence is write-once and validates provider, attempt identity, amount and transaction identity. Replays return the stored processing result; late/excess payment repairs or creates one refund obligation without reopening the Order.
+- COD checkout creates an `Unpaid` `PaymentAttempt`; pre-delivery COD cancellation keeps Payment/Attempt `Unpaid`. Payment, PaymentAttempt, Order and OrderDetail identity/snapshot fields are immutable.
+- Paid customer cancellation creates `ReadyForRefund` with a linked `RefundPending` obligation, supports destination/payout without a Warehouse receipt, keeps the historical Order `Cancelled`, and settles the obligation only after payout.
+- Staff confirmation verifies reservation and deduplicates the open `StockExportRequest`; cancellation closes open requests, Warehouse approval advances the request lifecycle, and migration safely enforces one open request per Order.
+
+Verification: server `529/529`, client `170/170`, production build exit code `0`, and `git diff --check` passed. Handoff detail is kept in the local-only `docs/superpowers/reconciliation/SL-003_HANDOFF.md` and `SL-003_G3_TRACEABILITY.md`; those files are intentionally not added to Git per project policy.

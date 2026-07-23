@@ -32,6 +32,7 @@ export function createStaffOrderService({ baseUrl = DEFAULT_BASE_URL, fetcher } 
     async confirmOrder(id, input = {}) {
       return request(`/staff/orders/${id}/confirm`, {
         method: 'POST',
+        ...(input.idempotencyKey ? { headers: { 'Idempotency-Key': input.idempotencyKey } } : {}),
         body: JSON.stringify(input),
       });
     },
@@ -50,6 +51,7 @@ export function createStaffOrderService({ baseUrl = DEFAULT_BASE_URL, fetcher } 
     async cancelOrder(id, input = {}) {
       return request(`/staff/orders/${id}/cancel`, {
         method: 'POST',
+        ...(input.idempotencyKey ? { headers: { 'Idempotency-Key': input.idempotencyKey } } : {}),
         body: JSON.stringify(input),
       });
     },

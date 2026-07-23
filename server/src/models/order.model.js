@@ -18,13 +18,55 @@ const orderSchema = new mongoose.Schema(
       trim: true,
       maxlength: 128,
     },
+    checkoutRequestHash: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    cancelIdempotencyKey: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    cancelRequestHash: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    staffConfirmIdempotencyKey: {
+      type: String,
+      default: '',
+      trim: true,
+      maxlength: 128,
+      immutable: true,
+    },
+    staffConfirmRequestHash: {
+      type: String,
+      default: '',
+      trim: true,
+      maxlength: 128,
+      immutable: true,
+    },
+    staffCancelIdempotencyKey: {
+      type: String,
+      default: '',
+      trim: true,
+      maxlength: 128,
+    },
+    staffCancelRequestHash: {
+      type: String,
+      default: '',
+      trim: true,
+      maxlength: 128,
+    },
     totalAmount: {
       type: Number,
       required: true,
       min: 0,
+      immutable: true,
     },
     // Server-derived once at checkout. Clients and Staff never choose a COD amount.
-    codExpectedAmount: { type: Number, min: 0, default: null },
+    codExpectedAmount: { type: Number, min: 0, default: null, immutable: true },
     customerCollectedAmount: { type: Number, min: 0, default: 0 },
     customerCollectedAt: { type: Date, default: null },
     customerCollectionEvidenceId: { type: String, default: '', trim: true, maxlength: 160 },
@@ -59,12 +101,21 @@ const orderSchema = new mongoose.Schema(
     },
     paymentStatus: {
       type: String,
-      enum: ['Unpaid', 'Pending', 'Paid', 'Failed', 'Cancelled', 'RefundPending', 'Refunded'],
+      enum: ['Unpaid', 'Pending', 'Paid', 'Failed', 'Cancelled'],
       default: 'Pending',
+    },
+    moneyObligationsSettled: {
+      type: Boolean,
+      default: true,
+    },
+    paymentDeadlineAt: {
+      type: Date,
+      default: null,
+      immutable: true,
     },
     orderStatus: {
       type: String,
-      enum: ['Pending', 'WaitingForPayment', 'Confirmed', 'StockExportRequested', 'Packed', 'Shipped', 'Delivered', 'Cancelled', 'Expired', 'Returned'],
+      enum: ['Pending', 'Confirmed', 'StockExportRequested', 'Packed', 'Shipped', 'Delivered', 'Cancelled', 'Returned'],
       default: 'Pending',
     },
     shippingAddress: {

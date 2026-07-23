@@ -162,15 +162,19 @@ function createNotificationService({
   }
 
   return {
-    async notifyPaymentStatus({ userId, orderCode, paymentStatus }) {
+    async notifyPaymentStatus({ userId, orderCode, paymentStatus, eventId = '' }) {
       const statusLabel = PAYMENT_STATUS_LABELS[paymentStatus] || String(paymentStatus || '').toLowerCase();
-      const notification = await notificationRepository.create({
+      const create = eventId && notificationRepository.createIdempotent
+        ? notificationRepository.createIdempotent.bind(notificationRepository)
+        : notificationRepository.create.bind(notificationRepository);
+      const notification = await create({
         userId,
         type: 'PAYMENT_STATUS',
         channel: 'Email',
         subject: `Thanh toán đơn ${orderCode} ${statusLabel}`,
         content: `Trạng thái thanh toán của đơn hàng ${orderCode}: ${statusLabel}.`,
         deliveryStatus: 'Pending',
+        eventId,
       });
       return toPlainNotification(notification);
     },

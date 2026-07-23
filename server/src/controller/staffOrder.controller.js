@@ -19,7 +19,11 @@ async function getOrder(req, res, next) {
 
 async function confirmOrder(req, res, next) {
   try {
-    return sendSuccess(res, await staffOrderService.confirmOrder(req.user.id, req.params.id, req.body), 'Order confirmed');
+    return sendSuccess(res, await staffOrderService.confirmOrder(
+      req.user.id,
+      req.params.id,
+      { ...(req.body || {}), idempotencyKey: req.get('Idempotency-Key') || req.body?.idempotencyKey },
+    ), 'Order confirmed');
   } catch (error) {
     return next(error);
   }
@@ -43,7 +47,11 @@ async function updateStatus(req, res, next) {
 
 async function cancelOrder(req, res, next) {
   try {
-    return sendSuccess(res, await staffOrderService.cancelOrder(req.user.id, req.params.id, req.body), 'Order cancelled');
+    return sendSuccess(res, await staffOrderService.cancelOrder(
+      req.user.id,
+      req.params.id,
+      { ...(req.body || {}), idempotencyKey: req.get('Idempotency-Key') || req.body?.idempotencyKey },
+    ), 'Order cancelled');
   } catch (error) {
     return next(error);
   }

@@ -5,7 +5,14 @@ const { createCartService } = require('./cart.service');
 
 function createProductRepository() {
   const products = [
-    { _id: 'p1', name: 'Green Pan', price: 25, status: 'Active', stockQuantity: 5 },
+    {
+      _id: 'p1',
+      name: 'Green Pan',
+      price: 25,
+      status: 'Active',
+      stockQuantity: 5,
+      updatedAt: new Date('2026-07-23T00:00:00.000Z'),
+    },
     { _id: 'p2', name: 'Hidden Plate', price: 10, status: 'Inactive', stockQuantity: 5 },
   ];
   return {
@@ -71,6 +78,31 @@ describe('cart service', () => {
 
     assert.equal(result.items.length, 1);
     assert.equal(result.items[0].productName, 'Green Pan');
+    assert.equal(result.items[0].priceVersion, '2026-07-23T00:00:00.000Z');
+    assert.equal(result.totalAmount, 50);
+  });
+
+  it('refreshes stale cart price evidence before displaying checkout totals', async () => {
+    const cartRepository = createCartRepository();
+    const cart = await cartRepository.createCart('customer-1');
+    await cartRepository.addItem({
+      cartId: cart._id,
+      productId: 'p1',
+      productName: 'Old Pan',
+      quantity: 2,
+      unitPrice: 20,
+      priceVersion: new Date('2026-07-22T00:00:00.000Z'),
+    });
+    cartService = createCartService({
+      productRepository: createProductRepository(),
+      cartRepository,
+    });
+
+    const result = await cartService.getCart('customer-1');
+
+    assert.equal(result.items[0].productName, 'Green Pan');
+    assert.equal(result.items[0].unitPrice, 25);
+    assert.equal(result.items[0].priceVersion, '2026-07-23T00:00:00.000Z');
     assert.equal(result.totalAmount, 50);
   });
 

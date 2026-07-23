@@ -19,6 +19,19 @@ function withOptionalSession(query, session) {
   return session ? query.session(session) : query;
 }
 
+function normalizeIdempotencyKey(value) {
+  const key = String(value || '').trim();
+  if (!key) return '';
+  if (key.length < 8 || key.length > 128 || !/^[A-Za-z0-9:._-]+$/.test(key)) {
+    throw new ApiError(400, 'Idempotency-Key must be 8-128 characters using letters, numbers, ., _, :, or -');
+  }
+  return key;
+}
+
+function hashCommand(value) {
+  return crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
+}
+
 function createModelTransactionManager() {
   return {
     async withTransaction(work) {
@@ -106,6 +119,17 @@ function createModelOrderRepository() {
     async findOrderById(id, session) { return withOptionalSession(Order.findById(id), session).lean(); },
     async listOrderDetails(orderId, session) { return withOptionalSession(OrderDetail.find({ orderId }), session).lean(); },
     async updateOrder(id, data, session) { return withOptionalSession(Order.findByIdAndUpdate(id, data, { new: true, runValidators: true }), session).lean(); },
+    async claimStaffConfirmation(id, data, session) {
+      return withOptionalSession(Order.findOneAndUpdate(
+        {
+          _id: id,
+          orderStatus: 'Pending',
+          $or: [{ paymentMethod: 'COD' }, { paymentStatus: 'Paid' }],
+        },
+        { $set: data },
+        { new: true, runValidators: true }
+      ), session).lean();
+    },
     async claimStaffCancellation(id, expectedPaymentStatus, data, session) {
       return withOptionalSession(Order.findOneAndUpdate(
         { _id: id, orderStatus: { $in: ['Pending', 'Confirmed'] }, paymentStatus: expectedPaymentStatus },
@@ -120,11 +144,39 @@ function createModelOrderRepository() {
         { new: true, runValidators: true }
       ), session).lean();
     },
-    async findOpenStockExportRequest(orderId) { return StockExportRequest.findOne({ orderId, status: { $in: ['Pending', 'Approved', 'Processing'] } }).lean(); },
-    async createStockExportRequest(data) { return StockExportRequest.create(data); },
+    async findInventoryByProductId(productId, session) {
+      return withOptionalSession(Inventory.findOne({ productId }), session).lean();
+    },
+    async findOpenStockExportRequest(orderId, session) {
+      return withOptionalSession(
+        StockExportRequest.findOne({ orderId, status: { $in: ['Pending', 'Approved', 'Processing'] } }),
+        session
+      ).lean();
+    },
+    async cancelOpenStockExportRequest(orderId, data, session) {
+      return withOptionalSession(StockExportRequest.findOneAndUpdate(
+        { orderId, status: { $in: ['Pending', 'Approved'] } },
+        { $set: { status: 'Cancelled', ...data } },
+        { new: true, runValidators: true }
+      ), session).lean();
+    },
+    async findCompletedStockExportRequest(orderId, session) {
+      return withOptionalSession(StockExportRequest.findOne({
+        orderId,
+        $or: [{ status: 'Exported' }, { exportedAt: { $ne: null } }],
+      }), session).lean();
+    },
+    async createStockExportRequest(data, session) {
+      if (!session) return StockExportRequest.create(data);
+      const [request] = await StockExportRequest.create([data], { session });
+      return request;
+    },
     async findPaymentByOrderId(orderId, session) { return withOptionalSession(Payment.findOne({ orderId }), session).lean(); },
     async updatePayment(id, data, session) { return withOptionalSession(Payment.findByIdAndUpdate(id, data, { new: true, runValidators: true }), session).lean(); },
     async findLatestPaymentAttemptByOrder(orderId, session) { return withOptionalSession(PaymentAttempt.findOne({ orderId }).sort({ createdAt: -1 }), session).lean(); },
+    async findPrimaryPaidPaymentAttemptByOrder(orderId, session) {
+      return withOptionalSession(PaymentAttempt.findOne({ orderId, paymentStatus: 'Paid' }).sort({ createdAt: 1, _id: 1 }), session).lean();
+    },
     async updatePaymentAttempt(id, data, session) { return withOptionalSession(PaymentAttempt.findByIdAndUpdate(id, data, { new: true, runValidators: true }), session).lean(); },
     async upsertRefundPending(data, session) {
       const identity = data.obligationKey
@@ -148,8 +200,25 @@ function createStaffOrderService({ orderRepository = createModelOrderRepository(
     await auditLogger.log({ userId: staffId, action, targetEntity: 'Order', targetId: String(order._id), description });
   }
 
+  async function assertExactReservation(details, session) {
+    if (!orderRepository.findInventoryByProductId) return;
+    const requiredByProduct = new Map();
+    for (const detail of details) {
+      const productId = String(detail.productId);
+      requiredByProduct.set(productId, (requiredByProduct.get(productId) || 0) + Number(detail.quantity || 0));
+    }
+    for (const [productId, quantity] of requiredByProduct) {
+      const inventory = await orderRepository.findInventoryByProductId(productId, session);
+      if (!inventory
+        || Number(inventory.stockQuantity || 0) < quantity
+        || Number(inventory.reservedQuantity || 0) < quantity) {
+        throw new ApiError(409, 'Order exact reservation is no longer intact');
+      }
+    }
+  }
+
   async function buildRefundHandoff(order, reason, session, paymentAttempt) {
-    const attempt = paymentAttempt || await orderRepository.findLatestPaymentAttemptByOrder(order._id, session);
+    const attempt = paymentAttempt || await orderRepository.findPrimaryPaidPaymentAttemptByOrder(order._id, session);
     if (!attempt) throw new ApiError(409, 'A payment attempt is required before creating a refund hand-off');
     return orderRepository.upsertRefundPending({
       orderId: order._id,
@@ -172,16 +241,71 @@ function createStaffOrderService({ orderRepository = createModelOrderRepository(
 
     async getOrder(orderId) {
       const order = await getOrderOrThrow(orderId);
-      return toOrderDetail(order, await orderRepository.listOrderDetails(orderId));
+      const [details, stockExportRequest] = await Promise.all([
+        orderRepository.listOrderDetails(orderId),
+        orderRepository.findOpenStockExportRequest ? orderRepository.findOpenStockExportRequest(orderId) : null,
+      ]);
+      return {
+        ...toOrderDetail(order, details),
+        stockExportRequest: stockExportRequest ? toStockExportRequest(stockExportRequest) : null,
+      };
     },
 
     async confirmOrder(staffId, orderId, input = {}) {
-      const order = await getOrderOrThrow(orderId);
-      if (order.paymentMethod === 'ONLINE' && order.paymentStatus !== 'Paid') throw new ApiError(409, 'Online order must be paid before confirmation');
-      if (order.orderStatus !== 'Pending') throw new ApiError(409, 'Only Pending orders can be confirmed');
-      const updated = await orderRepository.updateOrder(orderId, { orderStatus: 'Confirmed', confirmedAt: new Date() });
-      await writeAudit(staffId, 'STAFF_ORDER_CONFIRM', updated, `Staff confirmed order ${updated.orderCode}. ${input.note || ''}`.trim());
-      return toOrderDetail(updated, await orderRepository.listOrderDetails(orderId));
+      const note = String(input.note || '').trim();
+      const idempotencyKey = normalizeIdempotencyKey(input.idempotencyKey);
+      const requestHash = hashCommand({ note });
+      const result = await transactionManager.withTransaction(async (session) => {
+        const order = await getOrderOrThrow(orderId, session);
+        if (idempotencyKey && order.staffConfirmIdempotencyKey) {
+          if (order.staffConfirmIdempotencyKey !== idempotencyKey || order.staffConfirmRequestHash !== requestHash) {
+            throw new ApiError(409, 'Staff confirmation idempotency key was reused with different details');
+          }
+          const [details, existingRequest] = await Promise.all([
+            orderRepository.listOrderDetails(orderId, session),
+            orderRepository.findOpenStockExportRequest ? orderRepository.findOpenStockExportRequest(orderId, session) : null,
+          ]);
+          return { updated: order, details, stockExportRequest: existingRequest, idempotentReplay: true };
+        }
+        if (order.paymentMethod === 'ONLINE' && order.paymentStatus !== 'Paid') throw new ApiError(409, 'Online order must be paid before confirmation');
+        if (order.orderStatus !== 'Pending') throw new ApiError(409, 'Only Pending orders can be confirmed');
+        const details = await orderRepository.listOrderDetails(orderId, session);
+        await assertExactReservation(details, session);
+        const updated = await orderRepository.claimStaffConfirmation(
+          orderId,
+          {
+            orderStatus: 'Confirmed',
+            confirmedAt: new Date(),
+            ...(idempotencyKey ? {
+              staffConfirmIdempotencyKey: idempotencyKey,
+              staffConfirmRequestHash: requestHash,
+            } : {}),
+          },
+          session
+        );
+        if (!updated) throw new ApiError(409, 'Order changed while confirmation was being processed');
+        const existingRequest = orderRepository.findOpenStockExportRequest
+          ? await orderRepository.findOpenStockExportRequest(orderId, session)
+          : null;
+        let stockExportRequest = existingRequest;
+        if (!stockExportRequest) {
+          stockExportRequest = await orderRepository.createStockExportRequest({
+            orderId,
+            requestedBy: staffId,
+            status: 'Pending',
+            note,
+          }, session);
+        }
+        return { updated, details, stockExportRequest, idempotentReplay: false };
+      });
+      if (!result.idempotentReplay) {
+        await writeAudit(staffId, 'STAFF_ORDER_CONFIRM', result.updated, `Staff confirmed order ${result.updated.orderCode}. ${note}`.trim());
+      }
+      return {
+        ...toOrderDetail(result.updated, result.details),
+        stockExportRequest: result.stockExportRequest ? toStockExportRequest(result.stockExportRequest) : null,
+        idempotentReplay: Boolean(result.idempotentReplay),
+      };
     },
 
     async requestStockExport(staffId, orderId, input = {}) {
@@ -221,24 +345,50 @@ function createStaffOrderService({ orderRepository = createModelOrderRepository(
     async cancelOrder(staffId, orderId, input = {}) {
       const cancelReason = String(input.cancelReason || '').trim();
       if (!cancelReason) throw new ApiError(400, 'Cancel reason is required');
+      const idempotencyKey = normalizeIdempotencyKey(input.idempotencyKey);
+      const requestHash = hashCommand({ cancelReason });
       const result = await transactionManager.withTransaction(async (session) => {
         const order = await getOrderOrThrow(orderId, session);
+        if (idempotencyKey && order.staffCancelIdempotencyKey) {
+          if (order.staffCancelIdempotencyKey !== idempotencyKey || order.staffCancelRequestHash !== requestHash) {
+            throw new ApiError(409, 'Staff cancellation idempotency key was reused with different details');
+          }
+          return {
+            updated: order,
+            details: await orderRepository.listOrderDetails(orderId, session),
+            idempotentReplay: true,
+          };
+        }
         if (!['Pending', 'Confirmed'].includes(order.orderStatus)) throw new ApiError(409, 'Only Pending or Confirmed orders can be cancelled before stock export');
+        const completedExport = await orderRepository.findCompletedStockExportRequest(order._id, session);
+        if (completedExport) throw new ApiError(409, 'Stock export is complete; the order can no longer be cancelled');
 
         const isPaid = order.paymentStatus === 'Paid';
-        const payment = isPaid ? await orderRepository.findPaymentByOrderId(order._id, session) : null;
-        const attempt = isPaid ? await orderRepository.findLatestPaymentAttemptByOrder(order._id, session) : null;
+        const attempt = isPaid ? await orderRepository.findPrimaryPaidPaymentAttemptByOrder(order._id, session) : null;
         if (isPaid && !attempt) throw new ApiError(409, 'A payment attempt is required before cancelling a paid order');
-        const nextPaymentStatus = isPaid ? 'RefundPending' : order.paymentStatus === 'Pending' ? 'Cancelled' : order.paymentStatus;
-        const cancelData = { orderStatus: 'Cancelled', paymentStatus: nextPaymentStatus, cancelReason };
+        const nextPaymentStatus = order.paymentStatus === 'Pending' ? 'Cancelled' : order.paymentStatus;
+        const cancelData = {
+          orderStatus: 'Cancelled',
+          paymentStatus: nextPaymentStatus,
+          cancelReason,
+          ...(idempotencyKey ? {
+            staffCancelIdempotencyKey: idempotencyKey,
+            staffCancelRequestHash: requestHash,
+          } : {}),
+        };
         const updated = orderRepository.claimStaffCancellation
           ? await orderRepository.claimStaffCancellation(orderId, order.paymentStatus, cancelData, session)
           : await orderRepository.updateOrder(orderId, cancelData, session);
         if (!updated) throw new ApiError(409, 'Order changed while cancellation was being processed');
 
+        if (orderRepository.cancelOpenStockExportRequest) {
+          await orderRepository.cancelOpenStockExportRequest(order._id, {
+            processedBy: staffId,
+            note: `Cancelled with order: ${cancelReason}`,
+          }, session);
+        }
+
         if (isPaid) {
-          if (payment) await orderRepository.updatePayment(payment._id, { paymentStatus: 'RefundPending' }, session);
-          await orderRepository.updatePaymentAttempt(attempt._id, { paymentStatus: 'RefundPending' }, session);
           await buildRefundHandoff(order, `Staff cancellation: ${cancelReason}`, session, attempt);
         }
 
@@ -249,8 +399,10 @@ function createStaffOrderService({ orderRepository = createModelOrderRepository(
         }
         return { updated, details };
       });
-      await writeAudit(staffId, 'STAFF_ORDER_CANCEL', result.updated, `Staff cancelled ${result.updated.orderCode}: ${cancelReason}`);
-      return toOrderDetail(result.updated, result.details);
+      if (!result.idempotentReplay) {
+        await writeAudit(staffId, 'STAFF_ORDER_CANCEL', result.updated, `Staff cancelled ${result.updated.orderCode}: ${cancelReason}`);
+      }
+      return { ...toOrderDetail(result.updated, result.details), idempotentReplay: Boolean(result.idempotentReplay) };
     },
 
     async markCodCollected(staffId, orderId, input = {}) {

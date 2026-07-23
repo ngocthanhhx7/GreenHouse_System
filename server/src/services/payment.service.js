@@ -1,4 +1,6 @@
 const crypto = require('crypto');
+const mongoose = require('mongoose');
+const { AsyncLocalStorage } = require('node:async_hooks');
 
 const ApiError = require('../utils/apiError');
 const Order = require('../models/order.model');
@@ -38,10 +40,10 @@ function generateProviderOrderCode() {
   return (Date.now() * 1000) + crypto.randomInt(0, 1000);
 }
 
-function isReusablePayOSAttempt(attempt) {
+function isReusablePayOSAttempt(attempt, now = new Date()) {
   if (!attempt || attempt.paymentProvider !== 'PAYOS' || attempt.paymentStatus !== 'Pending' || !attempt.checkoutUrl) return false;
   if (!attempt.expiresAt) return true;
-  return new Date(attempt.expiresAt).getTime() > Date.now() + 30_000;
+  return new Date(attempt.expiresAt).getTime() > new Date(now).getTime() + 30_000;
 }
 
 function parsePayOSTransactionTime(value) {
@@ -54,24 +56,114 @@ function parsePayOSTransactionTime(value) {
   return Number.isNaN(timestamp.getTime()) ? null : timestamp;
 }
 
+function buildProviderEvidence(attempt, input, rawPayload, nextStatus) {
+  const evidence = { paymentStatus: nextStatus };
+  if (!attempt.transactionId && input.transactionId) evidence.transactionId = String(input.transactionId);
+  if (!attempt.providerMessageId) evidence.providerMessageId = String(input.providerMessageId || input.transactionId || '');
+  if (nextStatus === 'Paid' && !attempt.paidAt) evidence.paidAt = new Date();
+  if (!attempt.rawResponse) evidence.rawResponse = rawPayload || input;
+  if (!attempt.gatewayResponseCode && input.gatewayResponseCode !== undefined) {
+    evidence.gatewayResponseCode = String(input.gatewayResponseCode || '');
+  }
+  if (!attempt.gatewayMessage && input.gatewayMessage !== undefined) {
+    evidence.gatewayMessage = String(input.gatewayMessage || '');
+  }
+  return evidence;
+}
+
+function withOptionalSession(query, session) {
+  return session ? query.session(session) : query;
+}
+
+function createModelTransactionManager() {
+  return {
+    async withTransaction(work) {
+      const session = await mongoose.startSession();
+      try {
+        let result;
+        await session.withTransaction(async () => {
+          result = await work(session);
+        });
+        return result;
+      } finally {
+        await session.endSession();
+      }
+    },
+  };
+}
+
+function createPassthroughTransactionManager() {
+  return {
+    async withTransaction(work) {
+      return work(null);
+    },
+  };
+}
+
 function createModelPaymentRepository() {
   return {
-    async findOrderById(id) { return Order.findById(id).lean(); },
-    async findPaymentByOrder(id) { return Payment.findOne({ orderId: id }).lean(); },
-    async updatePayment(id, data) { return Payment.findByIdAndUpdate(id, data, { new: true, runValidators: true }).lean(); },
-    async updateOrder(id, data) { return Order.findByIdAndUpdate(id, data, { new: true, runValidators: true }).lean(); },
-    async findLatestAttemptByOrder(id) { return PaymentAttempt.findOne({ orderId: id }).sort({ createdAt: -1 }).lean(); },
-    async findPaymentAttemptById(id) { return PaymentAttempt.findById(id).lean(); },
-    async findPaymentAttemptByProviderOrderCode(paymentProvider, providerOrderCode) {
-      return PaymentAttempt.findOne({ paymentProvider, providerOrderCode }).lean();
+    usesMongooseTransactions: true,
+    async findOrderById(id, session) { return withOptionalSession(Order.findById(id), session).lean(); },
+    async findPaymentByOrder(id, session) { return withOptionalSession(Payment.findOne({ orderId: id }), session).lean(); },
+    async updatePayment(id, data, session) {
+      return withOptionalSession(Payment.findByIdAndUpdate(id, data, { new: true, runValidators: true }), session).lean();
     },
-    async createPaymentAttempt(data) { return PaymentAttempt.create(data); },
-    async updatePaymentAttempt(id, data) { return PaymentAttempt.findByIdAndUpdate(id, data, { new: true, runValidators: true }).lean(); },
-    async findCallbackEvent(paymentProvider, providerMessageId) {
-      return PaymentCallbackEvent.findOne({ paymentProvider, providerMessageId }).lean();
+    async updatePendingPayment(id, data, session) {
+      return withOptionalSession(Payment.findOneAndUpdate(
+        { _id: id, paymentStatus: { $in: ['Unpaid', 'Pending', 'Failed'] } },
+        { $set: data },
+        { new: true, runValidators: true }
+      ), session).lean();
     },
-    async claimCallbackEvent(id, staleBefore) {
-      return PaymentCallbackEvent.findOneAndUpdate(
+    async updateOrder(id, data, session) {
+      return withOptionalSession(Order.findByIdAndUpdate(id, data, { new: true, runValidators: true }), session).lean();
+    },
+    async markMoneyObligationsUnsettled(id, session) {
+      return withOptionalSession(Order.findByIdAndUpdate(
+        id,
+        { $set: { moneyObligationsSettled: false } },
+        { new: true, runValidators: true }
+      ), session).lean();
+    },
+    async claimOrderPayment(id, data, session) {
+      return withOptionalSession(Order.findOneAndUpdate(
+        {
+          _id: id,
+          orderStatus: 'Pending',
+          paymentStatus: { $in: ['Unpaid', 'Pending', 'Failed'] },
+        },
+        { $set: data },
+        { new: true, runValidators: true }
+      ), session).lean();
+    },
+    async findLatestAttemptByOrder(id, session) {
+      return withOptionalSession(PaymentAttempt.findOne({ orderId: id }).sort({ createdAt: -1 }), session).lean();
+    },
+    async findPrimaryPaidPaymentAttemptByOrder(id, session) {
+      return withOptionalSession(
+        PaymentAttempt.findOne({ orderId: id, paymentStatus: 'Paid' }).sort({ paidAt: 1, createdAt: 1, _id: 1 }),
+        session
+      ).lean();
+    },
+    async findPaymentAttemptById(id, session) {
+      return withOptionalSession(PaymentAttempt.findById(id), session).lean();
+    },
+    async findPaymentAttemptByProviderOrderCode(paymentProvider, providerOrderCode, session) {
+      return withOptionalSession(PaymentAttempt.findOne({ paymentProvider, providerOrderCode }), session).lean();
+    },
+    async createPaymentAttempt(data, session) {
+      if (!session) return PaymentAttempt.create(data);
+      const [attempt] = await PaymentAttempt.create([data], { session });
+      return attempt;
+    },
+    async updatePaymentAttempt(id, data, session) {
+      return withOptionalSession(PaymentAttempt.findByIdAndUpdate(id, data, { new: true, runValidators: true }), session).lean();
+    },
+    async findCallbackEvent(paymentProvider, providerMessageId, session) {
+      return withOptionalSession(PaymentCallbackEvent.findOne({ paymentProvider, providerMessageId }), session).lean();
+    },
+    async claimCallbackEvent(id, staleBefore, session) {
+      return withOptionalSession(PaymentCallbackEvent.findOneAndUpdate(
         {
           _id: id,
           $or: [
@@ -81,45 +173,111 @@ function createModelPaymentRepository() {
         },
         { eventStatus: 'Processing', processingStartedAt: new Date() },
         { new: true, runValidators: true }
+      ), session).lean();
+    },
+    async createCallbackEvent(data, session) {
+      if (!session) return PaymentCallbackEvent.create(data);
+      const [event] = await PaymentCallbackEvent.create([data], { session });
+      return event;
+    },
+    async markCallbackEventProcessed(id, processingResult, session) {
+      return withOptionalSession(
+        PaymentCallbackEvent.findByIdAndUpdate(id, { eventStatus: 'Processed', processingResult }, { new: true }),
+        session
       ).lean();
     },
-    async createCallbackEvent(data) { return PaymentCallbackEvent.create(data); },
-    async markCallbackEventProcessed(id, processingResult) {
-      return PaymentCallbackEvent.findByIdAndUpdate(id, { eventStatus: 'Processed', processingResult }, { new: true }).lean();
-    },
-    async upsertRefundPending(data) {
+    async upsertRefundPending(data, session) {
       const identity = data.obligationKey
         ? { obligationKey: data.obligationKey }
         : { orderId: data.orderId, obligationType: data.obligationType || 'PAYMENT_REVERSAL' };
-      return RefundPending.findOneAndUpdate(identity, { $setOnInsert: data }, { new: true, upsert: true, runValidators: true }).lean();
+      const refund = await withOptionalSession(
+        RefundPending.findOneAndUpdate(identity, { $setOnInsert: data }, { new: true, upsert: true, runValidators: true }),
+        session
+      ).lean();
+      if (refund?.orderId) {
+        await Order.updateOne(
+          { _id: refund.orderId },
+          { $set: { moneyObligationsSettled: false } },
+          session ? { session } : undefined
+        );
+      }
+      return refund;
     },
   };
 }
 
 function createPaymentService({
-  paymentRepository = createModelPaymentRepository(),
+  paymentRepository: suppliedPaymentRepository = createModelPaymentRepository(),
   auditLogger = { log: logAudit },
   notificationService = defaultNotificationService,
   callbackSecret = process.env.PAYMENT_CALLBACK_SECRET,
   payosGateway = createPayOSGateway(),
   callbackProcessingLeaseMs = Number(process.env.PAYMENT_CALLBACK_PROCESSING_LEASE_MS || 60_000),
+  clock = () => new Date(),
+  transactionManager = null,
 } = {}) {
+  const repositorySessionContext = new AsyncLocalStorage();
+  const paymentRepository = new Proxy(suppliedPaymentRepository, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver);
+      if (typeof value !== 'function') return value;
+      return (...args) => {
+        const session = repositorySessionContext.getStore();
+        return value.apply(target, session ? [...args, session] : args);
+      };
+    },
+  });
+  const callbackTransactionManager = transactionManager
+    || (suppliedPaymentRepository.usesMongooseTransactions
+      ? createModelTransactionManager()
+      : createPassthroughTransactionManager());
+
   async function callbackReplay(paymentProvider, providerMessageId) {
     const existing = await paymentRepository.findCallbackEvent(paymentProvider, providerMessageId);
     if (!existing) return null;
     if (existing.eventStatus !== 'Processed' || !existing.processingResult) return null;
-    const order = await paymentRepository.findOrderById(existing.orderId);
-    const attempt = existing.paymentAttemptId && paymentRepository.findPaymentAttemptById
-      ? await paymentRepository.findPaymentAttemptById(existing.paymentAttemptId)
-      : await paymentRepository.findLatestAttemptByOrder(existing.orderId);
-    return toPaymentResponse(order, attempt, { callbackEventId: String(existing._id), idempotentReplay: true });
+    return {
+      ...existing.processingResult,
+      callbackEventId: String(existing._id),
+      idempotentReplay: true,
+    };
   }
 
   async function persistCallbackResult(event, result) {
-    if (paymentRepository.markCallbackEventProcessed) {
-      await paymentRepository.markCallbackEventProcessed(event._id, result);
-    }
     return result;
+  }
+
+  function queueCallbackSideEffects(effects, {
+    event,
+    order,
+    attempt,
+    action,
+    description,
+    paymentStatus,
+  }) {
+    const eventPrefix = `PAYMENT_CALLBACK:${String(event._id)}`;
+    effects.push(
+      async () => {
+        try {
+          await auditLogger.log({
+            userId: order.customerId,
+            action,
+            eventId: `${eventPrefix}:AUDIT`,
+            targetEntity: 'PaymentAttempt',
+            targetId: String(attempt._id),
+            description,
+          });
+        } catch (error) {
+          if (error?.code !== 11000) throw error;
+        }
+      },
+      () => notificationService.notifyPaymentStatus({
+        userId: order.customerId,
+        orderCode: order.orderCode,
+        paymentStatus,
+        eventId: `${eventPrefix}:NOTIFICATION`,
+      })
+    );
   }
 
   async function processVerifiedPaymentCallback(input = {}) {
@@ -139,6 +297,24 @@ function createPaymentService({
       : await paymentRepository.findLatestAttemptByOrder(input.orderId);
     if (!attempt) throw new ApiError(404, 'Payment attempt not found');
     if (String(attempt.orderId) !== String(order._id)) throw new ApiError(400, 'Payment attempt does not belong to this order');
+    if (String(attempt.paymentProvider || '').toUpperCase() !== paymentProvider) {
+      throw new ApiError(400, 'Payment provider does not match the payment attempt', [], 'PAYMENT_PROVIDER_MISMATCH');
+    }
+    if (attempt.paymentMethod !== 'ONLINE') {
+      throw new ApiError(400, 'Only online payment attempts accept provider callbacks', [], 'PAYMENT_METHOD_MISMATCH');
+    }
+    if (Number(attempt.amount) !== Number(input.amount)) {
+      throw new ApiError(400, 'Payment amount does not match the payment attempt', [], 'PAYMENT_ATTEMPT_AMOUNT_MISMATCH');
+    }
+    if (input.providerOrderCode !== undefined && Number(input.providerOrderCode) !== Number(attempt.providerOrderCode)) {
+      throw new ApiError(400, 'Provider order code does not match the payment attempt', [], 'PAYMENT_PROVIDER_ORDER_MISMATCH');
+    }
+    if (attempt.providerMessageId && String(attempt.providerMessageId) !== providerMessageId) {
+      throw new ApiError(409, 'A payment attempt cannot be reused for another provider event', [], 'PAYMENT_ATTEMPT_REUSED');
+    }
+    if (attempt.transactionId && input.transactionId && String(attempt.transactionId) !== String(input.transactionId)) {
+      throw new ApiError(409, 'A payment attempt cannot be reused for another transaction', [], 'PAYMENT_ATTEMPT_REUSED');
+    }
 
     let event;
     try {
@@ -172,19 +348,89 @@ function createPaymentService({
       event = claimedEvent;
     }
 
+    const postCommitEffects = [];
+    const callbackResult = await callbackTransactionManager.withTransaction((session) => (
+      repositorySessionContext.run(session, async () => {
+    postCommitEffects.length = 0;
+    const currentOrder = await paymentRepository.findOrderById(input.orderId);
+    if (!currentOrder) throw new ApiError(404, 'Order not found');
+    const currentAttempt = input.paymentAttemptId && paymentRepository.findPaymentAttemptById
+      ? await paymentRepository.findPaymentAttemptById(input.paymentAttemptId)
+      : await paymentRepository.findLatestAttemptByOrder(input.orderId);
+    if (!currentAttempt) throw new ApiError(404, 'Payment attempt not found');
+    const order = currentOrder;
+    const attempt = currentAttempt;
+
     const nextStatus = ['Paid', 'Failed', 'Cancelled'].includes(input.status) ? input.status : 'Failed';
+    const orderDeadline = order.paymentDeadlineAt ? new Date(order.paymentDeadlineAt) : null;
+    const providerPaidAt = parsePayOSTransactionTime(input.transactionDateTime) || new Date(clock());
+    const paidAfterOrderDeadline = nextStatus === 'Paid'
+      && orderDeadline
+      && !Number.isNaN(orderDeadline.getTime())
+      && providerPaidAt.getTime() >= orderDeadline.getTime();
     if (nextStatus === 'Paid' && order.paymentStatus === 'Paid') {
       if (attempt.paymentStatus === 'Paid') {
-        return persistCallbackResult(event, toPaymentResponse(order, attempt, { callbackEventId: String(event._id) }));
+        const primaryAttempt = paymentRepository.findPrimaryPaidPaymentAttemptByOrder
+          ? await paymentRepository.findPrimaryPaidPaymentAttemptByOrder(order._id)
+          : null;
+        if (!primaryAttempt || String(primaryAttempt._id) === String(attempt._id)) {
+          const legacyPayment = await paymentRepository.findPaymentByOrder(order._id);
+          if (legacyPayment && legacyPayment.paymentStatus !== 'Paid') {
+            const paymentData = {
+              paymentProvider,
+              paymentStatus: 'Paid',
+              ...(legacyPayment.transactionId ? {} : { transactionId: attempt.transactionId || input.transactionId || '' }),
+              ...(legacyPayment.paidAt ? {} : { paidAt: attempt.paidAt || new Date() }),
+              ...(legacyPayment.rawResponse ? {} : { rawResponse: rawPayload || callbackPayload }),
+              ...(legacyPayment.providerMessageId ? {} : { providerMessageId }),
+            };
+            if (paymentRepository.updatePendingPayment) {
+              await paymentRepository.updatePendingPayment(legacyPayment._id, paymentData);
+            } else {
+              await paymentRepository.updatePayment(legacyPayment._id, paymentData);
+            }
+          }
+          const repairedResult = toPaymentResponse(order, attempt, { callbackEventId: String(event._id) });
+          queueCallbackSideEffects(postCommitEffects, {
+            event,
+            order,
+            attempt,
+            action: 'PAYMENT_CALLBACK_PAID',
+            description: `Payment callback Paid for ${order.orderCode}`,
+            paymentStatus: 'Paid',
+          });
+          return persistCallbackResult(event, repairedResult);
+        }
+        const excessRefund = await paymentRepository.upsertRefundPending({
+          orderId: order._id,
+          paymentAttemptId: attempt._id,
+          customerId: order.customerId,
+          amount: Number(input.amount),
+          currency: attempt.currency || 'VND',
+          reason: 'Duplicate successful payment received after the order was already paid',
+          status: 'RefundPending',
+          obligationType: 'EXCESS_PAYMENT',
+          obligationKey: `EXCESS_PAYMENT:${String(attempt._id)}`,
+        });
+        const replayableResult = toPaymentResponse(order, attempt, {
+          callbackEventId: String(event._id),
+          refundPending: true,
+          duplicatePayment: true,
+          refundPendingId: excessRefund?._id ? String(excessRefund._id) : null,
+        });
+        await persistCallbackResult(event, replayableResult);
+        queueCallbackSideEffects(postCommitEffects, {
+          event,
+          order,
+          attempt,
+          action: 'PAYMENT_CALLBACK_DUPLICATE_PAID_REFUND_PENDING',
+          description: `Duplicate successful payment requires refund for ${order.orderCode}`,
+          paymentStatus: 'RefundPending',
+        });
+        return replayableResult;
       }
       const updatedAttempt = await paymentRepository.updatePaymentAttempt(attempt._id, {
-        paymentStatus: 'RefundPending',
-        transactionId: input.transactionId || attempt.transactionId,
-        providerMessageId,
-        paidAt: new Date(),
-        rawResponse: rawPayload || callbackPayload,
-        gatewayResponseCode: String(input.gatewayResponseCode || ''),
-        gatewayMessage: String(input.gatewayMessage || ''),
+        ...buildProviderEvidence(attempt, input, rawPayload || callbackPayload, 'Paid'),
       });
       await paymentRepository.upsertRefundPending({
         orderId: order._id,
@@ -199,8 +445,14 @@ function createPaymentService({
       });
       const result = toPaymentResponse(order, updatedAttempt, { callbackEventId: String(event._id), refundPending: true, duplicatePayment: true });
       await persistCallbackResult(event, result);
-      await auditLogger.log({ userId: order.customerId, action: 'PAYMENT_CALLBACK_DUPLICATE_PAID_REFUND_PENDING', targetEntity: 'PaymentAttempt', targetId: String(updatedAttempt._id), description: `Duplicate successful payment requires refund for ${order.orderCode}` });
-      await notificationService.notifyPaymentStatus({ userId: order.customerId, orderCode: order.orderCode, paymentStatus: 'RefundPending' });
+      queueCallbackSideEffects(postCommitEffects, {
+        event,
+        order,
+        attempt: updatedAttempt,
+        action: 'PAYMENT_CALLBACK_DUPLICATE_PAID_REFUND_PENDING',
+        description: `Duplicate successful payment requires refund for ${order.orderCode}`,
+        paymentStatus: 'RefundPending',
+      });
       return result;
     }
     const hasAlreadyPaid = order.paymentStatus === 'Paid' || attempt.paymentStatus === 'Paid';
@@ -214,78 +466,127 @@ function createPaymentService({
       && payosTransactionTime
       && payosTransactionTime.getTime() > new Date(attempt.expiresAt).getTime();
     const isLatePaidCallback = nextStatus === 'Paid'
-      && (['Cancelled', 'Expired'].includes(order.orderStatus) || paidAfterLinkExpiry);
+      && (order.orderStatus === 'Cancelled' || paidAfterLinkExpiry || paidAfterOrderDeadline);
     if (isLatePaidCallback) {
-      const refundStatus = 'RefundPending';
-      const updatedAttempt = await paymentRepository.updatePaymentAttempt(attempt._id, {
-        paymentStatus: refundStatus,
-        transactionId: input.transactionId || attempt.transactionId,
-        providerMessageId,
-        paidAt: new Date(),
-        rawResponse: rawPayload || callbackPayload,
-        gatewayResponseCode: String(input.gatewayResponseCode || ''),
-        gatewayMessage: String(input.gatewayMessage || ''),
-      });
-      const legacyPayment = await paymentRepository.findPaymentByOrder(order._id);
-      if (legacyPayment) await paymentRepository.updatePayment(legacyPayment._id, { paymentProvider, paymentStatus: refundStatus, transactionId: input.transactionId || legacyPayment.transactionId, rawResponse: rawPayload || callbackPayload });
-      const updatedOrder = await paymentRepository.updateOrder(order._id, { paymentStatus: refundStatus });
+      const updatedAttempt = await paymentRepository.updatePaymentAttempt(
+        attempt._id,
+        buildProviderEvidence(attempt, input, rawPayload || callbackPayload, 'Paid'),
+      );
       await paymentRepository.upsertRefundPending({
         orderId: order._id,
         paymentAttemptId: updatedAttempt._id,
         customerId: order.customerId,
         amount: order.totalAmount,
         currency: updatedAttempt.currency || 'VND',
-        reason: paidAfterLinkExpiry
+        reason: paidAfterOrderDeadline
+          ? 'Payment transaction occurred at or after the immutable order payment deadline'
+          : paidAfterLinkExpiry
           ? 'Payment transaction occurred after the PayOS link expired'
           : `Late paid callback received after ${order.orderStatus.toLowerCase()} order`,
         status: 'RefundPending',
         obligationType: 'PAYMENT_REVERSAL',
         obligationKey: `PAYMENT_REVERSAL:${String(updatedAttempt._id)}`,
       });
-      const result = toPaymentResponse(updatedOrder, updatedAttempt, { callbackEventId: String(event._id), refundPending: true });
+      const result = toPaymentResponse(order, updatedAttempt, { callbackEventId: String(event._id), refundPending: true });
       await persistCallbackResult(event, result);
-      await auditLogger.log({ userId: order.customerId, action: 'PAYMENT_CALLBACK_REFUND_PENDING', targetEntity: 'PaymentAttempt', targetId: String(updatedAttempt._id), description: `Late payment callback requires refund for ${order.orderCode}` });
-      await notificationService.notifyPaymentStatus({ userId: order.customerId, orderCode: order.orderCode, paymentStatus: refundStatus });
+      queueCallbackSideEffects(postCommitEffects, {
+        event,
+        order,
+        attempt: updatedAttempt,
+        action: 'PAYMENT_CALLBACK_REFUND_PENDING',
+        description: `Late payment callback requires refund for ${order.orderCode}`,
+        paymentStatus: 'RefundPending',
+      });
       return result;
     }
 
-    const updatedAttempt = await paymentRepository.updatePaymentAttempt(attempt._id, {
-      paymentStatus: nextStatus,
-      transactionId: input.transactionId || attempt.transactionId,
-      providerMessageId,
-      paidAt: nextStatus === 'Paid' ? new Date() : null,
-      rawResponse: rawPayload || callbackPayload,
-      gatewayResponseCode: String(input.gatewayResponseCode || ''),
-      gatewayMessage: String(input.gatewayMessage || ''),
-    });
+    const updatedAttempt = await paymentRepository.updatePaymentAttempt(
+      attempt._id,
+      buildProviderEvidence(attempt, input, rawPayload || callbackPayload, nextStatus),
+    );
+    let updatedOrder = null;
+    if (nextStatus === 'Paid' && paymentRepository.claimOrderPayment) {
+      updatedOrder = await paymentRepository.claimOrderPayment(order._id, {
+        paymentStatus: 'Paid',
+        orderStatus: order.orderStatus,
+      });
+      if (!updatedOrder) {
+        const winningOrder = await paymentRepository.findOrderById(order._id);
+        const obligationType = winningOrder.paymentStatus === 'Paid' ? 'EXCESS_PAYMENT' : 'PAYMENT_REVERSAL';
+        const duplicatePayment = obligationType === 'EXCESS_PAYMENT';
+        await paymentRepository.upsertRefundPending({
+          orderId: winningOrder._id,
+          paymentAttemptId: updatedAttempt._id,
+          customerId: winningOrder.customerId,
+          amount: Number(input.amount),
+          currency: updatedAttempt.currency || 'VND',
+          reason: duplicatePayment
+            ? 'Duplicate successful payment received after the order was already paid'
+            : `Paid callback received after ${winningOrder.orderStatus.toLowerCase()} order transition committed`,
+          status: 'RefundPending',
+          obligationType,
+          obligationKey: `${obligationType}:${String(updatedAttempt._id)}`,
+        });
+        const result = toPaymentResponse(winningOrder, updatedAttempt, {
+          callbackEventId: String(event._id),
+          refundPending: true,
+          ...(duplicatePayment ? { duplicatePayment: true } : {}),
+        });
+        await persistCallbackResult(event, result);
+        queueCallbackSideEffects(postCommitEffects, {
+          event,
+          order: winningOrder,
+          attempt: updatedAttempt,
+          action: duplicatePayment ? 'PAYMENT_CALLBACK_DUPLICATE_PAID_REFUND_PENDING' : 'PAYMENT_CALLBACK_REFUND_PENDING',
+          description: `${duplicatePayment ? 'Duplicate successful payment' : 'Late payment callback'} requires refund for ${winningOrder.orderCode}`,
+          paymentStatus: 'RefundPending',
+        });
+        return result;
+      }
+    }
     const legacyPayment = await paymentRepository.findPaymentByOrder(order._id);
     if (legacyPayment) {
-      await paymentRepository.updatePayment(legacyPayment._id, {
-        paymentProvider,
+        const paymentData = {
+          paymentProvider,
+          paymentStatus: nextStatus,
+          ...(legacyPayment.transactionId ? {} : { transactionId: input.transactionId || '' }),
+          ...(legacyPayment.paidAt || nextStatus !== 'Paid' ? {} : { paidAt: new Date() }),
+          ...(legacyPayment.rawResponse ? {} : { rawResponse: rawPayload || callbackPayload }),
+          ...(legacyPayment.gatewayResponseCode ? {} : { gatewayResponseCode: String(input.gatewayResponseCode || '') }),
+          ...(legacyPayment.gatewayMessage ? {} : { gatewayMessage: String(input.gatewayMessage || '') }),
+          ...(legacyPayment.providerMessageId ? {} : { providerMessageId }),
+        };
+        if (paymentRepository.updatePendingPayment && nextStatus === 'Paid') {
+          await paymentRepository.updatePendingPayment(legacyPayment._id, paymentData);
+        } else {
+          await paymentRepository.updatePayment(legacyPayment._id, paymentData);
+        }
+    }
+    if (!updatedOrder) {
+      updatedOrder = await paymentRepository.updateOrder(order._id, {
         paymentStatus: nextStatus,
-        transactionId: input.transactionId || legacyPayment.transactionId,
-        paidAt: nextStatus === 'Paid' ? new Date() : null,
-        rawResponse: rawPayload || callbackPayload,
-        gatewayResponseCode: String(input.gatewayResponseCode || ''),
-        gatewayMessage: String(input.gatewayMessage || ''),
-        providerMessageId,
+        orderStatus: order.orderStatus,
       });
     }
-    const updatedOrder = await paymentRepository.updateOrder(order._id, {
-      paymentStatus: nextStatus,
-      orderStatus: nextStatus === 'Paid' && order.orderStatus === 'WaitingForPayment' ? 'Pending' : order.orderStatus,
-    });
     const result = toPaymentResponse(updatedOrder, updatedAttempt, { callbackEventId: String(event._id) });
     await persistCallbackResult(event, result);
-    await auditLogger.log({
-      userId: order.customerId,
+    queueCallbackSideEffects(postCommitEffects, {
+      event,
+      order,
+      attempt: updatedAttempt,
       action: `PAYMENT_CALLBACK_${nextStatus.toUpperCase()}`,
-      targetEntity: 'PaymentAttempt',
-      targetId: String(updatedAttempt._id),
       description: `Payment callback ${nextStatus} for ${order.orderCode}`,
+      paymentStatus: nextStatus,
     });
-    await notificationService.notifyPaymentStatus({ userId: order.customerId, orderCode: order.orderCode, paymentStatus: nextStatus });
     return result;
+      })
+    ));
+
+    for (const effect of postCommitEffects) await effect();
+    if (paymentRepository.markCallbackEventProcessed) {
+      await paymentRepository.markCallbackEventProcessed(event._id, callbackResult);
+    }
+    return callbackResult;
   }
 
   return {
@@ -294,13 +595,21 @@ function createPaymentService({
       if (!order || String(order.customerId) !== String(customerId)) throw new ApiError(404, 'Order not found');
       if (order.paymentMethod !== 'ONLINE') throw new ApiError(400, 'Order is not an online payment order');
       if (order.paymentStatus === 'Paid') throw new ApiError(409, 'Order is already paid');
-      if (order.orderStatus !== 'WaitingForPayment') throw new ApiError(409, 'Order is not waiting for payment');
+      if (order.orderStatus !== 'Pending') throw new ApiError(409, 'Order is not pending payment');
+      const now = new Date(clock());
+      const deadline = order.paymentDeadlineAt ? new Date(order.paymentDeadlineAt) : null;
+      if (!deadline || Number.isNaN(deadline.getTime())) {
+        throw new ApiError(409, 'Order payment deadline is missing or invalid', [], 'PAYMENT_DEADLINE_INVALID');
+      }
+      if (now.getTime() >= deadline.getTime()) {
+        throw new ApiError(409, 'Đơn hàng đã hết thời hạn thanh toán trực tuyến', [], 'PAYMENT_DEADLINE_EXPIRED');
+      }
       if (!Number.isSafeInteger(Number(order.totalAmount)) || Number(order.totalAmount) <= 0) {
         throw new ApiError(400, 'Số tiền thanh toán PayOS phải là số nguyên VND dương', [], 'PAYOS_INVALID_AMOUNT');
       }
 
       const latestAttempt = await paymentRepository.findLatestAttemptByOrder(order._id);
-      if (isReusablePayOSAttempt(latestAttempt)) return toPaymentResponse(order, latestAttempt, { reused: true });
+      if (isReusablePayOSAttempt(latestAttempt, now)) return toPaymentResponse(order, latestAttempt, { reused: true });
       if (!payosGateway.isConfigured({ requireRedirectUrls: true })) {
         throw new ApiError(503, 'payOS chưa được cấu hình trên máy chủ', [], 'PAYOS_NOT_CONFIGURED');
       }
@@ -336,7 +645,7 @@ function createPaymentService({
       } catch (error) {
         if (error?.code === 11000) {
           const concurrentAttempt = await paymentRepository.findLatestAttemptByOrder(order._id);
-          if (isReusablePayOSAttempt(concurrentAttempt)) return toPaymentResponse(order, concurrentAttempt, { reused: true });
+          if (isReusablePayOSAttempt(concurrentAttempt, now)) return toPaymentResponse(order, concurrentAttempt, { reused: true });
           throw new ApiError(409, 'Một link thanh toán PayOS khác đang được tạo, vui lòng thử lại', [], 'PAYOS_LINK_CREATION_IN_PROGRESS');
         }
         throw error;
@@ -344,6 +653,25 @@ function createPaymentService({
 
       try {
         const paymentLink = await payosGateway.createPaymentLink({ order, providerOrderCode });
+        const currentOrder = await paymentRepository.findOrderById(order._id);
+        const orderStillAcceptsPayment = currentOrder
+          && currentOrder.orderStatus === 'Pending'
+          && ['Unpaid', 'Pending', 'Failed'].includes(currentOrder.paymentStatus);
+        if (!orderStillAcceptsPayment) {
+          if (paymentLink.paymentLinkId && payosGateway.cancelPaymentLink) {
+            try {
+              await payosGateway.cancelPaymentLink(paymentLink.paymentLinkId, 'Order state changed before payment link was persisted');
+            } catch {
+              // The provider may already have retired the link; local state is
+              // still closed below.
+            }
+          }
+          await paymentRepository.updatePaymentAttempt(attempt._id, {
+            paymentStatus: 'Cancelled',
+            gatewayMessage: 'Order state changed before payment link was persisted',
+          });
+          throw new ApiError(409, 'Order is no longer pending payment', [], 'PAYMENT_ORDER_STATE_CHANGED');
+        }
         const updatedAttempt = await paymentRepository.updatePaymentAttempt(attempt._id, {
           paymentLinkId: paymentLink.paymentLinkId,
           checkoutUrl: paymentLink.checkoutUrl,
@@ -352,9 +680,17 @@ function createPaymentService({
           rawResponse: paymentLink,
         });
         const legacyPayment = await paymentRepository.findPaymentByOrder(order._id);
-        if (legacyPayment) await paymentRepository.updatePayment(legacyPayment._id, { paymentProvider: 'PAYOS', paymentStatus: 'Pending', rawResponse: paymentLink });
-        return toPaymentResponse(order, updatedAttempt);
+        if (legacyPayment) {
+          const paymentData = { paymentProvider: 'PAYOS', paymentStatus: 'Pending', rawResponse: paymentLink };
+          if (paymentRepository.updatePendingPayment) {
+            await paymentRepository.updatePendingPayment(legacyPayment._id, paymentData);
+          } else {
+            await paymentRepository.updatePayment(legacyPayment._id, paymentData);
+          }
+        }
+        return toPaymentResponse(currentOrder, updatedAttempt);
       } catch (error) {
+        if (error?.errorCode === 'PAYMENT_ORDER_STATE_CHANGED') throw error;
         await paymentRepository.updatePaymentAttempt(attempt._id, {
           paymentStatus: 'Failed',
           gatewayMessage: String(error?.message || 'Không thể tạo link thanh toán payOS'),

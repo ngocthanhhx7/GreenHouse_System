@@ -188,6 +188,17 @@ function createInventoryService({ repository = createModelRepository(), auditLog
               ? await repository.reopenOrderAfterRejectedExport(updatedRequest.orderId, session)
               : await repository.updateOrder(updatedRequest.orderId, { orderStatus: 'Confirmed' }, session);
             if (!order) throw new ApiError(409, 'Order changed while rejecting the stock export request');
+          } else if (nextStatus === 'Approved' && order && order.orderStatus === 'Confirmed') {
+            // SL-003 confirmation creates the downstream request while the
+            // order remains Confirmed. Once Warehouse accepts that request,
+            // advance the fulfillment hand-off exactly once so the export
+            // command can atomically capture the reservation.
+            order = await repository.updateOrder(
+              updatedRequest.orderId,
+              { orderStatus: 'StockExportRequested' },
+              session
+            );
+            if (!order) throw new ApiError(409, 'Order changed while approving the stock export request');
           }
           return { updatedRequest, order };
         });

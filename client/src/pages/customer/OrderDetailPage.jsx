@@ -43,9 +43,12 @@ export default function OrderDetailPage() {
   const [selectedReplacementUnitIds, setSelectedReplacementUnitIds] = useState([]);
   const [isSubmittingReturn, setIsSubmittingReturn] = useState(false);
   const [isSubmittingExchange, setIsSubmittingExchange] = useState(false);
+  const [cancelReason, setCancelReason] = useState('');
+  const [isCancelling, setIsCancelling] = useState(false);
   const returnSubmissionInFlight = useRef(false);
   const exchangeSubmissionInFlight = useRef(false);
   const exchangeSubmissionKey = useRef(newKey(`exchange:${id}`));
+  const cancelIdempotencyKey = useRef(newKey(`cancel:${id}`));
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
@@ -104,8 +107,29 @@ export default function OrderDetailPage() {
     return () => globalThis.clearTimeout(timer);
   }, [deadlineNow, id, order, replacementExchangeUnits]);
 
-  async function cancelOrder() {
-    try { setOrder(await orderService.cancelOrder(id)); } catch (err) { setError(err.message); }
+  async function cancelOrder(event) {
+    event.preventDefault();
+    if (!cancelReason.trim()) {
+      setError('Vui lòng nhập lý do hủy đơn hàng.');
+      return;
+    }
+    setIsCancelling(true);
+    setError('');
+    try {
+      const cancelledOrder = await orderService.cancelOrder(id, {
+        cancelReason,
+        idempotencyKey: cancelIdempotencyKey.current,
+      });
+      setOrder(cancelledOrder);
+      setMessage(cancelledOrder.idempotentReplay
+        ? 'Yêu cầu hủy đơn đã được ghi nhận trước đó.'
+        : 'Đơn hàng đã được hủy.');
+      await loadOrder();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setIsCancelling(false);
+    }
   }
 
   function handleAfterSalesConflict(err) {
@@ -249,6 +273,7 @@ export default function OrderDetailPage() {
             <dt className="col-sm-3">Địa chỉ giao hàng</dt><dd className="col-sm-9">{order.shippingAddress}</dd>
             <dt className="col-sm-3">Người nhận</dt><dd className="col-sm-9">{order.receiverName || '-'} · {order.receiverPhone || '-'}</dd>
             {order.customerNote && <><dt className="col-sm-3">Ghi chú</dt><dd className="col-sm-9">{order.customerNote}</dd></>}
+            {order.cancelReason && <><dt className="col-sm-3">Lý do hủy</dt><dd className="col-sm-9">{order.cancelReason}</dd></>}
           </dl>
           <h2>Sản phẩm trong đơn</h2>
           <ul className="order-item-list">
@@ -270,8 +295,27 @@ export default function OrderDetailPage() {
           {order.paymentMethod === 'ONLINE' && order.paymentStatus === 'Pending' && (
             <div className="mt-3"><Link className="btn btn-success" to={`/orders/${order.id}/payment`}>Thanh toán online</Link></div>
           )}
-          {['Pending', 'WaitingForPayment'].includes(order.orderStatus) && ['Unpaid', 'Pending', 'Failed'].includes(order.paymentStatus) && (
-            <div className="mt-3"><button className="btn btn-outline-danger" type="button" onClick={cancelOrder}>Hủy đơn hàng</button></div>
+          {order.orderStatus === 'Pending' && ['Unpaid', 'Pending', 'Failed', 'Paid'].includes(order.paymentStatus) && (
+            <form className="mt-3" onSubmit={cancelOrder}>
+              <label className="form-label" htmlFor="customerCancelReason">Lý do hủy đơn hàng</label>
+              <textarea
+                id="customerCancelReason"
+                className="form-control"
+                rows="2"
+                maxLength="500"
+                value={cancelReason}
+                onChange={(event) => setCancelReason(event.target.value)}
+                required
+              />
+              {order.paymentStatus === 'Paid' && (
+                <div className="alert alert-warning mt-2">
+                  Khoản thanh toán đã xác minh sẽ được giữ nguyên làm bằng chứng và chuyển sang quy trình hoàn tiền.
+                </div>
+              )}
+              <button className="btn btn-outline-danger mt-2" type="submit" disabled={isCancelling}>
+                {isCancelling ? 'Đang hủy...' : 'Hủy đơn hàng'}
+              </button>
+            </form>
           )}
 
           {activeCase && (

@@ -58,8 +58,13 @@ export default function StaffOrderDetailPage() {
             {order.orderStatus === 'Pending' && (
               <button className="btn btn-success" type="button" onClick={() => runAction(() => staffOrderService.confirmOrder(order.id), 'Đã xác nhận đơn hàng.')}>Xác nhận đơn</button>
             )}
-            {order.orderStatus === 'Confirmed' && (
+            {order.orderStatus === 'Confirmed' && !order.stockExportRequest && (
               <button className="btn btn-success" type="button" onClick={() => runAction(() => staffOrderService.requestStockExport(order.id), 'Đã gửi yêu cầu xuất kho.')}>Yêu cầu xuất kho</button>
+            )}
+            {order.stockExportRequest && (
+              <span className="badge text-bg-info align-self-center">
+                Phiếu xuất kho: {order.stockExportRequest.status}
+              </span>
             )}
             {(order.allowedNextStatuses || []).map((nextStatus) => (
               <button key={nextStatus} className="btn btn-outline-success" type="button" onClick={() => runAction(() => staffOrderService.updateStatus(order.id, nextStatus), `Đã chuyển sang ${translateOrderStatus(nextStatus)}.`)}>Chuyển sang {translateOrderStatus(nextStatus)}</button>
