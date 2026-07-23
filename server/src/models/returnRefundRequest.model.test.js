@@ -14,6 +14,10 @@ describe('return/refund request model', () => {
     ));
 
     assert.ok(openRequestIndex);
+    assert.deepEqual(
+      openRequestIndex[1].partialFilterExpression.obligationKey.$in,
+      ['', null],
+    );
   });
 
   it('exposes explicit approval, receipt, expiry, and completion states', () => {
@@ -35,5 +39,15 @@ describe('return/refund request model', () => {
       fields.requestCode === 1 && options.unique === true && options.partialFilterExpression?.requestCode?.$gt === ''
     ));
     assert.ok(requestCodeIndex);
+  });
+
+  it('can identify standalone payment obligations without colliding with a physical return request', () => {
+    assert.ok(ReturnRefundRequest.schema.path('obligationKey'));
+    const obligationIndex = ReturnRefundRequest.schema.indexes().find(([fields, options]) => (
+      fields.orderId === 1
+      && fields.obligationKey === 1
+      && options.unique === true
+    ));
+    assert.ok(obligationIndex);
   });
 });

@@ -426,6 +426,74 @@ describe('payment service', () => {
     assert.equal(notificationService.notifications[0].paymentStatus, 'Paid');
   });
 
+  it('claims only payment callback events from the shared domain outbox', async () => {
+    let requestedTypes = null;
+    const repository = createPaymentRepository();
+    repository.listPendingPostCommitWork = async (eventTypes) => {
+      requestedTypes = eventTypes;
+      return [];
+    };
+    const service = createPaymentService({
+      paymentRepository: repository,
+      auditLogger: createAuditLogger(),
+      notificationService: createNotificationService(),
+      callbackSecret: 'test-callback-secret',
+      payosGateway,
+    });
+
+    await service.drainPostCommitWork();
+
+    assert.deepEqual(requestedTypes, [
+      'PAYMENT_CALLBACK_AUDIT',
+      'PAYMENT_CALLBACK_NOTIFICATION',
+    ]);
+  });
+
+  it('does not publish a durable callback event claimed by another worker', async () => {
+    const repository = createPaymentRepository();
+    const callbackAudit = createAuditLogger();
+    let claimedId = null;
+    repository.listPendingPostCommitWork = async () => [{
+      _id: 'outbox-payment-lost',
+      identityKey: 'PAYMENT_CALLBACK_AUDIT:lost',
+      eventType: 'PAYMENT_CALLBACK_AUDIT',
+      payload: { action: 'PAYMENT_CALLBACK_PAID' },
+    }];
+    repository.claimPostCommitWork = async (id) => {
+      claimedId = id;
+      return null;
+    };
+    const service = createPaymentService({
+      paymentRepository: repository,
+      auditLogger: callbackAudit,
+      notificationService: createNotificationService(),
+      callbackSecret: 'test-callback-secret',
+      payosGateway,
+    });
+
+    await service.drainPostCommitWork();
+
+    assert.equal(claimedId, 'outbox-payment-lost');
+    assert.equal(callbackAudit.entries.length, 0);
+  });
+
+  it('keeps the Order pending when a provider marks one online attempt Failed', async () => {
+    const result = await paymentService.handlePaymentCallback({
+      orderId: 'order-online',
+      paymentAttemptId: 'attempt-1',
+      transactionId: 'TXN-FAILED',
+      providerMessageId: 'MSG-FAILED',
+      amount: 50,
+      status: 'Failed',
+      callbackSecret: 'test-callback-secret',
+    });
+
+    assert.equal(result.paymentStatus, 'Failed');
+    assert.equal(paymentRepository.attempts[0].paymentStatus, 'Failed');
+    assert.equal(paymentRepository.orders[0].orderStatus, 'Pending');
+    assert.equal(paymentRepository.orders[0].paymentStatus, 'Pending');
+  });
+
   it('commits callback business writes atomically and publishes side effects only after commit', async () => {
     const session = { id: 'payment-callback-session' };
     const seenSessions = [];
@@ -506,6 +574,113 @@ describe('payment service', () => {
     );
     assert.equal(transactionalAuditLogger.entries.length, 1);
     assert.equal(transactionalNotificationService.notifications.length, 1);
+  });
+
+  it('persists callback outbox work inside the transaction and drains it only after commit', async () => {
+    const outbox = [];
+    let insideTransaction = false;
+    const session = { id: 'durable-outbox-session' };
+    paymentRepository.enqueuePostCommitWork = async (data, receivedSession) => {
+      await Promise.resolve();
+      assert.equal(insideTransaction, true, 'durable outbox enqueue must complete before commit');
+      assert.equal(receivedSession, session);
+      const existing = outbox.find((item) => item.identityKey === data.identityKey);
+      if (existing) return existing;
+      const item = { _id: `outbox-${outbox.length + 1}`, ...data };
+      outbox.push(item);
+      return item;
+    };
+    paymentRepository.listPendingPostCommitWork = async () => (
+      outbox.filter((item) => ['Pending', 'Failed'].includes(item.status))
+    );
+    paymentRepository.markPostCommitWorkDone = async (id) => {
+      const item = outbox.find((entry) => entry._id === id);
+      item.status = 'Completed';
+      return item;
+    };
+    paymentRepository.markPostCommitWorkFailed = async (id, error) => {
+      const item = outbox.find((entry) => entry._id === id);
+      item.status = 'Failed';
+      item.lastError = error.message;
+      return item;
+    };
+
+    const durableAudit = createAuditLogger();
+    const durableNotifications = createNotificationService();
+    const durableService = createPaymentService({
+      paymentRepository,
+      auditLogger: durableAudit,
+      notificationService: durableNotifications,
+      callbackSecret: 'test-callback-secret',
+      payosGateway,
+      transactionManager: {
+        async withTransaction(work) {
+          insideTransaction = true;
+          try {
+            return await work(session);
+          } finally {
+            insideTransaction = false;
+          }
+        },
+      },
+    });
+
+    const result = await durableService.handlePaymentCallback({
+      orderId: 'order-online',
+      paymentAttemptId: 'attempt-1',
+      transactionId: 'TXN-DURABLE-OUTBOX',
+      providerMessageId: 'MSG-DURABLE-OUTBOX',
+      amount: 50,
+      status: 'Paid',
+      callbackSecret: 'test-callback-secret',
+    });
+
+    assert.equal(result.paymentStatus, 'Paid');
+    assert.equal(outbox.length, 2);
+    assert.ok(outbox.every((item) => item.status === 'Completed'));
+    assert.equal(durableAudit.entries.length, 1);
+    assert.equal(durableNotifications.notifications.length, 1);
+    assert.equal(paymentRepository.events[0].eventStatus, 'Processed');
+  });
+
+  it('does not publish transaction-local callback work when commit fails', async () => {
+    const rollbackAudit = createAuditLogger();
+    const rollbackNotifications = createNotificationService();
+    paymentRepository.enqueuePostCommitWork = async (data) => ({
+      _id: `transaction-local-${data.eventType}`,
+      ...data,
+    });
+    paymentRepository.listPendingPostCommitWork = async () => [];
+    const rollbackService = createPaymentService({
+      paymentRepository,
+      auditLogger: rollbackAudit,
+      notificationService: rollbackNotifications,
+      callbackSecret: 'test-callback-secret',
+      payosGateway,
+      transactionManager: {
+        async withTransaction(work) {
+          await work({ id: 'rolled-back-session' });
+          throw new Error('commit failed');
+        },
+      },
+    });
+
+    await assert.rejects(
+      () => rollbackService.handlePaymentCallback({
+        orderId: 'order-online',
+        paymentAttemptId: 'attempt-1',
+        transactionId: 'TXN-ROLLBACK-OUTBOX',
+        providerMessageId: 'MSG-ROLLBACK-OUTBOX',
+        amount: 50,
+        status: 'Paid',
+        callbackSecret: 'test-callback-secret',
+      }),
+      /commit failed/,
+    );
+    await rollbackService.drainPostCommitWork();
+
+    assert.equal(rollbackAudit.entries.length, 0);
+    assert.equal(rollbackNotifications.notifications.length, 0);
   });
 
   it('retries idempotent post-commit effects after notification enqueue fails without repeating business writes', async () => {
@@ -656,6 +831,63 @@ describe('payment service', () => {
     assert.equal(paymentRepository.refunds[0].obligationKey, 'PAYMENT_REVERSAL:attempt-1');
     assert.equal(auditLogger.entries.length, 1);
     assert.equal(notificationService.notifications.length, 1);
+  });
+
+  it('keeps every standalone refund-obligation write in the callback transaction', async () => {
+    paymentRepository.orders[0].orderStatus = 'Cancelled';
+    paymentRepository.orders[0].paymentStatus = 'Cancelled';
+    paymentRepository.payments[0].paymentStatus = 'Cancelled';
+    const session = { id: 'refund-obligation-session' };
+    const seenSessions = [];
+    const refundRequests = [];
+    const baseUpsert = paymentRepository.upsertRefundPending.bind(paymentRepository);
+    paymentRepository.upsertRefundPending = async (data, receivedSession) => {
+      seenSessions.push(receivedSession);
+      return baseUpsert(data);
+    };
+    paymentRepository.findRefundRequestByObligationKey = async (_orderId, _key, receivedSession) => {
+      seenSessions.push(receivedSession);
+      return null;
+    };
+    paymentRepository.createRefundRequest = async (data, receivedSession) => {
+      seenSessions.push(receivedSession);
+      const request = { _id: 'refund-request-1', ...data };
+      refundRequests.push(request);
+      return request;
+    };
+    paymentRepository.updateRefundPending = async (id, data, receivedSession) => {
+      seenSessions.push(receivedSession);
+      const refund = paymentRepository.refunds.find((entry) => entry._id === id);
+      Object.assign(refund, data);
+      return refund;
+    };
+    paymentRepository.updateRefundRequest = async (id, data, receivedSession) => {
+      seenSessions.push(receivedSession);
+      const request = refundRequests.find((entry) => entry._id === id);
+      Object.assign(request, data);
+      return request;
+    };
+    const transactionalService = createPaymentService({
+      paymentRepository,
+      auditLogger,
+      notificationService,
+      callbackSecret: 'test-callback-secret',
+      payosGateway,
+      transactionManager: { async withTransaction(work) { return work(session); } },
+    });
+
+    await transactionalService.handlePaymentCallback({
+      orderId: 'order-online',
+      paymentAttemptId: 'attempt-1',
+      transactionId: 'TXN-LATE-TRANSACTION',
+      providerMessageId: 'MSG-LATE-TRANSACTION',
+      amount: 50,
+      status: 'Paid',
+      callbackSecret: 'test-callback-secret',
+    });
+
+    assert.ok(seenSessions.length >= 5);
+    assert.ok(seenSessions.every((receivedSession) => receivedSession === session));
   });
 
   it('repairs a missing excess-payment obligation when a worker crashed after persisting Paid evidence', async () => {

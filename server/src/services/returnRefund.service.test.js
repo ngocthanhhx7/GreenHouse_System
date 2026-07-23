@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const { describe, it, beforeEach } = require('node:test');
 
-const { createReturnRefundService } = require('./returnRefund.service');
+const { createReturnRefundService, computeMoneyObligationsSettled } = require('./returnRefund.service');
 const { returnEvidenceClaim } = require('../utils/returnEvidenceClaim');
 
 const ACTIVE_STATUSES = [
@@ -315,6 +315,16 @@ function createTransactionManager(repository) {
 }
 
 describe('return/refund service', () => {
+  it('keeps aggregate money settlement false until every required obligation is terminal', () => {
+    assert.equal(computeMoneyObligationsSettled([
+      { status: 'Refunded' },
+      { status: 'RefundPending' },
+    ]), false);
+    assert.equal(computeMoneyObligationsSettled([
+      { status: 'Refunded' },
+      { status: 'FailedTerminal' },
+    ]), true);
+  });
   let repository;
   let auditLogger;
   let service;

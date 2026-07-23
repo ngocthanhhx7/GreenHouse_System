@@ -76,10 +76,114 @@ function createFixture() {
     },
     clock: () => new Date('2026-07-23T08:00:01.000Z'),
   });
-  return { service, order, payments, attempts, releases, auditEntries, notifications, retiredLinks };
+  return { service, order, payments, attempts, releases, auditEntries, notifications, retiredLinks, repository };
 }
 
 describe('order payment expiry service', () => {
+  it('claims only expiry events from the shared domain outbox', async () => {
+    let requestedTypes = null;
+    const service = createOrderPaymentExpiryService({
+      repository: {
+        async listPendingPostCommitWork(eventTypes) {
+          requestedTypes = eventTypes;
+          return [];
+        },
+      },
+    });
+
+    await service.drainPostCommitWork();
+
+    assert.deepEqual(requestedTypes, [
+      'ORDER_PAYMENT_EXPIRED_AUDIT',
+      'ORDER_PAYMENT_EXPIRED_NOTIFICATION',
+    ]);
+  });
+
+  it('does not publish a durable expiry event claimed by another worker', async () => {
+    const auditEntries = [];
+    let claimedId = null;
+    const service = createOrderPaymentExpiryService({
+      repository: {
+        async listPendingPostCommitWork() {
+          return [{
+            _id: 'outbox-expiry-lost',
+            identityKey: 'ORDER_PAYMENT_EXPIRED_AUDIT:lost',
+            eventType: 'ORDER_PAYMENT_EXPIRED_AUDIT',
+            payload: { action: 'ORDER_PAYMENT_EXPIRED' },
+          }];
+        },
+        async claimPostCommitWork(id) {
+          claimedId = id;
+          return null;
+        },
+      },
+      auditLogger: { async log(entry) { auditEntries.push(entry); } },
+    });
+
+    await service.drainPostCommitWork();
+
+    assert.equal(claimedId, 'outbox-expiry-lost');
+    assert.equal(auditEntries.length, 0);
+  });
+
+  it('persists failed post-commit effects for a later retry without repeating expiry', async () => {
+    const fixture = createFixture();
+    const workItems = [];
+    let auditAttempts = 0;
+    const repository = {
+      ...fixture.repository,
+      async enqueuePostCommitWork(item) { workItems.push(item); return item; },
+    };
+    const service = createOrderPaymentExpiryService({
+      repository,
+      transactionManager: { async withTransaction(work) { return work({}); } },
+      inventoryRepository: { async release() { return true; } },
+      auditLogger: { async log() { auditAttempts += 1; if (auditAttempts === 1) throw new Error('audit unavailable'); } },
+      notificationPublisher: { async publish() { return true; } },
+      clock: () => new Date('2026-07-23T08:00:01.000Z'),
+    });
+
+    const first = await service.expireOverdueOrders();
+    const second = await service.expireOverdueOrders();
+    assert.deepEqual(first, { expired: 1 });
+    assert.deepEqual(second, { expired: 0 });
+    assert.equal(workItems.length, 2);
+    assert.equal(fixture.order.orderStatus, 'Cancelled');
+  });
+
+  it('does not publish transaction-local expiry work when commit fails', async () => {
+    const fixture = createFixture();
+    const auditEntries = [];
+    const notifications = [];
+    const service = createOrderPaymentExpiryService({
+      repository: {
+        ...fixture.repository,
+        async enqueuePostCommitWork(item) {
+          return { _id: `transaction-local-${item.eventType}`, ...item };
+        },
+        async listPendingPostCommitWork() {
+          return [];
+        },
+      },
+      transactionManager: {
+        async withTransaction(work) {
+          await work({ id: 'rolled-back-session' });
+          throw new Error('commit failed');
+        },
+      },
+      inventoryRepository: { async release() { return true; } },
+      auditLogger: { async log(entry) { auditEntries.push(entry); } },
+      notificationPublisher: { async publish(entry) { notifications.push(entry); } },
+      clock: () => new Date('2026-07-23T08:00:01.000Z'),
+    });
+
+    await assert.rejects(() => service.expireOverdueOrders(), /commit failed/);
+    await service.drainPostCommitWork();
+
+    assert.equal(auditEntries.length, 0);
+    assert.equal(notifications.length, 0);
+  });
+
   it('expires one due online order atomically then releases each reservation once after the winner transition', async () => {
     const fixture = createFixture();
 
@@ -100,6 +204,28 @@ describe('order payment expiry service', () => {
       paymentLinkId: 'payos-link-active',
       reason: 'Order payment deadline expired',
     }]);
+  });
+
+  it('fails closed when an expired order has no exact reservation lineage to release', async () => {
+    const fixture = createFixture();
+    fixture.repository.claimReservationRelease = async () => null;
+    fixture.service = createOrderPaymentExpiryService({
+      repository: fixture.repository,
+      transactionManager: { async withTransaction(work) { return work({}); } },
+      inventoryRepository: {
+        async release() {
+          throw new Error('aggregate inventory must not be released without an owned lineage');
+        },
+      },
+      auditLogger: { async log() {} },
+      notificationPublisher: { async publish() {} },
+      clock: () => new Date('2026-07-23T08:00:01.000Z'),
+    });
+
+    await assert.rejects(
+      () => fixture.service.expireOverdueOrders(),
+      /reservation.*missing|reservation.*released|reservation.*intact/i,
+    );
   });
 
   it('does not release, audit, or notify when another committed transition wins the expiry race', async () => {

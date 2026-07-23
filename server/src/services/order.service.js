@@ -10,6 +10,8 @@ const OrderDetail = require('../models/orderDetail.model');
 const Payment = require('../models/payment.model');
 const PaymentAttempt = require('../models/paymentAttempt.model');
 const RefundPending = require('../models/refundPending.model');
+const OrderReservation = require('../models/orderReservation.model');
+const DomainOutbox = require('../models/domainOutbox.model');
 const ReturnRefundRequest = require('../models/returnRefundRequest.model');
 const User = require('../models/user.model');
 const UserAddress = require('../models/userAddress.model');
@@ -147,6 +149,8 @@ function hashCheckoutRequest({
   expectedItems,
 }) {
   const addressSource = savedAddressId
+    // A saved-address checkout is replayed from the immutable Order snapshot.
+    // Do not resolve the mutable address resource as part of idempotency.
     ? { type: 'saved', savedAddressId }
     : {
         type: 'one-time',
@@ -260,6 +264,23 @@ function createModelOrderRepository() {
       const [detail] = await OrderDetail.create([data], session ? { session } : undefined);
       return detail.toObject();
     },
+    async createReservation(data, session) {
+      const [reservation] = await OrderReservation.create([data], session ? { session } : undefined);
+      return reservation.toObject();
+    },
+    async findReservationsByOrder(orderId, session) {
+      return withOptionalSession(OrderReservation.find({ orderId, status: 'Reserved' }), session).lean();
+    },
+    async claimReservationRelease(reservationKey, releaseReason, session) {
+      return withOptionalSession(
+        OrderReservation.findOneAndUpdate(
+          { reservationKey, status: 'Reserved' },
+          { $set: { status: 'Released', releasedAt: new Date(), releaseReason } },
+          { new: true, runValidators: true }
+        ),
+        session
+      ).lean();
+    },
     async createPayment(data, session) {
       const [payment] = await Payment.create([data], session ? { session } : undefined);
       return payment.toObject();
@@ -272,9 +293,76 @@ function createModelOrderRepository() {
       const [request] = await ReturnRefundRequest.create([data], session ? { session } : undefined);
       return request.toObject();
     },
+    async findRefundRequestByObligationKey(orderId, obligationKey, session) {
+      return withOptionalSession(
+        ReturnRefundRequest.findOne({ orderId, obligationKey }),
+        session
+      ).lean();
+    },
     async updateRefundRequest(id, data, session) {
       return withOptionalSession(
         ReturnRefundRequest.findByIdAndUpdate(id, { $set: data }, { new: true, runValidators: true }),
+        session
+      ).lean();
+    },
+    async enqueuePostCommitWork(data, session) {
+      return withOptionalSession(
+        DomainOutbox.findOneAndUpdate(
+          { identityKey: data.identityKey },
+          { $setOnInsert: data },
+          { upsert: true, new: true, runValidators: true }
+        ),
+        session
+      ).lean();
+    },
+    async listPendingPostCommitWork(eventTypes, staleBefore, session) {
+      return withOptionalSession(
+        DomainOutbox.find({
+          eventType: { $in: eventTypes },
+          $or: [
+            { status: { $in: ['Pending', 'Failed'] } },
+            { status: 'Processing', processingStartedAt: { $lte: staleBefore } },
+          ],
+        }).sort({ createdAt: 1 }),
+        session
+      ).lean();
+    },
+    async claimPostCommitWork(id, staleBefore, now, session) {
+      return withOptionalSession(
+        DomainOutbox.findOneAndUpdate(
+          {
+            _id: id,
+            $or: [
+              { status: { $in: ['Pending', 'Failed'] } },
+              { status: 'Processing', processingStartedAt: { $lte: staleBefore } },
+            ],
+          },
+          {
+            $set: { status: 'Processing', processingStartedAt: now, lastError: '' },
+            $inc: { attemptCount: 1 },
+          },
+          { new: true, runValidators: true }
+        ),
+        session
+      ).lean();
+    },
+    async markPostCommitWorkDone(id, processingStartedAt, session) {
+      return withOptionalSession(
+        DomainOutbox.findOneAndUpdate(
+          { _id: id, status: 'Processing', processingStartedAt },
+          { $set: { status: 'Completed', completedAt: new Date(), processingStartedAt: null, lastError: '' } },
+          { new: true }
+        ),
+        session
+      ).lean();
+    },
+    async markPostCommitWorkFailed(id, processingStartedAt, error, session) {
+      return withOptionalSession(
+        DomainOutbox.findOneAndUpdate(
+          { _id: id, status: 'Processing', processingStartedAt },
+          { $set: { status: 'Failed', processingStartedAt: null, lastError: String(error?.message || error || '') } },
+          { new: true }
+        ),
         session
       ).lean();
     },
@@ -377,6 +465,77 @@ function createOrderService({
   payosGateway = createPayOSGateway(),
   clock = () => new Date(),
 } = {}) {
+  const localPostCommitWork = new Map();
+
+  async function runPostCommitWork(item) {
+    if (item.eventType === 'ORDER_CANCEL_AUDIT') await auditLogger.log(item.payload);
+  }
+
+  async function drainPostCommitWork() {
+    const drainStartedAt = new Date(clock());
+    const staleBefore = new Date(drainStartedAt.getTime() - 60_000);
+    const items = [
+      ...localPostCommitWork.values(),
+      ...(orderRepository.listPendingPostCommitWork
+        ? await orderRepository.listPendingPostCommitWork(
+          ['ORDER_CANCEL_AUDIT'],
+          staleBefore
+        )
+        : []),
+    ];
+    const seen = new Set();
+    for (const item of items) {
+      const key = String(item.identityKey || item._id || '');
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const now = new Date(clock());
+      const claimed = item._id && orderRepository.claimPostCommitWork
+        ? await orderRepository.claimPostCommitWork(
+          item._id,
+          staleBefore,
+          now
+        )
+        : item;
+      if (!claimed) {
+        localPostCommitWork.delete(key);
+        continue;
+      }
+      try {
+        await runPostCommitWork(claimed);
+        localPostCommitWork.delete(key);
+        if (claimed._id && orderRepository.markPostCommitWorkDone) {
+          await orderRepository.markPostCommitWorkDone(claimed._id, claimed.processingStartedAt);
+        }
+      } catch (error) {
+        localPostCommitWork.set(key, { ...claimed, lastError: error.message });
+        if (claimed._id && orderRepository.markPostCommitWorkFailed) {
+          try {
+            await orderRepository.markPostCommitWorkFailed(
+              claimed._id,
+              claimed.processingStartedAt,
+              error
+            );
+          } catch {
+            // Keep the local copy if the outbox persistence path is unavailable.
+          }
+        }
+      }
+    }
+  }
+
+  async function schedulePostCommitWork(eventType, payload, session) {
+    const identityKey = `${eventType}:${payload.eventId}`;
+    const item = { identityKey, eventType, payload, status: 'Pending' };
+    if (orderRepository.enqueuePostCommitWork) {
+      // Do not mirror transaction-local data in process memory. The durable
+      // row becomes visible to the drain only after the business transaction
+      // commits; a failed commit must not publish a false audit event.
+      await orderRepository.enqueuePostCommitWork(item, session);
+      return;
+    }
+    localPostCommitWork.set(identityKey, item);
+  }
+
   function normalizeIdempotencyKey(input = {}, operation = 'checkout') {
     const key = String(input.idempotencyKey || '').trim();
     if (!key) {
@@ -503,7 +662,17 @@ function createOrderService({
     return toOrderResponse(existing, details);
   }
 
+  async function releaseOrderReservation(orderId, detail, session, reason) {
+    if (orderRepository.claimReservationRelease) {
+      const reservationKey = `ORDER:${String(orderId)}:${String(detail._id)}`;
+      const claimed = await orderRepository.claimReservationRelease(reservationKey, reason, session);
+      if (!claimed) return null;
+    }
+    return inventoryRepository.release(detail.productId, detail.quantity, session);
+  }
+
   return {
+    drainPostCommitWork,
     async placeOrder(customerId, input = {}) {
       const idempotencyKey = normalizeIdempotencyKey(input);
       const paymentMethod = input.paymentMethod || 'COD';
@@ -529,6 +698,21 @@ function createOrderService({
         );
       }
 
+      let expectedItems;
+      if (hasSavedAddress && Array.isArray(input.expectedItems) && input.expectedItems.length > 0) {
+        expectedItems = normalizeExpectedItems(input.expectedItems);
+        const preliminaryCheckoutHash = hashCheckoutRequest({
+          customerId,
+          paymentMethod,
+          savedAddressId,
+          deliveryAddress: {},
+          customerNote: input.customerNote,
+          expectedItems,
+        });
+        const existing = await loadExisting(customerId, idempotencyKey, preliminaryCheckoutHash);
+        if (existing) return existing;
+      }
+
       let deliverySnapshot;
       if (hasSavedAddress) {
         const savedAddress = await addressRepository.findByIdForUser(customerId, savedAddressId);
@@ -551,7 +735,7 @@ function createOrderService({
           'CHECKOUT_ADDRESS_INVALID'
         );
       }
-      const expectedItems = normalizeExpectedItems(input.expectedItems);
+      if (!expectedItems) expectedItems = normalizeExpectedItems(input.expectedItems);
       const checkoutRequestHash = hashCheckoutRequest({
         customerId,
         paymentMethod,
@@ -560,8 +744,8 @@ function createOrderService({
         customerNote: deliverySnapshot.customerNote,
         expectedItems,
       });
-      const existing = await loadExisting(customerId, idempotencyKey, checkoutRequestHash);
-      if (existing) return existing;
+      const existingAfterAddressResolution = await loadExisting(customerId, idempotencyKey, checkoutRequestHash);
+      if (existingAfterAddressResolution) return existingAfterAddressResolution;
 
       let paymentDeadlineAt = null;
       if (paymentMethod === 'ONLINE') {
@@ -616,7 +800,17 @@ function createOrderService({
 
           for (const line of lines) {
             await inventoryRepository.reserve(line.productId, line.quantity, session);
-            await orderRepository.createOrderDetail({ orderId: order._id, ...line }, session);
+            const detail = await orderRepository.createOrderDetail({ orderId: order._id, ...line }, session);
+            if (detail?._id && orderRepository.createReservation) {
+              await orderRepository.createReservation({
+                reservationKey: `ORDER:${String(order._id)}:${String(detail._id)}`,
+                orderId: order._id,
+                orderDetailId: detail._id,
+                productId: line.productId,
+                quantity: line.quantity,
+                status: 'Reserved',
+              }, session);
+            }
           }
 
           const paymentPayload = {
@@ -700,6 +894,7 @@ function createOrderService({
 
     async cancelOrder(customerId, orderId, input = {}) {
       const { cancelReason, idempotencyKey, requestHash } = normalizeCancellation(input);
+      await drainPostCommitWork();
       const result = await transactionManager.withTransaction(async (session) => {
         const order = await orderRepository.findById(orderId, session);
         if (!order || String(order.customerId) !== String(customerId)) throw new ApiError(404, 'Order not found');
@@ -772,18 +967,23 @@ function createOrderService({
           }
         }
         if (isPaid) {
-          const refundRequest = orderRepository.createRefundRequest
-            ? await orderRepository.createRefundRequest({
+          const obligationKey = `PAYMENT_REVERSAL:${String(paidAttempt._id)}`;
+          let refundRequest = orderRepository.findRefundRequestByObligationKey
+            ? await orderRepository.findRefundRequestByObligationKey(order._id, obligationKey, session)
+            : null;
+          if (!refundRequest && orderRepository.createRefundRequest) {
+            refundRequest = await orderRepository.createRefundRequest({
               orderId: order._id,
-              requestCode: `CAN-${order.orderCode}`,
+              requestCode: `CAN-${order.orderCode}-${crypto.createHash('sha256').update(obligationKey).digest('hex').slice(0, 12).toUpperCase()}`,
               customerId: order.customerId,
               paymentId: payment?._id || null,
+              obligationKey,
               reason: `Customer cancellation: ${cancelReason}`,
               status: 'ReadyForRefund',
               refundAmount: order.totalAmount,
-              originalRequestedAt: new Date(),
-            }, session)
-            : null;
+              requestedAt: new Date(clock()),
+            }, session);
+          }
           const refund = await orderRepository.upsertRefundPending({
             orderId: order._id,
             paymentAttemptId: paidAttempt._id,
@@ -794,7 +994,7 @@ function createOrderService({
             reason: `Customer cancellation: ${cancelReason}`,
             status: 'RefundPending',
             obligationType: 'PAYMENT_REVERSAL',
-            obligationKey: `PAYMENT_REVERSAL:${String(paidAttempt._id)}`,
+            obligationKey,
           }, session);
           if (refundRequest && orderRepository.updateRefundRequest) {
             await orderRepository.updateRefundRequest(refundRequest._id, { refundPendingId: refund._id }, session);
@@ -804,8 +1004,19 @@ function createOrderService({
           }
         }
         for (const detail of details) {
-          await inventoryRepository.release(detail.productId, detail.quantity, session);
+          const released = await releaseOrderReservation(orderId, detail, session, 'Customer cancelled order');
+          if (orderRepository.claimReservationRelease && !released) {
+            throw new ApiError(409, 'Order reservation lineage is missing or already released');
+          }
         }
+        await schedulePostCommitWork('ORDER_CANCEL_AUDIT', {
+          userId: customerId,
+          action: 'ORDER_CANCEL',
+          targetEntity: 'Order',
+          targetId: String(orderId),
+          description: `Order cancelled: ${order.orderCode}`,
+          eventId: `ORDER_CANCEL:${String(orderId)}:${idempotencyKey}`,
+        }, session);
         return {
           cancelled,
           orderCode: order.orderCode,
@@ -822,13 +1033,7 @@ function createOrderService({
             // still reports Paid becomes an explicit refund obligation.
           }
         }
-        await auditLogger.log({
-          userId: customerId,
-          action: 'ORDER_CANCEL',
-          targetEntity: 'Order',
-          targetId: String(orderId),
-          description: `Order cancelled: ${result.orderCode}`,
-        });
+        await drainPostCommitWork();
       }
       return {
         ...toOrderResponse(result.cancelled),

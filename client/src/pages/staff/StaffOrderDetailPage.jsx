@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
 import { staffOrderService } from '../../services/staffOrderService.js';
@@ -11,6 +11,16 @@ export default function StaffOrderDetailPage() {
   const [destinationReference, setDestinationReference] = useState('');
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const submittingRef = useRef(false);
+  const commandKeys = useRef(new Map());
+
+  function idempotencyKey(command) {
+    if (!commandKeys.current.has(command)) {
+      commandKeys.current.set(command, `staff-${command}-${crypto.randomUUID()}`);
+    }
+    return commandKeys.current.get(command);
+  }
 
   async function loadOrder() {
     setError('');
@@ -24,14 +34,20 @@ export default function StaffOrderDetailPage() {
   useEffect(() => { loadOrder(); }, [id]);
 
   async function runAction(action, successMessage) {
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setError('');
     setMessage('');
+    setSubmitting(true);
     try {
       await action();
       setMessage(successMessage);
       await loadOrder();
     } catch (err) {
       setError(err.message);
+    } finally {
+      submittingRef.current = false;
+      setSubmitting(false);
     }
   }
 
@@ -56,7 +72,7 @@ export default function StaffOrderDetailPage() {
           <p><strong>Địa chỉ giao hàng:</strong> {order.shippingAddress}</p>
           <div className="action-row">
             {order.orderStatus === 'Pending' && (
-              <button className="btn btn-success" type="button" onClick={() => runAction(() => staffOrderService.confirmOrder(order.id), 'Đã xác nhận đơn hàng.')}>Xác nhận đơn</button>
+              <button className="btn btn-success" type="button" disabled={submitting} onClick={() => runAction(() => staffOrderService.confirmOrder(order.id, { idempotencyKey: idempotencyKey(`confirm:${order.id}`) }), 'Đã xác nhận đơn hàng.')}>Xác nhận đơn</button>
             )}
             {order.orderStatus === 'Confirmed' && !order.stockExportRequest && (
               <button className="btn btn-success" type="button" onClick={() => runAction(() => staffOrderService.requestStockExport(order.id), 'Đã gửi yêu cầu xuất kho.')}>Yêu cầu xuất kho</button>
@@ -112,7 +128,7 @@ export default function StaffOrderDetailPage() {
                 <input id="staffCancelReason" className="form-control" value={cancelReason} onChange={(event) => setCancelReason(event.target.value)} placeholder="Nhập lý do hủy bắt buộc" />
               </div>
               <div className="col-md-4">
-                <button className="btn btn-outline-danger" type="button" onClick={() => runAction(() => staffOrderService.cancelOrder(order.id, { cancelReason }), 'Đã hủy đơn hàng.')}>Hủy đơn</button>
+                <button className="btn btn-outline-danger" type="button" disabled={submitting} onClick={() => runAction(() => staffOrderService.cancelOrder(order.id, { cancelReason, idempotencyKey: idempotencyKey(`cancel:${order.id}`) }), 'Đã hủy đơn hàng.')}>Hủy đơn</button>
               </div>
             </div>
           )}

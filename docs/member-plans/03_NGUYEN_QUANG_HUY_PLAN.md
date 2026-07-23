@@ -331,3 +331,39 @@ Sau vòng review độc lập, SL-003 được harden thêm trước khi tạo P
 - Staff confirm kiểm tra đủ reservation, tạo duy nhất một StockExportRequest và hỗ trợ replay bằng Idempotency-Key; hủy Staff đóng request mở. Warehouse approve request Confirmed sẽ chuyển sang `StockExportRequested`. Migration tạo partial unique index một-request-mở-mỗi-order, preflight duplicate và lặp an toàn.
 
 Regression hardening: server `529/529`, client `170/170`, Vite build exit `0`; log runtime vẫn local-only.
+
+## SL-003 Closure Addendum 2026-07-24
+
+Branch closure: `feature/sl-003-order-payment-cancellation-closure`
+
+Owner/commit identity: Nguyễn Quang Huy `<quanghuyn267@gmail.com>`
+
+Reviewer/integration owner: Nguyễn Ngọc Thành
+
+Các blocker B1–B9 trong `docs/reviews/SL-003_RELEASE_AUDIT.md` đã được đóng
+bằng acceptance test trước khi sửa:
+
+- Callback Failed/Cancelled chỉ đóng attempt; Order còn retry được tới deadline.
+- Late/excess/paid-cancel tạo obligation độc lập và standalone
+  `ReturnRefundRequest` để dùng destination/payout workflow hiện hữu.
+- `moneyObligationsSettled` được tính từ toàn bộ obligation bắt buộc.
+- `OrderReservation` giữ lineage theo Order/OrderDetail; cancel/expiry/export
+  claim chính xác và fail-closed khi lineage thiếu.
+- Saved-address checkout replay không phụ thuộc resource mutable.
+- `DomainOutbox` nằm cùng transaction nghiệp vụ, không phát event khi rollback,
+  có atomic lease/claim giữa nhiều backend, reclaim stale work và không để một
+  handler lỗi chặn handler khác.
+- Staff confirm/cancel có stable idempotency key, state lock và ref lock tức thời.
+- Migration preflight toàn bộ identity index, backfill active lineage, chuẩn hóa
+  expired/cancelled projections và chạy lặp không phát sinh write.
+
+Fresh evidence:
+
+- Server `566/566`, 93 suites, 0 fail.
+- Client `171/171`, 49 suites, 0 fail.
+- Vite production build exit `0`; chỉ còn chunk-size warning đã biết.
+- Disposable MongoDB replica set `rs0`: migration second-run `0 write`;
+  multi-worker outbox chỉ một claim thắng và stale lease được reclaim.
+- Traceability và handoff được commit tại `docs/reviews/SL-003_G3_TRACEABILITY.md`
+  và `docs/reviews/SL-003_HANDOFF.md`; không đưa folder local-only
+  `docs/superpowers` hoặc `ui-prompts` vào commit.

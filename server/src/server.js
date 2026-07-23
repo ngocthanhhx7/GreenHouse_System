@@ -13,6 +13,9 @@ const { exchangeService } = require('./services/exchange.service');
 const { createExchangeExpiryWorker } = require('./workers/exchangeExpiry.worker');
 const { orderPaymentExpiryService } = require('./services/orderPaymentExpiry.service');
 const { createOrderPaymentExpiryWorker } = require('./workers/orderPaymentExpiry.worker');
+const { orderService } = require('./services/order.service');
+const { paymentService } = require('./services/payment.service');
+const { createDomainOutboxWorker } = require('./workers/domainOutbox.worker');
 
 const PORT = process.env.PORT || 5000;
 
@@ -26,11 +29,15 @@ async function startServer() {
   const returnEvidenceRetentionWorker = createReturnEvidenceRetentionWorker({ service: returnEvidenceRetentionService });
   const exchangeExpiryWorker = createExchangeExpiryWorker({ service: exchangeService });
   const orderPaymentExpiryWorker = createOrderPaymentExpiryWorker({ service: orderPaymentExpiryService });
+  const domainOutboxWorker = createDomainOutboxWorker({
+    services: [orderService, paymentService, orderPaymentExpiryService],
+  });
   emailWorker.start();
   returnRefundExpiryWorker.start();
   returnEvidenceRetentionWorker.start();
   exchangeExpiryWorker.start();
   orderPaymentExpiryWorker.start();
+  domainOutboxWorker.start();
   app.listen(PORT, () => {
     console.log(`GreenHome API listening on port ${PORT}`);
   });

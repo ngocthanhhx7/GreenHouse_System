@@ -40,6 +40,12 @@ const RECEIVABLE_STATUSES = ['Approved', 'AwaitingInspection'];
 const HANDOFF_RECORDABLE_STATUSES = [...RECEIVABLE_STATUSES, 'Expired'];
 const RECEIVED_STATUSES = ['Received', 'ReadyForRefund'];
 const RETURN_WINDOW_MS = 5 * 24 * 60 * 60 * 1000;
+
+function computeMoneyObligationsSettled(obligations = []) {
+  return obligations.every((obligation) => (
+    ['Refunded', 'FailedTerminal', 'ClosedNoPayout', 'Cancelled'].includes(String(obligation?.status || ''))
+  ));
+}
 const SHIP_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
 const FUTURE_TOLERANCE_MS = 5 * 60 * 1000;
 const CONFIRMATION_NOTICE = 'Tôi đã kiểm tra thông tin nhận hoàn tiền và chịu trách nhiệm về thông tin do mình cung cấp.';
@@ -424,6 +430,9 @@ function createModelRepository() {
     async findRefundPendingByRequestId(returnRefundRequestId, session) {
       return withOptionalSession(RefundPending.findOne({ returnRefundRequestId }), session).lean();
     },
+    async listRefundPendingByOrder(orderId, session) {
+      return withOptionalSession(RefundPending.find({ orderId }).sort({ createdAt: 1, _id: 1 }), session).lean();
+    },
     async updateRefundPending(id, data, session) {
       return withOptionalSession(RefundPending.findByIdAndUpdate(id, { $set: data }, { new: true, runValidators: true }), session).lean();
     },
@@ -627,6 +636,10 @@ function createReturnRefundService({
   }
 
   async function findRequestRefundObligation(request, session) {
+    if (request.obligationKey && repository.findRefundPending) {
+      const obligation = await repository.findRefundPending(request.obligationKey, session);
+      if (obligation) return obligation;
+    }
     const normalReturn = await repository.findRefundPending(`NORMAL_RETURN:${String(request._id)}`, session);
     if (normalReturn) return normalReturn;
     if (repository.findRefundPendingByRequestId) {
@@ -663,11 +676,17 @@ function createReturnRefundService({
       }, session);
     if (!completed) throw new ApiError(409, 'Return/refund request changed while payout was being completed');
 
+    const obligations = repository.listRefundPendingByOrder
+      ? await repository.listRefundPendingByOrder(loaded.order._id, session)
+      : null;
+    const moneyObligationsSettled = obligations
+      ? computeMoneyObligationsSettled(obligations)
+      : true;
     const updatedOrder = await repository.updateOrder(
       loaded.order._id,
       {
         ...(isCancellationRefund ? {} : { orderStatus: 'Returned' }),
-        moneyObligationsSettled: true,
+        moneyObligationsSettled,
       },
       session
     );
@@ -1613,5 +1632,6 @@ function createReturnRefundService({
 module.exports = {
   createModelRepository,
   createReturnRefundService,
+  computeMoneyObligationsSettled,
   returnRefundService: createReturnRefundService(),
 };

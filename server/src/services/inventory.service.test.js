@@ -222,6 +222,32 @@ describe('inventory service', () => {
     assert.equal(repository.transactions.at(-1).relatedCollection, 'StockExportRequest');
   });
 
+  it('consumes each exact order reservation lineage in the same export transaction', async () => {
+    const consumed = [];
+    repository.claimOrderReservationConsumption = async (orderId, orderDetailId, session) => {
+      consumed.push({ orderId, orderDetailId, session });
+      return { orderId, orderDetailId, status: 'Consumed' };
+    };
+
+    await service.updateStockExportStatus('warehouse-1', 'export-1', { status: 'Approved' });
+    await service.updateStockExportStatus('warehouse-1', 'export-1', { status: 'Exported' });
+
+    assert.equal(consumed.length, 1);
+    assert.equal(consumed[0].orderId, 'order-1');
+    assert.equal(consumed[0].orderDetailId, 'detail-1');
+  });
+
+  it('fails closed when stock export cannot claim the exact order reservation lineage', async () => {
+    repository.claimOrderReservationConsumption = async () => null;
+
+    await service.updateStockExportStatus('warehouse-1', 'export-1', { status: 'Approved' });
+    await assert.rejects(
+      () => service.updateStockExportStatus('warehouse-1', 'export-1', { status: 'Exported' }),
+      /reservation.*missing|reservation.*consumed|reservation.*intact/i,
+    );
+    assert.equal(repository.transactions.length, 0);
+  });
+
   it('moves a Confirmed order to StockExportRequested when its confirmed export is approved', async () => {
     repository.orders[0].orderStatus = 'Confirmed';
 
