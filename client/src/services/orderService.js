@@ -3,7 +3,10 @@ import { DEFAULT_BASE_URL, TOKEN_KEY, apiRequest } from './apiClient.js';
 async function parseResponse(response) {
   const payload = await response.json();
   if (!response.ok || payload.success === false) {
-    throw new Error(payload.message || 'Order request failed');
+    const error = new Error(payload.message || 'Order request failed');
+    error.errorCode = payload.errorCode;
+    error.errors = payload.errors || [];
+    throw error;
   }
   return payload.data;
 }

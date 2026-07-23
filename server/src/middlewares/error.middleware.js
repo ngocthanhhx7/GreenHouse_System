@@ -13,6 +13,23 @@ function errorHandler(error, req, res, next) {
   if (error && (error.type === 'entity.too.large' || error.status === 413)) {
     return sendError(res, 'Request body is too large', 413, [], 'PAYLOAD_TOO_LARGE', req);
   }
+  if (
+    error
+    && error.code === 20
+    && (
+      error.codeName === 'IllegalOperation'
+      || /transaction numbers are only allowed on a replica set member or mongos/i.test(error.message || '')
+    )
+  ) {
+    return sendError(
+      res,
+      'Cơ sở dữ liệu chưa được cấu hình transaction. Vui lòng cấu hình MongoDB replica set rồi thử lại.',
+      503,
+      [],
+      'DATABASE_TRANSACTIONS_UNSUPPORTED',
+      req
+    );
+  }
   if (error instanceof ApiError) {
     return sendError(res, error.message, error.statusCode, error.errors, error.errorCode, req);
   }

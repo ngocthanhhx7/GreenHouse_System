@@ -262,4 +262,18 @@ Huy sở hữu phát sự kiện email `ORDER_CREATED` sau khi transaction check
 ## Ownership Addendum 2026-07-22 - Order Email Failure Boundary
 
 - After checkout commits, customer lookup and `ORDER_CREATED` enqueue are isolated from the order response. A lookup/provider enqueue failure is recorded for operational follow-up and never rolls back or converts a successfully committed order into a 500 response.
+
+## Checkout Address/Transaction Closure 2026-07-23
+
+- Checkout gửi `savedAddressId` cho địa chỉ đã lưu; backend bắt buộc truy vấn theo
+  cả `addressId` và `customerId`, sau đó mới tạo snapshot bất biến trong Order.
+- Địa chỉ dùng một lần dùng payload `deliveryAddress` có cấu trúc; backend validate
+  riêng tên, số điện thoại, tỉnh/thành, quận/huyện, phường/xã và địa chỉ chi tiết.
+- Không tin snapshot phẳng do client gửi khi `savedAddressId` được chọn.
+- MongoDB local/production phải là replica set hoặc mongos vì checkout ghi Order,
+  OrderDetail, Payment, PaymentAttempt, Inventory reservation và Cart trong một
+  transaction. Server fail-fast nếu topology không hỗ trợ transaction; không dùng
+  fallback ghi từng phần.
+- MongoDB code 20 được trả thành `503 DATABASE_TRANSACTIONS_UNSUPPORTED` với thông
+  báo cấu hình rõ ràng thay vì `500 Internal server error`.
 - The event remains idempotent with key `ORDER_CREATED:<orderId>`; retries are handled by the durable email worker owned by Thành.

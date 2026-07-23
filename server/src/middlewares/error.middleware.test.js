@@ -70,6 +70,20 @@ describe('error middleware', () => {
     assert.equal(res.body.stack, undefined);
   });
 
+  it('maps MongoDB standalone transaction failures to an actionable 503', () => {
+    const res = createResponse('transaction-topology-request');
+    const error = new Error('Transaction numbers are only allowed on a replica set member or mongos');
+    error.code = 20;
+    error.codeName = 'IllegalOperation';
+
+    errorHandler(error, {}, res, () => {});
+
+    assert.equal(res.statusCode, 503);
+    assert.equal(res.body.errorCode, 'DATABASE_TRANSACTIONS_UNSUPPORTED');
+    assert.match(res.body.message, /cấu hình/i);
+    assert.equal(res.body.requestId, 'transaction-topology-request');
+  });
+
   it('returns NOT_FOUND for an unmatched route', () => {
     const res = createResponse('not-found-request');
 

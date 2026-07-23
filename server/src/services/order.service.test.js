@@ -4,12 +4,19 @@ const { describe, it, beforeEach } = require('node:test');
 const { createOrderService } = require('./order.service');
 
 function checkoutInput(overrides = {}) {
+  const { deliveryAddress, ...inputOverrides } = overrides;
   return {
-    receiverName: 'Khách hàng Demo',
-    receiverPhone: '0900000001',
-    shippingAddress: '12 Nguyễn Trãi, Thanh Xuân, Hà Nội',
+    deliveryAddress: {
+      receiverName: 'Khách hàng Demo',
+      phoneNumber: '0900000001',
+      province: 'Hà Nội',
+      district: 'Thanh Xuân',
+      ward: 'Khương Mai',
+      addressLine: '12 Nguyễn Trãi',
+      ...deliveryAddress,
+    },
     paymentMethod: 'COD',
-    ...overrides,
+    ...inputOverrides,
   };
 }
 
@@ -124,6 +131,36 @@ function createAuditLogger() {
   };
 }
 
+function createAddressRepository() {
+  const addresses = [
+    {
+      _id: 'address-owned',
+      userId: 'customer-1',
+      receiverName: 'Nguyễn Quang Huy',
+      phoneNumber: '0987654321',
+      province: 'Hà Nội',
+      district: 'Cầu Giấy',
+      ward: 'Dịch Vọng',
+      addressLine: 'Số 12 đường Bếp Việt',
+    },
+    {
+      _id: 'address-foreign',
+      userId: 'customer-2',
+      receiverName: 'Khách hàng khác',
+      phoneNumber: '0911111111',
+      province: 'Đà Nẵng',
+      district: 'Hải Châu',
+      ward: 'Thạch Thang',
+      addressLine: 'Số 8 đường khác',
+    },
+  ];
+  return {
+    async findByIdForUser(userId, id) {
+      return addresses.find((address) => address._id === id && address.userId === userId) || null;
+    },
+  };
+}
+
 describe('order service', () => {
   let orderService;
   let orderRepository;
@@ -148,6 +185,7 @@ describe('order service', () => {
       productRepository: createProductRepository(),
       inventoryRepository,
       orderRepository,
+      addressRepository: createAddressRepository(),
       auditLogger,
       customerRepository: { async findEmail() { return 'customer@example.com'; } },
       emailOutboxService: { async enqueue(event) { emailEvents.push(event); return event; } },
@@ -162,7 +200,7 @@ describe('order service', () => {
     assert.equal(result.paymentStatus, 'Unpaid');
     assert.equal(result.receiverName, 'Khách hàng Demo');
     assert.equal(result.receiverPhone, '0900000001');
-    assert.equal(result.shippingAddress, '12 Nguyễn Trãi, Thanh Xuân, Hà Nội');
+    assert.equal(result.shippingAddress, '12 Nguyễn Trãi, Khương Mai, Thanh Xuân, Hà Nội');
     assert.equal(orderRepository.details[0].productNameSnapshot, 'Green Pan');
     assert.equal(orderRepository.details[0].productSkuSnapshot, 'PAN-001');
     assert.equal(orderRepository.details[0].unitSnapshot, 'piece');
@@ -276,7 +314,10 @@ describe('order service', () => {
       });
 
       const first = await orderService.placeOrder('customer-1', checkoutInput({ idempotencyKey: 'unique-001' }));
-      const second = await orderService.placeOrder('customer-2', checkoutInput({ shippingAddress: '12 Bạch Đằng, Đà Nẵng', idempotencyKey: 'unique-002' }));
+      const second = await orderService.placeOrder('customer-2', checkoutInput({
+        deliveryAddress: { province: 'Đà Nẵng', district: 'Hải Châu', ward: 'Hòa Cường', addressLine: '12 Bạch Đằng' },
+        idempotencyKey: 'unique-002',
+      }));
 
       assert.notEqual(first.orderCode, second.orderCode);
     } finally {
@@ -299,6 +340,20 @@ describe('order service', () => {
     assert.equal(second.id, first.id);
     assert.equal(orderRepository.orders.length, 1);
     assert.equal(orderRepository.details.length, 1);
+  });
+
+  it('does not let an idempotency replay bypass the required checkout address source', async () => {
+    await orderService.placeOrder('customer-1', checkoutInput({ idempotencyKey: 'retry-source-001' }));
+
+    await assert.rejects(
+      () => orderService.placeOrder('customer-1', { paymentMethod: 'COD', idempotencyKey: 'retry-source-001' }),
+      (error) => {
+        assert.equal(error.statusCode, 400);
+        assert.equal(error.errorCode, 'CHECKOUT_ADDRESS_SOURCE_INVALID');
+        return true;
+      }
+    );
+    assert.equal(orderRepository.orders.length, 1);
   });
 
   it('runs all checkout writes inside a transaction and does not audit when transaction rolls back', async () => {
@@ -348,13 +403,115 @@ describe('order service', () => {
 
   it('validates receiver identity and Vietnamese phone before reserving stock', async () => {
     await assert.rejects(
-      () => orderService.placeOrder('customer-1', checkoutInput({ receiverName: '', idempotencyKey: 'invalid-name-001' })),
-      /tên người nhận/
+      () => orderService.placeOrder('customer-1', checkoutInput({ deliveryAddress: { receiverName: '' }, idempotencyKey: 'invalid-name-001' })),
+      (error) => {
+        assert.equal(error.errorCode, 'CHECKOUT_ADDRESS_INVALID');
+        assert.equal(error.errors[0].field, 'receiverName');
+        return true;
+      }
     );
     await assert.rejects(
-      () => orderService.placeOrder('customer-1', checkoutInput({ receiverPhone: '12345', idempotencyKey: 'invalid-phone-001' })),
-      /Số điện thoại người nhận không hợp lệ/
+      () => orderService.placeOrder('customer-1', checkoutInput({ deliveryAddress: { phoneNumber: '12345' }, idempotencyKey: 'invalid-phone-001' })),
+      (error) => {
+        assert.equal(error.errorCode, 'CHECKOUT_ADDRESS_INVALID');
+        assert.equal(error.errors[0].field, 'phoneNumber');
+        return true;
+      }
     );
     assert.equal(inventoryRepository.reservedQuantity, 0);
+  });
+
+  it('resolves an owned savedAddressId on the server and stores an immutable snapshot', async () => {
+    const result = await orderService.placeOrder('customer-1', {
+      savedAddressId: 'address-owned',
+      paymentMethod: 'COD',
+      idempotencyKey: 'saved-address-001',
+    });
+
+    assert.equal(result.receiverName, 'Nguyễn Quang Huy');
+    assert.equal(result.receiverPhone, '0987654321');
+    assert.equal(result.shippingAddress, 'Số 12 đường Bếp Việt, Dịch Vọng, Cầu Giấy, Hà Nội');
+  });
+
+  it('requires exactly one supported checkout address source with typed field errors', async () => {
+    await assert.rejects(
+      () => orderService.placeOrder('customer-1', { paymentMethod: 'COD', idempotencyKey: 'address-source-none-001' }),
+      (error) => {
+        assert.equal(error.statusCode, 400);
+        assert.equal(error.errorCode, 'CHECKOUT_ADDRESS_SOURCE_INVALID');
+        assert.deepEqual(error.errors, [{ field: 'addressSource', message: 'Chọn một địa chỉ đã lưu hoặc nhập địa chỉ mới' }]);
+        return true;
+      }
+    );
+
+    await assert.rejects(
+      () => orderService.placeOrder('customer-1', checkoutInput({ savedAddressId: 'address-owned', idempotencyKey: 'address-source-both-001' })),
+      (error) => {
+        assert.equal(error.statusCode, 400);
+        assert.equal(error.errorCode, 'CHECKOUT_ADDRESS_SOURCE_INVALID');
+        assert.deepEqual(error.errors, [{ field: 'addressSource', message: 'Chỉ được chọn một nguồn địa chỉ nhận hàng' }]);
+        return true;
+      }
+    );
+    assert.equal(inventoryRepository.reservedQuantity, 0);
+  });
+
+  it('rejects a savedAddressId that is not owned by the customer before reserving stock', async () => {
+    await assert.rejects(
+      () => orderService.placeOrder('customer-1', {
+        savedAddressId: 'address-foreign',
+        paymentMethod: 'COD',
+        idempotencyKey: 'saved-address-foreign-001',
+      }),
+      (error) => {
+        assert.equal(error.statusCode, 404);
+        assert.equal(error.errorCode, 'CHECKOUT_ADDRESS_NOT_FOUND');
+        return true;
+      }
+    );
+    assert.equal(inventoryRepository.reservedQuantity, 0);
+  });
+
+  it('validates and snapshots a structured one-time deliveryAddress', async () => {
+    const result = await orderService.placeOrder('customer-1', {
+      deliveryAddress: {
+        receiverName: 'Khách hàng Một lần',
+        phoneNumber: '0900000001',
+        province: 'Hà Nội',
+        district: 'Thanh Xuân',
+        ward: 'Khương Mai',
+        addressLine: 'Số 20 phố Hoàng Văn Thái',
+      },
+      paymentMethod: 'COD',
+      idempotencyKey: 'one-time-address-001',
+    });
+
+    assert.equal(result.receiverName, 'Khách hàng Một lần');
+    assert.equal(result.receiverPhone, '0900000001');
+    assert.equal(result.shippingAddress, 'Số 20 phố Hoàng Văn Thái, Khương Mai, Thanh Xuân, Hà Nội');
+  });
+
+  it('returns distinct validation details for oversized administrative address fields', async () => {
+    await assert.rejects(
+      () => orderService.placeOrder('customer-1', {
+        deliveryAddress: {
+          receiverName: 'Khách hàng Demo',
+          phoneNumber: '0900000001',
+          province: 'x'.repeat(101),
+          district: 'Thanh Xuân',
+          ward: 'Khương Mai',
+          addressLine: 'Số 20 phố Hoàng Văn Thái',
+        },
+        paymentMethod: 'COD',
+        idempotencyKey: 'oversized-province-001',
+      }),
+      (error) => {
+        assert.equal(error.statusCode, 400);
+        assert.equal(error.errorCode, 'CHECKOUT_ADDRESS_INVALID');
+        assert.equal(error.errors[0].field, 'province');
+        assert.equal(error.errors[0].message, 'Tỉnh/Thành không được vượt quá 100 ký tự');
+        return true;
+      }
+    );
   });
 });

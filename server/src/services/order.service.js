@@ -10,6 +10,7 @@ const OrderDetail = require('../models/orderDetail.model');
 const Payment = require('../models/payment.model');
 const PaymentAttempt = require('../models/paymentAttempt.model');
 const User = require('../models/user.model');
+const UserAddress = require('../models/userAddress.model');
 const { logAudit } = require('../utils/auditLogger');
 const { createEmailOutboxService } = require('./email.service');
 
@@ -54,22 +55,45 @@ function generateAttemptCode() {
   return `PAY-${Date.now()}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
 }
 
-function normalizeDeliverySnapshot(input = {}) {
-  const receiverName = String(input.receiverName || '').trim();
-  const receiverPhone = String(input.receiverPhone || '').replace(/[.\s-]/g, '');
-  const shippingAddress = String(input.shippingAddress || '').trim();
-  const customerNote = String(input.customerNote || '').trim();
+function normalizeStructuredDeliveryAddress(address = {}, customerNote = '') {
+  const fieldLimits = {
+    receiverName: { maxLength: 120, label: 'Tên người nhận' },
+    phoneNumber: { maxLength: 20, label: 'Số điện thoại' },
+    province: { maxLength: 100, label: 'Tỉnh/Thành' },
+    district: { maxLength: 100, label: 'Quận/Huyện' },
+    ward: { maxLength: 100, label: 'Phường/Xã' },
+    addressLine: { maxLength: 300, label: 'Địa chỉ chi tiết' },
+  };
+  const values = {};
+  const errors = [];
 
-  if (receiverName.length < 2) throw new ApiError(400, 'Vui lòng nhập tên người nhận');
-  if (!/^(?:\+84|0)(?:3|5|7|8|9)\d{8}$/.test(receiverPhone)) {
-    throw new ApiError(400, 'Số điện thoại người nhận không hợp lệ');
+  for (const [field, { maxLength, label }] of Object.entries(fieldLimits)) {
+    const value = String(address[field] || '').trim();
+    if (!value) errors.push({ field, message: `${label} là bắt buộc` });
+    if (value.length > maxLength) {
+      errors.push({ field, message: `${label} không được vượt quá ${maxLength} ký tự` });
+    }
+    values[field] = value;
   }
-  if (shippingAddress.length < 10 || shippingAddress.length > 500) {
-    throw new ApiError(400, 'Địa chỉ nhận hàng phải có từ 10 đến 500 ký tự');
-  }
-  if (customerNote.length > 500) throw new ApiError(400, 'Ghi chú đơn hàng không được vượt quá 500 ký tự');
 
-  return { receiverName, receiverPhone, shippingAddress, customerNote };
+  const receiverPhone = values.phoneNumber.replace(/[.\s-]/g, '');
+  if (values.phoneNumber && !/^(?:\+84|0)(?:3|5|7|8|9)\d{8}$/.test(receiverPhone)) {
+    errors.push({ field: 'phoneNumber', message: 'Số điện thoại người nhận không hợp lệ' });
+  }
+  const normalizedNote = String(customerNote || '').trim();
+  if (normalizedNote.length > 500) {
+    errors.push({ field: 'customerNote', message: 'Ghi chú đơn hàng không được vượt quá 500 ký tự' });
+  }
+  if (errors.length) {
+    throw new ApiError(400, 'Thông tin địa chỉ nhận hàng không hợp lệ', errors, 'CHECKOUT_ADDRESS_INVALID');
+  }
+
+  return {
+    receiverName: values.receiverName,
+    receiverPhone,
+    shippingAddress: [values.addressLine, values.ward, values.district, values.province].join(', '),
+    customerNote: normalizedNote,
+  };
 }
 
 function withOptionalSession(query, session) {
@@ -214,6 +238,15 @@ function createModelCustomerRepository() {
   };
 }
 
+function createModelAddressRepository() {
+  return {
+    async findByIdForUser(userId, id) {
+      if (!mongoose.isValidObjectId(id)) return null;
+      return UserAddress.findOne({ _id: id, userId }).lean();
+    },
+  };
+}
+
 function createOrderService({
   transactionManager = createModelTransactionManager(),
   cartRepository = createModelCartRepository(),
@@ -223,6 +256,7 @@ function createOrderService({
   auditLogger = { log: logAudit },
   customerRepository = null,
   emailOutboxService = null,
+  addressRepository = createModelAddressRepository(),
 } = {}) {
   function normalizeIdempotencyKey(input = {}) {
     const key = String(input.idempotencyKey || '').trim();
@@ -264,13 +298,55 @@ function createOrderService({
 
   return {
     async placeOrder(customerId, input = {}) {
-      const deliverySnapshot = normalizeDeliverySnapshot(input);
       const idempotencyKey = normalizeIdempotencyKey(input);
       const paymentMethod = input.paymentMethod || 'COD';
       if (!['COD', 'ONLINE'].includes(paymentMethod)) throw new ApiError(400, 'Invalid payment method');
 
+      const savedAddressId = String(input.savedAddressId || '').trim();
+      const hasSavedAddress = Boolean(savedAddressId);
+      const hasDeliveryAddress = input.deliveryAddress !== undefined && input.deliveryAddress !== null;
+      if (!hasSavedAddress && !hasDeliveryAddress) {
+        throw new ApiError(
+          400,
+          'Vui lòng chọn địa chỉ nhận hàng',
+          [{ field: 'addressSource', message: 'Chọn một địa chỉ đã lưu hoặc nhập địa chỉ mới' }],
+          'CHECKOUT_ADDRESS_SOURCE_INVALID'
+        );
+      }
+      if (hasSavedAddress && hasDeliveryAddress) {
+        throw new ApiError(
+          400,
+          'Thông tin địa chỉ nhận hàng không hợp lệ',
+          [{ field: 'addressSource', message: 'Chỉ được chọn một nguồn địa chỉ nhận hàng' }],
+          'CHECKOUT_ADDRESS_SOURCE_INVALID'
+        );
+      }
+
       const existing = await loadExisting(customerId, idempotencyKey);
       if (existing) return existing;
+
+      let deliverySnapshot;
+      if (hasSavedAddress) {
+        const savedAddress = await addressRepository.findByIdForUser(customerId, savedAddressId);
+        if (!savedAddress) {
+          throw new ApiError(
+            404,
+            'Không tìm thấy địa chỉ nhận hàng đã chọn',
+            [{ field: 'savedAddressId', message: 'Địa chỉ không tồn tại hoặc không thuộc tài khoản này' }],
+            'CHECKOUT_ADDRESS_NOT_FOUND'
+          );
+        }
+        deliverySnapshot = normalizeStructuredDeliveryAddress(savedAddress, input.customerNote);
+      } else if (typeof input.deliveryAddress === 'object' && !Array.isArray(input.deliveryAddress)) {
+        deliverySnapshot = normalizeStructuredDeliveryAddress(input.deliveryAddress, input.customerNote);
+      } else {
+        throw new ApiError(
+          400,
+          'Thông tin địa chỉ nhận hàng không hợp lệ',
+          [{ field: 'deliveryAddress', message: 'Địa chỉ mới không hợp lệ' }],
+          'CHECKOUT_ADDRESS_INVALID'
+        );
+      }
 
       let result;
       try {

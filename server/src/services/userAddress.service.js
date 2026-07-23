@@ -48,9 +48,14 @@ function validateAddress(input, { partial = false } = {}) {
   }
   if (data.label && data.label.length > 50) errors.push({ field: 'label', message: 'Label must not exceed 50 characters' });
   if (data.receiverName && data.receiverName.length > 120) errors.push({ field: 'receiverName', message: 'Receiver name must not exceed 120 characters' });
+  for (const field of ['province', 'district', 'ward']) {
+    if (data[field] && data[field].length > 100) {
+      errors.push({ field, message: `${field} must not exceed 100 characters` });
+    }
+  }
   if (data.addressLine && data.addressLine.length > 300) errors.push({ field: 'addressLine', message: 'Address line must not exceed 300 characters' });
   if (Object.hasOwn(input, 'isDefault')) data.isDefault = Boolean(input.isDefault);
-  if (errors.length) throw new ApiError(400, 'Invalid address data', errors);
+  if (errors.length) throw new ApiError(400, 'Invalid address data', errors, 'VALIDATION_ERROR');
   return data;
 }
 

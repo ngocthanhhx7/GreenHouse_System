@@ -91,4 +91,21 @@ describe('user address service', () => {
       /Invalid address data/
     );
   });
+
+  it('returns field validation errors before Mongoose for oversized province district and ward', async () => {
+    for (const field of ['province', 'district', 'ward']) {
+      await assert.rejects(
+        () => service.createAddress('user-1', { ...validAddress, [field]: 'x'.repeat(101) }),
+        (error) => {
+          assert.equal(error.statusCode, 400);
+          assert.equal(error.errorCode, 'VALIDATION_ERROR');
+          assert.deepEqual(error.errors, [{
+            field,
+            message: `${field} must not exceed 100 characters`,
+          }]);
+          return true;
+        }
+      );
+    }
+  });
 });
