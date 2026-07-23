@@ -20,6 +20,42 @@ describe('payOS configuration', () => {
     assert.equal(gateway.isConfigured(), false);
   });
 
+  it('uses the immutable order deadline as the provider-link expiry', async () => {
+    const calls = [];
+    const client = {
+      paymentRequests: {
+        async create(payload) {
+          calls.push(payload);
+          return { id: 'link-1', ...payload };
+        },
+      },
+    };
+    const deadline = new Date(Date.now() + 120_000);
+    const gateway = createPayOSGateway(
+      {
+        clientId: 'client',
+        apiKey: 'api',
+        checksumKey: 'checksum',
+        returnUrl: 'http://localhost:5173/payments/result',
+        cancelUrl: 'http://localhost:5173/payments/cancel',
+        ttlMinutes: 60,
+      },
+      { client },
+    );
+
+    await gateway.createPaymentLink({
+      order: {
+        _id: 'order-1',
+        orderCode: 'ORD-001',
+        totalAmount: 1000,
+        paymentDeadlineAt: deadline,
+      },
+      providerOrderCode: 100001,
+    });
+
+    assert.equal(calls[0].expiredAt, Math.floor(deadline.getTime() / 1000));
+  });
+
   it('creates and reconciles an idempotent payout through the official payOS client surface', async () => {
     const calls = [];
     const client = {

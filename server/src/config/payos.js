@@ -77,8 +77,20 @@ function createPayOSGateway(configuration = {}, dependencies = {}) {
 
     async createPaymentLink({ order, providerOrderCode }) {
       const payos = getClient({ requireRedirectUrls: true });
-      const ttlMinutes = Number.isFinite(config.ttlMinutes) && config.ttlMinutes > 0 ? config.ttlMinutes : 15;
-      const expiredAt = Math.floor(Date.now() / 1000) + Math.round(ttlMinutes * 60);
+      const orderDeadline = order?.paymentDeadlineAt ? new Date(order.paymentDeadlineAt) : null;
+      let expiredAt;
+      if (orderDeadline && !Number.isNaN(orderDeadline.getTime())) {
+        expiredAt = Math.floor(orderDeadline.getTime() / 1000);
+      } else {
+        // Legacy orders may not carry the immutable deadline yet.  Keep the
+        // adapter usable for those records while all new checkout orders use
+        // the server-derived Order.paymentDeadlineAt above.
+        const ttlMinutes = Number.isFinite(config.ttlMinutes) && config.ttlMinutes > 0 ? config.ttlMinutes : 15;
+        expiredAt = Math.floor(Date.now() / 1000) + Math.round(ttlMinutes * 60);
+      }
+      if (expiredAt <= Math.floor(Date.now() / 1000)) {
+        throw new ApiError(409, 'Đơn hàng đã hết thời hạn thanh toán trực tuyến', [], 'PAYMENT_DEADLINE_EXPIRED');
+      }
       return payos.paymentRequests.create({
         orderCode: providerOrderCode,
         amount: Number(order.totalAmount),
