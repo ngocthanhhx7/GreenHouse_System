@@ -1,6 +1,8 @@
 const ApiError = require('../utils/apiError');
+const mongoose = require('mongoose');
 const Product = require('../models/product.model');
 const Category = require('../models/category.model');
+const Inventory = require('../models/inventory.model');
 const { logAudit } = require('../utils/auditLogger');
 const { canonicalizeSku } = require('../utils/sku');
 
@@ -77,12 +79,18 @@ function matchesPrice(product, minPrice, maxPrice) {
 
 function createModelProductRepository() {
   return {
+    isPersistent: true,
     async list() {
       return Product.find({}).populate('categoryId').sort({ createdAt: -1 }).lean();
     },
-    async create(data) {
-      const created = await Product.create(data);
-      return Product.findById(created._id).populate('categoryId').lean();
+    async create(data, session) {
+      const [created] = await Product.create([data], session ? { session } : undefined);
+      const query = Product.findById(created._id).populate('categoryId');
+      if (session) query.session(session);
+      return query.lean();
+    },
+    async deleteById(id, session) {
+      return Product.deleteOne({ _id: id }, session ? { session } : undefined);
     },
     async findById(id) {
       return Product.findById(id).populate('categoryId').lean();
@@ -109,14 +117,39 @@ function validateProductInput(input) {
   if (!input.categoryId) throw new ApiError(400, 'Product category is required');
   if (!input.unit || !String(input.unit).trim()) throw new ApiError(400, 'Product unit is required');
   if (Number(input.price) <= 0) throw new ApiError(400, 'Product price must be greater than 0');
-  if (input.stockQuantity !== undefined && Number(input.stockQuantity) < 0) throw new ApiError(400, 'Product stock quantity cannot be negative');
+  if (input.stockQuantity !== undefined) throw new ApiError(400, 'Product stock quantity is managed by Inventory');
 }
 
 function createProductService({
   productRepository = createModelProductRepository(),
   categoryRepository = createModelCategoryRepository(),
   auditLogger = { log: logAudit },
+  inventoryRepository = null,
+  transactionManager = null,
 } = {}) {
+  if (!inventoryRepository && productRepository?.isPersistent) {
+    inventoryRepository = {
+      async create(data, session) {
+        const [created] = await Inventory.create([data], session ? { session } : undefined);
+        return created;
+      },
+      async deleteByProductId(productId) { return Inventory.deleteOne({ productId }); },
+    };
+  }
+  if (!transactionManager && productRepository?.isPersistent) {
+    transactionManager = {
+      async withTransaction(work) {
+        const session = await mongoose.startSession();
+        try {
+          let result;
+          await session.withTransaction(async () => { result = await work(session); });
+          return result;
+        } finally {
+          await session.endSession();
+        }
+      },
+    };
+  }
   async function ensureActiveCategory(categoryId) {
     const category = await categoryRepository.findById(categoryId);
     if (!category) throw new ApiError(400, 'Product category does not exist');
@@ -155,20 +188,49 @@ function createProductService({
       validateProductInput(input);
       await ensureActiveCategory(input.categoryId);
 
-      let product;
-      try {
-        product = await productRepository.create({
+      const productData = {
           name: String(input.name).trim(),
           sku: normalizeSku(input.sku),
           currency: normalizeCurrency(input.currency),
           description: String(input.description || '').trim(),
           imageUrls: Array.isArray(input.imageUrls) ? input.imageUrls : [],
           price: Number(input.price),
-          stockQuantity: input.stockQuantity !== undefined ? Number(input.stockQuantity) : 0,
           unit: String(input.unit).trim(),
           categoryId: input.categoryId,
           status: input.status || 'Active',
-        });
+        };
+      const createProductAndInventory = async (session) => {
+        let created;
+        try {
+          created = await productRepository.create(productData, session);
+        } catch (error) {
+          rethrowProductRepositoryError(error);
+        }
+        try {
+          if (inventoryRepository) await inventoryRepository.create({
+          productId: created._id,
+          stockQuantity: 0,
+          sellableQuantity: 0,
+          reservedQuantity: 0,
+          quarantinedQuantity: 0,
+          damagedQuantity: 0,
+          lowStockThreshold: 5,
+          inventoryHealth: 'Normal',
+          lastUpdatedBy: actor.id || null,
+          }, session);
+        } catch (error) {
+          if (session) throw error;
+          if (productRepository.deleteById) await productRepository.deleteById(created._id);
+          else if (inventoryRepository?.deleteByProductId) await inventoryRepository.deleteByProductId(created._id);
+          throw error;
+        }
+        return created;
+      };
+      let product;
+      try {
+        product = productRepository?.isPersistent && transactionManager
+          ? await transactionManager.withTransaction(createProductAndInventory)
+          : await createProductAndInventory(null);
       } catch (error) {
         rethrowProductRepositoryError(error);
       }
@@ -188,9 +250,7 @@ function createProductService({
       if (input.price !== undefined && Number(input.price) <= 0) {
         throw new ApiError(400, 'Product price must be greater than 0');
       }
-      if (input.stockQuantity !== undefined && Number(input.stockQuantity) < 0) {
-        throw new ApiError(400, 'Product stock quantity cannot be negative');
-      }
+      if (input.stockQuantity !== undefined) throw new ApiError(400, 'Product stock quantity is managed by Inventory');
 
       const existing = await productRepository.findById(id);
       if (!existing) throw new ApiError(404, 'Product not found');
@@ -211,7 +271,6 @@ function createProductService({
       if (input.sku !== undefined) data.sku = normalizeSku(input.sku);
       if (input.currency !== undefined) data.currency = normalizeCurrency(input.currency);
       if (input.price !== undefined) data.price = Number(input.price);
-      if (input.stockQuantity !== undefined) data.stockQuantity = Number(input.stockQuantity);
       if (input.imageUrls !== undefined) data.imageUrls = Array.isArray(input.imageUrls) ? input.imageUrls : [];
 
       let product;

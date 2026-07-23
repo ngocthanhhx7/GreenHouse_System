@@ -26,8 +26,24 @@ export function createInventoryService({ baseUrl = DEFAULT_BASE_URL, fetcher } =
         body: JSON.stringify(input),
       });
     },
+    async recordPhysicalCount(id, input) {
+      return request(`/warehouse/inventory/${id}/physical-count`, {
+        method: 'POST',
+        body: JSON.stringify(input),
+      });
+    },
+    async setThresholdOverride(id, input) {
+      return request(`/warehouse/inventory/${id}/threshold`, {
+        method: 'PATCH',
+        body: JSON.stringify(input),
+      });
+    },
     async listLowStock() {
       return request('/warehouse/inventory/low-stock');
+    },
+    async listLowStockAlerts(params = {}) {
+      const query = new URLSearchParams(params).toString();
+      return request(`/warehouse/inventory/low-stock-alerts${query ? `?${query}` : ''}`);
     },
     async listStockExports() {
       return request('/warehouse/stock-exports');

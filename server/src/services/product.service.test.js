@@ -247,4 +247,46 @@ describe('product service', () => {
       /Product category must be active/
     );
   });
+
+  it('rejects stock input because Inventory is the only quantity authority', async () => {
+    await assert.rejects(
+      () => productService.createProduct({
+        name: 'Stock Authority Product',
+        price: 10,
+        unit: 'piece',
+        categoryId: 'cat-active',
+        stockQuantity: 3,
+      }),
+      /managed by Inventory/,
+    );
+  });
+
+  it('can atomically initialize a zero-dimension Inventory through the persistent repository boundary', async () => {
+    const created = [];
+    const inventoryRepository = {
+      async create(data) { created.push(data); return data; },
+    };
+    const persistentProductRepository = {
+      isPersistent: true,
+      async create(data) { return { _id: 'persistent-product', ...data }; },
+      async findById() { return null; },
+    };
+    const service = createProductService({
+      productRepository: persistentProductRepository,
+      categoryRepository: createCategoryRepository(),
+      inventoryRepository,
+      transactionManager: { async withTransaction(work) { return work(null); } },
+      auditLogger: { async log() {} },
+    });
+    await service.createProduct({
+      name: 'Initialized Product',
+      price: 10,
+      unit: 'piece',
+      categoryId: 'cat-active',
+    });
+    assert.equal(created.length, 1);
+    assert.equal(created[0].productId, 'persistent-product');
+    assert.equal(created[0].sellableQuantity, 0);
+    assert.equal(created[0].reservedQuantity, 0);
+  });
 });

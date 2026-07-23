@@ -301,3 +301,42 @@ Addendum này chỉ supersede ongoing Notification integration ownership kể t�
 - Cường tiếp tục sở hữu Warehouse/Reports/Settings và phát domain event idempotent cho low-stock, replenishment, stock export và report anomaly.
 - Các event của Cường được gửi theo Notification contract do Nguyễn Quang Huy sở hữu; Cường không sở hữu Notification model/service/API, retry status, unread/read/delete hoặc in-app bell.
 - EmailOutbox/Gmail email delivery vẫn thuộc Nguyễn Ngọc Thành, không chuyển cho Cường hoặc Huy.
+
+## Ownership Addendum 2026-07-23 - SL-005 Implementation Evidence
+
+This addendum records the tracked Definition-of-Done evidence for SL-005. The normative baseline remains `docs/superpowers/specs/2026-07-22-sl-005-inventory-damage-replenishment-design.md`. Detailed local-only records are `docs/superpowers/reconciliation/SL-005_HANDOFF.md` and `docs/superpowers/reconciliation/SL-005_G3_TRACEABILITY.md`; repository policy ignores `docs/superpowers/`, so this section is the tracked closure artifact.
+
+### Scope and ownership
+
+- Le Vu Cuong owns the SL-005 Warehouse Inventory, damage custody, low-stock, replenishment, receipt, and migration implementation.
+- Staff may report and withdraw an own pending damage report. WarehouseManager owns physical count, damage decision/disposition, threshold override, replenishment request/receipt/correction, and short-closure initiation. Admin owns exact request approval/rejection, global threshold policy, and short-closure decision.
+- Supplier remains external and has no GreenHouse account. Purchasing, contract, supplier payment, and accounts payable are out of scope.
+- Inventory is the only quantity authority. Product input cannot set stock; persistent Product creation creates exactly one zero-dimension Inventory in the same transaction.
+
+### Acceptance and implementation traceability
+
+| Acceptance | Delivered evidence |
+|---|---|
+| AT-075-077 | Product stock-input rejection and atomic zero Inventory initialization; four dimensions, OnHand/Available calculations, and reconciliation health in product/inventory service tests and `sl005.acceptance.test.js` |
+| AT-078-082 | Staff evidence-backed quarantine/idempotency/withdrawal; Warehouse full, partial, zero decisions and confirmed-damage disposition in damage model/service/routes plus acceptance/client-service tests |
+| AT-083-086 | Evidence-backed counted Sellable, server-derived delta and before/after transaction, duplicate handling, shortage reconciliation and recovery in inventory service/API/UI tests |
+| AT-087-088 | Global-default/Product-override threshold behavior and one-open-alert index in inventory acceptance and `lowStockAlert.model.test.js` |
+| AT-089-093 | Immutable one-Product request, active-request uniqueness, withdrawal, exact Admin decision and no approval stock effect in replenishment service/model/API tests |
+| AT-094-098 | Append-only partial/final receipts, accepted/rejected arithmetic, at-most-once stock effect, short closure, and compensating correction in acceptance, replenishment, and receipt-model tests |
+| AT-099 | Actor authorization routes, evidence attribution, idempotent commands, grouped repository behavior, migration/index tests, and full regressions |
+
+### Local Definition of Done
+
+- [x] BR-047 through BR-058 implemented and mapped to AT-075 through AT-099.
+- [x] Server acceptance tests were introduced red for the intended missing behavior before the implementation turned them green.
+- [x] Server regression: `494/494` tests passed across `88` suites.
+- [x] Client regression: `164/164` tests passed across `49` suites.
+- [x] Client production build passed; only the existing Vite large-chunk warning remains.
+- [x] SL-005 migration is available as `npm run migrate:sl005` and is covered by an idempotent repository-fake test.
+- [x] Detailed handoff and G3 traceability are recorded locally under `docs/superpowers/reconciliation/`.
+- [x] No SL-003 or SL-007 implementation file is included in this delivery.
+- [ ] Deployment owner must run and record `npm run migrate:sl005` on the target database.
+- [ ] SL-003/SL-004 reservation/export owners must consume `ReconciliationRequired` and zero availability.
+- [ ] SL-001/SL-002 return/exchange owners must consume the four-dimension Inventory vocabulary at their integration seams.
+
+This evidence establishes local implementation closure only. It does not claim a production migration, deployment, live Supplier integration, production notification delivery, or a completed browser actor walkthrough.

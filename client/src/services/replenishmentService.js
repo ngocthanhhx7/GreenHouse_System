@@ -38,12 +38,36 @@ export function createReplenishmentService({ baseUrl = DEFAULT_BASE_URL, fetcher
         body: JSON.stringify(input),
       });
     },
+    async withdrawWarehouseRequest(id, input) {
+      return request(`/warehouse/replenishments/${id}/withdraw`, {
+        method: 'POST',
+        body: JSON.stringify(input),
+      });
+    },
+    async requestShortClosure(id, input) {
+      return request(`/warehouse/replenishments/${id}/short-closure`, {
+        method: 'POST',
+        body: JSON.stringify(input),
+      });
+    },
+    async correctReceipt(id, input) {
+      return request(`/warehouse/replenishments/${id}/receipt-correction`, {
+        method: 'POST',
+        body: JSON.stringify(input),
+      });
+    },
     async listAdminRequests(params = {}) {
       const query = buildQuery(params);
       return request(`/admin/replenishments${query ? `?${query}` : ''}`);
     },
     async updateAdminStatus(id, input) {
       return request(`/admin/replenishments/${id}/status`, {
+        method: 'PATCH',
+        body: JSON.stringify(input),
+      });
+    },
+    async decideShortClosure(id, input) {
+      return request(`/admin/replenishments/${id}/short-closure`, {
         method: 'PATCH',
         body: JSON.stringify(input),
       });

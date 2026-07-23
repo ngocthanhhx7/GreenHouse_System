@@ -7,7 +7,7 @@ import { translateRequestStatus } from '../../utils/formatters.js';
 export default function ReplenishmentPage() {
   const [inventory, setInventory] = useState([]);
   const [requests, setRequests] = useState([]);
-  const [form, setForm] = useState({ inventoryId: '', quantity: 20, reason: 'Bổ sung hàng do tồn kho thấp' });
+  const [form, setForm] = useState({ inventoryId: '', quantity: 20, reason: 'Low stock replenishment', evidence: '' });
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(true);
@@ -38,6 +38,8 @@ export default function ReplenishmentPage() {
       await replenishmentService.createWarehouseRequest({
         ...form,
         quantity: Number(form.quantity),
+        evidence: [{ reference: form.evidence || 'warehouse-restock-request' }],
+        idempotencyKey: `replenishment-${form.inventoryId}-${Date.now()}`,
       });
       setMessage('Đã tạo yêu cầu bổ sung hàng.');
       await loadData();
@@ -50,7 +52,16 @@ export default function ReplenishmentPage() {
     setError('');
     setMessage('');
     try {
-      await replenishmentService.receiveWarehouseRequest(request.id, { receivedQuantity: request.quantity });
+      const accepted = Number(request.approvedQuantity ?? request.quantity);
+      await replenishmentService.receiveWarehouseRequest(request.id, {
+        supplierReference: 'external-supplier',
+        deliveryReference: `delivery-${request.id}`,
+        deliveredQuantity: accepted,
+        acceptedSellableQuantity: accepted,
+        rejectedQuantity: 0,
+        evidence: [{ reference: 'warehouse-delivery-inspection' }],
+        idempotencyKey: `receipt-${request.id}-${Date.now()}`,
+      });
       setMessage(`Đã nhập bổ sung cho ${request.productName}.`);
       await loadData();
     } catch (err) {
@@ -74,6 +85,7 @@ export default function ReplenishmentPage() {
         </select>
         <input className="form-control" type="number" min="1" value={form.quantity} onChange={(event) => setForm((current) => ({ ...current, quantity: event.target.value }))} required />
         <input className="form-control" value={form.reason} onChange={(event) => setForm((current) => ({ ...current, reason: event.target.value }))} required />
+        <input className="form-control" placeholder="Evidence reference" value={form.evidence} onChange={(event) => setForm((current) => ({ ...current, evidence: event.target.value }))} required />
         <button className="btn btn-success" type="submit">Tạo yêu cầu</button>
       </form>
       <div className="table-responsive mt-4">

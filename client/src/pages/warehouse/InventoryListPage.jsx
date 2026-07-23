@@ -4,6 +4,7 @@ import { inventoryService } from '../../services/inventoryService.js';
 
 export default function InventoryListPage() {
   const [inventory, setInventory] = useState([]);
+  const [countInputs, setCountInputs] = useState({});
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(true);
@@ -25,15 +26,18 @@ export default function InventoryListPage() {
     loadInventory();
   }, []);
 
-  async function adjustStock(item, delta) {
+  async function recordPhysicalCount(item) {
     setError('');
     setMessage('');
+    const input = countInputs[item.id] || {};
     try {
-      await inventoryService.adjustInventory(item.id, {
-        delta,
-        reason: delta > 0 ? 'Nhập bù thủ công từ kho' : 'Điều chỉnh giảm thủ công từ kho',
+      await inventoryService.recordPhysicalCount(item.id, {
+        countedSellableQuantity: Number(input.countedSellableQuantity ?? item.sellableQuantity ?? item.stockQuantity),
+        reason: input.reason || 'Physical cycle count',
+        evidence: [{ reference: input.evidence || 'warehouse-count' }],
+        idempotencyKey: `count-${item.id}-${Date.now()}`,
       });
-      setMessage(`Đã cập nhật tồn kho cho ${item.productName}.`);
+      setMessage(`Physical count recorded for ${item.productName}.`);
       await loadInventory();
     } catch (err) {
       setError(err.message);
@@ -43,7 +47,7 @@ export default function InventoryListPage() {
   return (
     <div className="surface">
       <div className="page-heading">
-        <h1>Tồn kho</h1>
+        <h1>Inventory</h1>
       </div>
       {error && <div className="alert alert-danger">{error}</div>}
       {message && <div className="alert alert-success">{message}</div>}
@@ -51,34 +55,60 @@ export default function InventoryListPage() {
         <table className="table">
           <thead>
             <tr>
-              <th>Sản phẩm</th>
-              <th>Tồn</th>
-              <th>Đã giữ</th>
-              <th>Khả dụng</th>
-              <th>Hỏng</th>
-              <th>Ngưỡng cảnh báo</th>
-              <th>Trạng thái</th>
-              <th></th>
+              <th>Product</th>
+              <th>Sellable / count</th>
+              <th>Reserved</th>
+              <th>Quarantined</th>
+              <th>Available</th>
+              <th>Damaged</th>
+              <th>Threshold</th>
+              <th>Health</th>
             </tr>
           </thead>
           <tbody>
-            {inventory.map((item) => (
-              <tr key={item.id}>
-                <td>{item.productName}</td>
-                <td>{item.stockQuantity}</td>
-                <td>{item.reservedQuantity}</td>
-                <td>{item.availableQuantity}</td>
-                <td>{item.damagedQuantity}</td>
-                <td>{item.lowStockThreshold}</td>
-                <td>{item.isLowStock ? 'Sắp hết hàng' : 'Ổn định'}</td>
-                <td className="table-actions">
-                  <button className="btn btn-outline-success btn-sm" type="button" onClick={() => adjustStock(item, 1)}>+1</button>
-                  <button className="btn btn-outline-danger btn-sm" type="button" onClick={() => adjustStock(item, -1)}>-1</button>
-                </td>
-              </tr>
-            ))}
+            {inventory.map((item) => {
+              const values = countInputs[item.id] || {};
+              return (
+                <tr key={item.id}>
+                  <td>{item.productName}</td>
+                  <td>
+                    <div>{item.sellableQuantity ?? item.stockQuantity}</div>
+                    <input
+                      className="form-control form-control-sm"
+                      type="number"
+                      min="0"
+                      aria-label={`Sellable count for ${item.productName}`}
+                      value={values.countedSellableQuantity ?? (item.sellableQuantity ?? item.stockQuantity)}
+                      onChange={(event) => setCountInputs((current) => ({
+                        ...current,
+                        [item.id]: { ...current[item.id], countedSellableQuantity: event.target.value },
+                      }))}
+                    />
+                    <input
+                      className="form-control form-control-sm mt-1"
+                      placeholder="Evidence reference"
+                      aria-label={`Evidence for ${item.productName}`}
+                      value={values.evidence || ''}
+                      onChange={(event) => setCountInputs((current) => ({
+                        ...current,
+                        [item.id]: { ...current[item.id], evidence: event.target.value },
+                      }))}
+                    />
+                    <button className="btn btn-outline-success btn-sm mt-1" type="button" onClick={() => recordPhysicalCount(item)}>
+                      Record count
+                    </button>
+                  </td>
+                  <td>{item.reservedQuantity}</td>
+                  <td>{item.quarantinedQuantity ?? 0}</td>
+                  <td>{item.availableQuantity}</td>
+                  <td>{item.damagedQuantity}</td>
+                  <td>{item.effectiveThreshold ?? item.lowStockThreshold}</td>
+                  <td>{item.inventoryHealth === 'ReconciliationRequired' ? 'Reconciliation required' : item.isLowStock ? 'Low stock' : 'Normal'}</td>
+                </tr>
+              );
+            })}
             {!loading && !inventory.length && (
-              <tr><td colSpan="8" className="text-center text-muted">Chưa có bản ghi tồn kho.</td></tr>
+              <tr><td colSpan="8" className="text-center text-muted">No inventory records.</td></tr>
             )}
           </tbody>
         </table>
