@@ -101,11 +101,13 @@ Các yêu cầu mới về upload ảnh, avatar, hồ sơ, thông báo và sổ 
 
 | Thành viên | Ownership bổ sung |
 |---|---|
-| Nguyễn Ngọc Thành | Homepage, layout tài khoản dùng chung, upload foundation, User/avatar/profile, Address Book API nền tảng, Notification API + bell/dropdown/detail/read/delete, integration/review/merge |
-| Phạm Thành Chung | Product image upload UI, preview, featured image và Product media integration |
+| Nguyễn Ngọc Thành | Home, About, Liên hệ, layout tài khoản dùng chung, upload foundation, User/avatar/profile, Address Book API nền tảng, Notification API + bell/dropdown/detail/read/delete, integration/review/merge |
+| Phạm Thành Chung | Product image upload UI, preview, featured image và Product media integration; cung cấp dữ liệu/component catalog cho Home khi cần |
 | Nguyễn Quang Huy | Chọn địa chỉ đã lưu/mặc định hoặc nhập địa chỉ mới tại Checkout; Order address snapshot |
 | Nguyễn Hữu Anh Nhật | Staff Order, Return/Refund, Support; chỉ phát notification event theo contract của Thành |
 | Lê Vũ Cường | Warehouse, Reports, Settings; phát event tồn kho/replenishment và tích hợp Notification service của Thành |
+
+Quyền sở hữu giao diện public được chốt như sau: Nguyễn Ngọc Thành chịu trách nhiệm triển khai và bảo trì layout, nội dung và responsive behavior của ba màn **Home, About và Liên hệ**. Phạm Thành Chung không sở hữu layout Home; Chung chỉ sở hữu Product/Category/Catalog và cung cấp dữ liệu hoặc component sản phẩm cho Home. Mọi assignment cũ còn ghi Home dưới Chung được supersede bởi addendum này.
 
 ## 11. Ownership Addendum - PayOS Online Payment (2026-07-22)
 

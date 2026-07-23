@@ -39,7 +39,7 @@ Tạo nền tảng sản phẩm để hệ thống bán hàng có dữ liệu đ
 
 | Page | Path suggestion | Purpose |
 |---|---|---|
-| Home Page | `client/src/pages/public/HomePage.jsx` | Show featured/best-selling products and categories |
+| Home product integration | `client/src/pages/public/HomePage.jsx` | Cung cấp dữ liệu/component Product/Category cho Home do Thành sở hữu; không sở hữu layout Home |
 | Product Listing Page | `client/src/pages/public/ProductListingPage.jsx` | Browse/filter active products |
 | Search Result Page | `client/src/pages/public/SearchResultPage.jsx` | Display keyword results |
 | Product Detail Page | `client/src/pages/public/ProductDetailPage.jsx` | Show product information and reviews |
@@ -113,7 +113,7 @@ Tạo nền tảng sản phẩm để hệ thống bán hàng có dữ liệu đ
 
 | Screen | Main data | Main actions |
 |---|---|---|
-| Home | Featured/active products, active categories | Search, open product |
+| Home integration | Featured/active products, active categories | Thành sở hữu layout; Chung bảo đảm dữ liệu sản phẩm/danh mục và link tìm kiếm |
 | Product Listing | Product cards, filters | Filter/search/pagination |
 | Product Detail | Product information, stock status, reviews | Add to cart if logged in, login prompt if Guest |
 | Admin Product Management | Product table | Create, edit, disable |
@@ -150,7 +150,7 @@ Tạo nền tảng sản phẩm để hệ thống bán hàng có dữ liệu đ
 - [ ] Implement search/filter by keyword/category/price/availability.
 - [ ] Implement Admin product CRUD APIs.
 - [ ] Implement Admin category CRUD APIs.
-- [ ] Build Home/Product Listing/Product Detail screens.
+- [ ] Support Thành's Home data integration; build Product Listing/Product Detail screens.
 - [ ] Build Admin Product/Category screens.
 
 ### Phase 3 - Cart Support

@@ -18,8 +18,8 @@ Core workflow cần ưu tiên:
 
 | Thành viên | Vai trò chính | Module sở hữu | Frontend chính | Backend chính | Flow mentor có thể kiểm tra |
 |---|---|---|---|---|---|
-| Nguyễn Ngọc Thành | Team lead, foundation, integration | Auth/RBAC, layout, shared API client, audit foundation, PayOS gateway/webhook, final merge | Login, Register, Profile, Role Guard, Layout, PayOS redirect/result | User, Role, Auth, JWT, Authorization, Audit helper, PayOS adapter/webhook | Guest register, user login, role redirect, forbidden access, online payment qua PayOS |
-| Phạm Thành Chung | Catalog owner | Product, Category, Public Catalog, Search/Filter | Home, Product Listing, Product Detail, Admin Product/Category | Product, Category, catalog APIs, admin product/category APIs | Guest browse/search/filter/view product, Admin manage product |
+| Nguyễn Ngọc Thành | Team lead, storefront foundation, integration | Home, About, Contact, Auth/RBAC, layout, shared API client, audit foundation, PayOS gateway/webhook, final merge | Home, About, Contact, Login, Register, Profile, Role Guard, Layout, PayOS redirect/result | User, Role, Auth, JWT, Authorization, Audit helper, PayOS adapter/webhook | Guest browse Home/About/Contact, register/login, role redirect, forbidden access, online payment qua PayOS |
+| Phạm Thành Chung | Catalog owner | Product, Category, Public Catalog, Search/Filter | Product Listing, Product Detail, Admin Product/Category; hỗ trợ dữ liệu sản phẩm cho Home | Product, Category, catalog APIs, admin product/category APIs | Guest browse/search/filter/view product, Admin manage product |
 | Nguyễn Quang Huy | Customer purchase & Notification domain owner | Cart, Checkout, Order, Payment state, COD, Order History, Cancel, Notification domain foundation; không sở hữu tích hợp cổng PayOS | Cart, Checkout, Order History, Order Detail, Notification bell/dropdown/list | Cart, CartItem, Order, OrderDetail, Payment domain state, Notification model/service/API | Customer add cart, tạo online order/COD, cancel Pending unpaid order, read/unread/delete in-app notification |
 | Nguyễn Hữu Anh Nhật | Staff operation owner | Staff Order Processing, Invoice, Order Status, Return/Refund handling | Staff Dashboard, Order Queue, Order Detail, Invoice, Refund Queue | Staff order APIs, order state machine, ReturnRefundRequest | Staff confirm order, request export, ship/deliver, approve/reject refund |
 | Lê Vũ Cường | Warehouse/admin closure owner | Inventory, Stock Export, Replenishment, Support, Review, Reports, Settings; phát domain event cho Notification của Huy | Warehouse screens, Support, Review, Admin Reports/Settings | Inventory, Transaction, StockExport, Replenishment, Support, Review, Report, Setting | Warehouse export/adjust stock, low-stock replenishment, support/review/report |
@@ -207,7 +207,7 @@ Một module được xem là hoàn thành khi có đủ:
 
 | Thành viên | Phần phải thực hiện và bàn giao |
 |---|---|
-| Nguyễn Ngọc Thành | Homepage, layout tài khoản dùng chung, upload foundation, hồ sơ/avatar, Address Book API nền tảng, Notification API/UI và review/merge |
+| Nguyễn Ngọc Thành | Home, About, Contact, layout tài khoản dùng chung, upload foundation, hồ sơ/avatar, Address Book API nền tảng, Notification API/UI historical baseline và review/merge |
 | Phạm Thành Chung | Upload ảnh sản phẩm, preview/sắp xếp/chọn ảnh đại diện trong Product Management |
 | Nguyễn Quang Huy | Tích hợp địa chỉ đã lưu/mặc định và nhập địa chỉ mới vào Checkout; lưu snapshot địa chỉ trong Order |
 | Nguyễn Hữu Anh Nhật | Staff Order, Return/Refund, Support; phát event theo Notification contract của Thành |

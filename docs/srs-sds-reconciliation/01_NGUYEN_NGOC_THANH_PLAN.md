@@ -5,7 +5,7 @@
 - Họ tên: Nguyễn Ngọc Thành
 - Mã sinh viên: `HE186491`
 - Email commit: `thanhnnhe186491@fpt.edu.vn`
-- Vai trò: Team lead, Homepage owner, shared account/API/RBAC/audit owner, PayOS integration owner, reviewer và merge owner.
+- Vai trò: Team lead, Home/About/Contact owner, shared account/API/RBAC/audit owner, PayOS integration owner, reviewer và merge owner.
 
 ## Goal
 
@@ -13,7 +13,7 @@
 
 ## Phạm vi bổ sung do Nguyễn Ngọc Thành phụ trách
 
-- Homepage tiếng Việt và các tài nguyên dùng chung của storefront; bảo đảm không làm lẫn luồng khách hàng với dashboard nội bộ.
+- Home, About và Contact tiếng Việt cùng các tài nguyên dùng chung của storefront; bảo đảm không làm lẫn luồng khách hàng với dashboard nội bộ.
 - Hồ sơ có thể chỉnh sửa, đổi mật khẩu, avatar upload từ máy local và Address Book của Customer.
 - `AccountLayout` dùng chung cho Hồ sơ/Thông báo, tách khỏi sidebar nghiệp vụ Staff/Admin/Warehouse.
 - Notification foundation trong bản reconciliation cũ đã được chuyển cho Huy theo ownership addendum 2026-07-23; Thành không còn sở hữu unread badge, dropdown, trang thông báo, deep-link hay delete rule.
@@ -23,7 +23,7 @@
 
 ### Trạng thái triển khai phạm vi bổ sung
 
-- [x] Homepage và layout storefront dùng chung.
+- [x] Home, About, Liên hệ và layout storefront dùng chung.
 - [x] Profile edit, đổi mật khẩu và avatar upload/remove.
 - [x] Customer Address Book API/UI và địa chỉ mặc định.
 - [x] Historical baseline only: Notification API/UI, dropdown, unread/read/delete guard và deep-link; ownership hiện tại thuộc Huy theo addendum 2026-07-23.
