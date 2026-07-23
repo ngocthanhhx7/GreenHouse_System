@@ -226,15 +226,28 @@ The responsive foundation uses Fraunces for display typography and Be Vietnam Pr
 
 ## Ownership Addendum 2026-07-20
 
-Thành là owner chính của Homepage và các tài nguyên tài khoản dùng chung, bổ sung ngoài Auth/RBAC:
+Thành là owner chính của Home, About và Liên hệ cùng các tài nguyên storefront dùng chung, bổ sung ngoài Auth/RBAC:
 
-- Hoàn thiện Homepage tiếng Việt, commerce-first và các layout dùng chung không làm hỏng luồng role.
+- Hoàn thiện `HomePage.jsx`, `AboutPage.jsx` và `ContactPage.jsx` tiếng Việt, responsive desktop/mobile, commerce-first và các layout dùng chung không làm hỏng luồng role.
+- Chịu trách nhiệm nội dung, bố cục, header/footer integration và route-level regression của ba màn public này; Product/Catalog của Chung chỉ cung cấp dữ liệu và component sản phẩm được nhúng.
 - Xây upload foundation cho product/avatar, gồm MIME/size/role validation và thư mục runtime `server/uploads`.
 - Tách AccountLayout; xây Profile chỉnh sửa được, avatar, đổi mật khẩu và Address Book API nền tảng.
 - Xây Notification API/UI: unread count, dropdown preview, detail route, read state và rule chỉ xóa notification đã đọc.
 - Review contract của Chung/Huy/Nhật/Cường, chạy regression test, commit/merge cuối bằng danh tính `Nguyễn Ngọc Thành <thanhnnhe186491@fpt.edu.vn>`.
 
 Chi tiết execution: `docs/srs-sds-reconciliation/06_ACCOUNT_MEDIA_NOTIFICATION_ADDRESS_PLAN.md`.
+
+## Ownership Clarification 2026-07-23 — Public Storefront
+
+Để tránh assignment cũ gây hiểu nhầm, Nguyễn Ngọc Thành là người phụ trách triển khai và bảo trì giao diện ba màn public:
+
+| Màn hình | Owner | Phạm vi |
+|---|---|---|
+| Home | Nguyễn Ngọc Thành | Hero, featured/category sections, product display integration, responsive desktop/mobile |
+| About | Nguyễn Ngọc Thành | Brand story, sustainability content, responsive layout và shared shell |
+| Liên hệ | Nguyễn Ngọc Thành | Contact form, frontend/backend validation boundary, email hand-off và responsive layout |
+
+Phạm Thành Chung không còn ownership giao diện Home; Chung chỉ sở hữu Product/Category/Catalog và cung cấp dữ liệu/component sản phẩm cho Home khi cần. Các dòng lịch sử trước ngày 2026-07-23 được giữ để traceability và được addendum này supersede.
 
 ## Ownership Addendum 2026-07-22 - Email Delivery Và Validation Toàn Hệ Thống
 
