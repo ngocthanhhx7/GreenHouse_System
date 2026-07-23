@@ -127,6 +127,37 @@ GreenHouse_System/
 - Authentication: JWT.
 - External services: Payment Gateway, Email Service.
 
+## Chạy MongoDB local có hỗ trợ transaction
+
+Checkout tạo Order, OrderDetail, Payment, PaymentAttempt, giữ tồn kho và xóa giỏ
+hàng trong cùng một transaction. Vì vậy MongoDB local phải chạy dưới dạng
+single-node replica set; MongoDB standalone sẽ bị server từ chối ngay khi khởi
+động với lỗi `DATABASE_TRANSACTIONS_UNSUPPORTED`.
+
+1. Thêm cấu hình sau vào `mongod.cfg`, rồi khởi động lại MongoDB:
+
+```yaml
+replication:
+  replSetName: rs0
+```
+
+2. Khởi tạo replica set một lần:
+
+```powershell
+mongosh --eval "rs.initiate({_id:'rs0',members:[{_id:0,host:'127.0.0.1:27017'}]})"
+```
+
+3. Dùng URI:
+
+```dotenv
+MONGODB_URI=mongodb://127.0.0.1:27017/greenhome_kitchen?replicaSet=rs0
+```
+
+4. Xác nhận `mongosh --eval "rs.status().ok"` trả về `1` trước khi chạy server.
+
+Không bật fallback checkout không-transaction vì có thể tạo đơn, giữ tồn kho,
+thanh toán và giỏ hàng ở trạng thái lệch nhau.
+
 ## Yêu cầu phi chức năng
 
 - Giao diện dễ sử dụng cho khách hàng và nhân viên nội bộ.

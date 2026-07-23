@@ -18,9 +18,14 @@ describe('client order service', () => {
     });
 
     const result = await service.placeOrder({
-      receiverName: 'Khách hàng Demo',
-      receiverPhone: '0900000001',
-      shippingAddress: '12 Nguyễn Trãi, Hà Nội',
+      deliveryAddress: {
+        receiverName: 'Khách hàng Demo',
+        phoneNumber: '0900000001',
+        province: 'Hà Nội',
+        district: 'Thanh Xuân',
+        ward: 'Khương Mai',
+        addressLine: '12 Nguyễn Trãi',
+      },
       paymentMethod: 'COD',
     }, { idempotencyKey: 'checkout-test-001' });
 
@@ -36,6 +41,40 @@ describe('client order service', () => {
       },
     });
 
-    await service.placeOrder({ receiverName: 'Khách hàng Demo', receiverPhone: '0900000001', shippingAddress: '12 Nguyễn Trãi, Hà Nội', paymentMethod: 'COD' }, { idempotencyKey: 'checkout-header-001' });
+    await service.placeOrder({
+      deliveryAddress: {
+        receiverName: 'Khách hàng Demo',
+        phoneNumber: '0900000001',
+        province: 'Hà Nội',
+        district: 'Thanh Xuân',
+        ward: 'Khương Mai',
+        addressLine: '12 Nguyễn Trãi',
+      },
+      paymentMethod: 'COD',
+    }, { idempotencyKey: 'checkout-header-001' });
+  });
+
+  it('preserves backend checkout errorCode and field errors for distinct feedback', async () => {
+    const service = createOrderService({
+      baseUrl: 'http://api.test',
+      fetcher: async () => ({
+        ok: false,
+        json: async () => ({
+          success: false,
+          message: 'Thông tin địa chỉ nhận hàng không hợp lệ',
+          errorCode: 'CHECKOUT_ADDRESS_INVALID',
+          errors: [{ field: 'province', message: 'province must not exceed 100 characters' }],
+        }),
+      }),
+    });
+
+    await assert.rejects(
+      () => service.placeOrder({ deliveryAddress: {}, paymentMethod: 'COD' }, { idempotencyKey: 'checkout-error-001' }),
+      (error) => {
+        assert.equal(error.errorCode, 'CHECKOUT_ADDRESS_INVALID');
+        assert.equal(error.errors[0].field, 'province');
+        return true;
+      }
+    );
   });
 });

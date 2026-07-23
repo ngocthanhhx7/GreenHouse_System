@@ -22,9 +22,29 @@ describe('checkout address book contract', () => {
     assert.match(source, /receiverPhone/);
   });
 
-  it('keeps checkout idempotent while sending an immutable address snapshot', () => {
+  it('keeps checkout idempotent while letting the server resolve a saved address snapshot', () => {
     assert.match(source, /checkoutIdempotencyKey/);
-    assert.match(source, /formatShippingAddress/);
+    assert.match(source, /savedAddressId:\s*deliveryAddress\.id/);
+    assert.match(source, /deliveryAddress:\s*newAddress/);
     assert.match(source, /orderService\.placeOrder/);
+  });
+
+  it('renders backend checkout field errors beside their matching address controls and clears them on correction', () => {
+    assert.match(source, /const \[fieldErrors, setFieldErrors\] = useState\(\{\}\)/);
+    assert.match(source, /requestError\.errors/);
+    assert.match(source, /const nextFieldErrors = toFieldErrors\(requestError\.errors\)/);
+    assert.match(source, /setFieldErrors\(nextFieldErrors\)/);
+    assert.match(source, /entry\?\.field === 'savedAddressId'[\s\S]*?'addressSource'/);
+    assert.match(source, /updateNewAddress[\s\S]*?clearFieldError\(field\)/);
+    assert.match(source, /onChange=\{\(\) => \{ setSelectedAddressId\(address\.id\); clearFieldError\('addressSource'\); \}\}/);
+    assert.match(source, /setAddressMode\('saved'\); clearFieldError\('addressSource'\)/);
+    assert.match(source, /setAddressMode\('new'\); clearFieldError\('addressSource'\)/);
+    assert.match(source, /fieldErrors\.receiverName/);
+    assert.match(source, /fieldErrors\.phoneNumber/);
+    assert.match(source, /fieldErrors\.province/);
+    assert.match(source, /fieldErrors\.district/);
+    assert.match(source, /fieldErrors\.ward/);
+    assert.match(source, /fieldErrors\.addressLine/);
+    assert.match(source, /role="alert"/);
   });
 });
