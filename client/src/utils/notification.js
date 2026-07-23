@@ -1,3 +1,5 @@
+import { translateAfterSalesNotificationType } from './afterSalesLabels.js';
+
 const TYPE_LABELS = {
   PAYMENT_STATUS: 'Thanh toán',
   ORDER_STATUS: 'Đơn hàng',
@@ -10,5 +12,5 @@ const TYPE_LABELS = {
 };
 
 export function translateNotificationType(type) {
-  return TYPE_LABELS[type] || 'Thông báo hệ thống';
+  return translateAfterSalesNotificationType(type) || TYPE_LABELS[type] || 'Thông báo hệ thống';
 }

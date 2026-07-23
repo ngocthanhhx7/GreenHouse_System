@@ -11,6 +11,7 @@ const RefundDestination = require('../models/refundDestination.model');
 const RefundPayoutEvidence = require('../models/refundPayoutEvidence.model');
 const RefundPayoutIncident = require('../models/refundPayoutIncident.model');
 const ReturnRefundRequest = require('../models/returnRefundRequest.model');
+const ExchangeCase = require('../models/exchangeCase.model');
 const ReturnItem = require('../models/returnItem.model');
 const Inventory = require('../models/inventory.model');
 const InventoryTransaction = require('../models/inventoryTransaction.model');
@@ -24,6 +25,11 @@ const { createPayOSGateway } = require('../config/payos');
 const { logAudit } = require('../utils/auditLogger');
 const { notificationService } = require('./notification.service');
 const { afterSalesLockService } = require('./afterSalesLock.service');
+const {
+  ACTIVE_AFTER_SALES_ERROR_CODE,
+  resolveActiveAfterSalesConflict,
+  createActiveAfterSalesConflict,
+} = require('./afterSalesConflict.service');
 
 const OPEN_STATUSES = [
   'New', 'Pending', 'AwaitingCODReconciliation', 'Approved',
@@ -293,6 +299,13 @@ function toResponse({ request, order, details = [], items = [], destination = nu
 function createModelRepository() {
   return {
     async findOrderById(id, session) { return withOptionalSession(Order.findById(id), session).lean(); },
+    async findOrderLock(orderId, session) { return afterSalesLockService.find(orderId, session); },
+    async findExchangeCaseById(id, session) {
+      return withOptionalSession(ExchangeCase.findById(id), session).lean();
+    },
+    async findReturnRequestById(id, session) {
+      return withOptionalSession(ReturnRefundRequest.findById(id), session).lean();
+    },
     async claimOrderLock(data, session) { return afterSalesLockService.claim(data, session); },
     async releaseOrderLock(orderId, caseId, terminalStatus, closePermanently = false, session) {
       return afterSalesLockService.release({
@@ -301,6 +314,13 @@ function createModelRepository() {
         caseId,
         terminalStatus,
         closePermanently,
+      }, session);
+    },
+    async reopenOrderLock(orderId, caseId, session) {
+      return afterSalesLockService.reopenCompleted({
+        orderId,
+        caseType: 'RETURN_REFUND',
+        caseId,
       }, session);
     },
     async ensureReturnDeadline(id, deadlineAt, session) {
@@ -557,6 +577,15 @@ function createReturnRefundService({
     });
   }
 
+  async function resolveConflict(orderId, customerId, session) {
+    return resolveActiveAfterSalesConflict({
+      repository,
+      orderId,
+      customerId,
+      session,
+    });
+  }
+
   async function notifyCustomer(customerId, requestId, type, subject, content, eventIdentity = '') {
     try {
       if (eventPublisher?.createInAppNotification) {
@@ -673,6 +702,16 @@ function createReturnRefundService({
         }, session);
 
         if (responsibility === 'ShopOrProvider' && loaded.request.status === 'Completed') {
+          if (repository.reopenOrderLock) {
+            const reopenedLock = await repository.reopenOrderLock(
+              loaded.order._id,
+              loaded.request._id,
+              session
+            );
+            if (!reopenedLock) {
+              throw new ApiError(409, 'After-sales lock changed while payout recovery was being opened');
+            }
+          }
           await repository.updateRequest(loaded.request._id, {
             status: 'Received',
             completionVoidedAt: openedAt,
@@ -852,8 +891,18 @@ function createReturnRefundService({
         order = await repository.ensureReturnDeadline(order._id, deadlineAt);
       }
 
+      const preexistingConflict = await resolveConflict(order._id, customerId);
+      if (preexistingConflict.hasActiveLock) {
+        throw createActiveAfterSalesConflict(preexistingConflict.data);
+      }
       const existing = await repository.findOpenRequestByOrderId(order._id);
-      if (existing) throw new ApiError(409, 'This order already has an open return/refund request');
+      if (existing) {
+        const currentConflict = await resolveConflict(order._id, customerId);
+        if (currentConflict.hasActiveLock) {
+          throw createActiveAfterSalesConflict(currentConflict.data);
+        }
+        throw new ApiError(409, 'This order already has an open return/refund request');
+      }
       const evidenceImages = normalizeCustomerEvidence(customerId, submittedEvidence);
       const payment = await repository.findPaymentByOrderId(order._id);
       const codHold = order.paymentMethod === 'COD' && order.paymentStatus !== 'Paid';
@@ -881,12 +930,22 @@ function createReturnRefundService({
               caseType: 'RETURN_REFUND',
               caseId: created._id,
             }, session);
-            if (!lock) throw new ApiError(409, 'This Order already has an active after-sales case');
+            if (!lock) {
+              throw createActiveAfterSalesConflict(null);
+            }
           }
           return created;
         });
       } catch (error) {
-        if (error?.code === 11000) throw new ApiError(409, 'This order already has an open return/refund request');
+        if (error?.errorCode === ACTIVE_AFTER_SALES_ERROR_CODE) {
+          const winner = await resolveConflict(order._id, customerId);
+          throw createActiveAfterSalesConflict(winner.data);
+        }
+        if (error?.code === 11000) {
+          const winner = await resolveConflict(order._id, customerId);
+          if (winner.hasActiveLock) throw createActiveAfterSalesConflict(winner.data);
+          throw new ApiError(409, 'Duplicate return/refund request conflict');
+        }
         throw error;
       }
 

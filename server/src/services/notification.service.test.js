@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const { describe, it } = require('node:test');
 
 const { createNotificationService } = require('./notification.service');
+const Notification = require('../models/notification.model');
 
 describe('notification service', () => {
   it('records payment status notification with pending delivery status', async () => {
@@ -111,6 +112,158 @@ describe('notification service', () => {
     assert.notEqual(first.id, secondRecipient.id);
     assert.equal(first.eventId, 'stock-export:export-1');
     assert.equal(notifications.length, 2);
+  });
+
+  it('passes the caller Mongo session through the service idempotent create path', async () => {
+    const session = { id: 'exchange-session' };
+    let receivedSession;
+    const service = createNotificationService({
+      notificationRepository: {
+        async createIdempotent(data, repositorySession) {
+          receivedSession = repositorySession;
+          return { _id: 'noti-session-1', ...data };
+        },
+      },
+    });
+
+    await service.createInAppNotification({
+      userId: 'customer-1',
+      type: 'EXCHANGE_COMPLETED',
+      subject: 'Completed',
+      content: 'Completed atomically',
+      eventId: 'EXCHANGE_COMPLETED:exchange-1',
+    }, session);
+
+    assert.equal(receivedSession, session);
+  });
+
+  it('creates the in-app notification in the caller Mongo session', async () => {
+    const originalFindOne = Notification.findOne;
+    const originalCreate = Notification.create;
+    const session = { id: 'exchange-session' };
+    let receivedDocuments;
+    let receivedOptions;
+    Notification.findOne = () => ({
+      session(receivedSession) {
+        assert.equal(receivedSession, session);
+        return this;
+      },
+      async lean() { return null; },
+    });
+    Notification.create = async (documents, options) => {
+      receivedDocuments = documents;
+      receivedOptions = options;
+      return [{ _id: '507f1f77bcf86cd799439011', ...documents[0] }];
+    };
+
+    try {
+      const service = createNotificationService();
+      await service.createInAppNotification({
+        userId: '507f1f77bcf86cd799439012',
+        type: 'EXCHANGE_COMPLETED',
+        subject: 'Completed',
+        content: 'Completed atomically',
+        eventId: 'EXCHANGE_COMPLETED:507f1f77bcf86cd799439013',
+      }, session);
+    } finally {
+      Notification.findOne = originalFindOne;
+      Notification.create = originalCreate;
+    }
+
+    assert.equal(Array.isArray(receivedDocuments), true);
+    assert.equal(receivedDocuments[0].type, 'EXCHANGE_COMPLETED');
+    assert.equal(receivedOptions.session, session);
+  });
+
+  it('pre-reads an idempotent in-app notification in the caller session before creating', async () => {
+    const originalFindOne = Notification.findOne;
+    const originalCreate = Notification.create;
+    const session = { id: 'exchange-session' };
+    const operations = [];
+    Notification.findOne = (filter) => {
+      operations.push({ kind: 'find', filter });
+      return {
+        session(receivedSession) {
+          assert.equal(receivedSession, session);
+          return this;
+        },
+        async lean() {
+          return {
+            _id: '507f1f77bcf86cd799439011',
+            userId: '507f1f77bcf86cd799439012',
+            type: 'EXCHANGE_COMPLETED',
+            channel: 'InApp',
+            subject: 'Completed',
+            content: 'Completed once',
+            deliveryStatus: 'Sent',
+            eventId: 'EXCHANGE_COMPLETED:exchange-1',
+          };
+        },
+      };
+    };
+    Notification.create = async () => {
+      operations.push({ kind: 'create' });
+      throw new Error('create must not run when the session pre-read finds the event');
+    };
+
+    try {
+      const service = createNotificationService();
+      const result = await service.createInAppNotification({
+        userId: '507f1f77bcf86cd799439012',
+        type: 'EXCHANGE_COMPLETED',
+        subject: 'Completed',
+        content: 'Completed once',
+        eventId: 'EXCHANGE_COMPLETED:exchange-1',
+      }, session);
+      assert.equal(result.id, '507f1f77bcf86cd799439011');
+    } finally {
+      Notification.findOne = originalFindOne;
+      Notification.create = originalCreate;
+    }
+
+    assert.deepEqual(operations.map((item) => item.kind), ['find']);
+  });
+
+  it('does not query an aborted session after a duplicate create error', async () => {
+    const originalFindOne = Notification.findOne;
+    const originalCreate = Notification.create;
+    const session = { id: 'exchange-session' };
+    const operations = [];
+    Notification.findOne = () => {
+      operations.push('find');
+      return {
+        session(receivedSession) {
+          assert.equal(receivedSession, session);
+          return this;
+        },
+        async lean() { return null; },
+      };
+    };
+    Notification.create = async () => {
+      operations.push('create');
+      const error = new Error('duplicate notification event');
+      error.code = 11000;
+      throw error;
+    };
+
+    try {
+      const service = createNotificationService();
+      await assert.rejects(
+        service.createInAppNotification({
+          userId: '507f1f77bcf86cd799439012',
+          type: 'EXCHANGE_COMPLETED',
+          subject: 'Completed',
+          content: 'Completed once',
+          eventId: 'EXCHANGE_COMPLETED:exchange-1',
+        }, session),
+        (error) => error.code === 11000
+      );
+    } finally {
+      Notification.findOne = originalFindOne;
+      Notification.create = originalCreate;
+    }
+
+    assert.deepEqual(operations, ['find', 'create']);
   });
 
   it('lists unread notifications with an opaque cursor and target metadata', async () => {

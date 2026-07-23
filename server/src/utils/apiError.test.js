@@ -18,4 +18,14 @@ describe('ApiError', () => {
 
     assert.equal(error.errorCode, 'CONFLICT');
   });
+
+  it('accepts owner-safe structured data without changing legacy positions', () => {
+    const data = {
+      currentCase: { type: 'EXCHANGE', id: 'exchange-1', status: 'Submitted' },
+      action: { label: 'Xem yêu cầu đang xử lý', href: '/exchanges/exchange-1' },
+    };
+    const error = new ApiError(409, 'Case active', [], 'AFTER_SALES_CASE_ACTIVE', data);
+
+    assert.deepEqual(error.data, data);
+  });
 });

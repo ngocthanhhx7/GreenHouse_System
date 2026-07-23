@@ -229,3 +229,11 @@
 - [ ] Return/refund staff decision complete.
 - [ ] Manual demo tested.
 
+## Ownership Addendum 2026-07-23 - SL-002 Same-SKU Exchange
+
+Nguyễn Hữu Anh Nhật is the original delivery owner of SL-002 on
+`feature/sl-002-exchange`. The merged feature defines the Customer, Staff,
+Warehouse and Carrier exchange lifecycle. Nguyễn Ngọc Thành performs the
+separate post-merge integration review and closure; that review does not
+transfer original module authorship away from Nhật.
+

@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "node --test",
+    "test:ephemeral-browser": "playwright test --config=playwright.config.js",
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0"
@@ -20,6 +21,7 @@
     "vite": "^6.0.7"
   },
   "devDependencies": {
+    "@playwright/test": "1.61.1",
     "fontkit": "^2.0.4"
   }
 }

@@ -6,6 +6,29 @@ function getStorage() {
   return window.localStorage;
 }
 
+export function createApiError(payload = {}, fallbackMessage = 'API request failed') {
+  const error = new Error(payload?.message || fallbackMessage);
+  error.errorCode = payload?.errorCode;
+  error.errors = Array.isArray(payload?.errors) ? payload.errors : [];
+  error.data = payload?.data ?? null;
+  error.requestId = payload?.requestId;
+  return error;
+}
+
+export async function parseApiResponse(response, fallbackMessage = 'API request failed') {
+  let payload;
+  try {
+    payload = await response.json();
+  } catch (_error) {
+    if (!response.ok) throw createApiError({}, fallbackMessage);
+    throw new Error(fallbackMessage);
+  }
+  if (!response.ok || payload?.success === false) {
+    throw createApiError(payload, fallbackMessage);
+  }
+  return payload?.data;
+}
+
 export async function apiRequest(path, options = {}) {
   const token = getStorage().getItem(TOKEN_KEY);
   const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
@@ -18,11 +41,7 @@ export async function apiRequest(path, options = {}) {
     ...options,
     headers,
   });
-  const payload = await response.json();
-  if (!response.ok || payload.success === false) {
-    throw new Error(payload.message || 'API request failed');
-  }
-  return payload.data;
+  return parseApiResponse(response);
 }
 
 export function resolveMediaUrl(value) {

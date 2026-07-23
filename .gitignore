@@ -16,3 +16,4 @@ server/uploads/products/*
 stitch
 .gstack/
 .local-mongodb/
+/artifacts/

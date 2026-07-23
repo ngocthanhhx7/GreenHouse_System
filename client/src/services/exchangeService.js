@@ -1,10 +1,10 @@
-import { DEFAULT_BASE_URL, TOKEN_KEY, apiRequest } from './apiClient.js';
-
-async function parseResponse(response) {
-  const payload = await response.json();
-  if (!response.ok || payload.success === false) throw new Error(payload.message || 'Exchange request failed');
-  return payload.data;
-}
+import {
+  DEFAULT_BASE_URL,
+  TOKEN_KEY,
+  apiRequest,
+  createApiError,
+  parseApiResponse,
+} from './apiClient.js';
 
 function queryString(params = {}) {
   const query = new URLSearchParams();
@@ -24,7 +24,10 @@ function evidencePath(value) {
 export function createExchangeService({ baseUrl = DEFAULT_BASE_URL, fetcher } = {}) {
   const directFetcher = fetcher || fetch;
   const request = fetcher
-    ? async (path, options = {}) => parseResponse(await fetcher(`${baseUrl}${path}`, options))
+    ? async (path, options = {}) => parseApiResponse(
+      await fetcher(`${baseUrl}${path}`, options),
+      'Exchange request failed'
+    )
     : apiRequest;
 
   return {
@@ -32,18 +35,26 @@ export function createExchangeService({ baseUrl = DEFAULT_BASE_URL, fetcher } = 
       const body = new FormData();
       Array.from(files || []).forEach((file) => body.append('images', file));
       const token = typeof window === 'undefined' ? '' : window.localStorage.getItem(TOKEN_KEY);
-      return parseResponse(await directFetcher(`${baseUrl}/exchanges/evidence`, {
+      return parseApiResponse(await directFetcher(`${baseUrl}/exchanges/evidence`, {
         method: 'POST',
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         body,
-      }));
+      }), 'Exchange evidence upload failed');
     },
     async fetchEvidence(url) {
       const token = typeof window === 'undefined' ? '' : window.localStorage.getItem(TOKEN_KEY);
       const response = await directFetcher(`${baseUrl}${evidencePath(url)}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
-      if (!response.ok) throw new Error('Không thể mở ảnh bằng chứng');
+      if (!response.ok) {
+        let payload = {};
+        try {
+          payload = await response.json();
+        } catch (_error) {
+          // The evidence endpoint may return an empty/non-JSON proxy error.
+        }
+        throw createApiError(payload, 'Không thể mở ảnh bằng chứng');
+      }
       return response.blob();
     },
     async createCustomerRequest(orderId, input) {

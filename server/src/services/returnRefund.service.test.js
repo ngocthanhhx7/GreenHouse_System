@@ -15,6 +15,15 @@ function duplicateError() {
   return error;
 }
 
+async function captureError(work) {
+  try {
+    await work();
+  } catch (error) {
+    return error;
+  }
+  assert.fail('Expected operation to reject');
+}
+
 function createRepository() {
   const state = {
     orders: [
@@ -457,8 +466,99 @@ describe('return/refund service', () => {
 
   it('rejects a duplicate active case for the same order', async () => {
     await createRequest();
-    await assert.rejects(() => createRequest(), /already has an open/i);
+    repository.findOrderLock = async () => ({
+      orderId: 'order-1', caseType: 'RETURN_REFUND', caseId: 'request-1', status: 'Active',
+    });
+    const error = await captureError(() => createRequest());
+    assert.equal(error.errorCode, 'AFTER_SALES_CASE_ACTIVE');
+    assert.equal(error.message, 'This Order already has an active after-sales case');
+    assert.deepEqual(error.data, {
+      currentCase: { type: 'RETURN_REFUND', id: 'request-1', status: 'New' },
+      action: { label: 'Xem yêu cầu đang xử lý', href: '/return-refunds' },
+    });
     assert.equal(repository.requests.length, 1);
+  });
+
+  it('returns an owner-safe typed conflict for a preexisting winning Exchange lock', async () => {
+    repository.findOrderLock = async () => ({
+      orderId: 'order-1', caseType: 'EXCHANGE', caseId: 'exchange-winner', status: 'Active',
+    });
+    repository.findExchangeCaseById = async () => ({
+      _id: 'exchange-winner', orderId: 'order-1', customerId: 'customer-1',
+      status: 'Submitted', reason: 'private', evidenceImages: ['private.jpg'],
+    });
+    repository.claimOrderLock = async () => {
+      assert.fail('preexisting lock must be resolved before creating a Return');
+    };
+
+    const error = await captureError(() => createRequest());
+    assert.equal(error.errorCode, 'AFTER_SALES_CASE_ACTIVE');
+    assert.equal(error.message, 'This Order already has an active after-sales case');
+    assert.deepEqual(error.data, {
+      currentCase: { type: 'EXCHANGE', id: 'exchange-winner', status: 'Submitted' },
+      action: { label: 'Xem yêu cầu đang xử lý', href: '/exchanges/exchange-winner' },
+    });
+    assert.doesNotMatch(JSON.stringify(error.data), /reason|evidence|private/i);
+    assert.equal(repository.requests.length, 0);
+  });
+
+  it('resolves a verified shared-lock winner after Return lock-claim failure', async () => {
+    let lockReads = 0;
+    repository.findOrderLock = async () => {
+      lockReads += 1;
+      return lockReads === 1 ? null : {
+        orderId: 'order-1', caseType: 'EXCHANGE', caseId: 'exchange-race', status: 'Active',
+      };
+    };
+    repository.findExchangeCaseById = async () => ({
+      _id: 'exchange-race', orderId: 'order-1', customerId: 'customer-1', status: 'Submitted',
+    });
+    repository.claimOrderLock = async () => null;
+
+    const error = await captureError(() => createRequest());
+    assert.equal(error.errorCode, 'AFTER_SALES_CASE_ACTIVE');
+    assert.equal(error.data.action.href, '/exchanges/exchange-race');
+    assert.equal(repository.requests.length, 0);
+  });
+
+  it('resolves a verified shared-lock winner after a Return E11000 race', async () => {
+    let lockReads = 0;
+    repository.findOrderLock = async () => {
+      lockReads += 1;
+      return lockReads === 1 ? null : {
+        orderId: 'order-1', caseType: 'EXCHANGE', caseId: 'exchange-e11000', status: 'Active',
+      };
+    };
+    repository.findExchangeCaseById = async () => ({
+      _id: 'exchange-e11000', orderId: 'order-1', customerId: 'customer-1', status: 'Submitted',
+    });
+    repository.createRequest = async () => {
+      const error = duplicateError();
+      error.keyPattern = { requestCode: 1 };
+      throw error;
+    };
+
+    const error = await captureError(() => createRequest());
+    assert.equal(error.errorCode, 'AFTER_SALES_CASE_ACTIVE');
+    assert.equal(error.data.action.href, '/exchanges/exchange-e11000');
+    assert.equal(repository.requests.length, 0);
+  });
+
+  it('returns data null for corrupt, foreign, or missing shared-lock cases', async () => {
+    for (const currentCase of [
+      null,
+      { _id: 'wrong-order', orderId: 'order-2', customerId: 'customer-1', status: 'Submitted' },
+      { _id: 'foreign-owner', orderId: 'order-1', customerId: 'customer-2', status: 'Submitted' },
+    ]) {
+      repository.findOrderLock = async () => ({
+        orderId: 'order-1', caseType: 'EXCHANGE', caseId: currentCase?._id || 'missing', status: 'Active',
+      });
+      repository.findExchangeCaseById = async () => currentCase;
+      const error = await captureError(() => createRequest());
+      assert.equal(error.errorCode, 'AFTER_SALES_CASE_ACTIVE');
+      assert.equal(error.message, 'This Order already has an active after-sales case');
+      assert.equal(error.data, null);
+    }
   });
 
   it('preserves a timely Delivered+Unpaid COD request in reconciliation hold without a payout obligation', async () => {
@@ -959,6 +1059,23 @@ describe('return/refund service', () => {
       idempotencyKey: 'payout-misroute-original-001', method: 'MANUAL', providerReference: 'bank-misroute-001',
       status: 'Succeeded', occurredAt: now, reconciliationNote: 'Initial receipt later disputed',
     });
+    let lockStatus = 'ClosedPermanently';
+    repository.reopenOrderLock = async (orderId, caseId) => {
+      assert.equal(orderId, 'order-1');
+      assert.equal(caseId, requestId);
+      if (lockStatus !== 'ClosedPermanently') return null;
+      lockStatus = 'Active';
+      return { orderId, caseId, status: lockStatus };
+    };
+    repository.releaseOrderLock = async (orderId, caseId, terminalStatus, closePermanently) => {
+      assert.equal(orderId, 'order-1');
+      assert.equal(caseId, requestId);
+      assert.equal(terminalStatus, 'Completed');
+      assert.equal(closePermanently, true);
+      if (lockStatus !== 'Active') return null;
+      lockStatus = 'ClosedPermanently';
+      return { orderId, caseId, status: lockStatus };
+    };
     const incident = await service.reportPayoutIncident('staff-1', requestId, {
       idempotencyKey: 'incident-system-mismatch-001',
       cause: 'STAFF_SYSTEM_PROVIDER_MISMATCH',
@@ -970,6 +1087,7 @@ describe('return/refund service', () => {
     assert.equal(repository.refunds[0].status, 'HandedOff');
     assert.equal(repository.refunds[0].payoutStatus, 'Unknown');
     assert.equal(repository.orders[0].orderStatus, 'Delivered');
+    assert.equal(lockStatus, 'Active');
 
     const recovered = await service.recordPayoutEvidence('staff-1', requestId, {
       idempotencyKey: 'payout-misroute-recovery-001', method: 'MANUAL', providerReference: 'bank-recovery-001',
@@ -980,6 +1098,7 @@ describe('return/refund service', () => {
     assert.equal(repository.payoutIncidents[0].status, 'Resolved');
     assert.equal(repository.payoutIncidents[0].resolutionEvidenceId, repository.payoutEvidence[1]._id);
     assert.equal(repository.orders[0].orderStatus, 'Returned');
+    assert.equal(lockStatus, 'ClosedPermanently');
     const completionNotifications = notifications.filter((entry) => entry.type === 'RETURN_REFUND_COMPLETED');
     assert.equal(completionNotifications.length, 2);
     assert.equal(new Set(completionNotifications.map((entry) => entry.eventId)).size, 2);
