@@ -1,4 +1,4 @@
-import { DEFAULT_BASE_URL, TOKEN_KEY } from './apiClient.js';
+import { DEFAULT_BASE_URL, getCsrfToken } from './apiClient.js';
 
 async function parseResponse(response) {
   const payload = await response.json();
@@ -9,11 +9,9 @@ async function parseResponse(response) {
 }
 
 function authHeaders() {
-  if (typeof window === 'undefined') return { 'Content-Type': 'application/json' };
-  const token = window.localStorage.getItem(TOKEN_KEY);
   return {
     'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(getCsrfToken() ? { 'X-CSRF-Token': getCsrfToken() } : {}),
   };
 }
 
@@ -25,6 +23,7 @@ export function createPaymentService({ baseUrl = DEFAULT_BASE_URL, fetcher = fet
           method: 'POST',
           headers: authHeaders(),
           body: JSON.stringify({}),
+          credentials: 'include',
         })
       );
     },

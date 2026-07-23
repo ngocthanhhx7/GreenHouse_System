@@ -2,8 +2,11 @@ const ApiError = require('../utils/apiError');
 const User = require('../models/user.model');
 const AuditLog = require('../models/auditLog.model');
 const passwordUtils = require('../utils/password');
+const mongoose = require('mongoose');
+const { validatePasswordPolicy } = require('../utils/passwordPolicy');
+const { sessionService: defaultSessionService } = require('./session.service');
 
-const EDITABLE_FIELDS = new Set(['fullName', 'phoneNumber', 'address']);
+const EDITABLE_FIELDS = new Set(['fullName', 'phoneNumber']);
 const VIETNAMESE_PHONE = /^(?:\+84|0)(?:3|5|7|8|9)\d{8}$/;
 
 function normalizePhone(value) {
@@ -23,8 +26,7 @@ function toPublicProfile(user) {
     id: String(user._id),
     fullName: user.fullName,
     email: user.email,
-    phoneNumber: user.phoneNumber || user.phone || '',
-    address: user.address || '',
+    phoneNumber: user.phoneNumber || '',
     avatarUrl: user.avatarUrl || '',
     status: user.status,
     lastLoginAt: user.lastLoginAt || null,
@@ -54,14 +56,6 @@ function validateProfileChanges(input) {
       throw new ApiError(400, 'Invalid profile data', [{ field: 'phoneNumber', message: 'Valid Vietnamese phone number is required' }]);
     }
     changes.phoneNumber = phoneNumber;
-    changes.phone = phoneNumber;
-  }
-  if (Object.hasOwn(input, 'address')) {
-    const address = String(input.address || '').trim();
-    if (!address || address.length > 500) {
-      throw new ApiError(400, 'Invalid profile data', [{ field: 'address', message: 'Address is required and must not exceed 500 characters' }]);
-    }
-    changes.address = address;
   }
   return changes;
 }
@@ -70,12 +64,11 @@ function validatePasswordChange(input) {
   const currentPassword = String(input.currentPassword || '');
   const newPassword = String(input.newPassword || '');
   if (!currentPassword) throw new ApiError(400, 'Current password is required');
-  if (newPassword.length < 8 || !/[A-Za-z]/.test(newPassword) || !/\d/.test(newPassword)) {
-    throw new ApiError(400, 'New password must contain at least 8 characters, including a letter and a number');
-  }
-  if (newPassword !== String(input.confirmPassword || '')) {
-    throw new ApiError(400, 'Password confirmation does not match');
-  }
+  validatePasswordPolicy({
+    password: newPassword,
+    confirmPassword: input.confirmPassword,
+    passwordField: 'newPassword',
+  });
   if (currentPassword === newPassword) {
     throw new ApiError(400, 'New password must be different from current password');
   }
@@ -87,11 +80,13 @@ function createModelUserRepository() {
     async findById(id) {
       return User.findById(id).populate('roleId').lean();
     },
-    async updateProfile(id, changes) {
-      return User.findByIdAndUpdate(id, { $set: changes }, { new: true, runValidators: true }).populate('roleId').lean();
+    async updateProfile(id, changes, session) {
+      const query = User.findByIdAndUpdate(id, { $set: changes }, { new: true, runValidators: true }).populate('roleId');
+      return (session ? query.session(session) : query).lean();
     },
-    async updatePassword(id, passwordHash) {
-      return User.findByIdAndUpdate(id, { $set: { passwordHash } }, { new: true, runValidators: true }).populate('roleId').lean();
+    async updatePassword(id, changes, session) {
+      const query = User.findByIdAndUpdate(id, { $set: changes }, { new: true, runValidators: true }).populate('roleId');
+      return (session ? query.session(session) : query).lean();
     },
     async updateAvatar(id, avatarUrl) {
       return User.findByIdAndUpdate(id, { $set: { avatarUrl } }, { new: true, runValidators: true }).populate('roleId').lean();
@@ -100,7 +95,27 @@ function createModelUserRepository() {
 }
 
 function createAuditLogger() {
-  return { async log(entry) { await AuditLog.create(entry); } };
+  return {
+    async log(entry, session) {
+      if (session) await AuditLog.create([entry], { session });
+      else await AuditLog.create(entry);
+    },
+  };
+}
+
+function createTransactionManager() {
+  return {
+    async withTransaction(work) {
+      const session = await mongoose.startSession();
+      try {
+        let result;
+        await session.withTransaction(async () => { result = await work(session); });
+        return result;
+      } finally {
+        await session.endSession();
+      }
+    },
+  };
 }
 
 function createProfileService({
@@ -108,10 +123,14 @@ function createProfileService({
   comparePassword = passwordUtils.comparePassword,
   hashPassword = passwordUtils.hashPassword,
   auditLogger = createAuditLogger(),
+  sessionService = defaultSessionService,
+  transactionManager = createTransactionManager(),
+  now = () => new Date(),
 } = {}) {
   async function requireUser(userId) {
     const user = await userRepository.findById(userId);
     if (!user) throw new ApiError(404, 'Profile not found');
+    if (user.status !== 'Active') throw new ApiError(403, 'Tài khoản không hoạt động.', [], 'PROFILE_ACCOUNT_DISABLED');
     return user;
   }
 
@@ -141,15 +160,25 @@ function createProfileService({
         throw new ApiError(400, 'Current password is incorrect');
       }
       const passwordHash = await hashPassword(newPassword);
-      await userRepository.updatePassword(userId, passwordHash);
-      await auditLogger.log({
-        userId,
-        action: 'PROFILE_PASSWORD_CHANGE',
-        targetEntity: 'User',
-        targetId: String(userId),
-        description: 'User changed account password',
-      });
-      return { changed: true };
+      const changedAt = now();
+      const applyChange = async (session) => {
+        await userRepository.updatePassword(userId, {
+          passwordHash,
+          passwordChangedAt: changedAt,
+        }, session);
+        const revoked = await sessionService.revokeAllForUser(userId, 'PASSWORD_CHANGED', session);
+        await auditLogger.log({
+          userId,
+          action: 'PROFILE_PASSWORD_CHANGE',
+          targetEntity: 'User',
+          targetId: String(userId),
+          description: 'User changed account password and revoked all sessions',
+        }, session);
+        return { changed: true, revokedSessions: revoked.revokedCount };
+      };
+      return transactionManager
+        ? transactionManager.withTransaction(applyChange)
+        : applyChange(null);
     },
 
     async setAvatar(userId, avatarUrl) {

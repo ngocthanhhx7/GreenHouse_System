@@ -111,6 +111,9 @@ export default function AdminDashboardPage() {
           <Link className="btn btn-outline-success" to="/admin/settings">
             Cấu hình
           </Link>
+          <Link className="btn btn-outline-success" to="/admin/accounts">
+            Tài khoản
+          </Link>
         </div>
       </div>
       <form className="table-actions mb-3" onSubmit={handleApply}>

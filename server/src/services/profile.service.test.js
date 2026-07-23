@@ -29,7 +29,8 @@ function createUserRepository() {
     },
     async updatePassword(id, passwordHash) {
       if (id !== user._id) return null;
-      user.passwordHash = passwordHash;
+      if (typeof passwordHash === 'object') Object.assign(user, passwordHash);
+      else user.passwordHash = passwordHash;
       return { ...user };
     },
     async updateAvatar(id, avatarUrl) {
@@ -51,6 +52,13 @@ describe('profile service', () => {
       comparePassword: async (value, hash) => value === 'Current123' && hash === 'old-hash',
       hashPassword: async (value) => `hashed:${value}`,
       auditLogger: { async log() {} },
+      sessionService: {
+        async revokeAllForUser() {
+          return { revokedCount: 2 };
+        },
+      },
+      now: () => new Date('2026-07-24T00:00:00.000Z'),
+      transactionManager: { async withTransaction(work) { return work(null); } },
     });
   });
 
@@ -63,33 +71,37 @@ describe('profile service', () => {
     assert.equal(result.passwordHash, undefined);
   });
 
-  it('updates only allowed profile fields and mirrors the legacy phone field', async () => {
+  it('AT-144 permits every Active role to change only its own full name and canonical phone', async () => {
     const result = await service.updateProfile('user-1', {
       fullName: 'Nguyễn Ngọc Thành',
       phoneNumber: '0912345678',
-      address: 'Hà Nội',
     });
 
     assert.equal(result.fullName, 'Nguyễn Ngọc Thành');
     assert.equal(result.phoneNumber, '0912345678');
-    assert.equal(userRepository.user.phone, '0912345678');
+    assert.equal(userRepository.user.phone, '0900000000');
+    assert.equal(result.address, undefined);
   });
 
-  it('rejects protected or unknown profile fields', async () => {
-    await assert.rejects(
-      () => service.updateProfile('user-1', { roleId: 'admin-role' }),
-      /Profile contains fields that cannot be updated/
-    );
+  it('AT-145 rejects protected fields and parallel phone or free-form address authority', async () => {
+    for (const changes of [{ roleId: 'admin-role' }, { phone: '0912345678' }, { address: 'Hà Nội' }]) {
+      await assert.rejects(
+        () => service.updateProfile('user-1', changes),
+        /Profile contains fields that cannot be updated/
+      );
+    }
   });
 
-  it('changes password only after verifying the current password', async () => {
-    await service.changePassword('user-1', {
+  it('AT-142 changes password only after current-password proof and revokes every session', async () => {
+    const result = await service.changePassword('user-1', {
       currentPassword: 'Current123',
       newPassword: 'NewPassword123',
       confirmPassword: 'NewPassword123',
     });
 
     assert.equal(userRepository.user.passwordHash, 'hashed:NewPassword123');
+    assert.equal(userRepository.user.passwordChangedAt.toISOString(), '2026-07-24T00:00:00.000Z');
+    assert.equal(result.revokedSessions, 2);
   });
 
   it('rejects a wrong current password', async () => {

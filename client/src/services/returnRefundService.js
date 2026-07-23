@@ -1,7 +1,7 @@
 import {
   DEFAULT_BASE_URL,
-  TOKEN_KEY,
   apiRequest,
+  getCsrfToken,
   parseApiResponse,
 } from './apiClient.js';
 
@@ -33,18 +33,17 @@ export function createReturnRefundService({ baseUrl = DEFAULT_BASE_URL, fetcher 
     async uploadEvidence(files) {
       const body = new FormData();
       Array.from(files || []).forEach((file) => body.append('images', file));
-      const token = typeof window === 'undefined' ? '' : window.localStorage.getItem(TOKEN_KEY);
       return parseResponse(await directFetcher(`${baseUrl}/return-refunds/evidence`, {
         method: 'POST',
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        headers: getCsrfToken() ? { 'X-CSRF-Token': getCsrfToken() } : {},
+        credentials: 'include',
         body,
       }));
     },
     async fetchEvidence(url) {
-      const token = typeof window === 'undefined' ? '' : window.localStorage.getItem(TOKEN_KEY);
       const response = await directFetcher(`${baseUrl}${evidenceApiPath(url)}`, {
         method: 'GET',
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        credentials: 'include',
       });
       if (!response.ok) {
         let message = 'Không thể mở ảnh bằng chứng';

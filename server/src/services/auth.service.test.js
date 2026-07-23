@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const { describe, it, beforeEach } = require('node:test');
 
 const { createAuthService } = require('./auth.service');
+const { hashPassword } = require('../utils/password');
 
 function createUserRepository() {
   const users = [];
@@ -60,87 +61,91 @@ describe('auth service', () => {
       userRepository,
       roleRepository,
       auditLogger,
-      jwtSecret: 'test-secret',
+      sessionService: {
+        sessions: [],
+        async createSession(input) {
+          this.sessions.push(input);
+          return { selector: 'opaque-selector', session: { _id: 'session-1' } };
+        },
+      },
+      loginThrottle: {
+        failures: [],
+        async assertAllowed() {},
+        async recordAttempt() {},
+        async recordFailure(input) { this.failures.push(input); },
+        async clearEmail() {},
+      },
     });
   });
 
-  it('registers a Customer account with hashed password and audit log', async () => {
-    const result = await authService.registerCustomer({
-      fullName: 'Nguyen Ngoc Thanh',
-      email: 'thanh@example.com',
-      phone: '0900000000',
-      password: 'Password123',
-      address: 'Ha Noi',
-    });
-
-    assert.equal(result.user.email, 'thanh@example.com');
-    assert.equal(result.user.role.roleName, 'Customer');
-    assert.equal(result.user.passwordHash, undefined);
-    assert.notEqual(userRepository.users[0].passwordHash, 'Password123');
-    assert.equal(auditLogger.entries[0].action, 'AUTH_REGISTER');
-  });
-
-  it('rejects duplicate customer email during register', async () => {
-    await authService.registerCustomer({
-      fullName: 'Nguyen Ngoc Thanh',
-      email: 'thanh@example.com',
-      phone: '0900000000',
-      password: 'Password123',
-      address: 'Ha Noi',
-    });
-
+  it('AT-125 rejects the legacy direct registration path', async () => {
     await assert.rejects(
-      () =>
-        authService.registerCustomer({
-          fullName: 'Nguyen Ngoc Thanh',
-          email: 'thanh@example.com',
-          phone: '0900000000',
-          password: 'Password123',
-          address: 'Ha Noi',
-        }),
-      /Email already exists/
+      () => authService.registerCustomer({ email: 'thanh@example.com' }),
+      (error) => error.errorCode === 'REGISTRATION_TWO_STEP_REQUIRED' && error.statusCode === 410
     );
+    assert.equal(userRepository.users.length, 0);
   });
 
-  it('logs in an active user and returns a signed token without password hash', async () => {
-    await authService.registerCustomer({
+  it('AT-139 logs in an active user through one server session without a bearer token', async () => {
+    userRepository.users.push({
+      _id: 'user-1',
       fullName: 'Nguyen Ngoc Thanh',
       email: 'thanh@example.com',
-      phone: '0900000000',
-      password: 'Password123',
-      address: 'Ha Noi',
+      phoneNumber: '0900000000',
+      passwordHash: await hashPassword('Password123'),
+      status: 'Active',
+      roleId: { _id: 'role-customer', roleName: 'Customer' },
     });
 
     const result = await authService.login({
       email: 'thanh@example.com',
       password: 'Password123',
-    });
+    }, { ip: '127.0.0.1', userAgent: 'test' });
 
-    assert.equal(typeof result.token, 'string');
+    assert.equal(result.token, undefined);
+    assert.equal(result.sessionSelector, 'opaque-selector');
     assert.equal(result.user.email, 'thanh@example.com');
     assert.equal(result.user.passwordHash, undefined);
-    const decoded = require('jsonwebtoken').decode(result.token);
-    assert.equal(decoded.pwd, 0);
     assert.equal(auditLogger.entries.at(-1).action, 'AUTH_LOGIN_SUCCESS');
   });
 
-  it('rejects login for disabled accounts', async () => {
-    await authService.registerCustomer({
-      fullName: 'Nguyen Ngoc Thanh',
+  it('AT-136 makes unknown email and wrong password indistinguishable without a session', async () => {
+    userRepository.users.push({
+      _id: 'user-1',
       email: 'thanh@example.com',
-      phone: '0900000000',
-      password: 'Password123',
-      address: 'Ha Noi',
+      passwordHash: await hashPassword('Password123'),
+      status: 'Active',
+      roleId: { roleName: 'Customer' },
     });
-    userRepository.users[0].status = 'Disabled';
 
+    const results = [];
+    for (const input of [
+      { email: 'missing@example.com', password: 'Password123' },
+      { email: 'thanh@example.com', password: 'WrongPassword123' },
+    ]) {
+      await assert.rejects(() => authService.login(input, { ip: '127.0.0.1' }), (error) => {
+        results.push({ statusCode: error.statusCode, message: error.message, errorCode: error.errorCode });
+        return true;
+      });
+    }
+    assert.deepEqual(results[0], results[1]);
+  });
+
+  it('AT-137 reveals Disabled guidance only after password proof and fails closed on invalid role', async () => {
+    userRepository.users.push({
+      _id: 'disabled',
+      email: 'disabled@example.com',
+      passwordHash: await hashPassword('Password123'),
+      status: 'Disabled',
+      roleId: { roleName: 'Customer' },
+    });
     await assert.rejects(
-      () =>
-        authService.login({
-          email: 'thanh@example.com',
-          password: 'Password123',
-        }),
-      /Account is disabled/
+      () => authService.login({ email: 'disabled@example.com', password: 'Wrong1234' }, { ip: '127.0.0.1' }),
+      (error) => error.errorCode === 'AUTH_INVALID_CREDENTIALS'
+    );
+    await assert.rejects(
+      () => authService.login({ email: 'disabled@example.com', password: 'Password123' }, { ip: '127.0.0.1' }),
+      (error) => error.errorCode === 'AUTH_ACCOUNT_DISABLED'
     );
   });
 });

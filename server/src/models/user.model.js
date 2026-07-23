@@ -18,17 +18,7 @@ const userSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
-    phone: {
-      type: String,
-      required: true,
-      trim: true,
-    },
     phoneNumber: {
-      type: String,
-      default: '',
-      trim: true,
-    },
-    address: {
       type: String,
       required: true,
       trim: true,
@@ -55,6 +45,11 @@ const userSchema = new mongoose.Schema(
     passwordChangedAt: {
       type: Date,
       default: null,
+    },
+    version: {
+      type: Number,
+      default: 0,
+      min: 0,
     },
   },
   { timestamps: true }

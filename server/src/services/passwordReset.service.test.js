@@ -8,6 +8,7 @@ function repositories({ createdAt = new Date(NOW.getTime() - 61_000) } = {}) {
   const users = [{ _id: 'user-1', email: 'thanh@example.com', passwordHash: 'old-hash', passwordChangedAt: null, status: 'Active' }];
   const tokens = [];
   const outbox = [];
+  const sessionEvents = [];
   return {
     users,
     tokens,
@@ -42,6 +43,7 @@ function repositories({ createdAt = new Date(NOW.getTime() - 61_000) } = {}) {
       async updatePassword(id, data) { Object.assign(users.find((user) => user._id === id), data); return users.find((user) => user._id === id); },
     },
     outboxService: { async enqueue(event) { outbox.push(event); return event; }, events: outbox },
+    sessionService: { async revokeAllForUser(userId, reason) { sessionEvents.push({ userId, reason }); return { revokedCount: 2 }; }, events: sessionEvents },
   };
 }
 
@@ -82,6 +84,8 @@ describe('password reset OTP service', () => {
 
     assert.equal(repos.users[0].passwordHash, 'hashed:NewPassword123');
     assert.equal(repos.users[0].passwordChangedAt.toISOString(), NOW.toISOString());
+    assert.deepEqual(repos.sessionService.events, [{ userId: 'user-1', reason: 'PASSWORD_RESET' }]);
+    assert.equal(repos.outboxService.events.at(-1).eventType, 'PASSWORD_RESET_COMPLETED');
     await assert.rejects(
       () => service.resetPassword({ email: 'thanh@example.com', otp: '123456', password: 'NewPassword123', confirmPassword: 'NewPassword123' }),
       (error) => error.errorCode === 'OTP_INVALID_OR_USED'

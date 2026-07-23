@@ -61,46 +61,56 @@ function validateAddress(input, { partial = false } = {}) {
 
 function createModelAddressRepository() {
   return {
-    async listByUser(userId) {
-      return UserAddress.find({ userId }).sort({ isDefault: -1, createdAt: -1 }).lean();
+    async withTransaction(work) {
+      const session = await mongoose.startSession();
+      try {
+        let result;
+        await session.withTransaction(async () => { result = await work(session); });
+        return result;
+      } finally {
+        await session.endSession();
+      }
     },
-    async countByUser(userId) {
-      return UserAddress.countDocuments({ userId });
+    async listByUser(userId, session) {
+      const query = UserAddress.find({ userId }).sort({ isDefault: -1, createdAt: -1 });
+      return (session ? query.session(session) : query).lean();
     },
-    async unsetDefault(userId) {
-      await UserAddress.updateMany({ userId, isDefault: true }, { $set: { isDefault: false } });
+    async countByUser(userId, session) {
+      const query = UserAddress.countDocuments({ userId });
+      return session ? query.session(session) : query;
     },
-    async create(userId, data) {
-      return UserAddress.create({ userId, ...data });
+    async unsetDefault(userId, session) {
+      const query = UserAddress.updateMany({ userId, isDefault: true }, { $set: { isDefault: false } });
+      await (session ? query.session(session) : query);
     },
-    async findByIdForUser(userId, id) {
+    async create(userId, data, session) {
+      if (!session) return UserAddress.create({ userId, ...data });
+      const [created] = await UserAddress.create([{ userId, ...data }], { session });
+      return created;
+    },
+    async findByIdForUser(userId, id, session) {
       if (!mongoose.isValidObjectId(id)) return null;
-      return UserAddress.findOne({ _id: id, userId }).lean();
+      const query = UserAddress.findOne({ _id: id, userId });
+      return (session ? query.session(session) : query).lean();
     },
-    async updateForUser(userId, id, changes) {
+    async updateForUser(userId, id, changes, session) {
       if (!mongoose.isValidObjectId(id)) return null;
-      return UserAddress.findOneAndUpdate({ _id: id, userId }, { $set: changes }, { new: true, runValidators: true }).lean();
+      const query = UserAddress.findOneAndUpdate({ _id: id, userId }, { $set: changes, $inc: { version: 1 } }, { new: true, runValidators: true });
+      return (session ? query.session(session) : query).lean();
     },
-    async deleteForUser(userId, id) {
+    async deleteForUser(userId, id, session) {
       if (!mongoose.isValidObjectId(id)) return null;
-      return UserAddress.findOneAndDelete({ _id: id, userId }).lean();
+      const query = UserAddress.findOneAndDelete({ _id: id, userId });
+      return (session ? query.session(session) : query).lean();
     },
   };
 }
 
 function createUserAddressService({ addressRepository = createModelAddressRepository() } = {}) {
-  async function requireAddress(userId, id) {
-    const address = await addressRepository.findByIdForUser(userId, id);
+  async function requireAddress(userId, id, session) {
+    const address = await addressRepository.findByIdForUser(userId, id, session);
     if (!address) throw new ApiError(404, 'Address not found');
     return address;
-  }
-
-  async function promoteFirstAddress(userId) {
-    const remaining = await addressRepository.listByUser(userId);
-    if (remaining.length && !remaining.some((item) => item.isDefault)) {
-      return addressRepository.updateForUser(userId, remaining[0]._id, { isDefault: true });
-    }
-    return null;
   }
 
   return {
@@ -110,10 +120,16 @@ function createUserAddressService({ addressRepository = createModelAddressReposi
 
     async createAddress(userId, input) {
       const data = validateAddress(input || {});
-      const makeDefault = Boolean(data.isDefault) || (await addressRepository.countByUser(userId)) === 0;
-      if (makeDefault) await addressRepository.unsetDefault(userId);
-      const created = await addressRepository.create(userId, { ...data, isDefault: makeDefault });
-      return toPlainAddress(created);
+      return addressRepository.withTransaction(async (session) => {
+        const count = await addressRepository.countByUser(userId, session);
+        if (count >= 10) {
+          throw new ApiError(409, 'Sổ địa chỉ đã đạt giới hạn 10 địa chỉ.', [], 'ADDRESS_LIMIT_REACHED');
+        }
+        const makeDefault = Boolean(data.isDefault) || count === 0;
+        if (makeDefault && count > 0) await addressRepository.unsetDefault(userId, session);
+        const created = await addressRepository.create(userId, { ...data, isDefault: makeDefault }, session);
+        return toPlainAddress(created);
+      });
     },
 
     async updateAddress(userId, id, input) {
@@ -126,17 +142,29 @@ function createUserAddressService({ addressRepository = createModelAddressReposi
     },
 
     async setDefaultAddress(userId, id) {
-      await requireAddress(userId, id);
-      await addressRepository.unsetDefault(userId);
-      const updated = await addressRepository.updateForUser(userId, id, { isDefault: true });
-      return toPlainAddress(updated);
+      return addressRepository.withTransaction(async (session) => {
+        await requireAddress(userId, id, session);
+        await addressRepository.unsetDefault(userId, session);
+        const updated = await addressRepository.updateForUser(userId, id, { isDefault: true }, session);
+        return toPlainAddress(updated);
+      });
     },
 
     async deleteAddress(userId, id) {
-      const existing = await requireAddress(userId, id);
-      const deleted = await addressRepository.deleteForUser(userId, id);
-      if (existing.isDefault) await promoteFirstAddress(userId);
-      return toPlainAddress(deleted);
+      return addressRepository.withTransaction(async (session) => {
+        const existing = await requireAddress(userId, id, session);
+        const count = await addressRepository.countByUser(userId, session);
+        if (existing.isDefault && count > 1) {
+          throw new ApiError(
+            409,
+            'Hãy chọn địa chỉ mặc định khác trước khi xóa.',
+            [],
+            'DEFAULT_ADDRESS_REPLACEMENT_REQUIRED'
+          );
+        }
+        const deleted = await addressRepository.deleteForUser(userId, id, session);
+        return toPlainAddress(deleted);
+      });
     },
   };
 }

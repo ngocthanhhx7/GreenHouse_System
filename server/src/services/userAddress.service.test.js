@@ -7,6 +7,9 @@ function createRepository() {
   const addresses = [];
   return {
     addresses,
+    async withTransaction(work) {
+      return work({ id: 'transaction-1' });
+    },
     async listByUser(userId) {
       return addresses.filter((item) => item.userId === userId);
     },
@@ -76,13 +79,27 @@ describe('user address service', () => {
     await assert.rejects(() => service.updateAddress('user-2', created.id, { label: 'Khác' }), /Address not found/);
   });
 
-  it('promotes another address when deleting the current default', async () => {
+  it('AT-148 blocks deletion of a default while another address remains', async () => {
     const first = await service.createAddress('user-1', validAddress);
-    const second = await service.createAddress('user-1', { ...validAddress, label: 'Văn phòng' });
+    await service.createAddress('user-1', { ...validAddress, label: 'Văn phòng' });
 
-    await service.deleteAddress('user-1', first.id);
+    await assert.rejects(
+      () => service.deleteAddress('user-1', first.id),
+      (error) => error.errorCode === 'DEFAULT_ADDRESS_REPLACEMENT_REQUIRED'
+    );
 
-    assert.equal(repository.addresses.find((item) => item._id === second.id).isDefault, true);
+    assert.equal(repository.addresses.length, 2);
+    assert.equal(repository.addresses.filter((item) => item.isDefault).length, 1);
+  });
+
+  it('AT-147 limits each Customer address book to ten structured addresses', async () => {
+    for (let index = 0; index < 10; index += 1) {
+      await service.createAddress('user-1', { ...validAddress, label: `Địa chỉ ${index + 1}` });
+    }
+    await assert.rejects(
+      () => service.createAddress('user-1', { ...validAddress, label: 'Địa chỉ 11' }),
+      (error) => error.errorCode === 'ADDRESS_LIMIT_REACHED'
+    );
   });
 
   it('validates Vietnamese phone and required address fields', async () => {

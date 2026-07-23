@@ -1,4 +1,4 @@
-import { DEFAULT_BASE_URL, TOKEN_KEY, apiRequest } from './apiClient.js';
+import { DEFAULT_BASE_URL, apiRequest, getCsrfToken } from './apiClient.js';
 
 async function parseResponse(response) {
   const payload = await response.json();
@@ -12,11 +12,9 @@ async function parseResponse(response) {
 }
 
 function authHeaders() {
-  if (typeof window === 'undefined') return { 'Content-Type': 'application/json' };
-  const token = window.localStorage.getItem(TOKEN_KEY);
   return {
     'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(getCsrfToken() ? { 'X-CSRF-Token': getCsrfToken() } : {}),
   };
 }
 
@@ -34,6 +32,7 @@ export function createOrderService({ baseUrl = DEFAULT_BASE_URL, fetcher = fetch
           method: 'POST',
           headers: { ...authHeaders(), 'Idempotency-Key': idempotencyKey },
           body: JSON.stringify(payload),
+          credentials: 'include',
         })
       );
     },
@@ -52,6 +51,7 @@ export function createOrderService({ baseUrl = DEFAULT_BASE_URL, fetcher = fetch
           method: 'PATCH',
           headers: { ...authHeaders(), 'Idempotency-Key': idempotencyKey },
           body: JSON.stringify({ cancelReason }),
+          credentials: 'include',
         })
       );
     },

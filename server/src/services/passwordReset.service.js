@@ -3,6 +3,8 @@ const ApiError = require('../utils/apiError');
 const User = require('../models/user.model');
 const PasswordResetToken = require('../models/passwordResetToken.model');
 const { hashPassword: defaultHashPassword } = require('../utils/password');
+const { validatePasswordPolicy } = require('../utils/passwordPolicy');
+const { sessionService: defaultSessionService } = require('./session.service');
 
 const GENERIC_RESPONSE = 'Nếu email tồn tại, mã OTP đặt lại mật khẩu sẽ được gửi đến hộp thư của bạn.';
 
@@ -93,12 +95,9 @@ function validateResetInput({ email, otp, password, confirmPassword }) {
   const errors = [];
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizeEmail(email))) errors.push({ field: 'email', message: 'Email không hợp lệ.' });
   if (!/^\d{6}$/.test(String(otp || ''))) errors.push({ field: 'otp', message: 'Mã OTP phải gồm đúng 6 chữ số.' });
-  if (String(password || '').length < 8) errors.push({ field: 'password', message: 'Mật khẩu mới phải có ít nhất 8 ký tự.' });
-  if (!/[a-z]/.test(String(password || '')) || !/[A-Z]/.test(String(password || '')) || !/\d/.test(String(password || ''))) {
-    errors.push({ field: 'password', message: 'Mật khẩu mới phải có chữ hoa, chữ thường và chữ số.' });
-  }
   if (password !== confirmPassword) errors.push({ field: 'confirmPassword', message: 'Xác nhận mật khẩu không khớp.' });
   if (errors.length) throw new ApiError(400, 'Dữ liệu đặt lại mật khẩu không hợp lệ.', errors, 'VALIDATION_ERROR');
+  validatePasswordPolicy({ password, confirmPassword });
 }
 
 function createPasswordResetService({
@@ -109,6 +108,7 @@ function createPasswordResetService({
   otpGenerator = () => String(crypto.randomInt(0, 1_000_000)).padStart(6, '0'),
   otpSecret = resolveOtpSecret(),
   hashPassword = defaultHashPassword,
+  sessionService = defaultSessionService,
   ttlMs = 10 * 60_000,
   cooldownMs = 60_000,
   maxAttempts = 5,
@@ -174,6 +174,15 @@ function createPasswordResetService({
         const consumed = await tokenRepository.consume(token._id, current, maxAttempts, session);
         if (!consumed) throw new ApiError(400, 'Mã OTP không hợp lệ hoặc đã được sử dụng.', [{ field: 'otp', message: 'Mã OTP không hợp lệ hoặc đã được sử dụng.' }], 'OTP_INVALID_OR_USED');
         await userRepository.updatePassword(user._id, { passwordHash: await hashPassword(input.password), passwordChangedAt: current }, session);
+        await sessionService.revokeAllForUser(user._id, 'PASSWORD_RESET', session);
+        if (outboxService.enqueue) {
+          await outboxService.enqueue({
+            eventType: 'PASSWORD_RESET_COMPLETED',
+            idempotencyKey: `PASSWORD_RESET_COMPLETED:${String(token._id)}`,
+            recipient: email,
+            payload: { userId: String(user._id) },
+          }, session);
+        }
       };
       if (transactionManager) await transactionManager.withTransaction(update);
       else await update(null);

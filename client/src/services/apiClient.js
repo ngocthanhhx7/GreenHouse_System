@@ -1,9 +1,17 @@
 const viteEnv = import.meta.env || {};
 const DEFAULT_BASE_URL = viteEnv.VITE_API_BASE_URL || 'http://localhost:5000/api';
-const TOKEN_KEY = 'greenhome_token';
+let csrfToken = '';
 
-function getStorage() {
-  return window.localStorage;
+export function setCsrfToken(value) {
+  csrfToken = String(value || '');
+}
+
+export function clearCsrfToken() {
+  csrfToken = '';
+}
+
+export function getCsrfToken() {
+  return csrfToken;
 }
 
 export function createApiError(payload = {}, fallbackMessage = 'API request failed') {
@@ -30,16 +38,17 @@ export async function parseApiResponse(response, fallbackMessage = 'API request 
 }
 
 export async function apiRequest(path, options = {}) {
-  const token = getStorage().getItem(TOKEN_KEY);
   const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
   const headers = { ...(isFormData ? {} : { 'Content-Type': 'application/json' }), ...(options.headers || {}) };
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
+  const method = String(options.method || 'GET').toUpperCase();
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(method) && csrfToken) {
+    headers['X-CSRF-Token'] = csrfToken;
   }
 
   const response = await fetch(`${DEFAULT_BASE_URL}${path}`, {
     ...options,
     headers,
+    credentials: 'include',
   });
   return parseApiResponse(response);
 }
@@ -50,4 +59,4 @@ export function resolveMediaUrl(value) {
   return `${serverOrigin}${value.startsWith('/') ? value : `/${value}`}`;
 }
 
-export { TOKEN_KEY, DEFAULT_BASE_URL };
+export { DEFAULT_BASE_URL };
