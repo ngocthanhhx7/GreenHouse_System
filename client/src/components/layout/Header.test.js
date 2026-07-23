@@ -22,6 +22,10 @@ describe('shared header design contract', () => {
 
   it('keeps cart scoped to customer/storefront usage instead of internal dashboards', () => {
     assert.match(header, /showCart/);
+    assert.match(header, /useCart/);
+    assert.match(header, /cart-indicator-dot/);
+    assert.match(header, /itemCount > 0/);
+    assert.match(header, /aria-label="Giỏ hàng có sản phẩm mới"/);
     assert.match(header, /to="\/login"/);
     assert.match(header, /to="\/register"/);
     assert.match(header, /<NotificationBell/);

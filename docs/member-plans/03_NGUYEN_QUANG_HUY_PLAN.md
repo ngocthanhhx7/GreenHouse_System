@@ -277,3 +277,12 @@ Huy sở hữu phát sự kiện email `ORDER_CREATED` sau khi transaction check
 - MongoDB code 20 được trả thành `503 DATABASE_TRANSACTIONS_UNSUPPORTED` với thông
   báo cấu hình rõ ràng thay vì `500 Internal server error`.
 - The event remains idempotent with key `ORDER_CREATED:<orderId>`; retries are handled by the durable email worker owned by Thành.
+
+## Ownership Addendum 2026-07-23 - Shared Cart Indicator
+
+Huy bổ sung trạng thái giỏ hàng dùng chung cho luồng Customer:
+
+- Header chỉ hiện chấm đỏ có nhãn trợ năng khi Customer có ít nhất một sản phẩm trong giỏ; Staff, Warehouse và Admin không nhận trạng thái hoặc chỉ báo giỏ hàng.
+- `CartProvider` nạp lại giỏ theo Customer đăng nhập, xóa trạng thái khi logout/chuyển role và đồng bộ sau add, cập nhật số lượng, xóa item hoặc tạo đơn thành công.
+- Mỗi lần đổi tài khoản hoặc reset sau checkout sẽ tăng generation và thay hàng đợi; các cart operation trong cùng generation chạy tuần tự theo thứ tự người dùng khởi tạo, còn operation cũ đang chờ sẽ bị bỏ qua trước khi gọi API.
+- Header là shared-shell do Thành khởi tạo, nhưng thay đổi này thuộc Cart flow của Huy; không làm thay đổi menu hoặc quyền của role nội bộ.

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
 import useAuth from '../../hooks/useAuth.js';
+import { useCart } from '../../contexts/CartContext.jsx';
 import { cartService } from '../../services/cartService.js';
 import { resolveMediaUrl } from '../../services/apiClient.js';
 import { orderService } from '../../services/orderService.js';
@@ -12,6 +13,7 @@ import { formatProductCurrency, formatProductSku } from '../../utils/formatters.
 export default function ProductDetailPage() {
   const { id } = useParams();
   const { user } = useAuth();
+  const { runCartMutation } = useCart();
   const [product, setProduct] = useState(null);
   const [reviews, setReviews] = useState({ items: [], total: 0, averageRating: 0 });
   const [reviewableOrders, setReviewableOrders] = useState([]);
@@ -76,7 +78,7 @@ export default function ProductDetailPage() {
     setError('');
     setMessage('');
     try {
-      await cartService.addItem({ productId: product.id || product._id, quantity: 1 });
+      await runCartMutation(() => cartService.addItem({ productId: product.id || product._id, quantity: 1 }));
       setMessage('Đã thêm sản phẩm vào giỏ hàng.');
     } catch (err) {
       setError(err.message);
