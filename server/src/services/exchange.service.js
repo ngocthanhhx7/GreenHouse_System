@@ -122,6 +122,22 @@ function createModelRepository({ lockService = afterSalesLockService } = {}) {
     async findUnitsByIds(ids, session) {
       return withSession(ExchangeUnitLineage.find({ _id: { $in: ids } }).sort({ createdAt: 1 }), session).lean();
     },
+    async listClaimedOriginalUnitOrdinals(orderId, orderDetailId, session) {
+      const units = await withSession(ExchangeUnitLineage.find({
+        orderId,
+        orderDetailId,
+        parentUnitId: null,
+        exclusivePhysicalClaimKey: { $exists: true, $ne: '' },
+      }).select('originalUnitOrdinal'), session).lean();
+      return units.map((item) => Number(item.originalUnitOrdinal));
+    },
+    async releaseUnitClaims(caseId, session) {
+      const result = await withSession(ExchangeUnitLineage.updateMany(
+        { exchangeCaseId: caseId },
+        { $unset: { exclusivePhysicalClaimKey: 1 } }
+      ), session);
+      return result.modifiedCount;
+    },
     async updateUnitsForInspection(caseId, lineId, acceptedQuantity, movementKeys, session) {
       const units = await withSession(ExchangeUnitLineage.find({
         exchangeCaseId: caseId, exchangeLineId: lineId,
@@ -391,6 +407,72 @@ function createExchangeService({
     });
   }
 
+  async function shipmentEventResult(event, source, replay) {
+    if (source === 'CARRIER') {
+      return {
+        eventId: String(event._id),
+        eventType: event.eventType,
+        idempotentReplay: replay,
+      };
+    }
+    return {
+      event,
+      request: await load(event.exchangeCaseId, source === 'STAFF_EVIDENCE' ? 'Staff' : 'Customer'),
+      idempotentReplay: replay,
+    };
+  }
+
+  function unresolvedShipmentIncidents(shipments) {
+    return shipments.filter((incident) => (
+      incident.status === 'Incident'
+      && !shipments.some((candidate) => (
+        String(candidate.resendOfShipmentId || '') === String(incident._id)
+      ))
+    ));
+  }
+
+  function incidentResolvedByDeliveredDescendant(incident, shipments, visited = new Set()) {
+    const incidentId = String(incident._id);
+    if (visited.has(incidentId)) return false;
+    visited.add(incidentId);
+    return shipments
+      .filter((candidate) => String(candidate.resendOfShipmentId || '') === incidentId)
+      .some((candidate) => (
+        candidate.status === 'Delivered'
+        || (candidate.status === 'Incident'
+          && incidentResolvedByDeliveredDescendant(candidate, shipments, visited))
+      ));
+  }
+
+  async function reconcileIncidentState(caseId, session) {
+    const shipments = await repository.listShipments(caseId, session);
+    const unresolved = unresolvedShipmentIncidents(shipments);
+    if (unresolved.length) {
+      const incident = unresolved[0];
+      return repository.claimCase(caseId, [
+        'OutboundFulfillment', 'ReplacementShipped', 'DeliveryIncident',
+      ], {
+        status: 'DeliveryIncident',
+        waitingFor: incident.direction === 'REPLACEMENT_TO_CUSTOMER'
+          ? 'INCIDENT_RESEND'
+          : 'REJECTED_ORIGINAL_RECONCILIATION',
+        incidentShipmentId: incident._id,
+        shippingPayer: 'SHOP',
+      }, session);
+    }
+    const fresh = await repository.findCaseById(caseId, session);
+    if (fresh?.status !== 'DeliveryIncident') return fresh;
+    const nextStatus = shipments.some((item) => item.direction === 'REPLACEMENT_TO_CUSTOMER')
+      ? 'ReplacementShipped'
+      : 'OutboundFulfillment';
+    return repository.claimCase(caseId, ['DeliveryIncident'], {
+      status: nextStatus,
+      waitingFor: '',
+      incidentShipmentId: null,
+      incidentReason: '',
+    }, session);
+  }
+
   async function load(caseId, audience = 'Customer', replay = false, session) {
     const exchangeCase = await repository.findCaseById(caseId, session);
     if (!exchangeCase) throw new ApiError(404, 'Exchange request not found');
@@ -506,8 +588,7 @@ function createExchangeService({
         if (!lines.length) throw new ApiError(409, 'Exchange lines are missing');
         await reserveAll(fresh, lines, staffId, session);
         const approvedAt = new Date(clock());
-        return repository.claimCase
-          ? repository.claimCase(fresh._id, ['Submitted', 'WaitingForExactStock'], {
+        const approved = await repository.claimCase(fresh._id, ['Submitted', 'WaitingForExactStock'], {
             ...data,
             status: 'ApprovedAwaitingShipment',
             approvedAt,
@@ -517,23 +598,14 @@ function createExchangeService({
             stockFailureReason: '',
             waitingFor: '',
             incidentShipmentId: null,
-          }, session)
-          : repository.updateCase(fresh._id, {
-            ...data,
-            status: 'ApprovedAwaitingShipment',
-            approvedAt,
-            shipByAt: new Date(approvedAt.getTime() + SHIP_WINDOW_MS),
-            decidedAt: approvedAt,
-            decidedBy: staffId,
-            stockFailureReason: '',
-            waitingFor: '',
-            incidentShipmentId: null,
-          }, session);
+        }, session);
+        if (!approved) throw new ApiError(409, 'Exchange request changed while Staff was approving it');
+        return approved;
       });
     } catch (error) {
       if (!(error instanceof NoExactStockError)) throw error;
       const failedAt = new Date(clock());
-      return repository.updateCase(exchangeCase._id, {
+      const waiting = await repository.claimCase(exchangeCase._id, ['Submitted', 'WaitingForExactStock'], {
         ...data,
         status: 'AwaitingExactStockChoice',
         approvedAt: null,
@@ -544,6 +616,8 @@ function createExchangeService({
         waitingFor: 'INITIAL_APPROVAL',
         incidentShipmentId: null,
       });
+      if (!waiting) throw new ApiError(409, 'Exchange request changed while Staff was checking exact stock');
+      return waiting;
     }
   }
 
@@ -552,10 +626,7 @@ function createExchangeService({
     const shipments = await repository.listShipments(caseId, session);
     if (shipments.some((item) => item.status === 'InTransit')) return null;
     for (const incident of shipments.filter((item) => item.status === 'Incident')) {
-      const resolvedByDeliveredResend = shipments.some((item) => (
-        String(item.resendOfShipmentId || '') === String(incident._id)
-        && item.status === 'Delivered'
-      ));
+      const resolvedByDeliveredResend = incidentResolvedByDeliveredDescendant(incident, shipments);
       if (!resolvedByDeliveredResend) return null;
     }
     let anyAccepted = false;
@@ -575,7 +646,10 @@ function createExchangeService({
     }
     const completedAt = new Date(clock());
     const terminalStatus = anyAccepted ? 'Completed' : 'ClosedNoExchange';
-    const updated = await repository.updateCase(caseId, { status: terminalStatus, completedAt, terminalAt: completedAt }, session);
+    const updated = await repository.claimCase(caseId, [
+      'OutboundFulfillment', 'ReplacementShipped', 'DeliveryIncident',
+    ], { status: terminalStatus, completedAt, terminalAt: completedAt }, session);
+    if (!updated) throw new ApiError(409, 'Exchange changed before completion could be recorded');
     await repository.releaseOrderLock(updated.orderId, updated._id, terminalStatus, false, session);
     return updated;
   }
@@ -754,20 +828,42 @@ function createExchangeService({
             purchasedQuantity: Number(detail.quantity),
             requestedQuantity: quantity,
           })), session);
+          for (const normalized of normalizedLines.filter((item) => !item.sourceUnits.length)) {
+            const claimedOrdinals = new Set(
+              await repository.listClaimedOriginalUnitOrdinals(
+                order._id,
+                normalized.detail._id,
+                session
+              )
+            );
+            normalized.originalOrdinals = Array.from(
+              { length: Number(normalized.detail.quantity) },
+              (_value, index) => index + 1
+            ).filter((ordinal) => !claimedOrdinals.has(ordinal)).slice(0, normalized.quantity);
+            if (normalized.originalOrdinals.length !== normalized.quantity) {
+              throw new ApiError(409, 'Selected original physical units are already used by another Exchange');
+            }
+          }
           const units = [];
           for (const line of lines) {
             const normalized = normalizedLines.find((item) => String(item.detail._id) === String(line.orderDetailId));
             for (let ordinal = 1; ordinal <= Number(line.requestedQuantity); ordinal += 1) {
               const parent = normalized?.sourceUnits?.[ordinal - 1] || null;
+              const originalUnitOrdinal = parent?.originalUnitOrdinal
+                || normalized.originalOrdinals[ordinal - 1];
+              const exclusivePhysicalClaimKey = parent
+                ? `REPLACEMENT:${String(parent._id)}`
+                : `ORIGINAL:${String(order._id)}:${String(line.orderDetailId)}:${originalUnitOrdinal}`;
               units.push({
                 unitKey: `${String(exchangeCase._id)}:${String(line._id)}:${ordinal}`,
+                exclusivePhysicalClaimKey,
                 exchangeCaseId: exchangeCase._id,
                 exchangeLineId: line._id,
                 orderId: order._id,
                 orderDetailId: line.orderDetailId,
                 productId: line.productId,
                 parentUnitId: parent?._id || null,
-                originalUnitOrdinal: parent?.originalUnitOrdinal || ordinal,
+                originalUnitOrdinal,
                 cycle: parent ? Number(parent.cycle || 0) + 1 : 0,
                 outcome: 'Pending',
               });
@@ -780,6 +876,7 @@ function createExchangeService({
         if (error?.code === 11000) {
           const replay = await repository.findCaseByIdempotency(customerId, idempotencyKey);
           if (replay) return loadCreateReplay(replay, customerId, input);
+          throw new ApiError(409, 'A selected physical unit is already owned by another Exchange');
         }
         throw error;
       }
@@ -888,20 +985,14 @@ function createExchangeService({
       if (decision === 'REJECT') {
         const rejectedAt = new Date(clock());
         const updated = await transactionManager.withTransaction(async (session) => {
-          const rejected = repository.claimCase
-            ? await repository.claimCase(id, ['Submitted'], {
-              status: 'Rejected', decisionReason: reason, decidedBy: staffId,
-              decidedAt: rejectedAt, terminalAt: rejectedAt,
-              decisionIdempotencyKey: idempotencyKey,
-              decisionFingerprint: fingerprint,
-            }, session)
-            : await repository.updateCase(id, {
-              status: 'Rejected', decisionReason: reason, decidedBy: staffId,
-              decidedAt: rejectedAt, terminalAt: rejectedAt,
-              decisionIdempotencyKey: idempotencyKey,
-              decisionFingerprint: fingerprint,
-            }, session);
+          const rejected = await repository.claimCase(id, ['Submitted'], {
+            status: 'Rejected', decisionReason: reason, decidedBy: staffId,
+            decidedAt: rejectedAt, terminalAt: rejectedAt,
+            decisionIdempotencyKey: idempotencyKey,
+            decisionFingerprint: fingerprint,
+          }, session);
           if (!rejected) throw new ApiError(409, 'Exchange request changed while Staff was deciding it');
+          await repository.releaseUnitClaims(rejected._id, session);
           await repository.releaseOrderLock(rejected.orderId, rejected._id, 'Rejected', false, session);
           return rejected;
         });
@@ -927,8 +1018,12 @@ function createExchangeService({
 
     async retryReservation(staffId, id, input = {}) {
       rejectForbiddenFields(input);
+      const idempotencyKey = normalizeIdempotencyKey(input.idempotencyKey);
       const exchangeCase = await repository.findCaseById(id);
       if (!exchangeCase) throw new ApiError(404, 'Exchange request not found');
+      if (exchangeCase.reservationRetryIdempotencyKey === idempotencyKey) {
+        return load(id, 'Staff', true);
+      }
       if (exchangeCase.status !== 'WaitingForExactStock') throw new ApiError(409, 'Only a waiting Exchange can retry reservation');
       if (exchangeCase.waitingFor === 'INCIDENT_RESEND') {
         throw new ApiError(409, 'Incident stock must continue through the exact-SKU resend flow');
@@ -938,6 +1033,7 @@ function createExchangeService({
         responsibility: exchangeCase.responsibility,
         shippingPayer: exchangeCase.shippingPayer,
         payerRationale: exchangeCase.payerRationale,
+        reservationRetryIdempotencyKey: idempotencyKey,
       });
       await writeAudit(staffId, updated.status === 'ApprovedAwaitingShipment' ? 'EXCHANGE_STOCK_RESERVED' : 'EXCHANGE_STILL_NO_STOCK', id, updated.stockFailureReason || '');
       return load(id, 'Staff');
@@ -959,11 +1055,14 @@ function createExchangeService({
         throw new ApiError(409, 'This Exchange is not waiting for a stock choice');
       }
       if (choice === 'WAIT') {
-        await repository.updateCase(id, {
+        const waiting = await repository.claimCase(id, [
+          'AwaitingExactStockChoice', 'WaitingForExactStock', 'DeliveryIncident',
+        ], {
           status: 'WaitingForExactStock',
           stockChoiceIdempotencyKey: idempotencyKey,
           stockChoice: 'WAIT',
         });
+        if (!waiting) throw new ApiError(409, 'Exchange stock choice changed while Customer was submitting it');
         await writeAudit(customerId, 'EXCHANGE_WAIT_FOR_STOCK', id, 'Customer chose exact-SKU stock wait');
         return load(id);
       }
@@ -980,6 +1079,15 @@ function createExchangeService({
         throw new ApiError(409, 'This Exchange cannot convert to Return/Refund');
       }
       const converted = await transactionManager.withTransaction(async (session) => {
+        const claimed = await repository.claimCase(id, [
+          'AwaitingExactStockChoice', 'WaitingForExactStock', 'DeliveryIncident',
+        ], {
+          status: 'ConvertedToReturnRefund',
+          stockChoiceIdempotencyKey: conversionKey,
+          stockChoice: 'CONVERT_TO_RETURN',
+          terminalAt: new Date(clock()),
+        }, session);
+        if (!claimed) throw new ApiError(409, 'Exchange changed while Customer was converting it');
         await releaseReservations(id, customerId, 'Converted to Return/Refund', session);
         const [lines, movements] = await Promise.all([
           repository.listLines(id, session),
@@ -1028,11 +1136,7 @@ function createExchangeService({
           convertedAt: new Date(clock()),
         }, session);
         await repository.updateCase(id, {
-          status: 'ConvertedToReturnRefund',
           convertedReturnRefundRequestId: returnRequest._id,
-          stockChoiceIdempotencyKey: conversionKey,
-          stockChoice: 'CONVERT_TO_RETURN',
-          terminalAt: new Date(clock()),
         }, session);
         return returnRequest;
       });
@@ -1052,12 +1156,13 @@ function createExchangeService({
       if (handoffAt.getTime() > new Date(clock()).getTime() + FUTURE_TOLERANCE_MS) throw new ApiError(400, 'handoffAt cannot be in the future');
       if (handoffAt.getTime() > new Date(exchangeCase.shipByAt).getTime()) throw new ApiError(409, 'The three-day Exchange handoff deadline has expired');
       if (exchangeCase.approvedAt && handoffAt.getTime() < new Date(exchangeCase.approvedAt).getTime()) throw new ApiError(400, 'handoffAt cannot be before approval');
-      await repository.updateCase(id, {
+      const handedOff = await repository.claimCase(id, ['ApprovedAwaitingShipment'], {
         status: 'CustomerShipped',
         handoffAt,
         handoffProofReference: proofReference,
         handoffIdempotencyKey: idempotencyKey,
       });
+      if (!handedOff) throw new ApiError(409, 'Exchange changed before Customer handoff could be recorded');
       await writeAudit(customerId, 'EXCHANGE_HANDOFF_RECORDED', id, proofReference);
       return load(id);
     },
@@ -1071,12 +1176,17 @@ function createExchangeService({
         throw new ApiError(409, 'Customer cannot cancel after Carrier handoff');
       }
       await transactionManager.withTransaction(async (session) => {
-        await releaseReservations(id, customerId, 'Customer cancelled before handoff', session);
         const cancelledAt = new Date(clock());
-        await repository.updateCase(id, {
-          status: 'Cancelled', cancellationIdempotencyKey: idempotencyKey,
+        const cancelled = await repository.claimCase(id, [
+          'Submitted', 'AwaitingExactStockChoice', 'WaitingForExactStock', 'ApprovedAwaitingShipment',
+        ], {
+          status: 'Cancelled',
+          cancellationIdempotencyKey: idempotencyKey,
           terminalAt: cancelledAt,
         }, session);
+        if (!cancelled) throw new ApiError(409, 'Exchange changed before cancellation could be recorded');
+        await releaseReservations(id, customerId, 'Customer cancelled before handoff', session);
+        await repository.releaseUnitClaims(id, session);
         await repository.releaseOrderLock(exchangeCase.orderId, exchangeCase._id, 'Cancelled', false, session);
       });
       await writeAudit(customerId, 'EXCHANGE_CANCELLED', id, 'Customer cancelled before Carrier handoff');
@@ -1091,8 +1201,12 @@ function createExchangeService({
       const now = new Date(clock());
       if (!exchangeCase.shipByAt || now.getTime() <= new Date(exchangeCase.shipByAt).getTime()) throw new ApiError(409, 'Exchange handoff deadline has not expired');
       await transactionManager.withTransaction(async (session) => {
+        const expired = await repository.claimCase(id, ['ApprovedAwaitingShipment'], {
+          status: 'Expired', terminalAt: now,
+        }, session);
+        if (!expired) throw new ApiError(409, 'Exchange changed before expiry could be recorded');
         await releaseReservations(id, actorId, 'Customer missed ShipByAt', session);
-        await repository.updateCase(id, { status: 'Expired', terminalAt: now }, session);
+        await repository.releaseUnitClaims(id, session);
         await repository.releaseOrderLock(exchangeCase.orderId, exchangeCase._id, 'Expired', false, session);
       });
       await writeAudit(actorId, 'EXCHANGE_EXPIRED', id, 'No timely Customer handoff');
@@ -1129,12 +1243,13 @@ function createExchangeService({
       if (exchangeCase.handoffAt && receivedAt.getTime() < new Date(exchangeCase.handoffAt).getTime()) {
         throw new ApiError(400, 'receivedAt cannot be before Customer handoff');
       }
-      await repository.updateCase(id, {
+      const received = await repository.claimCase(id, ['CustomerShipped'], {
         status: 'WarehouseInspecting',
         warehouseReceivedAt: receivedAt,
         warehouseReceiptReference: reference,
         warehouseReceiptIdempotencyKey: idempotencyKey,
       });
+      if (!received) throw new ApiError(409, 'Exchange changed before Warehouse receipt could be recorded');
       await writeAudit(warehouseId, 'EXCHANGE_WAREHOUSE_RECEIVED', id, reference);
       return load(id, 'Warehouse');
     },
@@ -1272,10 +1387,11 @@ function createExchangeService({
           });
         }
         await repository.createInspections(inspectionRecords, session);
-        await repository.updateCase(id, {
+        const finalized = await repository.claimCase(id, ['WarehouseInspecting'], {
           status: 'OutboundFulfillment',
           inspectionIdempotencyKey: idempotencyKey,
         }, session);
+        if (!finalized) throw new ApiError(409, 'Exchange changed before Warehouse inspection could be finalized');
       });
       await writeAudit(warehouseId, 'EXCHANGE_INSPECTION_FINALIZED', id, 'Warehouse accounted for every requested unit');
       return load(id, 'Warehouse');
@@ -1387,9 +1503,15 @@ function createExchangeService({
           createdBy: warehouseId,
           resendOfShipmentId: null,
         }, session);
-        await repository.updateCase(id, {
-          status: direction === 'REPLACEMENT_TO_CUSTOMER' ? 'ReplacementShipped' : exchangeCase.status,
-        }, session);
+        if (direction === 'REPLACEMENT_TO_CUSTOMER' && exchangeCase.status !== 'DeliveryIncident') {
+          const progressed = await repository.claimCase(
+            id,
+            [exchangeCase.status],
+            { status: 'ReplacementShipped' },
+            session
+          );
+          if (!progressed) throw new ApiError(409, 'Exchange changed while outbound Shipment was being created');
+        }
       });
       await writeAudit(warehouseId, 'EXCHANGE_OUTBOUND_CREATED', id, `${direction} ${trackingCode}`);
       return { shipment, request: await load(id, 'Warehouse'), idempotentReplay: false };
@@ -1422,16 +1544,22 @@ function createExchangeService({
           || String(existing.note || '') !== note) {
           throw new ApiError(409, 'Shipment event id was already used for a different fact');
         }
-        return {
-          event: existing,
-          request: await load(existing.exchangeCaseId, source === 'STAFF_EVIDENCE' ? 'Staff' : 'Customer'),
-          idempotentReplay: true,
-        };
+        return shipmentEventResult(existing, source, true);
       }
       const shipment = await repository.findShipmentById(shipmentId);
       if (!shipment) throw new ApiError(404, 'Exchange shipment not found');
       if (input.exchangeCaseId && String(input.exchangeCaseId) !== String(shipment.exchangeCaseId)) {
         throw new ApiError(404, 'Exchange shipment not found');
+      }
+      const eventCase = await repository.findCaseById(shipment.exchangeCaseId);
+      if (!eventCase) throw new ApiError(404, 'Exchange request not found');
+      if (TERMINAL_STATUSES.has(eventCase.status)
+        && ['DELIVERED', 'LOST', 'DAMAGED'].includes(eventType)) {
+        throw new ApiError(409, 'A terminal Exchange cannot accept a new Shipment outcome');
+      }
+      if (shipment.status === 'Delivered'
+        && ['DELIVERED', 'LOST', 'DAMAGED'].includes(eventType)) {
+        throw new ApiError(409, 'A delivered Shipment outcome can change only through an attributable correction');
       }
       if (['DELIVERED', 'LOST', 'DAMAGED'].includes(eventType)
         && occurredAt.getTime() < new Date(shipment.shippedAt).getTime()) {
@@ -1480,17 +1608,23 @@ function createExchangeService({
             );
           }
           completedCase = await reconcileCompletion(shipment.exchangeCaseId, session);
+          if (!completedCase) await reconcileIncidentState(shipment.exchangeCaseId, session);
         } else if (['LOST', 'DAMAGED'].includes(eventType)) {
           await repository.updateShipment(shipment._id, {
             status: 'Incident', incidentAt: occurredAt, incidentReason: eventType,
           }, session);
-          await repository.updateCase(shipment.exchangeCaseId, {
+          const incidentCase = await repository.claimCase(shipment.exchangeCaseId, [
+            'OutboundFulfillment', 'ReplacementShipped', 'DeliveryIncident',
+          ], {
             status: 'DeliveryIncident',
             incidentReason: `${eventType}: ${String(input.note || evidenceReference).trim()}`,
             shippingPayer: 'SHOP',
-            waitingFor: 'INCIDENT_RESEND',
+            waitingFor: shipment.direction === 'REPLACEMENT_TO_CUSTOMER'
+              ? 'INCIDENT_RESEND'
+              : 'REJECTED_ORIGINAL_RECONCILIATION',
             incidentShipmentId: shipment._id,
           }, session);
+          if (!incidentCase) throw new ApiError(409, 'Exchange changed before the Shipment incident could be recorded');
         }
       });
       await writeAudit(actorId, `EXCHANGE_SHIPMENT_${eventType}`, shipment.exchangeCaseId, `${source}: ${evidenceReference}`);
@@ -1507,7 +1641,7 @@ function createExchangeService({
           caseId: shipment.exchangeCaseId,
         });
       }
-      return { event, request: await load(shipment.exchangeCaseId, source === 'STAFF_EVIDENCE' ? 'Staff' : 'Customer'), idempotentReplay: false };
+      return shipmentEventResult(event, source, false);
     },
 
     async recordStaffShipmentEvent(staffId, caseId, shipmentId, input = {}) {
@@ -1625,24 +1759,37 @@ function createExchangeService({
             createdBy: staffId,
             resendOfShipmentId: incidentShipment._id,
           }, session);
-          await repository.updateCase(id, {
-            status: 'ReplacementShipped',
+          const shipments = await repository.listShipments(id, session);
+          const unresolved = unresolvedShipmentIncidents(shipments);
+          const nextIncident = unresolved[0] || null;
+          const progressed = await repository.claimCase(id, [
+            'DeliveryIncident', 'WaitingForExactStock',
+          ], {
+            status: nextIncident ? 'DeliveryIncident' : 'ReplacementShipped',
             incidentReason: '',
             shippingPayer: 'SHOP',
-            waitingFor: '',
-            incidentShipmentId: null,
+            waitingFor: nextIncident
+              ? (nextIncident.direction === 'REPLACEMENT_TO_CUSTOMER'
+                ? 'INCIDENT_RESEND'
+                : 'REJECTED_ORIGINAL_RECONCILIATION')
+              : '',
+            incidentShipmentId: nextIncident?._id || null,
             stockFailureReason: '',
           }, session);
+          if (!progressed) throw new ApiError(409, 'Exchange changed while the replacement resend was being created');
         });
       } catch (error) {
         if (!(error instanceof NoExactStockError)) throw error;
-        await repository.updateCase(id, {
+        const waiting = await repository.claimCase(id, [
+          'DeliveryIncident', 'WaitingForExactStock',
+        ], {
           status: 'AwaitingExactStockChoice',
           stockFailureReason: error.message,
           shippingPayer: 'SHOP',
           waitingFor: 'INCIDENT_RESEND',
           incidentShipmentId: incidentShipment._id,
         });
+        if (!waiting) throw new ApiError(409, 'Exchange changed while resend stock was being checked');
         await writeAudit(staffId, 'EXCHANGE_RESEND_NO_STOCK', id, error.message);
         return { shipment: null, request: await load(id, 'Staff'), idempotentReplay: false };
       }

@@ -16,6 +16,7 @@ export default function ExchangeDetailPage() {
   const [decisionReason, setDecisionReason] = useState('');
   const [shipmentId, setShipmentId] = useState('');
   const [shipmentEventType, setShipmentEventType] = useState('DELIVERED');
+  const [shipmentOccurredAt, setShipmentOccurredAt] = useState('');
   const [shipmentEvidence, setShipmentEvidence] = useState('');
   const [replacesEventId, setReplacesEventId] = useState('');
   const [resendIncidentShipmentId, setResendIncidentShipmentId] = useState('');
@@ -23,6 +24,7 @@ export default function ExchangeDetailPage() {
   const [resendTracking, setResendTracking] = useState('');
   const shipmentEventKey = useRef(eventKey());
   const resendKey = useRef(eventKey());
+  const retryReservationKey = useRef(eventKey());
   const decisionKey = useRef(eventKey());
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
@@ -52,8 +54,11 @@ export default function ExchangeDetailPage() {
   async function retryReservation() {
     setError(''); setMessage('');
     try {
-      const result = await exchangeService.retryReservation(id);
+      const result = await exchangeService.retryReservation(id, {
+        idempotencyKey: retryReservationKey.current,
+      });
       setRequest(result);
+      retryReservationKey.current = eventKey();
       setMessage(result.status === 'ApprovedAwaitingShipment' ? 'Đã giữ đủ đúng sản phẩm.' : 'Vẫn chưa đủ đúng sản phẩm.');
     } catch (err) { setError(err.message); }
   }
@@ -64,12 +69,13 @@ export default function ExchangeDetailPage() {
       const result = await exchangeService.recordStaffShipmentEvent(id, shipmentId, {
         idempotencyKey: shipmentEventKey.current,
         eventType: shipmentEventType,
-        occurredAt: new Date().toISOString(),
+        occurredAt: new Date(shipmentOccurredAt).toISOString(),
         evidenceReference: shipmentEvidence,
         note: `Staff ghi từ bằng chứng vận chuyển: ${shipmentEvidence}`,
         ...(shipmentEventType === 'CORRECTION' ? { replacesEventId } : {}),
       });
       setRequest(result.request);
+      shipmentEventKey.current = eventKey();
       setMessage('Đã ghi sự kiện vận chuyển kèm nguồn và bằng chứng.');
     } catch (err) { setError(err.message); }
   }
@@ -85,6 +91,7 @@ export default function ExchangeDetailPage() {
         shippedAt: new Date().toISOString(),
       });
       setRequest(result.request);
+      resendKey.current = eventKey();
       setMessage(result.shipment ? 'Đã tạo chuyến gửi lại đúng sản phẩm, Shop chịu trách nhiệm.' : 'Chưa đủ đúng sản phẩm; Customer cần chọn chờ hoặc chuyển sang trả hàng.');
     } catch (err) { setError(err.message); }
   }
@@ -149,6 +156,15 @@ export default function ExchangeDetailPage() {
                 <option value="DAMAGED">Hư hỏng khi vận chuyển</option>
                 <option value="CORRECTION">Đính chính có truy vết</option>
               </select>
+              <label className="form-label mt-2" htmlFor="staffShipmentOccurredAt">Thời điểm trên bằng chứng vận chuyển</label>
+              <input
+                id="staffShipmentOccurredAt"
+                className="form-control"
+                type="datetime-local"
+                value={shipmentOccurredAt}
+                onChange={(event) => setShipmentOccurredAt(event.target.value)}
+                required
+              />
               {shipmentEventType === 'CORRECTION' && (
                 <>
                   <label className="form-label mt-2" htmlFor="replacedShipmentEvent">Sự kiện được đính chính</label>
@@ -164,7 +180,13 @@ export default function ExchangeDetailPage() {
               <button className="btn btn-outline-success mt-2" type="submit">Ghi sự kiện</button>
             </form>
           )}
-          {(request.status === 'DeliveryIncident'
+          {request.status === 'DeliveryIncident'
+            && request.waitingFor === 'REJECTED_ORIGINAL_RECONCILIATION' && (
+            <div className="alert alert-warning mt-4">
+              Hàng gốc bị từ chối đang có sự cố vận chuyển. Giữ case mở để CSKH đối soát bằng chứng với Carrier; không tự tạo hàng thay thế hoặc hoàn tiền.
+            </div>
+          )}
+          {((request.status === 'DeliveryIncident' && request.waitingFor === 'INCIDENT_RESEND')
             || (request.status === 'WaitingForExactStock' && request.waitingFor === 'INCIDENT_RESEND')) && (
             <form className="mt-4" onSubmit={resend}>
               <h2>Gửi lại do sự cố vận chuyển</h2>

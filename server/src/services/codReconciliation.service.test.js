@@ -215,7 +215,9 @@ describe('COD reconciliation service', () => {
     assert.equal(repository.refunds.length, 1);
     assert.equal(repository.refunds[0].amount, 40);
     assert.equal(repository.refunds[0].obligationType, 'COD_RECOVERY');
-    assert.equal(repository.requests[0].status, 'ClosedByCODRecovery');
+    assert.equal(repository.requests[0].status, 'CODRecoveryInProgress');
+    assert.equal(repository.requests[0].recoveryRefundId, repository.refunds[0]._id);
+    assert.equal(repository.requests[0].recoveryCompletedAt, null);
 
     const replay = await service.finalizeRecovery('staff-1', 'order-1', {
       goodsRecoveryReceiptId: receipt.receipt.receiptId, destinationVerified: true,
@@ -223,6 +225,15 @@ describe('COD reconciliation service', () => {
     });
     assert.equal(replay.idempotentReplay, true);
     assert.equal(repository.refunds.length, 1);
+    assert.equal(repository.requests[0].status, 'CODRecoveryInProgress');
+
+    repository.refunds[0].status = 'Refunded';
+    await service.finalizeRecovery('staff-1', 'order-1', {
+      goodsRecoveryReceiptId: receipt.receipt.receiptId, destinationVerified: true,
+      destinationReference: 'destination-1', note: 'Đối soát payout đã thành công',
+    });
+    assert.equal(repository.requests[0].status, 'ClosedByCODRecovery');
+    assert.ok(repository.requests[0].recoveryCompletedAt);
   });
 
   it('does not finalize recovery when another Staff worker already claimed the closure', async () => {

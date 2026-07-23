@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const exchangeUnitLineageSchema = new mongoose.Schema(
   {
     unitKey: { type: String, required: true, trim: true, maxlength: 240, immutable: true },
+    exclusivePhysicalClaimKey: { type: String, trim: true, maxlength: 240 },
     exchangeCaseId: { type: mongoose.Schema.Types.ObjectId, ref: 'ExchangeCase', required: true },
     exchangeLineId: { type: mongoose.Schema.Types.ObjectId, ref: 'ExchangeLine', required: true },
     orderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Order', required: true, immutable: true },
@@ -24,6 +25,10 @@ const exchangeUnitLineageSchema = new mongoose.Schema(
 );
 
 exchangeUnitLineageSchema.index({ unitKey: 1 }, { unique: true, name: 'exchange_unit_key_unique' });
+exchangeUnitLineageSchema.index(
+  { exclusivePhysicalClaimKey: 1 },
+  { unique: true, sparse: true, name: 'exchange_physical_claim_unique' }
+);
 exchangeUnitLineageSchema.index({ orderId: 1, orderDetailId: 1, originalUnitOrdinal: 1, cycle: 1 });
 exchangeUnitLineageSchema.index({ exchangeDeadlineAt: 1, outcome: 1 });
 

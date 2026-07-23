@@ -58,6 +58,7 @@ export default function ExchangeDetailPage() {
         choice,
       });
       setRequest(result);
+      choiceKey.current = key('exchange-choice');
       setMessage(choice === 'WAIT' ? 'Đã chọn chờ đúng sản phẩm.' : 'Đã chuyển sang quy trình trả hàng/hoàn tiền.');
     } catch (err) { setError(err.message); }
   }

@@ -282,16 +282,16 @@ export default function OrderDetailPage() {
                           ) : (
                             <label className="form-label" htmlFor={`exchange-quantity-${itemId}`}>
                               {item.productNameSnapshot} (đã mua {item.quantity})
-                              <input
+                              <select
                                 id={`exchange-quantity-${itemId}`}
-                                className="form-control mt-1"
-                                type="number"
-                                min="0"
-                                max={item.quantity}
-                                step="1"
+                                className="form-select mt-1"
                                 value={exchangeQuantities[itemId] || 0}
                                 onChange={(event) => updateExchangeQuantity(itemId, event.target.value)}
-                              />
+                              >
+                                <option value="0">Không đổi sản phẩm này</option>
+                                {Array.from({ length: Number(item.quantity) }, (_value, index) => index + 1)
+                                  .map((quantity) => <option key={quantity} value={quantity}>{quantity}</option>)}
+                              </select>
                             </label>
                           )}
                         </div>

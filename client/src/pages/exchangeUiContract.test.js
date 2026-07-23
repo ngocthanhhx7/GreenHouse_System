@@ -13,7 +13,8 @@ describe('SL-002 actor UI contract', () => {
     assert.match(orderDetail, /Đổi hàng/);
     assert.match(orderDetail, /Trả hàng\/Hoàn tiền/);
     assert.match(orderDetail, /type="checkbox"/);
-    assert.match(orderDetail, /type="number".*max=/s);
+    assert.match(orderDetail, /<select[^>]+exchange-quantity-/s);
+    assert.doesNotMatch(orderDetail, /id=\{`exchange-quantity-\$\{itemId\}`\}[\s\S]{0,180}type="number"/);
     assert.match(orderDetail, /Yêu cầu đang được xử lý, vui lòng chờ/);
   });
 
@@ -40,5 +41,15 @@ describe('SL-002 actor UI contract', () => {
     assert.match(customerDetail, /inspection|Kết quả kiểm hàng/);
     assert.match(customerDetail, /shipments|Vận chuyển/);
     assert.match(customerDetail, /reportShipmentDispute|Khiếu nại thời điểm giao hàng/);
+  });
+
+  it('requires evidence-backed shipment time and rotates command keys after success', () => {
+    assert.match(staffDetail, /type="datetime-local"/);
+    assert.match(staffDetail, /shipmentOccurredAt/);
+    assert.doesNotMatch(staffDetail, /occurredAt:\s*new Date\(\)\.toISOString\(\)/);
+    assert.match(staffDetail, /shipmentEventKey\.current\s*=\s*eventKey\(\)/);
+    assert.match(staffDetail, /resendKey\.current\s*=\s*eventKey\(\)/);
+    assert.match(staffDetail, /retryReservationKey\.current/);
+    assert.match(customerDetail, /choiceKey\.current\s*=\s*key\('exchange-choice'\)/);
   });
 });

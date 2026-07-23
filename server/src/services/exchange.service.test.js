@@ -99,17 +99,25 @@ function makeHarness() {
       return item;
     },
     async createLines(items) {
-      const created = items.map((item) => ({ _id: `exchange-line-${state.lines.length + 1}`, ...item }));
+      const offset = state.lines.length;
+      const created = items.map((item, index) => ({ _id: `exchange-line-${offset + index + 1}`, ...item }));
       state.lines.push(...created);
       return created;
     },
     async createUnits(items) {
-      const created = items.map((item) => ({ _id: `unit-${state.units.length + 1}`, ...item }));
+      const offset = state.units.length;
+      const created = items.map((item, index) => ({ _id: `unit-${offset + index + 1}`, ...item }));
       state.units.push(...created);
       return created;
     },
     async updateCase(id, data) {
       const item = state.cases.find((entry) => entry._id === id);
+      if (!item) return null;
+      Object.assign(item, data);
+      return item;
+    },
+    async claimCase(id, statuses, data) {
+      const item = state.cases.find((entry) => entry._id === id && statuses.includes(entry.status));
       if (!item) return null;
       Object.assign(item, data);
       return item;
@@ -206,6 +214,19 @@ function makeHarness() {
         exchangeDeadlineAt: deadlineAt,
       }));
       return units;
+    },
+    async listClaimedOriginalUnitOrdinals(orderId, orderDetailId) {
+      return state.units
+        .filter((item) => item.orderId === orderId
+          && item.orderDetailId === orderDetailId
+          && item.exclusivePhysicalClaimKey
+          && !item.parentUnitId)
+        .map((item) => Number(item.originalUnitOrdinal));
+    },
+    async releaseUnitClaims(caseId) {
+      const units = state.units.filter((item) => item.exchangeCaseId === caseId);
+      units.forEach((unit) => { delete unit.exclusivePhysicalClaimKey; });
+      return units.length;
     },
   };
 
@@ -503,18 +524,18 @@ describe('SL-002 Exchange service', () => {
       occurredAt: harness.now,
       evidenceReference: 'proof-partial-replacement',
     });
-    assert.notEqual(replacementDelivered.request.status, 'Completed');
+    assert.notEqual(harness.state.cases.find((item) => item._id === request.id).status, 'Completed');
     const allDelivered = await harness.service.recordCarrierShipmentEvent(rejectedOriginal.shipment._id, {
       eventId: 'carrier-partial-rejected-delivered',
       eventType: 'DELIVERED',
       occurredAt: harness.now,
       evidenceReference: 'proof-partial-rejected',
     });
-    assert.equal(allDelivered.request.status, 'Completed');
+    assert.equal(harness.state.cases.find((item) => item._id === request.id).status, 'Completed');
     assert.equal(harness.state.notifications.filter((item) => item.type === 'EXCHANGE_COMPLETED').length, 1);
   });
 
-  it('keeps a lost replacement in the same case and completes an exact-SKU Shop resend', async () => {
+  it('keeps repeated replacement incidents in one case and completes the delivered resend chain', async () => {
     const request = await harness.service.createCustomerRequest('customer-1', validRequest());
     await harness.service.decideRequest('staff-1', request.id, {
       idempotencyKey: 'decision-resend-0001',
@@ -557,8 +578,8 @@ describe('SL-002 Exchange service', () => {
       occurredAt: harness.now,
       evidenceReference: 'carrier-proof-lost-001',
     });
-    assert.equal(incident.request.status, 'DeliveryIncident');
-    assert.equal(incident.request.shippingPayer, 'SHOP');
+    assert.equal(harness.state.cases.find((item) => item._id === request.id).status, 'DeliveryIncident');
+    assert.equal(harness.state.cases.find((item) => item._id === request.id).shippingPayer, 'SHOP');
 
     harness.state.inventories[0].stockQuantity = 2;
     harness.state.products[0].stockQuantity = 2;
@@ -573,13 +594,28 @@ describe('SL-002 Exchange service', () => {
     assert.equal(harness.state.shipments.length, 2);
     assert.equal(harness.state.inventories[0].stockQuantity, 0);
 
-    const delivered = await harness.service.recordCarrierShipmentEvent(resent.shipment._id, {
-      eventId: 'carrier-resend-delivered-0001',
+    await harness.service.recordCarrierShipmentEvent(resent.shipment._id, {
+      eventId: 'carrier-resend-lost-0001',
+      eventType: 'LOST',
+      occurredAt: harness.now,
+      evidenceReference: 'carrier-proof-resend-lost-001',
+    });
+    harness.state.inventories[0].stockQuantity = 2;
+    harness.state.products[0].stockQuantity = 2;
+    const resentAgain = await harness.service.resendReplacement('staff-1', request.id, {
+      idempotencyKey: 'resend-command-0002',
+      incidentShipmentId: resent.shipment._id,
+      carrierName: 'GHN',
+      trackingCode: 'GHN-RESEND-002',
+      shippedAt: harness.now,
+    });
+    await harness.service.recordCarrierShipmentEvent(resentAgain.shipment._id, {
+      eventId: 'carrier-resend-delivered-0002',
       eventType: 'DELIVERED',
       occurredAt: harness.now,
-      evidenceReference: 'carrier-proof-delivered-001',
+      evidenceReference: 'carrier-proof-delivered-002',
     });
-    assert.equal(delivered.request.status, 'Completed');
+    assert.equal(harness.state.cases.find((item) => item._id === request.id).status, 'Completed');
     assert.equal(harness.state.locks.find((item) => item.orderId === 'order-1').status, 'Released');
   });
 
@@ -719,7 +755,9 @@ describe('SL-002 Exchange service', () => {
       /idempotency key.*different|different.*choice/i
     );
     await assert.rejects(
-      harness.service.retryReservation('staff-1', request.id),
+      harness.service.retryReservation('staff-1', request.id, {
+        idempotencyKey: 'retry-incident-resend-0001',
+      }),
       /incident.*resend|resend.*flow/i
     );
 
@@ -761,13 +799,13 @@ describe('SL-002 Exchange service', () => {
       outbound.shipment._id,
       {
         idempotencyKey: 'customer-dispute-0001',
-        replacesEventId: delivered.event._id,
+        replacesEventId: delivered.eventId,
         evidenceReference: 'customer-dispute-proof',
         note: 'Thời điểm giao hàng không đúng',
       }
     );
     assert.equal(disputed.event.source, 'CUSTOMER_DISPUTE');
-    assert.equal(disputed.event.replacesEventId, delivered.event._id);
+    assert.equal(disputed.event.replacesEventId, delivered.eventId);
 
     const corrected = await harness.service.recordStaffShipmentEvent(
       'staff-1',
@@ -783,5 +821,392 @@ describe('SL-002 Exchange service', () => {
     );
     assert.equal(corrected.event.replacesEventId, disputed.event._id);
     assert.equal(harness.state.shipmentEvents.length, 3);
+  });
+
+  it('does not cancel or release stock when the atomic status claim loses a handoff race', async () => {
+    const request = await harness.service.createCustomerRequest('customer-1', validRequest({
+      idempotencyKey: 'exchange-cancel-race-0001',
+    }));
+    await harness.service.decideRequest('staff-1', request.id, {
+      idempotencyKey: 'decision-cancel-race-0001',
+      decision: 'APPROVE', responsibility: 'SHOP_FAULT', reason: 'Lỗi Shop',
+    });
+    harness.repository.claimCase = async () => null;
+
+    await assert.rejects(
+      harness.service.cancelRequest('customer-1', request.id, {
+        idempotencyKey: 'cancel-race-0001',
+      }),
+      /changed|handoff|another/i
+    );
+    assert.equal(harness.state.cases[0].status, 'ApprovedAwaitingShipment');
+    assert.equal(harness.state.inventories[0].reservedQuantity, 2);
+    assert.equal(harness.state.reservations[0].status, 'Reserved');
+    assert.equal(harness.state.locks[0].status, 'Active');
+  });
+
+  it('rolls back exact-stock reservation when the approval status claim loses a race', async () => {
+    const request = await harness.service.createCustomerRequest('customer-1', validRequest({
+      idempotencyKey: 'exchange-approval-race-0001',
+    }));
+    harness.repository.claimCase = async () => null;
+
+    await assert.rejects(
+      harness.service.decideRequest('staff-1', request.id, {
+        idempotencyKey: 'decision-approval-race-0001',
+        decision: 'APPROVE', responsibility: 'SHOP_FAULT', reason: 'Lỗi Shop',
+      }),
+      /changed|approv|another/i
+    );
+    assert.equal(harness.state.inventories[0].reservedQuantity, 0);
+    assert.equal(harness.state.reservations.length, 0);
+    assert.equal(harness.state.cases[0].status, 'Submitted');
+  });
+
+  it('does not record handoff when an atomic cancellation already owns the case', async () => {
+    const request = await harness.service.createCustomerRequest('customer-1', validRequest({
+      idempotencyKey: 'exchange-handoff-race-0001',
+    }));
+    await harness.service.decideRequest('staff-1', request.id, {
+      idempotencyKey: 'decision-handoff-race-0001',
+      decision: 'APPROVE', responsibility: 'SHOP_FAULT', reason: 'Lỗi Shop',
+    });
+    harness.repository.claimCase = async () => null;
+
+    await assert.rejects(
+      harness.service.recordHandoffProof('customer-1', request.id, {
+        idempotencyKey: 'handoff-race-0001',
+        proofReference: 'TRACK-RACE',
+        handoffAt: harness.now,
+      }),
+      /changed|cancel|another/i
+    );
+    assert.equal(harness.state.cases[0].status, 'ApprovedAwaitingShipment');
+    assert.equal(Boolean(harness.state.cases[0].handoffAt), false);
+  });
+
+  it('does not record Warehouse receipt when the case transition claim loses a race', async () => {
+    const request = await harness.service.createCustomerRequest('customer-1', validRequest({
+      idempotencyKey: 'exchange-receipt-race-0001',
+    }));
+    await harness.service.decideRequest('staff-1', request.id, {
+      idempotencyKey: 'decision-receipt-race-0001',
+      decision: 'APPROVE', responsibility: 'SHOP_FAULT', reason: 'Lỗi Shop',
+    });
+    await harness.service.recordHandoffProof('customer-1', request.id, {
+      idempotencyKey: 'handoff-receipt-race-0001',
+      proofReference: 'TRACK-RECEIPT-RACE',
+      handoffAt: harness.now,
+    });
+    harness.repository.claimCase = async () => null;
+
+    await assert.rejects(
+      harness.service.recordWarehouseReceipt('warehouse-1', request.id, {
+        idempotencyKey: 'receipt-race-0001',
+        receivedAt: harness.now,
+        evidenceReference: 'RECEIPT-RACE',
+      }),
+      /changed|another|race/i
+    );
+    assert.equal(harness.state.cases[0].status, 'CustomerShipped');
+    assert.equal(Boolean(harness.state.cases[0].warehouseReceivedAt), false);
+  });
+
+  it('rolls back Warehouse inspection effects when the terminal inspection claim loses a race', async () => {
+    const request = await harness.service.createCustomerRequest('customer-1', validRequest({
+      idempotencyKey: 'exchange-inspection-race-0001',
+      lines: [{ orderDetailId: 'line-1', quantity: 1 }],
+    }));
+    await harness.service.decideRequest('staff-1', request.id, {
+      idempotencyKey: 'decision-inspection-race-0001',
+      decision: 'APPROVE', responsibility: 'SHOP_FAULT', reason: 'Lỗi Shop',
+    });
+    await harness.service.recordHandoffProof('customer-1', request.id, {
+      idempotencyKey: 'handoff-inspection-race-0001',
+      proofReference: 'TRACK-INSPECTION-RACE',
+      handoffAt: harness.now,
+    });
+    await harness.service.recordWarehouseReceipt('warehouse-1', request.id, {
+      idempotencyKey: 'receipt-inspection-race-0001',
+      receivedAt: harness.now,
+      evidenceReference: 'RECEIPT-INSPECTION-RACE',
+    });
+    const before = structuredClone(harness.state.inventories);
+    harness.repository.claimCase = async () => null;
+
+    await assert.rejects(
+      harness.service.finalizeInspection('warehouse-1', request.id, {
+        idempotencyKey: 'inspection-race-0001',
+        lines: [{
+          exchangeLineId: harness.state.lines.find((line) => line.exchangeCaseId === request.id)._id,
+          receivedQuantity: 1,
+          acceptedSellableQuantity: 1,
+          acceptedDamagedQuantity: 0,
+          rejectedQuantity: 0,
+          inspectionReason: 'Đủ điều kiện đổi',
+          evidenceImages: ['/api/exchanges/evidence/inspection-race.jpg'],
+        }],
+      }),
+      /changed|another|race/i
+    );
+    assert.deepEqual(harness.state.inventories, before);
+    assert.equal(harness.state.inspections.length, 0);
+    assert.equal(harness.state.cases[0].status, 'WarehouseInspecting');
+  });
+
+  it('uses a new idempotent Staff command for reservation retry and replays its result', async () => {
+    harness.state.inventories[1].stockQuantity = 0;
+    const request = await harness.service.createCustomerRequest('customer-1', validRequest({
+      idempotencyKey: 'exchange-retry-idempotent-0001',
+      lines: [{ orderDetailId: 'line-2', quantity: 1 }],
+    }));
+    await harness.service.decideRequest('staff-1', request.id, {
+      idempotencyKey: 'decision-retry-idempotent-0001',
+      decision: 'APPROVE', responsibility: 'SHOP_FAULT', reason: 'Đủ điều kiện',
+    });
+    await harness.service.chooseStockOption('customer-1', request.id, {
+      idempotencyKey: 'choice-retry-idempotent-0001',
+      choice: 'WAIT',
+    });
+    harness.state.inventories[1].stockQuantity = 1;
+
+    const first = await harness.service.retryReservation('staff-1', request.id, {
+      idempotencyKey: 'retry-reservation-0001',
+    });
+    const replay = await harness.service.retryReservation('staff-1', request.id, {
+      idempotencyKey: 'retry-reservation-0001',
+    });
+    assert.equal(first.status, 'ApprovedAwaitingShipment');
+    assert.equal(replay.idempotentReplay, true);
+    assert.equal(harness.state.reservations.length, 1);
+  });
+
+  it('allocates the next unclaimed original physical unit after an earlier unit completes Exchange', async () => {
+    const first = await harness.service.createCustomerRequest('customer-1', validRequest({
+      idempotencyKey: 'exchange-original-unit-one-0001',
+      lines: [{ orderDetailId: 'line-1', quantity: 1 }],
+    }));
+    await harness.service.decideRequest('staff-1', first.id, {
+      idempotencyKey: 'decision-original-unit-one-0001',
+      decision: 'APPROVE', responsibility: 'SHOP_FAULT', reason: 'Lỗi Shop',
+    });
+    await harness.service.recordHandoffProof('customer-1', first.id, {
+      idempotencyKey: 'handoff-original-unit-one-0001',
+      proofReference: 'TRACK-ORIGINAL-ONE',
+      handoffAt: harness.now,
+    });
+    await harness.service.recordWarehouseReceipt('warehouse-1', first.id, {
+      idempotencyKey: 'receipt-original-unit-one-0001',
+      receivedAt: harness.now,
+      evidenceReference: 'RECEIPT-ORIGINAL-ONE',
+    });
+    await harness.service.finalizeInspection('warehouse-1', first.id, {
+      idempotencyKey: 'inspection-original-unit-one-0001',
+      lines: [{
+        exchangeLineId: harness.state.lines.find((line) => line.exchangeCaseId === first.id)._id,
+        receivedQuantity: 1,
+        acceptedSellableQuantity: 0,
+        acceptedDamagedQuantity: 1,
+        rejectedQuantity: 0,
+        inspectionReason: 'Đã xác nhận một sản phẩm lỗi',
+        evidenceImages: ['/api/exchanges/evidence/original-one.jpg'],
+      }],
+    });
+    const outbound = await harness.service.createOutboundShipment('warehouse-1', first.id, {
+      idempotencyKey: 'shipment-original-unit-one-0001',
+      exchangeLineId: harness.state.lines.find((line) => line.exchangeCaseId === first.id)._id,
+      direction: 'REPLACEMENT_TO_CUSTOMER',
+      quantity: 1,
+      carrierName: 'GHN',
+      trackingCode: 'TRACK-OUT-ORIGINAL-ONE',
+      shippedAt: harness.now,
+    });
+    await harness.service.recordCarrierShipmentEvent(outbound.shipment._id, {
+      eventId: 'carrier-original-unit-one-delivered',
+      eventType: 'DELIVERED',
+      occurredAt: harness.now,
+      evidenceReference: 'proof-original-one-delivered',
+    });
+    assert.equal(harness.state.cases.find((item) => item._id === first.id).status, 'Completed');
+
+    const second = await harness.service.createCustomerRequest('customer-1', validRequest({
+      idempotencyKey: 'exchange-original-unit-two-0001',
+      lines: [{ orderDetailId: 'line-1', quantity: 1 }],
+    }));
+    const secondUnit = harness.state.units.find((unit) => unit.exchangeCaseId === second.id);
+    assert.equal(secondUnit.originalUnitOrdinal, 2);
+    assert.match(secondUnit.exclusivePhysicalClaimKey, /ORIGINAL:order-1:line-1:2$/);
+  });
+
+  it('keeps a multi-line delivery incident visible when another outbound shipment is created', async () => {
+    const request = await harness.service.createCustomerRequest('customer-1', validRequest({
+      idempotencyKey: 'exchange-multiline-incident-0001',
+      lines: [
+        { orderDetailId: 'line-1', quantity: 1 },
+        { orderDetailId: 'line-2', quantity: 1 },
+      ],
+    }));
+    await harness.service.decideRequest('staff-1', request.id, {
+      idempotencyKey: 'decision-multiline-incident-0001',
+      decision: 'APPROVE', responsibility: 'SHOP_FAULT', reason: 'Lỗi Shop',
+    });
+    await harness.service.recordHandoffProof('customer-1', request.id, {
+      idempotencyKey: 'handoff-multiline-incident-0001',
+      proofReference: 'TRACK-MULTILINE-IN',
+      handoffAt: harness.now,
+    });
+    await harness.service.recordWarehouseReceipt('warehouse-1', request.id, {
+      idempotencyKey: 'receipt-multiline-incident-0001',
+      receivedAt: harness.now,
+      evidenceReference: 'RECEIPT-MULTILINE',
+    });
+    const caseLines = harness.state.lines.filter((line) => line.exchangeCaseId === request.id);
+    await harness.service.finalizeInspection('warehouse-1', request.id, {
+      idempotencyKey: 'inspection-multiline-incident-0001',
+      lines: caseLines.map((line, index) => ({
+        exchangeLineId: line._id,
+        receivedQuantity: 1,
+        acceptedSellableQuantity: 0,
+        acceptedDamagedQuantity: 1,
+        rejectedQuantity: 0,
+        inspectionReason: `Đã xác nhận sản phẩm lỗi ${index + 1}`,
+        evidenceImages: [`/api/exchanges/evidence/multiline-${index + 1}.jpg`],
+      })),
+    });
+    const firstShipment = await harness.service.createOutboundShipment('warehouse-1', request.id, {
+      idempotencyKey: 'shipment-multiline-one-0001',
+      exchangeLineId: caseLines[0]._id,
+      direction: 'REPLACEMENT_TO_CUSTOMER',
+      quantity: 1,
+      carrierName: 'GHN',
+      trackingCode: 'TRACK-MULTILINE-ONE',
+      shippedAt: harness.now,
+    });
+    await harness.service.recordCarrierShipmentEvent(firstShipment.shipment._id, {
+      eventId: 'carrier-multiline-one-lost',
+      eventType: 'LOST',
+      occurredAt: harness.now,
+      evidenceReference: 'proof-multiline-one-lost',
+    });
+    await harness.service.createOutboundShipment('warehouse-1', request.id, {
+      idempotencyKey: 'shipment-multiline-two-0001',
+      exchangeLineId: caseLines[1]._id,
+      direction: 'REPLACEMENT_TO_CUSTOMER',
+      quantity: 1,
+      carrierName: 'GHN',
+      trackingCode: 'TRACK-MULTILINE-TWO',
+      shippedAt: harness.now,
+    });
+    assert.equal(harness.state.cases.find((item) => item._id === request.id).status, 'DeliveryIncident');
+  });
+
+  it('classifies a rejected-original incident for reconciliation without offering replacement resend', async () => {
+    const request = await harness.service.createCustomerRequest('customer-1', validRequest({
+      idempotencyKey: 'exchange-rejected-incident-0001',
+      lines: [{ orderDetailId: 'line-1', quantity: 1 }],
+    }));
+    await harness.service.decideRequest('staff-1', request.id, {
+      idempotencyKey: 'decision-rejected-incident-0001',
+      decision: 'APPROVE', responsibility: 'SHOP_FAULT', reason: 'Cần kiểm tra thực tế',
+    });
+    await harness.service.recordHandoffProof('customer-1', request.id, {
+      idempotencyKey: 'handoff-rejected-incident-0001',
+      proofReference: 'TRACK-REJECTED-IN',
+      handoffAt: harness.now,
+    });
+    await harness.service.recordWarehouseReceipt('warehouse-1', request.id, {
+      idempotencyKey: 'receipt-rejected-incident-0001',
+      receivedAt: harness.now,
+      evidenceReference: 'RECEIPT-REJECTED',
+    });
+    const line = harness.state.lines.find((item) => item.exchangeCaseId === request.id);
+    await harness.service.finalizeInspection('warehouse-1', request.id, {
+      idempotencyKey: 'inspection-rejected-incident-0001',
+      lines: [{
+        exchangeLineId: line._id,
+        receivedQuantity: 1,
+        acceptedSellableQuantity: 0,
+        acceptedDamagedQuantity: 0,
+        rejectedQuantity: 1,
+        inspectionReason: 'Không đủ điều kiện đổi',
+        rejectionReason: 'Sản phẩm gửi về không khớp bằng chứng',
+        evidenceImages: ['/api/exchanges/evidence/rejected-incident.jpg'],
+      }],
+    });
+    const shipment = await harness.service.createOutboundShipment('warehouse-1', request.id, {
+      idempotencyKey: 'shipment-rejected-incident-0001',
+      exchangeLineId: line._id,
+      direction: 'REJECTED_ORIGINAL_TO_CUSTOMER',
+      quantity: 1,
+      carrierName: 'GHN',
+      trackingCode: 'TRACK-REJECTED-OUT',
+      shippedAt: harness.now,
+    });
+    const incident = await harness.service.recordCarrierShipmentEvent(shipment.shipment._id, {
+      eventId: 'carrier-rejected-original-lost-0001',
+      eventType: 'LOST',
+      occurredAt: harness.now,
+      evidenceReference: 'proof-rejected-original-lost',
+    });
+    assert.equal(
+      harness.state.cases.find((item) => item._id === request.id).waitingFor,
+      'REJECTED_ORIGINAL_RECONCILIATION'
+    );
+    assert.deepEqual(Object.keys(incident).sort(), ['eventId', 'eventType', 'idempotentReplay']);
+  });
+
+  it('rejects a late loss event after the Exchange case has completed', async () => {
+    const request = await prepareInspectedExchange(harness, 'late-terminal-event');
+    const line = harness.state.lines.find((item) => item.exchangeCaseId === request.id);
+    const outbound = await harness.service.createOutboundShipment('warehouse-1', request.id, {
+      idempotencyKey: 'shipment-late-terminal-event-0001',
+      exchangeLineId: line._id,
+      direction: 'REPLACEMENT_TO_CUSTOMER',
+      quantity: 2,
+      carrierName: 'GHN',
+      trackingCode: 'TRACK-LATE-TERMINAL',
+      shippedAt: harness.now,
+    });
+    await harness.service.recordCarrierShipmentEvent(outbound.shipment._id, {
+      eventId: 'carrier-terminal-delivered-0001',
+      eventType: 'DELIVERED',
+      occurredAt: harness.now,
+      evidenceReference: 'proof-terminal-delivered',
+    });
+    assert.equal(harness.state.cases.find((item) => item._id === request.id).status, 'Completed');
+
+    await assert.rejects(
+      harness.service.recordCarrierShipmentEvent(outbound.shipment._id, {
+        eventId: 'carrier-terminal-lost-late-0001',
+        eventType: 'LOST',
+        occurredAt: harness.now,
+        evidenceReference: 'proof-terminal-lost-late',
+      }),
+      /terminal|completed|closed/i
+    );
+    assert.equal(harness.state.cases.find((item) => item._id === request.id).status, 'Completed');
+  });
+
+  it('returns only a minimal acknowledgement to the Carrier integration', async () => {
+    const request = await prepareInspectedExchange(harness, 'carrier-ack');
+    const line = harness.state.lines.find((item) => item.exchangeCaseId === request.id);
+    const outbound = await harness.service.createOutboundShipment('warehouse-1', request.id, {
+      idempotencyKey: 'shipment-carrier-ack-0001',
+      exchangeLineId: line._id,
+      direction: 'REPLACEMENT_TO_CUSTOMER',
+      quantity: 2,
+      carrierName: 'GHN',
+      trackingCode: 'TRACK-CARRIER-ACK',
+      shippedAt: harness.now,
+    });
+    const result = await harness.service.recordCarrierShipmentEvent(outbound.shipment._id, {
+      eventId: 'carrier-minimal-ack-0001',
+      eventType: 'DELIVERED',
+      occurredAt: harness.now,
+      evidenceReference: 'proof-carrier-minimal-ack',
+    });
+    assert.deepEqual(Object.keys(result).sort(), ['eventId', 'eventType', 'idempotentReplay']);
+    assert.equal(result.eventId, 'shipment-event-1');
+    assert.equal(result.eventType, 'DELIVERED');
   });
 });

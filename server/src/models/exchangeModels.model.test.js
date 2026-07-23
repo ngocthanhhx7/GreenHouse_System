@@ -43,11 +43,15 @@ describe('SL-002 persistence contracts', () => {
     ].forEach((field) => assert.equal(ExchangeCase.schema.path(field), undefined, field));
 
     assert.ok(hasUniqueIndex(ExchangeCase, { customerId: 1, idempotencyKey: 1 }, 'exchange_customer_idempotency_unique'));
+    assert.ok(ExchangeCase.schema.path('reservationRetryIdempotencyKey'));
+    assert.ok(ExchangeCase.schema.path('waitingFor').enumValues.includes('REJECTED_ORIGINAL_RECONCILIATION'));
   });
 
   it('keeps exact line, unit, reservation, inspection, shipment, event, and conversion identities', () => {
     assert.ok(hasUniqueIndex(ExchangeLine, { exchangeCaseId: 1, orderDetailId: 1 }, 'exchange_line_case_order_detail_unique'));
     assert.ok(hasUniqueIndex(ExchangeUnitLineage, { unitKey: 1 }, 'exchange_unit_key_unique'));
+    assert.ok(ExchangeUnitLineage.schema.path('exclusivePhysicalClaimKey'));
+    assert.ok(hasUniqueIndex(ExchangeUnitLineage, { exclusivePhysicalClaimKey: 1 }, 'exchange_physical_claim_unique'));
     assert.ok(hasUniqueIndex(StockReservation, { reservationKey: 1 }, 'exchange_reservation_key_unique'));
     assert.ok(hasUniqueIndex(ExchangeInspection, { inspectionKey: 1 }, 'exchange_inspection_key_unique'));
     assert.ok(hasUniqueIndex(ExchangeShipment, { shipmentKey: 1 }, 'exchange_shipment_key_unique'));

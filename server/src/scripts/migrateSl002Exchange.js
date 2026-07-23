@@ -59,13 +59,37 @@ async function migrateSl002Exchange() {
     locksBackfilled += result.upsertedCount;
   }
 
+  const unitsWithoutClaim = await ExchangeUnitLineage.find({
+    exclusivePhysicalClaimKey: { $exists: false },
+  }).select('_id exchangeCaseId orderId orderDetailId parentUnitId originalUnitOrdinal').lean();
+  const unitCaseIds = [...new Set(unitsWithoutClaim.map((item) => String(item.exchangeCaseId)))];
+  const unitCases = await ExchangeCase.find({ _id: { $in: unitCaseIds } }).select('_id status').lean();
+  const statusByCase = new Map(unitCases.map((item) => [String(item._id), item.status]));
+  let physicalClaimsBackfilled = 0;
+  for (const unit of unitsWithoutClaim) {
+    if (['Rejected', 'Cancelled', 'Expired'].includes(statusByCase.get(String(unit.exchangeCaseId)))) continue;
+    const exclusivePhysicalClaimKey = unit.parentUnitId
+      ? `REPLACEMENT:${String(unit.parentUnitId)}`
+      : `ORIGINAL:${String(unit.orderId)}:${String(unit.orderDetailId)}:${Number(unit.originalUnitOrdinal)}`;
+    const result = await ExchangeUnitLineage.updateOne(
+      { _id: unit._id, exclusivePhysicalClaimKey: { $exists: false } },
+      { $set: { exclusivePhysicalClaimKey } }
+    );
+    physicalClaimsBackfilled += result.modifiedCount;
+  }
+
   const models = [
     AfterSalesOrderLock, ExchangeCase, ExchangeLine, ExchangeUnitLineage,
     StockReservation, ExchangeInspection, ExchangeShipment,
     ExchangeShipmentEvent, ExchangeConversion, InventoryTransaction,
   ];
   for (const model of models) await model.createIndexes();
-  return { deadlinesBackfilled, locksBackfilled, indexesVerified: models.length };
+  return {
+    deadlinesBackfilled,
+    locksBackfilled,
+    physicalClaimsBackfilled,
+    indexesVerified: models.length,
+  };
 }
 
 async function runCli() {

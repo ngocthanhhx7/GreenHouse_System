@@ -58,6 +58,7 @@ const exchangeCaseSchema = new mongoose.Schema(
     warehouseReceiptIdempotencyKey: { type: String, default: '', trim: true, maxlength: 160 },
     inspectionIdempotencyKey: { type: String, default: '', trim: true, maxlength: 160 },
     stockChoiceIdempotencyKey: { type: String, default: '', trim: true, maxlength: 160 },
+    reservationRetryIdempotencyKey: { type: String, default: '', trim: true, maxlength: 160 },
     stockChoice: {
       type: String,
       enum: ['', 'WAIT', 'CONVERT_TO_RETURN'],
@@ -67,7 +68,7 @@ const exchangeCaseSchema = new mongoose.Schema(
     stockFailureReason: { type: String, default: '', trim: true, maxlength: 1000 },
     waitingFor: {
       type: String,
-      enum: ['', 'INITIAL_APPROVAL', 'INCIDENT_RESEND'],
+      enum: ['', 'INITIAL_APPROVAL', 'INCIDENT_RESEND', 'REJECTED_ORIGINAL_RECONCILIATION'],
       default: '',
     },
     incidentShipmentId: {

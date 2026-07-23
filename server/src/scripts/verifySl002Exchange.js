@@ -27,6 +27,13 @@ function assertFact(condition, message) {
   if (!condition) throw new Error(`SL-002 verification failed: ${message}`);
 }
 
+function assertSafeTarget(uri, { nodeEnv = process.env.NODE_ENV } = {}) {
+  if (nodeEnv === 'production') throw new Error('SL-002 verification cannot run in production');
+  if (!/^mongodb:\/\/(127\.0\.0\.1|localhost)(:\d+)?\/greenhome_kitchen(?:\?|$)/i.test(String(uri || ''))) {
+    throw new Error('SL-002 verification is restricted to the local greenhome_kitchen database');
+  }
+}
+
 async function cleanup({ orderId, productId, caseIds }) {
   const shipmentIds = await ExchangeShipment.find({ exchangeCaseId: { $in: caseIds } }).distinct('_id');
   await ExchangeShipmentEvent.deleteMany({
@@ -56,6 +63,7 @@ async function cleanup({ orderId, productId, caseIds }) {
 }
 
 async function verifySl002Exchange() {
+  assertSafeTarget(process.env.MONGODB_URI);
   const suffix = crypto.randomUUID();
   const customerId = new mongoose.Types.ObjectId();
   const staffId = new mongoose.Types.ObjectId();
@@ -219,6 +227,7 @@ async function verifySl002Exchange() {
 
 async function runCli() {
   require('dotenv').config();
+  assertSafeTarget(process.env.MONGODB_URI);
   await connectDatabase();
   try {
     const result = await verifySl002Exchange();
@@ -236,4 +245,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { verifySl002Exchange };
+module.exports = { verifySl002Exchange, assertSafeTarget };
