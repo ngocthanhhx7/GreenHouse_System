@@ -140,6 +140,14 @@ Nguồn tham khảo: [Shopify product media](https://help.shopify.com/en/manual/
 | Phạm Thành Chung | Product Media và dữ liệu catalog production-like | Hoàn thành, đã merge `main` | Backend 196/196; frontend 65/65; build pass; upload-save-remove và desktop/mobile QA pass |
 | Nguyễn Quang Huy | Address Book tại Checkout và Order snapshot | Hoàn thành, đã được Thành review/merge `main` | Backend 197/197; frontend 68/68; build pass; Checkout desktop/mobile QA và console pass; merge `790f132` |
 
+### Notification handoff/maintenance progress — 2026-07-23
+
+Các dòng assignment/evidence phía trên là lịch sử baseline và được giữ nguyên. Từ 2026-07-23, Nguyễn Quang Huy tiếp nhận ongoing ownership/maintenance cho Notification model/service/API, in-app bell/dropdown/list/detail, read/unread/delete, event consumption và retry status. Thành tiếp tục giữ EmailOutbox, Gmail SMTP/email delivery, OTP/password reset, public contact email, PayOS, Audit và final integration.
+
+| Owner | Progress | Branch |
+|---|---|---|
+| Nguyễn Quang Huy | Ownership handoff đã ghi nhận; implementation/maintenance code chưa bắt đầu trong thay đổi tài liệu này | Ownership docs only: `feature/huy-notification-ownership-docs`; future code: `feature/huy-notification-domain` (TBD, chưa tạo) |
+
 ## 10. Checklist pull/merge
 
 - [x] Branch không có tiền tố `codex/`.

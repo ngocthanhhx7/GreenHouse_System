@@ -158,7 +158,7 @@ Tạo nền tảng để mọi module khác hoạt động đúng quyền. Nếu
 - [ ] Confirm Customer guard works for cart/checkout/order pages.
 - [ ] Add audit helper usage examples for order creation/cancel.
 
-### Phase 4 - Payment/Notification Support
+### Phase 4 - Payment/Email Support
 
 - [x] PayOS webhook không yêu cầu JWT người dùng nhưng bắt buộc xác minh signature bằng Checksum Key.
 - [x] Tạo hosted checkout link ở backend; không đưa Client ID/API Key/Checksum Key xuống frontend.
@@ -282,3 +282,11 @@ Thông tin người dùng phải cung cấp ngoài Git trước Phase 2: tên da
 - Outbox claims carry a random lease token. Sent/failed finalization is conditional on that token so an expired or stolen lease cannot overwrite another worker's result; failed deliveries remain retryable.
 - OTP consume and password update run in one transaction boundary. If the password mutation rolls back, the OTP remains available; successful reset still updates `passwordChangedAt` to invalidate older JWTs.
 - Public contact submission is throttled independently from field validation. Every delivery failure is observable through the outbox/audit path without failing a committed order or contact persistence operation.
+
+## Ownership Addendum 2026-07-23 - Notification Domain
+
+Addendum này chỉ chuyển ongoing ownership và maintenance của Notification kể từ ngày 2026-07-23; addendum 2026-07-20 vẫn là bằng chứng lịch sử baseline do Nguyễn Ngọc Thành triển khai.
+
+- Nguyễn Quang Huy sở hữu Notification model/service/API, in-app bell/dropdown/list/detail, read/unread/delete, domain-event consumption và retry status.
+- Nguyễn Ngọc Thành tiếp tục sở hữu EmailOutbox, Gmail SMTP/email delivery, OTP/password reset, public contact email, PayOS, Audit và final integration.
+- `feature/huy-notification-ownership-docs` là branch ownership-docs only. Branch code Notification tương lai là `feature/huy-notification-domain` (TBD, chưa tạo), author `Nguyễn Quang Huy <quanghuyn267@gmail.com>`.
