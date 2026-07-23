@@ -50,7 +50,7 @@
 
 ## Gate evidence
 
-- Server regression: `586/586`, 101 suites.
+- Server regression: `588/588`, 102 suites.
 - Client regression: `175/175`, 51 suites.
 - Production build: pass.
 - Disposable `rs0` migration: first run transforms seeded legacy data; second run produces zero business writes and recreates/verifies indexes safely.

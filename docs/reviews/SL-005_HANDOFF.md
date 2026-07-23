@@ -50,7 +50,7 @@ Production rollout still requires backup, preflight, target-database execution a
 ## Regression
 
 ```text
-server: 586/586 tests, 101 suites
+server: 588/588 tests, 102 suites
 client: 175/175 tests, 51 suites
 client build: PASS
 ```

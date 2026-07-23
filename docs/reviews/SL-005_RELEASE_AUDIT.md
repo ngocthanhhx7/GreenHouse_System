@@ -25,6 +25,8 @@
 
 Completeness findings C-01 through C-03 are also closed: Product-based damage resolves one Inventory identity throughout, rejected-only delivery keeps `Approved` with zero stock effect, and notification handoffs target Warehouse/Admin roles after commit.
 
+The independent final review found and closed one additional P1: the Warehouse damage controller now awaits the selected service command before sending success, and forwards validation/transaction rejection through `next`. The controller success/failure contract is covered directly.
+
 ## Cross-slice conflict resolution
 
 Rebasing onto SL-003 produced intentional conflicts in Order and Return/Refund integration:
@@ -37,7 +39,7 @@ Targeted cross-slice tests passed `99/99` server and `4/4` client.
 
 ## Verification
 
-- Server: `586/586`, 101 suites, 0 failures.
+- Server: `588/588`, 102 suites, 0 failures.
 - Client: `175/175`, 51 suites, 0 failures.
 - Production build: passed; only the existing Vite chunk-size warning remains.
 - `git diff --check`: clean.

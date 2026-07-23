@@ -329,7 +329,7 @@ This addendum records the tracked Definition-of-Done evidence for SL-005. The no
 
 - [x] BR-047 through BR-058 implemented and mapped to AT-075 through AT-099.
 - [x] Server acceptance tests were introduced red for the intended missing behavior before the implementation turned them green.
-- [x] Server regression after SL-003 rebase: `586/586` tests passed across `101` suites.
+- [x] Server regression after SL-003 rebase and independent review remediation: `588/588` tests passed across `102` suites.
 - [x] Client regression after SL-003 rebase: `175/175` tests passed across `51` suites.
 - [x] Client production build passed; only the existing Vite large-chunk warning remains.
 - [x] SL-005 migration is available as `npm run migrate:sl005`, has a timestamp-preserving repeat-safety test, and passed a disposable `rs0` verification twice with zero business writes on the second run.
@@ -345,7 +345,7 @@ This evidence establishes local implementation closure only. It does not claim a
 ### Verification refresh 2026-07-24
 
 - Targeted cross-slice regression: `99/99` server tests and `4/4` client tests passed after resolving the SL-003/SL-005 reservation-lineage seam.
-- Full regression: server `586/586`, client `175/175`; production build passed with only the existing large-chunk warning.
+- Full regression: server `588/588`, client `175/175`; production build passed with only the existing large-chunk warning.
 - Disposable MongoDB replica-set migration:
   - first run: Inventory `1`, damage report `1`, quarantine movement `1`, replenishment `3`, index groups `6`;
   - second run: Inventory `0`, damage report `0`, quarantine movement `0`, replenishment `0`;

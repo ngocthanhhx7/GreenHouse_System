@@ -27,11 +27,12 @@ async function getWarehouseReport(req, res, next) {
 
 async function confirmWarehouseReport(req, res, next) {
   try {
+    const report = (req.body && req.body.confirmedQuantity !== undefined)
+      ? await damageReportService.resolveWarehouseReport(req.user.id, req.params.id, req.body)
+      : await damageReportService.confirmWarehouseReport(req.user.id, req.params.id);
     return sendSuccess(
       res,
-      (req.body && req.body.confirmedQuantity !== undefined)
-        ? damageReportService.resolveWarehouseReport(req.user.id, req.params.id, req.body)
-        : damageReportService.confirmWarehouseReport(req.user.id, req.params.id),
+      report,
       'Damage report confirmed'
     );
   } catch (error) {
