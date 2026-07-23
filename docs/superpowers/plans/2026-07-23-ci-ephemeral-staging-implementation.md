@@ -318,7 +318,10 @@ describe('ephemeral HTTP smoke verifier', () => {
           : JSON.parse(options.body).email.startsWith('nhanvien')
             ? 'Staff'
             : 'WarehouseManager';
-        return response(200, { success: true, data: { token: `token-${role}`, user: { role } } });
+        return response(200, {
+          success: true,
+          data: { token: `token-${role}`, user: { role: { id: `role-${role}`, roleName: role } } },
+        });
       }
       if (url.endsWith('/orders/my')) return response(200, { success: true, data: [] });
       if (url.endsWith('/staff/orders') && options.headers?.Authorization === 'Bearer token-Customer') {
@@ -484,7 +487,7 @@ async function runEphemeralHttpSmoke({
       });
       assertStatus(login, 200, `${actor.roleName} login`);
       const loginPayload = await readJson(login, `${actor.roleName} login`);
-      if (loginPayload.data?.user?.role !== actor.roleName || !loginPayload.data?.token) {
+      if (loginPayload.data?.user?.role?.roleName !== actor.roleName || !loginPayload.data?.token) {
         throw new Error('login role or token is invalid');
       }
       tokens.set(actor.roleName, loginPayload.data.token);
