@@ -85,8 +85,19 @@ jobs:
         id: backend_audit
         shell: bash
         run: |
-          set -o pipefail
-          npm audit --omit=dev 2>&1 | tee ../artifacts/ephemeral-staging/backend-audit.log
+          set -uo pipefail
+          for attempt in 1 2 3; do
+            npm audit --omit=dev 2>&1 \
+              | tee -a ../artifacts/ephemeral-staging/backend-audit.log
+            audit_status="${PIPESTATUS[0]}"
+            if [[ "$audit_status" -eq 0 ]]; then
+              exit 0
+            fi
+            if [[ "$attempt" -lt 3 ]]; then
+              sleep "$((attempt * 5))"
+            fi
+          done
+          exit "$audit_status"
         working-directory: server
 
       - name: Run frontend tests
@@ -101,8 +112,19 @@ jobs:
         id: frontend_audit
         shell: bash
         run: |
-          set -o pipefail
-          npm audit --omit=dev 2>&1 | tee ../artifacts/ephemeral-staging/frontend-audit.log
+          set -uo pipefail
+          for attempt in 1 2 3; do
+            npm audit --omit=dev 2>&1 \
+              | tee -a ../artifacts/ephemeral-staging/frontend-audit.log
+            audit_status="${PIPESTATUS[0]}"
+            if [[ "$audit_status" -eq 0 ]]; then
+              exit 0
+            fi
+            if [[ "$attempt" -lt 3 ]]; then
+              sleep "$((attempt * 5))"
+            fi
+          done
+          exit "$audit_status"
         working-directory: client
 
       - name: Build production frontend
