@@ -105,7 +105,7 @@ Các yêu cầu mới về upload ảnh, avatar, hồ sơ, thông báo và sổ 
 | Phạm Thành Chung | Product image upload UI, preview, featured image và Product media integration |
 | Nguyễn Quang Huy | Chọn địa chỉ đã lưu/mặc định hoặc nhập địa chỉ mới tại Checkout; Order address snapshot |
 | Nguyễn Hữu Anh Nhật | Staff Order, Return/Refund, Support; chỉ phát notification event theo contract của Thành |
-| Lê Vũ Cường | Warehouse, Reports, Settings; phát event tồn kho/replenishment và tích hợp Notification service của Huy |
+| Lê Vũ Cường | Warehouse, Reports, Settings; phát event tồn kho/replenishment và tích hợp Notification service của Thành |
 
 ## 11. Ownership Addendum - PayOS Online Payment (2026-07-22)
 

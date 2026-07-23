@@ -1,13 +1,13 @@
-# Nguyễn Quang Huy - Cart, Checkout, Order, Payment Plan
+# Nguyễn Quang Huy - Cart, Checkout, Order, Payment, Notification Plan
 
 ## 1. Owner Information
 
 | Field | Detail |
 |---|---|
 | Owner | Nguyễn Quang Huy |
-| Role in team | Customer purchase flow owner |
-| Main responsibility | Cart Management, Checkout, Order Placement, Payment domain state/COD, Customer Order History, Cancel Order; không sở hữu PayOS integration |
-| Git branch | `feature/huy-cart-order-payment` |
+| Role in team | Customer purchase flow và ongoing Notification domain owner |
+| Main responsibility | Cart Management, Checkout, Order Placement, Payment domain state/COD, Customer Order History, Cancel Order; từ 2026-07-23 sở hữu Notification model/service/API, in-app UI và lifecycle; không sở hữu PayOS, EmailOutbox/Gmail, OTP, Contact hoặc Audit |
+| Git branch | `feature/huy-cart-order-payment`; ownership docs: `feature/huy-notification-ownership-docs`; Notification code tương lai: `feature/huy-notification-domain` (TBD) |
 | Priority | Must Have |
 
 ## 2. Business Objective
@@ -23,6 +23,8 @@
 - Customer order history.
 - Customer order detail/status.
 - Cancel Pending unpaid order.
+- Ongoing Notification model/service/API và in-app bell/dropdown/list/detail kể từ 2026-07-23.
+- Notification read/unread/delete, domain-event consumption và retry status; không bao gồm EmailOutbox/Gmail delivery.
 
 ## 4. Important Flows Owned
 

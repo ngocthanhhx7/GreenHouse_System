@@ -5,11 +5,11 @@
 - Họ tên: Nguyễn Quang Huy
 - Mã sinh viên: `HE186466`
 - Email commit: `quanghuyn267@gmail.com`
-- Vai trò: Cart, Checkout, Order, Payment domain state, COD và Customer Order History owner; không sở hữu PayOS provider integration.
+- Vai trò: Cart, Checkout, Order, Payment domain state, COD, Customer Order History và ongoing Notification domain owner từ 2026-07-23; không sở hữu PayOS provider integration, EmailOutbox/Gmail delivery, OTP/password reset, public contact email hoặc Audit.
 
 ## Goal
 
-Đồng bộ Cart -> Order -> Payment domain với SRS mới, đặc biệt là idempotent checkout, reservation boundary, PaymentAttempt, callback history, COD và refund trigger. PayOS SDK/credential/webhook/provider mapping thuộc Nguyễn Ngọc Thành.
+Đồng bộ Cart -> Order -> Payment domain với SRS mới, đặc biệt là idempotent checkout, reservation boundary, PaymentAttempt, callback history, COD và refund trigger. Từ 2026-07-23, Huy đồng thời sở hữu ongoing Notification model/service/API, in-app UI, lifecycle và domain-event consumption. PayOS SDK/credential/webhook/provider mapping, EmailOutbox/Gmail delivery, OTP/password reset, public contact email và Audit tiếp tục thuộc Nguyễn Ngọc Thành.
 
 ## Phạm vi discrepancy cần sửa
 
@@ -18,6 +18,8 @@
 - SDS chưa có state machine PaymentAttempt/PaymentStatus.
 - Cart/CartItem chưa thể hiện rõ ownership và không reserve stock trước order creation.
 - Order có `items` nhưng đồng thời có OrderDetail, gây trùng nguồn dữ liệu.
+- Tài liệu trước 2026-07-23 ghi nhận Notification baseline do Thành triển khai nhưng chưa tách rõ lịch sử baseline với ownership vận hành/bảo trì đang chuyển sang Huy.
+- Notification producer ở các module nghiệp vụ cần dùng một contract idempotent chung; không module nào được tự tạo model, unread rule hoặc bell riêng.
 
 ## File cần kiểm tra/cập nhật ở phase triển khai
 
@@ -36,6 +38,13 @@
 - `client/src/pages/customer/CheckoutPage.jsx`
 - `client/src/pages/customer/PaymentPage.jsx` và Result page là integration surface do Thành sở hữu khi nối PayOS.
 - `client/src/pages/customer/OrderHistoryPage.jsx`
+- `server/src/models/notification.model.js`
+- `server/src/services/notification.service.js`
+- `server/src/controller/notification.controller.js`
+- `server/src/routes/notification.routes.js`
+- `client/src/services/notificationService.js`
+- `client/src/components/NotificationBell.jsx`
+- `client/src/pages/account/NotificationsPage.jsx` hoặc đường dẫn tương đương đang được router sử dụng.
 
 ## Chi tiết thực hiện
 
@@ -47,6 +56,9 @@
 6. Chốt late paid callback: không mở lại order đã timeout/cancel; tạo Refund/RefundPending theo business rule.
 7. Customer hủy đơn unpaid/pre-confirmation phải claim trạng thái và hoàn toàn bộ reservation trong cùng transaction; retry không được hoàn tồn lần hai.
 8. Cập nhật SDS sequence/class/query design và test cho duplicate, stale price, inactive product, insufficient availability, invalid callback và retry.
+9. Bảo trì Notification model/service/API và in-app bell/dropdown/list/detail; mọi truy vấn/mutation phải giới hạn theo owner hiện tại.
+10. Chốt lifecycle read/unread/delete, event consumption idempotent và retry status; deep-link không được bỏ qua RBAC/ownership của target.
+11. Giữ ranh giới: Huy không sửa EmailOutbox/Gmail delivery, OTP/password reset, public contact email, PayOS provider/webhook hoặc Audit; các phần này tiếp tục do Thành sở hữu.
 
 ## Acceptance checklist
 
@@ -63,6 +75,10 @@
 - [x] Địa chỉ mới chỉ được lưu khi Customer chủ động chọn, có tên gợi nhớ riêng.
 - [x] Order lưu snapshot bất biến gồm người nhận, số điện thoại, địa chỉ và ghi chú.
 - [x] Validation người nhận, số điện thoại Việt Nam và độ dài địa chỉ chạy trước khi reserve tồn kho.
+- [x] Ownership docs phân biệt rõ Notification historical baseline của Thành với ongoing ownership của Huy từ 2026-07-23.
+- [ ] Notification code tương lai kiểm tra owner/RBAC cho list/detail/read/delete và không để deep-link cấp thêm quyền.
+- [ ] Domain event được consume idempotent; retry status không tạo duplicate notification.
+- [ ] EmailOutbox/Gmail/OTP/Contact/PayOS/Audit vẫn nằm ngoài Notification implementation scope của Huy.
 
 ## Bổ sung hoàn thành - Checkout Address Book
 
@@ -97,6 +113,12 @@ docs: align payment order reconciliation scope
 
 feature/huy-checkout-address-book
 feat: integrate address book into checkout
+
+feature/huy-notification-ownership-docs
+docs: transfer notification ownership to huy
+
+feature/huy-notification-domain
+TBD - chưa tạo; dùng identity Nguyễn Quang Huy <quanghuyn267@gmail.com>
 ```
 
 ## Trạng thái bàn giao
@@ -112,3 +134,13 @@ Addendum này ưu tiên hơn các mô tả cũ gán toàn bộ callback/provider
 - Nguyễn Ngọc Thành sở hữu `@payos/node`, env/credential, create payment link, return/cancel URL, `POST /api/payments/payos/webhook`, signature verification, webhook registration và frontend PayOS redirect/result.
 - Nguyễn Quang Huy sở hữu Payment domain state/COD, amount and ownership validation, callback idempotency/history, late-paid/refund invariant sau khi nhận payload PayOS đã được Thành xác minh.
 - PayOS implementation dùng branch `feature/thanh-payos-payment` và identity của Nguyễn Ngọc Thành.
+
+## Ownership Addendum 2026-07-23 - Notification Domain
+
+Addendum này chỉ supersede ongoing ownership kể từ 2026-07-23. Các dòng trước đó mô tả Thành triển khai Notification baseline là bằng chứng lịch sử và không bị viết lại.
+
+- Nguyễn Quang Huy sở hữu Notification model/service/API, in-app bell/dropdown/list/detail, read/unread/delete, domain-event consumption và retry status.
+- Nhật, Cường và các module nghiệp vụ khác chỉ phát domain event idempotent theo Notification contract của Huy; không tạo Notification model, bell hoặc lifecycle riêng.
+- Nguyễn Ngọc Thành tiếp tục sở hữu EmailOutbox, Gmail SMTP/email delivery, OTP/password reset, public contact email, PayOS, Audit và final integration.
+- Ownership docs branch là `feature/huy-notification-ownership-docs`. Notification code branch dự kiến là `feature/huy-notification-domain` (TBD, chưa tạo).
+- Mọi commit thuộc scope Huy phải dùng `Nguyễn Quang Huy <quanghuyn267@gmail.com>`.

@@ -38,7 +38,7 @@ Nguồn tham khảo: [Shopify product media](https://help.shopify.com/en/manual/
 
 - Thành sở hữu lịch sử triển khai baseline `Notification`, `AccountLayout` và các route profile/account; ongoing ownership của Notification model/service/API và Header bell/dropdown thuộc Huy từ 2026-07-23.
 - Chung chỉ sở hữu media nghiệp vụ sản phẩm và tích hợp endpoint upload do Thành cung cấp; không sửa Header/Footer dùng chung.
-- Huy chỉ tích hợp Address Book vào checkout; không sửa cách lưu snapshot của Order nếu không có contract.
+- Trong historical workstream 2026-07-20, Huy chỉ tích hợp Address Book vào checkout và không sửa Order snapshot nếu chưa có contract. Kể từ addendum 2026-07-23, Huy đồng thời sở hữu ongoing Notification domain theo ranh giới ghi trong tài liệu này.
 - Nhật và Cường tạo event/domain payload, không tự tạo cơ chế notification thứ hai.
 - Mọi PR ghi rõ actor, API, frontend, test evidence và dependency; Thành review rồi mới merge vào `main`.
 
@@ -117,7 +117,7 @@ Nguồn tham khảo: [Shopify product media](https://help.shopify.com/en/manual/
 
 1. Thành chốt historical notification baseline, upload contract và AccountLayout; Huy chốt ongoing Notification contract.
 2. Chung tích hợp Product Media; Huy tích hợp Address Book vào Checkout.
-3. Nhật/Cường phát event theo contract; Thành hoàn thiện dropdown/detail và kiểm thử tích hợp.
+3. Trong historical sequence, Nhật/Cường phát event theo contract và Thành hoàn thiện baseline dropdown/detail. Kể từ 2026-07-23, Huy bảo trì/hoàn thiện ongoing Notification dropdown/detail và event-consumption contract; Thành giữ final integration.
 4. Thành review từng PR, chạy regression, merge vào `main`, sau đó xóa branch feature local/remote.
 
 ## 9. Definition of Done
