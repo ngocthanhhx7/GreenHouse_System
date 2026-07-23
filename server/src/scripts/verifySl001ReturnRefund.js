@@ -3,6 +3,7 @@ const crypto = require('node:crypto');
 const mongoose = require('mongoose');
 
 const { connectDatabase } = require('../config/database');
+const AfterSalesOrderLock = require('../models/afterSalesOrderLock.model');
 const AuditLog = require('../models/auditLog.model');
 const Category = require('../models/category.model');
 const Inventory = require('../models/inventory.model');
@@ -49,6 +50,12 @@ async function cleanup(ids) {
   if (ids.paymentId) await Payment.deleteOne({ _id: ids.paymentId });
   if (ids.attemptId) await PaymentAttempt.deleteOne({ _id: ids.attemptId });
   if (ids.detailId) await OrderDetail.deleteOne({ _id: ids.detailId });
+  if (ids.orderId) {
+    await AfterSalesOrderLock.deleteOne({
+      orderId: ids.orderId,
+      caseType: 'RETURN_REFUND',
+    });
+  }
   if (ids.orderId) await Order.deleteOne({ _id: ids.orderId });
   if (ids.inventoryId) await Inventory.deleteOne({ _id: ids.inventoryId });
   if (ids.productId) await Product.deleteOne({ _id: ids.productId });

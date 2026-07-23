@@ -177,7 +177,7 @@ async function verifySl002Exchange() {
       trackingCode: `VERIFY-OUT-${suffix}`,
       shippedAt: new Date(),
     });
-    const completed = await exchangeService.recordCarrierShipmentEvent(outbound.shipment._id, {
+    const deliveryAck = await exchangeService.recordCarrierShipmentEvent(outbound.shipment._id, {
       eventId: `verify-delivered:${suffix}`,
       eventType: 'DELIVERED',
       evidenceReference: `VERIFY-POD-${suffix}`,
@@ -191,7 +191,8 @@ async function verifySl002Exchange() {
       ExchangeUnitLineage.findOne({ exchangeCaseId: caseIds[0] }).lean(),
       ExchangeCase.findById(caseIds[0]).lean(),
     ]);
-    assertFact(completed.request.status === 'Completed', 'case did not wait for and reach delivered completion');
+    assertFact(deliveryAck.eventType === 'DELIVERED', 'carrier delivery event was not acknowledged');
+    assertFact(persistedCase?.status === 'Completed', 'case did not wait for and reach delivered completion');
     assertFact(inventory.stockQuantity === 4 && inventory.reservedQuantity === 0 && inventory.damagedQuantity === 1,
       'Inventory sellable/reserved/damaged quantities are inconsistent');
     assertFact(movements.length === 2, 'expected exactly one damaged-in and one replacement-out movement');
@@ -206,7 +207,7 @@ async function verifySl002Exchange() {
       'Exchange persistence contains a forbidden money or payout field');
 
     return {
-      status: completed.request.status,
+      status: persistedCase.status,
       inventory: {
         stockQuantity: inventory.stockQuantity,
         reservedQuantity: inventory.reservedQuantity,
