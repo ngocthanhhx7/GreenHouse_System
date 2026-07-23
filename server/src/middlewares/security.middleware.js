@@ -15,7 +15,12 @@ function createCorsOptions(origins = resolveCorsOrigins()) {
   };
 }
 
-function createRateLimiter({ windowMs = 15 * 60 * 1000, max = 20, message = 'Bạn thao tác quá nhiều, vui lòng thử lại sau' } = {}) {
+function createRateLimiter({
+  windowMs = 15 * 60 * 1000,
+  max = 20,
+  message = 'Bạn thao tác quá nhiều, vui lòng thử lại sau.',
+  errorCode = 'RATE_LIMITED',
+} = {}) {
   return rateLimit({
     windowMs,
     max,
@@ -27,11 +32,15 @@ function createRateLimiter({ windowMs = 15 * 60 * 1000, max = 20, message = 'B�
         message,
         data: null,
         errors: [],
-        errorCode: 'RATE_LIMITED',
+        errorCode,
         ...(req.requestId ? { requestId: req.requestId } : {}),
       });
     },
   });
 }
 
-module.exports = { resolveCorsOrigins, createCorsOptions, createRateLimiter };
+module.exports = {
+  resolveCorsOrigins,
+  createCorsOptions,
+  createRateLimiter,
+};

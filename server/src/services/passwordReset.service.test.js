@@ -5,7 +5,14 @@ const { createPasswordResetService, hashOtp } = require('./passwordReset.service
 const NOW = new Date('2026-07-22T03:00:00.000Z');
 
 function repositories({ createdAt = new Date(NOW.getTime() - 61_000) } = {}) {
-  const users = [{ _id: 'user-1', email: 'thanh@example.com', passwordHash: 'old-hash', passwordChangedAt: null, status: 'Active' }];
+  const users = [{
+    _id: 'user-1',
+    email: 'thanh@example.com',
+    passwordHash: 'old-hash',
+    passwordChangedAt: null,
+    credentialVersion: 0,
+    status: 'Active',
+  }];
   const tokens = [];
   const outbox = [];
   const sessionEvents = [];
@@ -41,6 +48,13 @@ function repositories({ createdAt = new Date(NOW.getTime() - 61_000) } = {}) {
     userRepository: {
       async findByEmail(email) { return users.find((user) => user.email === email) || null; },
       async updatePassword(id, data) { Object.assign(users.find((user) => user._id === id), data); return users.find((user) => user._id === id); },
+      async updatePasswordIfCredentialVersion(id, expectedVersion, data) {
+        const user = users.find((entry) => entry._id === id);
+        if (!user || user.credentialVersion !== expectedVersion) return null;
+        Object.assign(user, data);
+        user.credentialVersion += 1;
+        return user;
+      },
     },
     outboxService: { async enqueue(event) { outbox.push(event); return event; }, events: outbox },
     sessionService: { async revokeAllForUser(userId, reason) { sessionEvents.push({ userId, reason }); return { revokedCount: 2 }; }, events: sessionEvents },
@@ -54,6 +68,7 @@ function createService(repos, overrides = {}) {
     otpGenerator: () => '123456',
     otpSecret: 'test-otp-secret-at-least-32-characters',
     hashPassword: async (password) => `hashed:${password}`,
+    transactionManager: { async withTransaction(work) { return work(null); } },
     ...overrides,
   });
 }
@@ -92,32 +107,79 @@ describe('password reset OTP service', () => {
     );
   });
 
-  it('locks the OTP after five incorrect attempts with a distinct error', async () => {
+  it('locks the OTP after five incorrect attempts without exposing the boundary', async () => {
     const repos = repositories();
     const service = createService(repos);
     await service.requestReset('thanh@example.com');
 
-    for (let attempt = 1; attempt < 5; attempt += 1) {
+    for (let attempt = 1; attempt <= 5; attempt += 1) {
       await assert.rejects(
         () => service.resetPassword({ email: 'thanh@example.com', otp: '000000', password: 'NewPassword123', confirmPassword: 'NewPassword123' }),
-        (error) => error.errorCode === 'OTP_INCORRECT' && error.errors[0].field === 'otp'
+        (error) => error.errorCode === 'OTP_INVALID_OR_USED' && error.statusCode === 400
       );
     }
-    await assert.rejects(
-      () => service.resetPassword({ email: 'thanh@example.com', otp: '000000', password: 'NewPassword123', confirmPassword: 'NewPassword123' }),
-      (error) => error.errorCode === 'OTP_ATTEMPT_LIMIT'
-    );
+    assert.equal(repos.tokens[0].attemptCount, 5);
+    assert.equal(repos.tokens[0].usedAt.toISOString(), NOW.toISOString());
   });
 
-  it('reports expiry separately from an incorrect OTP', async () => {
+  it('keeps expiry internal to the generic pre-proof OTP envelope', async () => {
     const repos = repositories();
     const service = createService(repos, { ttlMs: -1 });
     await service.requestReset('thanh@example.com');
 
     await assert.rejects(
       () => service.resetPassword({ email: 'thanh@example.com', otp: '123456', password: 'NewPassword123', confirmPassword: 'NewPassword123' }),
-      (error) => error.errorCode === 'OTP_EXPIRED'
+      (error) => error.errorCode === 'OTP_INVALID_OR_USED' && error.statusCode === 400
     );
+  });
+
+  it('does not expose account state through reset-completion OTP errors before proof', async () => {
+    async function captureResetError(repos, otp = '000000') {
+      const service = createService(repos);
+      try {
+        await service.resetPassword({
+          email: repos.inputEmail,
+          otp,
+          password: 'NewPassword123',
+          confirmPassword: 'NewPassword123',
+        });
+        return null;
+      } catch (error) {
+        return {
+          statusCode: error.statusCode,
+          errorCode: error.errorCode,
+          message: error.message,
+          errors: error.errors,
+        };
+      }
+    }
+
+    const unknown = repositories();
+    unknown.inputEmail = 'unknown@example.com';
+
+    const disabled = repositories();
+    disabled.users[0].status = 'Disabled';
+    disabled.inputEmail = 'thanh@example.com';
+
+    const incorrect = repositories();
+    incorrect.inputEmail = 'thanh@example.com';
+    await createService(incorrect).requestReset(incorrect.inputEmail);
+
+    const expired = repositories();
+    expired.inputEmail = 'thanh@example.com';
+    await createService(expired, { ttlMs: -1 }).requestReset(expired.inputEmail);
+
+    const envelopes = await Promise.all([
+      captureResetError(unknown),
+      captureResetError(disabled),
+      captureResetError(incorrect),
+      captureResetError(expired, '123456'),
+    ]);
+
+    assert.deepEqual(envelopes[1], envelopes[0]);
+    assert.deepEqual(envelopes[2], envelopes[0]);
+    assert.deepEqual(envelopes[3], envelopes[0]);
+    assert.equal(incorrect.tokens[0].attemptCount, 1);
   });
 
   it('does not send another OTP during the resend cooldown', async () => {
@@ -143,5 +205,99 @@ describe('password reset OTP service', () => {
     await service.requestReset('thanh@example.com');
     await assert.rejects(() => service.resetPassword({ email: 'thanh@example.com', otp: '123456', password: 'NewPassword123', confirmPassword: 'NewPassword123' }), /hash unavailable/);
     assert.equal(repos.tokens[0].usedAt, null);
+  });
+
+  it('does not overwrite a concurrent credential change after OTP verification', async () => {
+    const repos = repositories();
+    let releaseHash;
+    let hashStarted;
+    const started = new Promise((resolve) => { hashStarted = resolve; });
+    const release = new Promise((resolve) => { releaseHash = resolve; });
+    const service = createService(repos, {
+      hashPassword: async () => {
+        hashStarted();
+        await release;
+        return 'otp-reset-hash';
+      },
+      transactionManager: {
+        async withTransaction(work) {
+          const tokenSnapshot = structuredClone(repos.tokens);
+          try {
+            return await work({ id: 'otp-reset-tx' });
+          } catch (error) {
+            repos.tokens.splice(0, repos.tokens.length, ...tokenSnapshot);
+            throw error;
+          }
+        },
+      },
+    });
+    await service.requestReset('thanh@example.com');
+
+    const pendingReset = service.resetPassword({
+      email: 'thanh@example.com',
+      otp: '123456',
+      password: 'NewPassword123',
+      confirmPassword: 'NewPassword123',
+    });
+    await started;
+    Object.assign(repos.users[0], {
+      passwordHash: 'self-change-hash',
+      credentialVersion: 1,
+      passwordChangedAt: new Date('2026-07-22T03:00:01.000Z'),
+    });
+    releaseHash();
+
+    await assert.rejects(
+      pendingReset,
+      (error) => error.errorCode === 'CREDENTIAL_CHANGED_CONCURRENTLY'
+    );
+    assert.equal(repos.users[0].passwordHash, 'self-change-hash');
+    assert.equal(repos.tokens[0].usedAt, null);
+  });
+
+  it('rolls back reset-token replacement when outbox persistence fails', async () => {
+    const repos = repositories();
+    const transactionManager = {
+      async withTransaction(work) {
+        const tokens = structuredClone(repos.tokens);
+        const outbox = structuredClone(repos.outboxService.events);
+        try {
+          return await work({ id: 'tx-reset-request' });
+        } catch (error) {
+          repos.tokens.splice(0, repos.tokens.length, ...tokens);
+          repos.outboxService.events.splice(
+            0,
+            repos.outboxService.events.length,
+            ...outbox,
+          );
+          throw error;
+        }
+      },
+    };
+    const service = createService(repos, { transactionManager });
+    await service.requestReset('thanh@example.com');
+    repos.tokens[0].createdAt = new Date(NOW.getTime() - 61_000);
+    repos.outboxService.enqueue = async () => {
+      throw new Error('outbox unavailable');
+    };
+
+    await assert.rejects(
+      () => service.requestReset('thanh@example.com'),
+      /outbox unavailable/,
+    );
+    assert.equal(repos.tokens.length, 1);
+    assert.equal(repos.tokens[0].usedAt, null);
+  });
+
+  it('requires a dedicated strong reset secret in production', () => {
+    const repos = repositories();
+    assert.throws(
+      () => createPasswordResetService({
+        ...repos,
+        otpSecret: 'short',
+        environment: 'production',
+      }),
+      /RESET_OTP_SECRET/,
+    );
   });
 });

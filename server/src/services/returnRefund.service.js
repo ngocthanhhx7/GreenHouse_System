@@ -26,6 +26,9 @@ const { notificationService } = require('./notification.service');
 const { lowStockAlertLifecycle } = require('./lowStockAlertLifecycle.service');
 const { afterSalesLockService } = require('./afterSalesLock.service');
 const {
+  assignmentCoordinator: defaultAssignmentCoordinator,
+} = require('./assignmentCoordination.service');
+const {
   ACTIVE_AFTER_SALES_ERROR_CODE,
   resolveActiveAfterSalesConflict,
   createActiveAfterSalesConflict,
@@ -560,6 +563,7 @@ function createReturnRefundService({
   lowStockLifecycle = null,
   payosGateway = createPayOSGateway(),
   clock = () => new Date(),
+  assignmentCoordinator = defaultAssignmentCoordinator,
 } = {}) {
   async function loadRequest(id, session) {
     const request = await repository.findRequestById(id, session);
@@ -1053,6 +1057,13 @@ function createReturnRefundService({
         ...(approved ? { approvedAt: decidedAt, shipByAt: new Date(decidedAt.getTime() + SHIP_WINDOW_MS) } : {}),
       };
       const updated = await transactionManager.withTransaction(async (session) => {
+        if (approved) {
+          await assignmentCoordinator.coordinate({
+            userId: staffId,
+            expectedRole: 'Staff',
+            session,
+          });
+        }
         const claimed = repository.claimDecision
           ? await repository.claimDecision(id, DECIDABLE_STATUSES, decisionData, session)
           : await repository.updateRequest(id, decisionData, session);

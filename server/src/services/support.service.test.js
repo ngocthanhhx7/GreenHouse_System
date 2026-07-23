@@ -50,7 +50,12 @@ describe('support service', () => {
 
   beforeEach(() => {
     repository = createRepository();
-    service = createSupportService({ repository, auditLogger: createAuditLogger() });
+    service = createSupportService({
+      repository,
+      auditLogger: createAuditLogger(),
+      transactionManager: { async withTransaction(work) { return work({ id: 'support-tx' }); } },
+      assignmentCoordinator: { async coordinate() {} },
+    });
   });
 
   it('creates a customer support request linked to the customer order', async () => {
@@ -96,5 +101,39 @@ describe('support service', () => {
     assert.equal(result.status, 'Resolved');
     assert.ok(result.closedAt);
     assert.equal(result.handledBy, 'staff-1');
+  });
+
+  it('does not assign Support after a passed Staff request loses its role', async () => {
+    const request = await service.createCustomerRequest('customer-1', {
+      orderId: 'order-1',
+      subject: 'Delivery issue',
+      content: 'The box arrived open.',
+    });
+    const guarded = createSupportService({
+      repository,
+      auditLogger: createAuditLogger(),
+      transactionManager: { async withTransaction(work) { return work({ id: 'support-race-tx' }); } },
+      assignmentCoordinator: {
+        async coordinate({ userId, expectedRole, session }) {
+          assert.deepEqual(
+            { userId, expectedRole, session },
+            { userId: 'staff-1', expectedRole: 'Staff', session: { id: 'support-race-tx' } },
+          );
+          const error = new Error('role changed after middleware');
+          error.errorCode = 'ASSIGNMENT_ACTOR_STALE';
+          throw error;
+        },
+      },
+    });
+
+    await assert.rejects(
+      () => guarded.respondToRequest('staff-1', request.id, {
+        response: 'We will investigate.',
+        status: 'InProgress',
+      }),
+      (error) => error.errorCode === 'ASSIGNMENT_ACTOR_STALE',
+    );
+    assert.equal(repository.requests[0].handledBy, undefined);
+    assert.equal(repository.requests[0].status, 'New');
   });
 });

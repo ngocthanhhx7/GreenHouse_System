@@ -54,4 +54,24 @@ describe('auth request validation', () => {
       { field: 'confirmPassword', message: 'Xác nhận mật khẩu không khớp.' },
     ]);
   });
+
+  it('validates every public invitation-acceptance field before persistence', async () => {
+    const result = await request(server, '/api/internal-invitations/accept', {
+      email: 'invalid',
+      token: '',
+      fullName: '',
+      phoneNumber: '123',
+      password: '',
+      confirmPassword: 'different',
+    });
+    assert.equal(result.statusCode, 400);
+    assert.deepEqual(result.body.errors.map((error) => error.field), [
+      'email',
+      'token',
+      'fullName',
+      'phoneNumber',
+      'password',
+      'confirmPassword',
+    ]);
+  });
 });

@@ -115,6 +115,7 @@ describe('staff order service', () => {
       orderRepository,
       auditLogger,
       transactionManager: { async withTransaction(work) { return work({ id: 'staff-test-session' }); } },
+      assignmentCoordinator: { async coordinate() {} },
     });
   });
 
@@ -158,6 +159,33 @@ describe('staff order service', () => {
     await assert.rejects(() => service.confirmOrder('staff-1', 'order-1', {}), /Only Pending orders can be confirmed/);
 
     assert.equal(orderRepository.exports.length, 0);
+  });
+
+  it('does not assign StockExport after a passed Staff request loses its role', async () => {
+    orderRepository.orders[0].orderStatus = 'Confirmed';
+    const guarded = createStaffOrderService({
+      orderRepository,
+      auditLogger,
+      transactionManager: { async withTransaction(work) { return work({ id: 'stock-export-race-tx' }); } },
+      assignmentCoordinator: {
+        async coordinate({ userId, expectedRole, session }) {
+          assert.deepEqual(
+            { userId, expectedRole, session },
+            { userId: 'staff-1', expectedRole: 'Staff', session: { id: 'stock-export-race-tx' } },
+          );
+          const error = new Error('role changed after middleware');
+          error.errorCode = 'ASSIGNMENT_ACTOR_STALE';
+          throw error;
+        },
+      },
+    });
+
+    await assert.rejects(
+      () => guarded.requestStockExport('staff-1', 'order-1', {}),
+      (error) => error.errorCode === 'ASSIGNMENT_ACTOR_STALE',
+    );
+    assert.equal(orderRepository.exports.length, 0);
+    assert.equal(orderRepository.orders[0].orderStatus, 'Confirmed');
   });
 
   it('rejects confirmation when the exact reservation is no longer intact', async () => {

@@ -1,5 +1,7 @@
 const ApiError = require('../utils/apiError');
 const LoginAttempt = require('../models/loginAttempt.model');
+const LoginThrottleBucket = require('../models/loginThrottleBucket.model');
+const crypto = require('node:crypto');
 
 function normalizeEmail(value) {
   return String(value || '').trim().toLowerCase();
@@ -15,6 +17,57 @@ function createModelRepository() {
     },
     async clearEmail(key) {
       await LoginAttempt.deleteMany({ kind: 'email', key });
+      await LoginThrottleBucket.deleteOne({ _id: `email:${key}` });
+    },
+    async claim({ kind, key, since, limit, createdAt, expiresAt }) {
+      const claimToken = crypto.randomUUID();
+      const update = [
+        {
+          $set: {
+            kind,
+            key,
+            attempts: {
+              $filter: {
+                input: { $ifNull: ['$attempts', []] },
+                as: 'attempt',
+                cond: { $gte: ['$$attempt', since] },
+              },
+            },
+          },
+        },
+        {
+          $set: {
+            lastClaimToken: {
+              $cond: [
+                { $lt: [{ $size: '$attempts' }, limit] },
+                claimToken,
+                null,
+              ],
+            },
+            attempts: {
+              $cond: [
+                { $lt: [{ $size: '$attempts' }, limit] },
+                { $concatArrays: ['$attempts', [createdAt]] },
+                '$attempts',
+              ],
+            },
+            expiresAt,
+          },
+        },
+      ];
+      const execute = () => LoginThrottleBucket.findOneAndUpdate(
+        { _id: `${kind}:${key}` },
+        update,
+        { upsert: true, new: true, setDefaultsOnInsert: false }
+      ).lean();
+      let bucket;
+      try {
+        bucket = await execute();
+      } catch (error) {
+        if (error?.code !== 11000) throw error;
+        bucket = await execute();
+      }
+      return bucket?.lastClaimToken === claimToken;
     },
   };
 }
@@ -36,7 +89,33 @@ function createLoginThrottleService({
   emailLimit = 5,
   ipLimit = 30,
 } = {}) {
+  async function claim(kind, key, limit, errorCode) {
+    const current = now();
+    const allowed = await repository.claim({
+      kind,
+      key,
+      since: new Date(current.getTime() - windowMs),
+      limit,
+      createdAt: current,
+      expiresAt: new Date(current.getTime() + windowMs),
+    });
+    if (!allowed) {
+      throw throttleError(errorCode, new Date(current.getTime() + windowMs));
+    }
+  }
+
   return {
+    async claimAttempt({ ip }) {
+      return claim('ip', String(ip || ''), ipLimit, 'LOGIN_IP_THROTTLED');
+    },
+    async claimFailure({ email }) {
+      return claim(
+        'email',
+        normalizeEmail(email),
+        emailLimit,
+        'LOGIN_EMAIL_THROTTLED'
+      );
+    },
     async assertAllowed({ email, ip }) {
       const current = now();
       const since = new Date(current.getTime() - windowMs);
@@ -61,4 +140,9 @@ function createLoginThrottleService({
   };
 }
 
-module.exports = { createLoginThrottleService, loginThrottleService: createLoginThrottleService(), normalizeEmail };
+module.exports = {
+  createLoginThrottleService,
+  createModelRepository,
+  loginThrottleService: createLoginThrottleService(),
+  normalizeEmail,
+};

@@ -5,6 +5,7 @@ const passwordUtils = require('../utils/password');
 const mongoose = require('mongoose');
 const { validatePasswordPolicy } = require('../utils/passwordPolicy');
 const { sessionService: defaultSessionService } = require('./session.service');
+const { createEmailOutboxService } = require('./email.service');
 
 const EDITABLE_FIELDS = new Set(['fullName', 'phoneNumber']);
 const VIETNAMESE_PHONE = /^(?:\+84|0)(?:3|5|7|8|9)\d{8}$/;
@@ -84,8 +85,15 @@ function createModelUserRepository() {
       const query = User.findByIdAndUpdate(id, { $set: changes }, { new: true, runValidators: true }).populate('roleId');
       return (session ? query.session(session) : query).lean();
     },
-    async updatePassword(id, changes, session) {
-      const query = User.findByIdAndUpdate(id, { $set: changes }, { new: true, runValidators: true }).populate('roleId');
+    async updatePasswordIfCredentialVersion(id, expectedVersion, changes, session) {
+      const credentialFilter = expectedVersion === 0
+        ? { $or: [{ credentialVersion: 0 }, { credentialVersion: { $exists: false } }] }
+        : { credentialVersion: expectedVersion };
+      const query = User.findOneAndUpdate(
+        { _id: id, ...credentialFilter },
+        { $set: changes, $inc: { credentialVersion: 1 } },
+        { new: true, runValidators: true }
+      ).populate('roleId');
       return (session ? query.session(session) : query).lean();
     },
     async updateAvatar(id, avatarUrl) {
@@ -124,6 +132,7 @@ function createProfileService({
   hashPassword = passwordUtils.hashPassword,
   auditLogger = createAuditLogger(),
   sessionService = defaultSessionService,
+  outboxService = createEmailOutboxService(),
   transactionManager = createTransactionManager(),
   now = () => new Date(),
 } = {}) {
@@ -156,16 +165,25 @@ function createProfileService({
     async changePassword(userId, input) {
       const { currentPassword, newPassword } = validatePasswordChange(input || {});
       const user = await requireUser(userId);
+      const expectedCredentialVersion = Number(user.credentialVersion || 0);
       if (!(await comparePassword(currentPassword, user.passwordHash))) {
         throw new ApiError(400, 'Current password is incorrect');
       }
       const passwordHash = await hashPassword(newPassword);
       const changedAt = now();
       const applyChange = async (session) => {
-        await userRepository.updatePassword(userId, {
+        const updated = await userRepository.updatePasswordIfCredentialVersion(userId, expectedCredentialVersion, {
           passwordHash,
           passwordChangedAt: changedAt,
         }, session);
+        if (!updated) {
+          throw new ApiError(
+            409,
+            'Mật khẩu đã được thay đổi bởi một yêu cầu khác. Vui lòng đăng nhập lại.',
+            [],
+            'CREDENTIAL_CHANGED_CONCURRENTLY'
+          );
+        }
         const revoked = await sessionService.revokeAllForUser(userId, 'PASSWORD_CHANGED', session);
         await auditLogger.log({
           userId,
@@ -173,6 +191,15 @@ function createProfileService({
           targetEntity: 'User',
           targetId: String(userId),
           description: 'User changed account password and revoked all sessions',
+        }, session);
+        await outboxService.enqueue({
+          eventType: 'PROFILE_PASSWORD_CHANGED',
+          idempotencyKey: `PROFILE_PASSWORD_CHANGED:${String(userId)}:${changedAt.toISOString()}`,
+          recipient: user.email,
+          payload: {
+            userId: String(userId),
+            fullName: user.fullName,
+          },
         }, session);
         return { changed: true, revokedSessions: revoked.revokedCount };
       };

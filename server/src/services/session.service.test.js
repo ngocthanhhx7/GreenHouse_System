@@ -11,6 +11,7 @@ function createRepositories() {
     email: 'thanh@example.com',
     phoneNumber: '0912345678',
     status: 'Active',
+    credentialVersion: 0,
     roleId: { _id: 'role-customer', roleName: 'Customer' },
   };
   return {
@@ -107,5 +108,27 @@ describe('server-side session service', () => {
     assert.equal((await service.revokeCurrent('selector-a')).alreadyProcessed, false);
     assert.equal((await service.revokeCurrent('selector-a')).alreadyProcessed, true);
     assert.equal((await service.authenticate('selector-b')).user.id, 'user-1');
+  });
+
+  it('rejects a session created from a stale credential version after password reset', async () => {
+    const repositories = createRepositories();
+    const service = createSessionService({
+      ...repositories,
+      selectorGenerator: () => 'stale-selector',
+      csrfSecretGenerator: () => 'csrf',
+    });
+
+    await service.createSession({
+      userId: 'user-1',
+      roleName: 'Customer',
+      credentialVersion: 0,
+    });
+    repositories.user.credentialVersion = 1;
+    repositories.user.passwordChangedAt = new Date('2026-07-24T00:00:01.000Z');
+
+    await assert.rejects(
+      () => service.authenticate('stale-selector'),
+      (error) => error.errorCode === 'SESSION_CREDENTIAL_STALE'
+    );
   });
 });

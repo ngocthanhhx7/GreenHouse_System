@@ -6,6 +6,7 @@ const userSessionSchema = new mongoose.Schema(
     selectorHash: { type: String, required: true, immutable: true },
     csrfSecret: { type: String, required: true, select: false },
     roleAtCreation: { type: String, required: true, enum: ['Customer', 'Staff', 'WarehouseManager', 'Admin'] },
+    credentialVersionAtCreation: { type: Number, required: true, default: 0, min: 0 },
     lastSeenAt: { type: Date, required: true },
     idleExpiresAt: { type: Date, required: true },
     absoluteExpiresAt: { type: Date, required: true },

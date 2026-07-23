@@ -46,10 +46,27 @@ const userSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    credentialVersion: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
     version: {
       type: Number,
       default: 0,
       min: 0,
+    },
+    addressBookVersion: {
+      type: Number,
+      default: 0,
+      min: 0,
+      select: false,
+    },
+    assignmentEpoch: {
+      type: Number,
+      default: 0,
+      min: 0,
+      select: false,
     },
   },
   { timestamps: true }

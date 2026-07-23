@@ -19,5 +19,13 @@ const registrationChallengeSchema = new mongoose.Schema(
 registrationChallengeSchema.index({ email: 1, createdAt: -1 }, { name: 'sl007_registration_latest_identity' });
 registrationChallengeSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0, name: 'sl007_registration_expiry' });
 registrationChallengeSchema.index({ email: 1, idempotencyKey: 1 }, { unique: true, name: 'sl007_registration_idempotency' });
+registrationChallengeSchema.index(
+  { email: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { state: 'PendingVerification' },
+    name: 'sl007_registration_single_live_identity',
+  },
+);
 
 module.exports = mongoose.model('RegistrationChallenge', registrationChallengeSchema);

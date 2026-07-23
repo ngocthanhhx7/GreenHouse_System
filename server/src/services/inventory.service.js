@@ -12,6 +12,9 @@ const { notificationService } = require('./notification.service');
 const { systemSettingService } = require('./systemSetting.service');
 const { lowStockAlertLifecycle: defaultLowStockLifecycle } = require('./lowStockAlertLifecycle.service');
 const { logAudit } = require('../utils/auditLogger');
+const {
+  assignmentCoordinator: defaultAssignmentCoordinator,
+} = require('./assignmentCoordination.service');
 
 function withOptionalSession(query, session) { return session ? query.session(session) : query; }
 
@@ -171,6 +174,7 @@ function createInventoryService({
   eventPublisher = notificationService,
   thresholdProvider = null,
   lowStockLifecycle = null,
+  assignmentCoordinator = defaultAssignmentCoordinator,
 } = {}) {
   const physicalCountResults = new Map();
   async function getInventoryOrThrow(id) { const inventory = await repository.findInventoryById(id); if (!inventory) throw new ApiError(404, 'Inventory record not found'); return inventory; }
@@ -401,6 +405,13 @@ function createInventoryService({
       if (nextStatus !== 'Exported') {
         if (request.status !== 'Pending') throw new ApiError(409, 'Only Pending stock export requests can be decided');
         const decision = await transactionManager.withTransaction(async (session) => {
+          if (nextStatus === 'Approved') {
+            await assignmentCoordinator.coordinate({
+              userId,
+              expectedRole: 'WarehouseManager',
+              session,
+            });
+          }
           const note = input.note !== undefined ? String(input.note || '').trim() : request.note;
           const updatedRequest = repository.claimExportDecision
             ? await repository.claimExportDecision(id, nextStatus, userId, note, session)

@@ -182,6 +182,7 @@ describe('inventory service', () => {
       auditLogger: createAuditLogger(),
       transactionManager: { withTransaction: async (work) => { transactionCalls += 1; return work(null); } },
       eventPublisher: null,
+      assignmentCoordinator: { async coordinate() {} },
     });
   });
 
@@ -222,6 +223,44 @@ describe('inventory service', () => {
     assert.equal(repository.productStocks.get('product-1'), 10);
     assert.equal(repository.transactions.at(-1).transactionType, 'STOCK_EXPORT');
     assert.equal(repository.transactions.at(-1).relatedCollection, 'StockExportRequest');
+  });
+
+  it('does not assign the Warehouse processor after its passed request loses the role', async () => {
+    const guarded = createInventoryService({
+      repository,
+      auditLogger: createAuditLogger(),
+      transactionManager: {
+        async withTransaction(work) {
+          return work({ id: 'stock-export-processor-race-tx' });
+        },
+      },
+      eventPublisher: null,
+      assignmentCoordinator: {
+        async coordinate({ userId, expectedRole, session }) {
+          assert.deepEqual(
+            { userId, expectedRole, session },
+            {
+              userId: 'warehouse-1',
+              expectedRole: 'WarehouseManager',
+              session: { id: 'stock-export-processor-race-tx' },
+            },
+          );
+          const error = new Error('role changed after middleware');
+          error.errorCode = 'ASSIGNMENT_ACTOR_STALE';
+          throw error;
+        },
+      },
+    });
+
+    await assert.rejects(
+      () => guarded.updateStockExportStatus('warehouse-1', 'export-1', {
+        status: 'Approved',
+        note: 'Approved by stale Warehouse request',
+      }),
+      (error) => error.errorCode === 'ASSIGNMENT_ACTOR_STALE',
+    );
+    assert.equal(repository.stockExports[0].status, 'Pending');
+    assert.equal(repository.stockExports[0].processedBy, undefined);
   });
 
   it('consumes each exact order reservation lineage in the same export transaction', async () => {

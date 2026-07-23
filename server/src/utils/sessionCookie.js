@@ -6,7 +6,13 @@ function parseCookies(header = '') {
     if (index < 0) return result;
     const key = part.slice(0, index).trim();
     const value = part.slice(index + 1).trim();
-    if (key) result[key] = decodeURIComponent(value);
+    if (!key) return result;
+    try {
+      result[key] = decodeURIComponent(value);
+    } catch (_error) {
+      // A malformed client-controlled cookie must not escape an Express 4
+      // async middleware as an unhandled rejected promise.
+    }
     return result;
   }, {});
 }

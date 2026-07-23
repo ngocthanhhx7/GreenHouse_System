@@ -76,14 +76,22 @@ function createSessionService({
   absoluteTtlMs = ABSOLUTE_TTL_MS,
 } = {}) {
   return {
-    async createSession({ userId, roleName, ip = '', userAgent = '', mongoSession = null }) {
-      let currentRole = roleName;
-      if (!currentRole) {
-        const user = await userRepository.findById(userId);
-        currentRole = assertSingleApprovedRole(user?.roleId || user?.role);
-      } else {
-        currentRole = assertSingleApprovedRole(currentRole);
-      }
+    async createSession({
+      userId,
+      roleName,
+      credentialVersion,
+      ip = '',
+      userAgent = '',
+      mongoSession = null,
+    }) {
+      const needsUserSnapshot = !roleName || credentialVersion === undefined;
+      const user = needsUserSnapshot ? await userRepository.findById(userId) : null;
+      const currentRole = assertSingleApprovedRole(
+        roleName || user?.roleId || user?.role
+      );
+      const currentCredentialVersion = credentialVersion === undefined
+        ? Number(user?.credentialVersion || 0)
+        : Number(credentialVersion || 0);
       const createdAt = now();
       const absoluteExpiresAt = new Date(createdAt.getTime() + absoluteTtlMs);
       const idleExpiresAt = new Date(Math.min(createdAt.getTime() + idleTtlMs, absoluteExpiresAt.getTime()));
@@ -93,6 +101,7 @@ function createSessionService({
         selectorHash: hashSessionSelector(selector),
         csrfSecret: csrfSecretGenerator(),
         roleAtCreation: currentRole,
+        credentialVersionAtCreation: currentCredentialVersion,
         lastSeenAt: createdAt,
         idleExpiresAt,
         absoluteExpiresAt,
@@ -126,6 +135,16 @@ function createSessionService({
       }
       if (roleName !== session.roleAtCreation) {
         throw sessionError(401, 'Quyền tài khoản đã thay đổi. Vui lòng đăng nhập lại.', 'SESSION_ROLE_STALE');
+      }
+      if (
+        Number(user.credentialVersion || 0)
+        !== Number(session.credentialVersionAtCreation || 0)
+      ) {
+        throw sessionError(
+          401,
+          'Thông tin đăng nhập đã thay đổi. Vui lòng đăng nhập lại.',
+          'SESSION_CREDENTIAL_STALE'
+        );
       }
       const idleExpiresAt = new Date(Math.min(
         current.getTime() + idleTtlMs,

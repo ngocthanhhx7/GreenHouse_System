@@ -67,13 +67,14 @@ function createRepository() {
   };
 }
 
-function createService(repository) {
+function createService(repository, assignmentCoordinator = { async coordinate() {} }) {
   return createReplenishmentService({
     repository,
-    transactionManager: { withTransaction: async (work) => work(null) },
+    transactionManager: { withTransaction: async (work) => work({ id: 'replenishment-tx' }) },
     auditLogger: { async log() {} },
     eventPublisher: null,
     lowStockLifecycle: { async evaluate() {} },
+    assignmentCoordinator,
   });
 }
 
@@ -126,5 +127,36 @@ describe('replenishment service', () => {
     assert.equal(result.status, 'Completed');
     assert.equal(repository.inventory.sellableQuantity, 8);
     assert.equal(repository.transactions.length, 1);
+  });
+
+  it('does not assign Replenishment after a passed Warehouse request loses its role', async () => {
+    const repository = createRepository();
+    const service = createService(repository, {
+      async coordinate({ userId, expectedRole, session }) {
+        assert.deepEqual(
+          { userId, expectedRole, session },
+          {
+            userId: 'warehouse-1',
+            expectedRole: 'WarehouseManager',
+            session: { id: 'replenishment-tx' },
+          },
+        );
+        const error = new Error('role changed after middleware');
+        error.errorCode = 'ASSIGNMENT_ACTOR_STALE';
+        throw error;
+      },
+    });
+
+    await assert.rejects(
+      () => service.createRequest('warehouse-1', {
+        inventoryId: 'inv-1',
+        quantity: 20,
+        reason: 'Low stock restock',
+        evidence: [{ file: 'count-sheet.jpg' }],
+        idempotencyKey: 'request-race-1',
+      }),
+      (error) => error.errorCode === 'ASSIGNMENT_ACTOR_STALE',
+    );
+    assert.equal(repository.requests.length, 0);
   });
 });

@@ -12,6 +12,12 @@ const internalInvitationSchema = new mongoose.Schema(
     revokedAt: { type: Date, default: null },
     idempotencyKey: { type: String, required: true, trim: true },
     reason: { type: String, default: '', trim: true },
+    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    replacedInvitationId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'InternalInvitation',
+      default: null,
+    },
   },
   { versionKey: false }
 );
@@ -19,5 +25,13 @@ const internalInvitationSchema = new mongoose.Schema(
 internalInvitationSchema.index({ email: 1, createdAt: -1 }, { name: 'sl007_invitation_latest_identity' });
 internalInvitationSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0, name: 'sl007_invitation_expiry' });
 internalInvitationSchema.index({ email: 1, idempotencyKey: 1 }, { unique: true, name: 'sl007_invitation_idempotency' });
+internalInvitationSchema.index(
+  { email: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { state: 'PendingAcceptance' },
+    name: 'sl007_invitation_single_live_identity',
+  },
+);
 
 module.exports = mongoose.model('InternalInvitation', internalInvitationSchema);

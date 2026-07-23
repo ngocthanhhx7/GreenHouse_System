@@ -1,5 +1,6 @@
 const ApiError = require('../utils/apiError');
 const UserAddress = require('../models/userAddress.model');
+const User = require('../models/user.model');
 const mongoose = require('mongoose');
 
 const ADDRESS_FIELDS = ['label', 'receiverName', 'phoneNumber', 'province', 'district', 'ward', 'addressLine'];
@@ -79,6 +80,23 @@ function createModelAddressRepository() {
       const query = UserAddress.countDocuments({ userId });
       return session ? query.session(session) : query;
     },
+    async lockAddressBook(userId, session) {
+      if (!session) {
+        throw new ApiError(
+          503,
+          'Không thể khóa sổ địa chỉ ngoài transaction.',
+          [],
+          'ADDRESS_TRANSACTION_REQUIRED',
+        );
+      }
+      const locked = await User.findOneAndUpdate(
+        { _id: userId },
+        { $inc: { addressBookVersion: 1 } },
+        { new: false },
+      ).select('_id').session(session).lean();
+      if (!locked) throw new ApiError(404, 'User not found');
+      return locked;
+    },
     async unsetDefault(userId, session) {
       const query = UserAddress.updateMany({ userId, isDefault: true }, { $set: { isDefault: false } });
       await (session ? query.session(session) : query);
@@ -121,6 +139,7 @@ function createUserAddressService({ addressRepository = createModelAddressReposi
     async createAddress(userId, input) {
       const data = validateAddress(input || {});
       return addressRepository.withTransaction(async (session) => {
+        await addressRepository.lockAddressBook(userId, session);
         const count = await addressRepository.countByUser(userId, session);
         if (count >= 10) {
           throw new ApiError(409, 'Sổ địa chỉ đã đạt giới hạn 10 địa chỉ.', [], 'ADDRESS_LIMIT_REACHED');
@@ -133,16 +152,34 @@ function createUserAddressService({ addressRepository = createModelAddressReposi
     },
 
     async updateAddress(userId, id, input) {
-      await requireAddress(userId, id);
       const changes = validateAddress(input || {}, { partial: true });
-      if (changes.isDefault) await addressRepository.unsetDefault(userId);
-      const updated = await addressRepository.updateForUser(userId, id, changes);
-      if (!updated) throw new ApiError(404, 'Address not found');
-      return toPlainAddress(updated);
+      return addressRepository.withTransaction(async (session) => {
+        await addressRepository.lockAddressBook(userId, session);
+        const existing = await requireAddress(userId, id, session);
+        if (changes.isDefault) {
+          await addressRepository.unsetDefault(userId, session);
+          const updated = await addressRepository.updateForUser(userId, id, changes, session);
+          if (!updated) throw new ApiError(404, 'Address not found');
+          return toPlainAddress(updated);
+        }
+
+        if (changes.isDefault === false) {
+          if (existing.isDefault) {
+            throw new ApiError(409, 'A customer must keep one default address', [], 'DEFAULT_ADDRESS_REQUIRED');
+          }
+          delete changes.isDefault;
+        }
+        if (!Object.keys(changes).length) return toPlainAddress(existing);
+
+        const updated = await addressRepository.updateForUser(userId, id, changes, session);
+        if (!updated) throw new ApiError(404, 'Address not found');
+        return toPlainAddress(updated);
+      });
     },
 
     async setDefaultAddress(userId, id) {
       return addressRepository.withTransaction(async (session) => {
+        await addressRepository.lockAddressBook(userId, session);
         await requireAddress(userId, id, session);
         await addressRepository.unsetDefault(userId, session);
         const updated = await addressRepository.updateForUser(userId, id, { isDefault: true }, session);
@@ -152,6 +189,7 @@ function createUserAddressService({ addressRepository = createModelAddressReposi
 
     async deleteAddress(userId, id) {
       return addressRepository.withTransaction(async (session) => {
+        await addressRepository.lockAddressBook(userId, session);
         const existing = await requireAddress(userId, id, session);
         const count = await addressRepository.countByUser(userId, session);
         if (existing.isDefault && count > 1) {

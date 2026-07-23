@@ -12,13 +12,58 @@ function assertEmailConfig(env = process.env) {
   return true;
 }
 
-function renderEmail(entry, otpSecret) {
+function renderEmail(
+  entry,
+  otpSecret,
+  { clientUrl = process.env.CLIENT_URL || 'http://localhost:5173' } = {},
+) {
   const payload = entry.payload || {};
   if (entry.eventType === 'PASSWORD_RESET_OTP_REQUESTED') {
     const otp = decryptOtp(payload.encryptedOtp, otpSecret);
     return {
       subject: 'Mã OTP đặt lại mật khẩu GreenHome Kitchen',
       text: `Mã OTP của bạn là ${otp}. Mã có hiệu lực trong ${payload.expiresInMinutes || 10} phút. Không chia sẻ mã này với bất kỳ ai.`,
+    };
+  }
+  if (entry.eventType === 'REGISTRATION_OTP_REQUESTED') {
+    const otp = decryptOtp(payload.encryptedOtp, otpSecret);
+    return {
+      subject: 'Mã xác minh đăng ký GreenHome Kitchen',
+      text: `Mã xác minh đăng ký của bạn là ${otp}. Mã có hiệu lực trong ${payload.expiresInMinutes || 10} phút. Không chia sẻ mã này với bất kỳ ai.`,
+    };
+  }
+  if (entry.eventType === 'INTERNAL_INVITATION_CREATED') {
+    const token = decryptOtp(payload.encryptedToken, otpSecret);
+    const link = new URL('/accept-invitation', clientUrl);
+    link.searchParams.set('email', entry.recipient);
+    link.searchParams.set('token', token);
+    return {
+      subject: 'Lời mời tham gia GreenHome Kitchen',
+      text: `Bạn được mời tham gia GreenHome Kitchen với vai trò ${payload.roleName || 'nhân viên'}. Hoàn tất kích hoạt tài khoản tại: ${link.toString()}`,
+    };
+  }
+  if (entry.eventType === 'ACCOUNT_REGISTRATION_COMPLETED') {
+    return {
+      subject: 'Đăng ký thành công - GreenHome Kitchen',
+      text: `Xin chào ${payload.fullName || 'bạn'}, tài khoản GreenHome Kitchen của bạn đã được tạo thành công. Bạn có thể đăng nhập để bắt đầu mua sắm.`,
+    };
+  }
+  if (entry.eventType === 'INTERNAL_INVITATION_ACCEPTED') {
+    return {
+      subject: 'Kích hoạt thành công - GreenHome Kitchen',
+      text: `Xin chào ${payload.fullName || 'bạn'}, tài khoản ${payload.roleName || 'nhân viên'} của bạn đã được kích hoạt thành công. Vui lòng đăng nhập để bắt đầu làm việc.`,
+    };
+  }
+  if (entry.eventType === 'PASSWORD_RESET_COMPLETED') {
+    return {
+      subject: 'Đặt lại mật khẩu thành công - GreenHome Kitchen',
+      text: 'Mật khẩu GreenHome Kitchen của bạn đã được đặt lại thành công. Tất cả phiên đăng nhập cũ đã bị thu hồi. Nếu bạn không thực hiện thao tác này, vui lòng liên hệ hỗ trợ ngay.',
+    };
+  }
+  if (entry.eventType === 'PROFILE_PASSWORD_CHANGED') {
+    return {
+      subject: 'Mật khẩu đã thay đổi - GreenHome Kitchen',
+      text: `Xin chào ${payload.fullName || 'bạn'}, mật khẩu GreenHome Kitchen của bạn đã thay đổi và tất cả phiên đăng nhập cũ đã bị thu hồi. Nếu bạn không thực hiện thao tác này, vui lòng liên hệ hỗ trợ ngay.`,
     };
   }
   if (entry.eventType === 'CONTACT_SUBMISSION') {
@@ -50,6 +95,7 @@ function createEmailProvider(providerName = process.env.MAIL_PROVIDER || 'disabl
   const pass = config.SMTP_PASS;
   const from = config.MAIL_FROM || user;
   const otpSecret = config.RESET_OTP_SECRET;
+  const clientUrl = options.clientUrl || process.env.CLIENT_URL || 'http://localhost:5173';
   let transporter = options.transporter;
 
   if (!transporter) {
@@ -60,7 +106,7 @@ function createEmailProvider(providerName = process.env.MAIL_PROVIDER || 'disabl
 
   return {
     async send(entry) {
-      const content = renderEmail(entry, otpSecret);
+      const content = renderEmail(entry, otpSecret, { clientUrl });
       const result = await transporter.sendMail({ from, to: entry.recipient, ...content });
       return { accepted: true, messageId: result && result.messageId };
     },

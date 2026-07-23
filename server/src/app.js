@@ -32,7 +32,11 @@ const { resolveCorsOrigins, createCorsOptions, createRateLimiter } = require('./
 const { loadSession } = require('./middlewares/auth.middleware');
 const { createCsrfProtection } = require('./middlewares/csrf.middleware');
 
-function createApp({ rateLimit = true, uploadsRoot = path.resolve(__dirname, '../uploads') } = {}) {
+function createApp({
+  rateLimit = true,
+  authRateLimitMax = 20,
+  uploadsRoot = path.resolve(__dirname, '../uploads'),
+} = {}) {
   const app = express();
 
   app.use(requestId);
@@ -47,6 +51,18 @@ function createApp({ rateLimit = true, uploadsRoot = path.resolve(__dirname, '..
   app.use('/api', loadSession);
   app.use('/api', createCsrfProtection({ allowedOrigins: resolveCorsOrigins() }));
   if (rateLimit) {
+    app.use([
+      '/api/auth/login',
+      '/api/auth/registration-challenges',
+      '/api/auth/registrations',
+      '/api/auth/forgot-password',
+      '/api/auth/reset-password',
+      '/api/internal-invitations/accept',
+    ], createRateLimiter({
+      max: authRateLimitMax,
+      message: 'Bạn đã gửi quá nhiều yêu cầu xác thực, vui lòng thử lại sau.',
+      errorCode: 'AUTH_PUBLIC_RATE_LIMITED',
+    }));
     app.use('/api/contact', createRateLimiter({ max: 5, message: 'Bạn đã gửi quá nhiều yêu cầu liên hệ, vui lòng thử lại sau.' }));
   }
   const publicMediaOptions = {

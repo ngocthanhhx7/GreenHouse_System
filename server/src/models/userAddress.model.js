@@ -61,7 +61,10 @@ const userAddressSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-userAddressSchema.index({ userId: 1, createdAt: -1 });
+userAddressSchema.index(
+  { userId: 1, createdAt: -1 },
+  { name: 'sl007_address_owner_created' },
+);
 userAddressSchema.index(
   { userId: 1, isDefault: 1 },
   {

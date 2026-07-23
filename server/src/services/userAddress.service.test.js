@@ -5,10 +5,27 @@ const { createUserAddressService } = require('./userAddress.service');
 
 function createRepository() {
   const addresses = [];
+  const calls = [];
+  const lockTails = new Map();
+  let transactionSequence = 0;
   return {
     addresses,
+    calls,
     async withTransaction(work) {
-      return work({ id: 'transaction-1' });
+      const snapshot = structuredClone(addresses);
+      const session = {
+        id: `transaction-${++transactionSequence}`,
+        mutated: false,
+        releases: [],
+      };
+      try {
+        return await work(session);
+      } catch (error) {
+        if (session.mutated) addresses.splice(0, addresses.length, ...snapshot);
+        throw error;
+      } finally {
+        session.releases.reverse().forEach((release) => release());
+      }
     },
     async listByUser(userId) {
       return addresses.filter((item) => item.userId === userId);
@@ -16,26 +33,42 @@ function createRepository() {
     async countByUser(userId) {
       return addresses.filter((item) => item.userId === userId).length;
     },
-    async unsetDefault(userId) {
+    async lockAddressBook(userId, session) {
+      calls.push({ operation: 'lockAddressBook', session });
+      const previous = lockTails.get(userId) || Promise.resolve();
+      let release;
+      const held = new Promise((resolve) => { release = resolve; });
+      lockTails.set(userId, previous.then(() => held));
+      await previous;
+      session.releases.push(release);
+    },
+    async unsetDefault(userId, session) {
+      calls.push({ operation: 'unsetDefault', session });
+      session.mutated = true;
       addresses.filter((item) => item.userId === userId).forEach((item) => { item.isDefault = false; });
     },
-    async create(userId, data) {
+    async create(userId, data, session) {
+      session.mutated = true;
       const item = { _id: `address-${addresses.length + 1}`, userId, ...data };
       addresses.push(item);
       return item;
     },
-    async findByIdForUser(userId, id) {
+    async findByIdForUser(userId, id, session) {
+      calls.push({ operation: 'findByIdForUser', session });
       return addresses.find((item) => item.userId === userId && item._id === id) || null;
     },
-    async updateForUser(userId, id, changes) {
+    async updateForUser(userId, id, changes, session) {
+      calls.push({ operation: 'updateForUser', session });
       const item = addresses.find((entry) => entry.userId === userId && entry._id === id);
       if (!item) return null;
+      session.mutated = true;
       Object.assign(item, changes);
       return item;
     },
-    async deleteForUser(userId, id) {
+    async deleteForUser(userId, id, session) {
       const index = addresses.findIndex((entry) => entry.userId === userId && entry._id === id);
       if (index < 0) return null;
+      session.mutated = true;
       return addresses.splice(index, 1)[0];
     },
   };
@@ -72,6 +105,76 @@ describe('user address service', () => {
     assert.equal(repository.addresses.find((item) => item._id === first.id).isDefault, false);
     assert.equal(second.isDefault, true);
     assert.equal(repository.addresses.filter((item) => item.isDefault).length, 1);
+  });
+
+  it('rolls back a default reassignment when the target update fails', async () => {
+    const first = await service.createAddress('user-1', validAddress);
+    const second = await service.createAddress('user-1', { ...validAddress, label: 'VÄƒn phÃ²ng' });
+    const originalUpdate = repository.updateForUser;
+    repository.updateForUser = async (userId, id, changes, session) => {
+      if (id === second.id) {
+        repository.calls.push({ operation: 'updateForUser', session });
+        return null;
+      }
+      return originalUpdate(userId, id, changes, session);
+    };
+
+    await assert.rejects(() => service.updateAddress('user-1', second.id, { isDefault: true }), /Address not found/);
+
+    assert.equal(repository.addresses.find((item) => item._id === first.id).isDefault, true);
+    assert.equal(repository.addresses.find((item) => item._id === second.id).isDefault, false);
+    assert.deepEqual(
+      repository.calls.slice(-3).map((call) => [call.operation, call.session?.id]),
+      [
+        ['findByIdForUser', 'transaction-3'],
+        ['unsetDefault', 'transaction-3'],
+        ['updateForUser', 'transaction-3'],
+      ]
+    );
+  });
+
+  it('serializes concurrent creates at capacity so the address book never exceeds ten', async () => {
+    for (let index = 0; index < 9; index += 1) {
+      await service.createAddress('user-1', {
+        ...validAddress,
+        label: `Địa chỉ ${index + 1}`,
+      });
+    }
+
+    const results = await Promise.allSettled([
+      service.createAddress('user-1', { ...validAddress, label: 'Địa chỉ 10-A' }),
+      service.createAddress('user-1', { ...validAddress, label: 'Địa chỉ 10-B' }),
+    ]);
+
+    assert.equal(results.filter((item) => item.status === 'fulfilled').length, 1);
+    assert.equal(results.filter((item) => item.status === 'rejected').length, 1);
+    assert.equal(results.find((item) => item.status === 'rejected').reason.errorCode, 'ADDRESS_LIMIT_REACHED');
+    assert.equal(repository.addresses.length, 10);
+    assert.equal(repository.addresses.filter((item) => item.isDefault).length, 1);
+  });
+
+  it('serializes sole-default deletion against create and preserves exactly one default', async () => {
+    const sole = await service.createAddress('user-1', validAddress);
+
+    const results = await Promise.allSettled([
+      service.deleteAddress('user-1', sole.id),
+      service.createAddress('user-1', { ...validAddress, label: 'Địa chỉ mới' }),
+    ]);
+
+    assert.equal(results.filter((item) => item.status === 'fulfilled').length, 2);
+    assert.equal(repository.addresses.length, 1);
+    assert.equal(repository.addresses[0].isDefault, true);
+  });
+
+  it('does not allow the only default address to be cleared through a partial update', async () => {
+    const created = await service.createAddress('user-1', validAddress);
+
+    await assert.rejects(
+      () => service.updateAddress('user-1', created.id, { isDefault: false }),
+      (error) => error.errorCode === 'DEFAULT_ADDRESS_REQUIRED'
+    );
+
+    assert.equal(repository.addresses.find((item) => item._id === created.id).isDefault, true);
   });
 
   it('does not expose another user address', async () => {

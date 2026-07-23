@@ -145,6 +145,7 @@ describe('SL-005 acceptance contracts', () => {
       repository,
       transactionManager: { withTransaction: async (work) => work(null) },
       auditLogger: { async log() {} },
+      assignmentCoordinator: { async coordinate() {} },
       eventPublisher: null,
     });
 
@@ -167,6 +168,7 @@ describe('SL-005 acceptance contracts', () => {
       repository,
       transactionManager: { withTransaction: async (work) => work(null) },
       auditLogger: { async log() {} },
+      assignmentCoordinator: { async coordinate() {} },
     });
 
     const report = await service.createStaffReport('staff-1', {
@@ -201,6 +203,7 @@ describe('SL-005 acceptance contracts', () => {
       transactionManager: { withTransaction: async (work) => work(null) },
       auditLogger: { async log() {} },
       eventPublisher: null,
+      assignmentCoordinator: { async coordinate() {} },
     });
 
     const request = await service.createRequest('warehouse-1', {

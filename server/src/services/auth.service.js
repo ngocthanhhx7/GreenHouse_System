@@ -87,12 +87,11 @@ function createAuthService({
 
     async login(input, { ip = '', userAgent = '' } = {}) {
       const email = normalizeEmail(input.email);
-      await loginThrottle.assertAllowed({ email, ip });
-      await loginThrottle.recordAttempt({ ip });
+      await loginThrottle.claimAttempt({ email, ip });
       const user = await userRepository.findByEmail(email);
       const passwordMatches = await passwordComparer(input.password || '', user?.passwordHash || dummyPasswordHash);
       if (!passwordMatches) {
-        await loginThrottle.recordFailure({ email, ip });
+        await loginThrottle.claimFailure({ email, ip });
         await auditLogger.log({
           userId: user?._id || null,
           action: 'AUTH_LOGIN_FAILURE',
@@ -138,6 +137,7 @@ function createAuthService({
       const createdSession = await sessionService.createSession({
         userId: String(user._id),
         roleName,
+        credentialVersion: Number(user.credentialVersion || 0),
         ip,
         userAgent,
       });

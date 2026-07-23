@@ -331,6 +331,7 @@ describe('return/refund service', () => {
   let now;
   let payosGateway;
   let notifications;
+  let createService;
 
   beforeEach(() => {
     repository = createRepository();
@@ -350,14 +351,17 @@ describe('return/refund service', () => {
       async createPayout(input) { this.calls.push({ type: 'create', input }); return structuredClone(this.payout); },
       async getPayout(id) { this.calls.push({ type: 'get', id }); return structuredClone(this.payout); },
     };
-    service = createReturnRefundService({
+    createService = (overrides = {}) => createReturnRefundService({
       repository,
       auditLogger,
       transactionManager: createTransactionManager(repository),
       eventPublisher: { async createInAppNotification(notification) { notifications.push(notification); } },
       payosGateway,
       clock: () => new Date(now),
+      assignmentCoordinator: { async coordinate() {} },
+      ...overrides,
     });
+    service = createService();
   });
 
   function claimedEvidence(customerId = 'customer-1', index = 1, size = 1024) {
@@ -382,6 +386,32 @@ describe('return/refund service', () => {
     await service.decideRequest('staff-1', request.id, { status: 'Approved', staffNote: 'Evidence accepted' });
     return request.id;
   }
+
+  it('does not assign Return after a passed Staff request loses its role', async () => {
+    const request = await createRequest();
+    const guarded = createService({
+      assignmentCoordinator: {
+        async coordinate({ userId, expectedRole, session }) {
+          assert.equal(userId, 'staff-1');
+          assert.equal(expectedRole, 'Staff');
+          assert.ok(session);
+          const error = new Error('role changed after middleware');
+          error.errorCode = 'ASSIGNMENT_ACTOR_STALE';
+          throw error;
+        },
+      },
+    });
+
+    await assert.rejects(
+      () => guarded.decideRequest('staff-1', request.id, {
+        status: 'Approved',
+        staffNote: 'Approved after inspection',
+      }),
+      (error) => error.errorCode === 'ASSIGNMENT_ACTOR_STALE',
+    );
+    assert.equal(repository.requests[0].status, 'New');
+    assert.equal(repository.requests[0].resolvedBy, undefined);
+  });
 
   async function recordHandoff(requestId) {
     return service.recordHandoffProof('customer-1', requestId, {

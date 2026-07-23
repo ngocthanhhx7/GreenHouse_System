@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const { describe, it, beforeEach } = require('node:test');
 
 const { createAuthService } = require('./auth.service');
+const { createSessionService, hashSessionSelector } = require('./session.service');
 const { hashPassword } = require('../utils/password');
 
 function createUserRepository() {
@@ -70,9 +71,8 @@ describe('auth service', () => {
       },
       loginThrottle: {
         failures: [],
-        async assertAllowed() {},
-        async recordAttempt() {},
-        async recordFailure(input) { this.failures.push(input); },
+        async claimAttempt() {},
+        async claimFailure(input) { this.failures.push(input); },
         async clearEmail() {},
       },
     });
@@ -146,6 +146,117 @@ describe('auth service', () => {
     await assert.rejects(
       () => authService.login({ email: 'disabled@example.com', password: 'Password123' }, { ip: '127.0.0.1' }),
       (error) => error.errorCode === 'AUTH_ACCOUNT_DISABLED'
+    );
+  });
+
+  it('claims the IP attempt and failed-email budget through atomic throttle operations', async () => {
+    const calls = [];
+    const service = createAuthService({
+      userRepository,
+      roleRepository,
+      auditLogger,
+      passwordComparer: async () => false,
+      loginThrottle: {
+        async claimAttempt(input) { calls.push(['attempt', input]); },
+        async claimFailure(input) { calls.push(['failure', input]); },
+        async clearEmail() {},
+      },
+      sessionService: { async createSession() { throw new Error('not expected'); } },
+    });
+
+    await assert.rejects(
+      () => service.login(
+        { email: 'MISSING@example.com', password: 'WrongPassword123' },
+        { ip: '10.0.0.7' }
+      ),
+      (error) => error.errorCode === 'AUTH_INVALID_CREDENTIALS'
+    );
+
+    assert.deepEqual(calls, [
+      ['attempt', { email: 'missing@example.com', ip: '10.0.0.7' }],
+      ['failure', { email: 'missing@example.com', ip: '10.0.0.7' }],
+    ]);
+  });
+
+  it('binds a slow login to the credential version verified before a concurrent reset', async () => {
+    const currentUser = {
+      _id: 'race-user',
+      fullName: 'Race User',
+      email: 'race@example.com',
+      phoneNumber: '0912345678',
+      passwordHash: 'old-hash',
+      credentialVersion: 0,
+      status: 'Active',
+      roleId: { _id: 'role-customer', roleName: 'Customer' },
+    };
+    const sessions = [];
+    const sessionService = createSessionService({
+      userRepository: {
+        async findById(id) { return id === currentUser._id ? { ...currentUser } : null; },
+      },
+      sessionRepository: {
+        async create(data) {
+          const session = { _id: `session-${sessions.length + 1}`, ...data };
+          sessions.push(session);
+          return session;
+        },
+        async findBySelectorHash(selectorHash) {
+          return sessions.find((entry) => entry.selectorHash === selectorHash) || null;
+        },
+        async touch(id, lastSeenAt, idleExpiresAt) {
+          const session = sessions.find((entry) => entry._id === id);
+          Object.assign(session, { lastSeenAt, idleExpiresAt });
+          return session;
+        },
+      },
+      selectorGenerator: () => 'race-selector',
+      csrfSecretGenerator: () => 'race-csrf',
+    });
+    let releasePasswordProof;
+    let proofStarted;
+    const started = new Promise((resolve) => { proofStarted = resolve; });
+    const release = new Promise((resolve) => { releasePasswordProof = resolve; });
+    const service = createAuthService({
+      userRepository: {
+        async findByEmail(email) {
+          return email === currentUser.email ? structuredClone(currentUser) : null;
+        },
+        async updateLastLogin() {},
+      },
+      auditLogger: { async log() {} },
+      sessionService,
+      loginThrottle: {
+        async claimAttempt() {},
+        async claimFailure() {},
+        async clearEmail() {},
+      },
+      passwordComparer: async (_password, verifiedHash) => {
+        proofStarted();
+        await release;
+        return verifiedHash === 'old-hash';
+      },
+    });
+
+    const pendingLogin = service.login({
+      email: 'race@example.com',
+      password: 'OldPassword123',
+    });
+    await started;
+    Object.assign(currentUser, {
+      passwordHash: 'reset-hash',
+      credentialVersion: 1,
+      passwordChangedAt: new Date('2026-07-24T00:00:01.000Z'),
+    });
+    releasePasswordProof();
+
+    const loginResult = await pendingLogin;
+    assert.equal(
+      sessions[0].selectorHash,
+      hashSessionSelector(loginResult.sessionSelector)
+    );
+    await assert.rejects(
+      () => sessionService.authenticate(loginResult.sessionSelector),
+      (error) => error.errorCode === 'SESSION_CREDENTIAL_STALE'
     );
   });
 });
