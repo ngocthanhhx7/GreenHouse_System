@@ -2,12 +2,14 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 
 import useAuth from '../../hooks/useAuth.js';
+import { useCart } from '../../contexts/CartContext.jsx';
 import { cartService } from '../../services/cartService.js';
 import { resolveMediaUrl } from '../../services/apiClient.js';
 import { formatCurrency } from '../../utils/formatters.js';
 
 export default function ProductCard({ product }) {
   const { user } = useAuth();
+  const { runCartMutation } = useCart();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [added, setAdded] = useState(false);
@@ -35,7 +37,7 @@ export default function ProductCard({ product }) {
     setLoading(true);
     setError('');
     try {
-      await cartService.addItem({ productId: product.id || product._id, quantity: 1 });
+      await runCartMutation(() => cartService.addItem({ productId: product.id || product._id, quantity: 1 }));
       setAdded(true);
       setTimeout(() => setAdded(false), 2000);
     } catch (err) {

@@ -2,16 +2,17 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import { cartService } from '../../services/cartService.js';
+import { useCart } from '../../contexts/CartContext.jsx';
 import { formatCurrency } from '../../utils/formatters.js';
 
 export default function CartPage() {
-  const [cart, setCart] = useState({ items: [], totalAmount: 0 });
+  const { cart, refreshCart, runCartMutation } = useCart();
   const [error, setError] = useState('');
 
   async function loadCart() {
     setError('');
     try {
-      setCart(await cartService.getCart());
+      await refreshCart();
     } catch (err) {
       setError(err.message);
     }
@@ -23,7 +24,7 @@ export default function CartPage() {
 
   async function updateQuantity(item, quantity) {
     try {
-      setCart(await cartService.updateItem(item.id, { quantity: Number(quantity) }));
+      await runCartMutation(() => cartService.updateItem(item.id, { quantity: Number(quantity) }));
     } catch (err) {
       setError(err.message);
     }
@@ -31,7 +32,7 @@ export default function CartPage() {
 
   async function removeItem(item) {
     try {
-      setCart(await cartService.removeItem(item.id));
+      await runCartMutation(() => cartService.removeItem(item.id));
     } catch (err) {
       setError(err.message);
     }

@@ -113,6 +113,19 @@
   min-height: 44px;
 }
 
+.site-header-premium .cart-indicator-dot {
+  position: absolute;
+  right: 7px;
+  bottom: 6px;
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid var(--gh-paper);
+  border-radius: 999px;
+  background: #d12f2f;
+  box-shadow: 0 1px 3px rgba(64, 20, 20, 0.24);
+  pointer-events: none;
+}
+
 .site-header-premium .avatar-menu,
 .site-header-premium .notification-bell {
   position: relative;

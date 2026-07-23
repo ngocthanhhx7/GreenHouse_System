@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 
 import { cartService } from '../../services/cartService.js';
+import { useCart } from '../../contexts/CartContext.jsx';
 import { createCheckoutIdempotencyKey, orderService } from '../../services/orderService.js';
 import { profileService } from '../../services/profileService.js';
 import { formatCurrency } from '../../utils/formatters.js';
@@ -29,6 +30,7 @@ function toFieldErrors(errors) {
 
 export default function CheckoutPage() {
   const navigate = useNavigate();
+  const { resetCart } = useCart();
   const [cart, setCart] = useState({ items: [], totalAmount: 0 });
   const [addresses, setAddresses] = useState([]);
   const [selectedAddressId, setSelectedAddressId] = useState('');
@@ -120,6 +122,7 @@ export default function CheckoutPage() {
         customerNote,
         paymentMethod,
       }, { idempotencyKey: checkoutIdempotencyKey });
+      resetCart();
       navigate(`/orders/${order.id}`, { replace: true });
     } catch (requestError) {
       const nextFieldErrors = toFieldErrors(requestError.errors);

@@ -47,4 +47,9 @@ describe('checkout address book contract', () => {
     assert.match(source, /fieldErrors\.addressLine/);
     assert.match(source, /role="alert"/);
   });
+
+  it('clears the shared cart indicator only after a successful order is created', () => {
+    assert.match(source, /useCart/);
+    assert.match(source, /resetCart\(\);[\s\S]*?navigate\(`\/orders\/\$\{order\.id\}`/);
+  });
 });

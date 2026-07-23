@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, NavLink, useNavigate } from 'react-router-dom';
 
 import useAuth from '../../hooks/useAuth.js';
+import { useCart } from '../../contexts/CartContext.jsx';
 import NotificationBell from '../notifications/NotificationBell.jsx';
 import { resolveMediaUrl } from '../../services/apiClient.js';
 import { translateRole } from '../../utils/formatters.js';
@@ -74,6 +75,7 @@ function roleMenuLinks(role, getWorkspacePath) {
 export default function Header({ showCart = true }) {
   const auth = useAuth();
   const { user, logout } = auth;
+  const { itemCount } = useCart();
   const navigate = useNavigate();
   const getWorkspacePath = auth['get' + 'Dash' + 'boardPath'];
   const [keyword, setKeyword] = useState('');
@@ -225,6 +227,7 @@ export default function Header({ showCart = true }) {
                 <circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/>
                 <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/>
               </svg>
+              {itemCount > 0 && <span className="cart-indicator-dot" role="status" aria-label="Giỏ hàng có sản phẩm mới" />}
             </Link>
           )}
 
