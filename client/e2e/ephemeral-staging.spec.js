@@ -42,6 +42,9 @@ test('public home renders without an uncaught page error', async ({ page }) => {
   });
 
   expect(pageErrors).toEqual([]);
+  expect(consoleEntries.some(({ text }) => (
+    text.includes('Download the React DevTools')
+  ))).toBe(false);
 });
 
 test('Customer can sign in and open order history', async ({ page }) => {

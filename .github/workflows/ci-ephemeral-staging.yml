@@ -129,6 +129,8 @@ jobs:
       - name: Build production frontend
         id: frontend_build
         shell: bash
+        env:
+          NODE_ENV: production
         run: |
           set -o pipefail
           npm run build 2>&1 | tee ../artifacts/ephemeral-staging/frontend-build.log
