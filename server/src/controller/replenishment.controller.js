@@ -41,10 +41,46 @@ async function updateRequestStatus(req, res, next) {
   }
 }
 
+async function withdrawRequest(req, res, next) {
+  try {
+    return sendSuccess(res, await replenishmentService.withdrawRequest(req.user.id, req.params.id, req.body), 'Replenishment request withdrawn');
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function requestShortClosure(req, res, next) {
+  try {
+    return sendSuccess(res, await replenishmentService.requestShortClosure(req.user.id, req.params.id, req.body), 'Short closure requested');
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function decideShortClosure(req, res, next) {
+  try {
+    return sendSuccess(res, await replenishmentService.decideShortClosure(req.user.id, req.params.id, req.body), 'Short closure decision updated');
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function correctReceipt(req, res, next) {
+  try {
+    return sendSuccess(res, await replenishmentService.correctReceipt(req.user.id, req.params.id, req.body), 'Receipt correction recorded');
+  } catch (error) {
+    return next(error);
+  }
+}
+
 module.exports = {
   createRequest,
   listWarehouseRequests,
   receiveRequest,
   listAdminRequests,
   updateRequestStatus,
+  withdrawRequest,
+  requestShortClosure,
+  decideShortClosure,
+  correctReceipt,
 };

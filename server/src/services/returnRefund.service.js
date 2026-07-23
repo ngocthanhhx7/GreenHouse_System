@@ -15,7 +15,6 @@ const ExchangeCase = require('../models/exchangeCase.model');
 const ReturnItem = require('../models/returnItem.model');
 const Inventory = require('../models/inventory.model');
 const InventoryTransaction = require('../models/inventoryTransaction.model');
-const Product = require('../models/product.model');
 const { encrypt, decrypt, hash, fingerprint } = require('../utils/refundDestinationCrypto');
 const {
   MAX_RETURN_EVIDENCE_TOTAL_SIZE,
@@ -24,6 +23,7 @@ const {
 const { createPayOSGateway } = require('../config/payos');
 const { logAudit } = require('../utils/auditLogger');
 const { notificationService } = require('./notification.service');
+const { lowStockAlertLifecycle } = require('./lowStockAlertLifecycle.service');
 const { afterSalesLockService } = require('./afterSalesLock.service');
 const {
   ACTIVE_AFTER_SALES_ERROR_CODE,
@@ -475,16 +475,17 @@ function createModelRepository() {
     },
     async claimReturnInventory(productId, before, increments, userId, session) {
       return withOptionalSession(Inventory.findOneAndUpdate(
-        { productId, stockQuantity: before.stockQuantity, damagedQuantity: before.damagedQuantity },
+        { productId, sellableQuantity: before.sellableQuantity, damagedQuantity: before.damagedQuantity },
         {
-          $inc: { stockQuantity: increments.sellableQuantity, damagedQuantity: increments.damagedQuantity },
+          $inc: {
+            stockQuantity: increments.sellableQuantity,
+            sellableQuantity: increments.sellableQuantity,
+            damagedQuantity: increments.damagedQuantity,
+          },
           $set: { lastUpdatedBy: userId },
         },
         { new: true, runValidators: true }
       ), session).lean();
-    },
-    async updateProductStock(productId, stockQuantity, session) {
-      return withOptionalSession(Product.findByIdAndUpdate(productId, { $set: { stockQuantity } }, { new: true, runValidators: true }), session).lean();
     },
     async createInventoryTransaction(data, session) {
       const [created] = await InventoryTransaction.create([data], session ? { session } : undefined);
@@ -556,6 +557,7 @@ function createReturnRefundService({
   auditLogger = { log: logAudit },
   transactionManager = createModelTransactionManager(),
   eventPublisher = notificationService,
+  lowStockLifecycle = null,
   payosGateway = createPayOSGateway(),
   clock = () => new Date(),
 } = {}) {
@@ -1376,25 +1378,29 @@ function createReturnRefundService({
             : await repository.updateRequest(id, claimData, session));
         if (!claimed) throw new ApiError(409, 'Only an Approved request with handoff proof can be inspected');
 
+        const updatedInventories = [];
         for (const item of items) {
           if (item.inventorySellableQuantity === 0 && item.inventoryDamagedQuantity === 0) continue;
           const before = await repository.findInventoryByProductId(item.productId, session);
           if (!before) throw new ApiError(409, 'Every returned product requires an Inventory record');
-          const beforeStock = Number(before.stockQuantity);
+          const beforeStock = Number(before.sellableQuantity ?? before.stockQuantity);
           const beforeDamaged = Number(before.damagedQuantity);
           if (![beforeStock, beforeDamaged].every((quantity) => Number.isInteger(quantity) && quantity >= 0)) {
             throw new ApiError(409, 'Stored inventory quantities are invalid');
           }
           const after = await repository.claimReturnInventory(
             item.productId,
-            { stockQuantity: beforeStock, damagedQuantity: beforeDamaged },
+            {
+              stockQuantity: beforeStock,
+              sellableQuantity: beforeStock,
+              damagedQuantity: beforeDamaged,
+            },
             { sellableQuantity: item.inventorySellableQuantity, damagedQuantity: item.inventoryDamagedQuantity },
             warehouseId,
             session
           );
           if (!after) throw new ApiError(409, 'Inventory changed while the return was being received');
-          const product = await repository.updateProductStock(item.productId, Number(after.stockQuantity), session);
-          if (!product) throw new ApiError(409, 'Returned product no longer exists');
+          updatedInventories.push(after);
 
           await repository.createInventoryTransaction({
             productId: item.productId,
@@ -1405,7 +1411,7 @@ function createReturnRefundService({
             transactionType: 'RETURN_IN',
             quantity: item.inventorySellableQuantity,
             beforeQuantity: beforeStock,
-            afterQuantity: Number(after.stockQuantity),
+            afterQuantity: Number(after.sellableQuantity ?? after.stockQuantity),
             movementKey: `${item.inventoryMovementKey}:RETURN_IN`,
             reason: `Sellable return receipt for ${order.orderCode}`,
           }, session);
@@ -1427,10 +1433,13 @@ function createReturnRefundService({
         const createdItems = await repository.createReturnItems(items, session);
         const refund = await createRefundHandoff(order, request, session);
         const updated = await repository.updateRequest(request._id, { refundPendingId: refund._id }, session);
-        return { createdItems, refund, updated };
+        return { createdItems, refund, updated, updatedInventories };
       });
 
       await writeAudit(warehouseId, 'RETURN_REFUND_RECEIVED', id, `Warehouse received and classified every returned item for ${order.orderCode}`);
+      for (const inventory of result.updatedInventories) {
+        await lowStockLifecycle?.evaluate?.(inventory, { eventKey: `return-receipt:${id}` });
+      }
       await notifyCustomer(request.customerId, request._id, 'RETURN_REFUND_RECEIVED', 'Kho đã nhận hàng trả', 'Kho đã nhận đủ hàng và chuyển hồ sơ sang bước đối soát hoàn tiền.');
       return toResponse({ ...loaded, request: result.updated, items: result.createdItems }, 'Warehouse');
     },
@@ -1633,5 +1642,5 @@ module.exports = {
   createModelRepository,
   createReturnRefundService,
   computeMoneyObligationsSettled,
-  returnRefundService: createReturnRefundService(),
+  returnRefundService: createReturnRefundService({ lowStockLifecycle: lowStockAlertLifecycle }),
 };

@@ -271,7 +271,8 @@ function createStaffOrderService({ orderRepository = createModelOrderRepository(
     for (const [productId, quantity] of requiredByProduct) {
       const inventory = await orderRepository.findInventoryByProductId(productId, session);
       if (!inventory
-        || Number(inventory.stockQuantity || 0) < quantity
+        || inventory.inventoryHealth === 'ReconciliationRequired'
+        || Number(inventory.sellableQuantity ?? inventory.stockQuantity ?? 0) < quantity
         || Number(inventory.reservedQuantity || 0) < quantity) {
         throw new ApiError(409, 'Order exact reservation is no longer intact');
       }

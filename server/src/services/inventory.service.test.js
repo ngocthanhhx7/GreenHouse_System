@@ -10,6 +10,7 @@ function createRepository() {
       productId: 'product-1',
       productName: 'Green Ceramic Frying Pan',
       stockQuantity: 10,
+      sellableQuantity: 10,
       reservedQuantity: 2,
       damagedQuantity: 0,
       lowStockThreshold: 5,
@@ -20,6 +21,7 @@ function createRepository() {
       productId: 'product-2',
       productName: 'Eco Dish Soap',
       stockQuantity: 3,
+      sellableQuantity: 3,
       reservedQuantity: 0,
       damagedQuantity: 0,
       lowStockThreshold: 6,
@@ -194,7 +196,7 @@ describe('inventory service', () => {
     const result = await service.adjustInventory('warehouse-1', 'inv-1', { delta: -2, reason: 'Damaged item removed' });
 
     assert.equal(result.inventory.stockQuantity, 8);
-    assert.equal(repository.productStocks.get('product-1'), 8);
+    assert.equal(repository.productStocks.get('product-1'), 10);
     assert.equal(repository.transactions.length, 1);
     assert.equal(repository.transactions[0].transactionType, 'ADJUSTMENT');
     assert.equal(repository.transactions[0].relatedCollection, 'Inventory');
@@ -217,7 +219,7 @@ describe('inventory service', () => {
     assert.ok(repository.orders[0].packedAt);
     assert.equal(repository.inventories[0].stockQuantity, 8);
     assert.equal(repository.inventories[0].reservedQuantity, 0);
-    assert.equal(repository.productStocks.get('product-1'), 8);
+    assert.equal(repository.productStocks.get('product-1'), 10);
     assert.equal(repository.transactions.at(-1).transactionType, 'STOCK_EXPORT');
     assert.equal(repository.transactions.at(-1).relatedCollection, 'StockExportRequest');
   });
@@ -287,6 +289,7 @@ describe('inventory service', () => {
 
   it('rejects export when inventory is insufficient', async () => {
     repository.inventories[0].stockQuantity = 1;
+    repository.inventories[0].sellableQuantity = 1;
     await service.updateStockExportStatus('warehouse-1', 'export-1', { status: 'Approved' });
 
     await assert.rejects(

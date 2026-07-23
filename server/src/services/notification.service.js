@@ -1,6 +1,8 @@
 const mongoose = require('mongoose');
 
 const Notification = require('../models/notification.model');
+const Role = require('../models/role.model');
+const User = require('../models/user.model');
 const ApiError = require('../utils/apiError');
 
 const DEFAULT_LIMIT = 20;
@@ -150,6 +152,12 @@ function createModelNotificationRepository() {
         { new: true, runValidators: true }
       ).lean();
     },
+    async listActiveUserIdsByRole(roleName) {
+      const role = await Role.findOne({ roleName }).select('_id').lean();
+      if (!role) return [];
+      const users = await User.find({ roleId: role._id, status: 'Active' }).select('_id').lean();
+      return users.map((user) => user._id);
+    },
   };
 }
 
@@ -207,6 +215,30 @@ function createNotificationService({
         recipientEmail,
       }, session);
       return toPlainNotification(notification);
+    },
+
+    async createRoleNotifications({
+      recipientRole,
+      type,
+      subject,
+      content,
+      eventId = '',
+      targetCollection = '',
+      targetId = null,
+    }, session) {
+      if (!recipientRole) return [];
+      const userIds = notificationRepository.listActiveUserIdsByRole
+        ? await notificationRepository.listActiveUserIdsByRole(recipientRole)
+        : [];
+      return Promise.all(userIds.map((userId) => this.createInAppNotification({
+        userId,
+        type,
+        subject,
+        content,
+        eventId: eventId ? `${eventId}:${String(userId)}` : '',
+        targetCollection,
+        targetId,
+      }, session)));
     },
 
     async listMyNotifications(userId, input = {}) {

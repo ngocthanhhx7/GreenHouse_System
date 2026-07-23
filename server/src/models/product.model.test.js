@@ -9,12 +9,8 @@ describe('product model', () => {
     assert.equal(Product.schema.options.autoIndex, false);
   });
 
-  it('stores stock quantity for cart and order stock validation', () => {
-    const path = Product.schema.path('stockQuantity');
-
-    assert.ok(path);
-    assert.equal(path.instance, 'Number');
-    assert.equal(path.options.min, 0);
+  it('does not persist stock quantity because Inventory is authoritative', () => {
+    assert.equal(Product.schema.path('stockQuantity'), undefined);
   });
 
   it('defaults legacy products to VND and rejects unsupported currencies', () => {

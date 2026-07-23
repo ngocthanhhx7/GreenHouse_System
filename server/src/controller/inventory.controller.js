@@ -25,6 +25,30 @@ async function adjustInventory(req, res, next) {
   }
 }
 
+async function recordPhysicalCount(req, res, next) {
+  try {
+    return sendSuccess(
+      res,
+      await inventoryService.recordPhysicalCount(req.user.id, req.params.id, req.body),
+      'Physical inventory count recorded',
+    );
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function setThresholdOverride(req, res, next) {
+  try {
+    return sendSuccess(
+      res,
+      await inventoryService.setThresholdOverride(req.user.id, req.params.id, req.body),
+      'Inventory threshold updated',
+    );
+  } catch (error) {
+    return next(error);
+  }
+}
+
 async function listLowStock(req, res, next) {
   try {
     return sendSuccess(res, await inventoryService.listLowStock());
@@ -33,9 +57,26 @@ async function listLowStock(req, res, next) {
   }
 }
 
+async function listLowStockAlerts(req, res, next) {
+  try {
+    return sendSuccess(res, await inventoryService.listLowStockAlerts(req.query));
+  } catch (error) {
+    return next(error);
+  }
+}
+
 async function listStockExports(req, res, next) {
   try {
     return sendSuccess(res, await inventoryService.listStockExports());
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function listTransactions(req, res, next) {
+  try {
+    const result = await inventoryService.listTransactions(req.query);
+    return sendSuccess(res, result);
   } catch (error) {
     return next(error);
   }
@@ -65,4 +106,8 @@ module.exports = {
   listStockExports,
   getStockExport,
   updateStockExportStatus,
+  recordPhysicalCount,
+  setThresholdOverride,
+  listLowStockAlerts,
+  listTransactions,
 };

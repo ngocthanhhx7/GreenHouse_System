@@ -27,10 +27,45 @@ async function getWarehouseReport(req, res, next) {
 
 async function confirmWarehouseReport(req, res, next) {
   try {
+    const report = (req.body && req.body.confirmedQuantity !== undefined)
+      ? await damageReportService.resolveWarehouseReport(req.user.id, req.params.id, req.body)
+      : await damageReportService.confirmWarehouseReport(req.user.id, req.params.id);
     return sendSuccess(
       res,
-      await damageReportService.confirmWarehouseReport(req.user.id, req.params.id),
+      report,
       'Damage report confirmed'
+    );
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function getStaffReport(req, res, next) {
+  try {
+    return sendSuccess(res, await damageReportService.getStaffReport(req.user.id, req.params.id));
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function withdrawStaffReport(req, res, next) {
+  try {
+    return sendSuccess(
+      res,
+      await damageReportService.withdrawStaffReport(req.user.id, req.params.id, req.body || {}),
+      'Damage report withdrawn',
+    );
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function disposeConfirmedDamage(req, res, next) {
+  try {
+    return sendSuccess(
+      res,
+      await damageReportService.disposeConfirmedDamage(req.user.id, req.params.inventoryId, req.body || {}),
+      'Damaged inventory disposition recorded',
     );
   } catch (error) {
     return next(error);
@@ -41,5 +76,8 @@ module.exports = {
   createStaffReport,
   listWarehouseReports,
   getWarehouseReport,
+  getStaffReport,
   confirmWarehouseReport,
+  withdrawStaffReport,
+  disposeConfirmedDamage,
 };
