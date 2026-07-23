@@ -3,6 +3,17 @@ import { Link, useParams } from 'react-router-dom';
 
 import AuthenticatedEvidenceList from '../../components/returnRefund/AuthenticatedEvidenceList.jsx';
 import { exchangeService } from '../../services/exchangeService.js';
+import {
+  translateExchangeStatus,
+  translateExchangeResponsibility,
+  translateShipmentDirection,
+  translateShipmentEventType,
+  translateShippingPayer,
+} from '../../utils/afterSalesLabels.js';
+import {
+  getExchangeWorkflowActions,
+  getExchangeWorkflowMessage,
+} from '../../utils/exchangeUiState.js';
 
 function eventKey() {
   return `staff-shipment:${globalThis.crypto?.randomUUID?.() || Date.now()}`;
@@ -97,6 +108,8 @@ export default function ExchangeDetailPage() {
   }
 
   if (!request && !error) return <div className="page-center">Đang tải yêu cầu đổi hàng...</div>;
+  const workflowActions = getExchangeWorkflowActions(request);
+  const workflowMessage = getExchangeWorkflowMessage(request);
   return (
     <div className="surface">
       <div className="page-heading"><h1>Xử lý đổi hàng</h1><Link className="btn btn-outline-success" to="/staff/exchanges">Hàng đợi</Link></div>
@@ -106,10 +119,10 @@ export default function ExchangeDetailPage() {
         <>
           <dl className="row">
             <dt className="col-sm-4">Mã yêu cầu</dt><dd className="col-sm-8">{request.requestCode}</dd>
-            <dt className="col-sm-4">Trạng thái</dt><dd className="col-sm-8">{request.status}</dd>
+            <dt className="col-sm-4">Trạng thái</dt><dd className="col-sm-8">{translateExchangeStatus(request.status)}</dd>
             <dt className="col-sm-4">Lý do Customer</dt><dd className="col-sm-8">{request.reason}</dd>
-            <dt className="col-sm-4">Trách nhiệm</dt><dd className="col-sm-8">{request.responsibility || 'Chưa quyết định'}</dd>
-            <dt className="col-sm-4">Bên chịu phí vận chuyển</dt><dd className="col-sm-8">{request.shippingPayer || 'Chưa quyết định'} — thanh toán trực tiếp với đơn vị vận chuyển</dd>
+            <dt className="col-sm-4">Trách nhiệm</dt><dd className="col-sm-8">{translateExchangeResponsibility(request.responsibility)}</dd>
+            <dt className="col-sm-4">Bên chịu phí vận chuyển</dt><dd className="col-sm-8">{translateShippingPayer(request.shippingPayer)} — thanh toán trực tiếp với đơn vị vận chuyển</dd>
           </dl>
           <AuthenticatedEvidenceList urls={request.evidenceImages} fetchEvidence={exchangeService.fetchEvidence} />
           <h2 className="mt-4">Dòng hàng Customer yêu cầu</h2>
@@ -137,7 +150,8 @@ export default function ExchangeDetailPage() {
               <button className="btn btn-success mt-2" type="submit">Ghi nhận quyết định</button>
             </form>
           )}
-          {request.status === 'WaitingForExactStock' && request.waitingFor !== 'INCIDENT_RESEND' && (
+          {workflowMessage && <div className="alert alert-warning mt-3">{workflowMessage}</div>}
+          {workflowActions.canRetryReservation && (
             <button className="btn btn-success mt-3" type="button" onClick={retryReservation}>Thử giữ lại đúng sản phẩm</button>
           )}
 
@@ -147,7 +161,7 @@ export default function ExchangeDetailPage() {
               <label className="form-label" htmlFor="staffShipment">Chuyến hàng</label>
               <select id="staffShipment" className="form-select" value={shipmentId} onChange={(event) => setShipmentId(event.target.value)} required>
                 <option value="">Chọn chuyến hàng</option>
-                {request.shipments.map((shipment) => <option key={shipment._id} value={shipment._id}>{shipment.trackingCode} — {shipment.direction}</option>)}
+                {request.shipments.map((shipment) => <option key={shipment._id} value={shipment._id}>{shipment.trackingCode} — {translateShipmentDirection(shipment.direction)}</option>)}
               </select>
               <label className="form-label mt-2" htmlFor="staffShipmentEvent">Sự kiện</label>
               <select id="staffShipmentEvent" className="form-select" value={shipmentEventType} onChange={(event) => setShipmentEventType(event.target.value)}>
@@ -171,7 +185,7 @@ export default function ExchangeDetailPage() {
                   <select id="replacedShipmentEvent" className="form-select" value={replacesEventId} onChange={(event) => setReplacesEventId(event.target.value)} required>
                     <option value="">Chọn sự kiện gốc/khiếu nại</option>
                     {(request.shipmentEvents || []).filter((item) => String(item.shipmentId) === String(shipmentId))
-                      .map((item) => <option key={item._id} value={item._id}>{item.eventType} — {new Date(item.occurredAt).toLocaleString('vi-VN')}</option>)}
+                      .map((item) => <option key={item._id} value={item._id}>{translateShipmentEventType(item.eventType)} — {new Date(item.occurredAt).toLocaleString('vi-VN')}</option>)}
                   </select>
                 </>
               )}
@@ -180,14 +194,7 @@ export default function ExchangeDetailPage() {
               <button className="btn btn-outline-success mt-2" type="submit">Ghi sự kiện</button>
             </form>
           )}
-          {request.status === 'DeliveryIncident'
-            && request.waitingFor === 'REJECTED_ORIGINAL_RECONCILIATION' && (
-            <div className="alert alert-warning mt-4">
-              Hàng gốc bị từ chối đang có sự cố vận chuyển. Giữ case mở để CSKH đối soát bằng chứng với Carrier; không tự tạo hàng thay thế hoặc hoàn tiền.
-            </div>
-          )}
-          {((request.status === 'DeliveryIncident' && request.waitingFor === 'INCIDENT_RESEND')
-            || (request.status === 'WaitingForExactStock' && request.waitingFor === 'INCIDENT_RESEND')) && (
+          {workflowActions.canResend && (
             <form className="mt-4" onSubmit={resend}>
               <h2>Gửi lại do sự cố vận chuyển</h2>
               <div className="alert alert-warning">Giữ nguyên yêu cầu hiện tại; Customer không phải tạo yêu cầu mới hoặc chịu thêm phí.</div>

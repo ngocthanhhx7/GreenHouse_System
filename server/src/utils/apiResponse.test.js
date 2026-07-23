@@ -80,4 +80,31 @@ describe('API response helpers', () => {
     assert.equal(res.body.errorCode, 'INTERNAL_ERROR');
     assert.equal(res.body.requestId, 'request-internal');
   });
+
+  it('preserves typed conflict data while keeping the legacy envelope', () => {
+    const res = createResponse('request-conflict');
+    const data = {
+      currentCase: { type: 'RETURN_REFUND', id: 'return-1', status: 'Approved' },
+      action: { label: 'Xem yêu cầu đang xử lý', href: '/return-refunds' },
+    };
+
+    sendError(
+      res,
+      'This Order already has an active after-sales case',
+      409,
+      [],
+      'AFTER_SALES_CASE_ACTIVE',
+      { requestId: 'request-conflict' },
+      data
+    );
+
+    assert.deepEqual(res.body, {
+      success: false,
+      message: 'This Order already has an active after-sales case',
+      data,
+      errors: [],
+      errorCode: 'AFTER_SALES_CASE_ACTIVE',
+      requestId: 'request-conflict',
+    });
+  });
 });

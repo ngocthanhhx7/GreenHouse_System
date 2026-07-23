@@ -52,6 +52,27 @@ describe('error middleware', () => {
     assert.equal(res.body.requestId, 'service-unavailable-request');
   });
 
+  it('forwards typed ApiError data without adding private fields', () => {
+    const res = createResponse('active-case-request');
+    const data = {
+      currentCase: { type: 'EXCHANGE', id: 'exchange-1', status: 'Submitted' },
+      action: { label: 'Xem yêu cầu đang xử lý', href: '/exchanges/exchange-1' },
+    };
+
+    errorHandler(
+      new ApiError(409, 'This Order already has an active after-sales case', [], 'AFTER_SALES_CASE_ACTIVE', data),
+      {},
+      res,
+      () => {}
+    );
+
+    assert.equal(res.statusCode, 409);
+    assert.equal(res.body.errorCode, 'AFTER_SALES_CASE_ACTIVE');
+    assert.deepEqual(res.body.data, data);
+    assert.deepEqual(Object.keys(res.body.data.currentCase).sort(), ['id', 'status', 'type']);
+    assert.deepEqual(Object.keys(res.body.data.action).sort(), ['href', 'label']);
+  });
+
   it('uses a generic 500 contract without leaking the original stack or message', () => {
     const res = createResponse('internal-request');
     const error = new Error('database password leaked');

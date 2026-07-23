@@ -17,6 +17,11 @@ const ExchangeShipmentEvent = require('../models/exchangeShipmentEvent.model');
 const ExchangeConversion = require('../models/exchangeConversion.model');
 const ReturnRefundRequest = require('../models/returnRefundRequest.model');
 const { afterSalesLockService } = require('./afterSalesLock.service');
+const {
+  ACTIVE_AFTER_SALES_ERROR_CODE,
+  resolveActiveAfterSalesConflict,
+  createActiveAfterSalesConflict,
+} = require('./afterSalesConflict.service');
 const { returnEvidenceClaim, MAX_RETURN_EVIDENCE_TOTAL_SIZE } = require('../utils/returnEvidenceClaim');
 const { logAudit } = require('../utils/auditLogger');
 const { notificationService } = require('./notification.service');
@@ -41,6 +46,35 @@ class NoExactStockError extends Error {
     this.name = 'NoExactStockError';
     this.productId = productId;
   }
+}
+
+function duplicateIndexText(error) {
+  return [
+    ...Object.keys(error?.keyPattern || {}),
+    String(error?.index || ''),
+    String(error?.codeName || ''),
+    String(error?.message || ''),
+  ].join(' ');
+}
+
+function classifyExchangeDuplicateConflict(error) {
+  const indexText = duplicateIndexText(error);
+  if (/requestCode|exchange_request_code_unique/i.test(indexText)) {
+    return new ApiError(409, 'Exchange request code collision; retry the command');
+  }
+  if (/exclusivePhysicalClaimKey|exchange_physical_claim_unique/i.test(indexText)) {
+    return new ApiError(409, 'A selected physical unit is already owned by another Exchange');
+  }
+  if (/idempotencyKey|exchange_customer_idempotency_unique/i.test(indexText)) {
+    return new ApiError(409, 'Exchange idempotency key is already owned by another command');
+  }
+  if (/exchangeCaseId|orderDetailId|exchange_line_case_order_detail_unique/i.test(indexText)) {
+    return new ApiError(409, 'An Exchange line already exists for this command');
+  }
+  if (/unitKey|exchange_unit_key_unique/i.test(indexText)) {
+    return new ApiError(409, 'An Exchange unit lineage already exists for this command');
+  }
+  return new ApiError(409, 'Duplicate command conflict');
 }
 
 function withSession(query, session) {
@@ -77,6 +111,9 @@ function createModelRepository({ lockService = afterSalesLockService } = {}) {
       return withSession(OrderDetail.find({ orderId }).sort({ createdAt: 1 }), session).lean();
     },
     async findCaseById(id, session) { return withSession(ExchangeCase.findById(id), session).lean(); },
+    async findReturnRequestById(id, session) {
+      return withSession(ReturnRefundRequest.findById(id), session).lean();
+    },
     async findCaseByIdempotency(customerId, idempotencyKey, session) {
       return withSession(ExchangeCase.findOne({ customerId, idempotencyKey }), session).lean();
     },
@@ -137,6 +174,14 @@ function createModelRepository({ lockService = afterSalesLockService } = {}) {
         exclusivePhysicalClaimKey: { $exists: true, $ne: '' },
       }).select('originalUnitOrdinal'), session).lean();
       return units.map((item) => Number(item.originalUnitOrdinal));
+    },
+    async listClaimedReplacementParentIds(orderId, session) {
+      const units = await withSession(ExchangeUnitLineage.find({
+        orderId,
+        parentUnitId: { $ne: null },
+        exclusivePhysicalClaimKey: { $exists: true, $ne: '' },
+      }).select('parentUnitId'), session).lean();
+      return units.map((item) => String(item.parentUnitId));
     },
     async releaseUnitClaims(caseId, session) {
       const result = await withSession(ExchangeUnitLineage.updateMany(
@@ -418,6 +463,17 @@ function createExchangeService({
   },
   clock = () => new Date(),
 } = {}) {
+  async function activeAfterSalesConflict(orderId, customerId, session, requireVerified = false) {
+    const resolved = await resolveActiveAfterSalesConflict({
+      repository,
+      orderId,
+      customerId,
+      session,
+    });
+    if (requireVerified && !resolved.verified) return null;
+    return createActiveAfterSalesConflict(resolved.data);
+  }
+
   async function writeAudit(userId, action, caseId, description, session, eventId = '') {
     await auditLogger.log({
       userId: userId || null,
@@ -556,6 +612,19 @@ function createExchangeService({
       repository.listShipments(caseId, session),
       repository.listShipmentEvents(caseId, session),
     ]);
+    const [claimedReplacementParentIdValues, orderLock] = audience === 'Customer'
+      ? await Promise.all([
+        repository.listClaimedReplacementParentIds
+          ? repository.listClaimedReplacementParentIds(exchangeCase.orderId, session)
+          : [],
+        repository.findOrderLock
+          ? repository.findOrderLock(exchangeCase.orderId, session)
+          : null,
+      ])
+      : [[], null];
+    const claimedReplacementParentIds = new Set(claimedReplacementParentIdValues);
+    const hasOrderBarrier = orderLock?.status === 'Active'
+      || (orderLock?.status === 'ClosedPermanently' && orderLock?.caseType === 'RETURN_REFUND');
     const response = {
       id: String(exchangeCase._id),
       requestCode: exchangeCase.requestCode,
@@ -600,17 +669,30 @@ function createExchangeService({
       response.reservations = reservations.map(toPlain);
     }
     if (audience === 'Customer') {
-      response.units = units.map((unit) => ({
-        id: String(unit._id),
-        orderId: String(unit.orderId),
-        orderDetailId: String(unit.orderDetailId),
-        productId: String(unit.productId),
-        parentUnitId: unit.parentUnitId ? String(unit.parentUnitId) : null,
-        cycle: Number(unit.cycle || 0),
-        outcome: unit.outcome,
-        replacementDeliveredAt: unit.replacementDeliveredAt || null,
-        exchangeDeadlineAt: unit.exchangeDeadlineAt || null,
-      }));
+      response.units = units.map((unit) => {
+        const deadlineTime = unit.exchangeDeadlineAt
+          ? new Date(unit.exchangeDeadlineAt).getTime()
+          : Number.NaN;
+        const deadlineValid = Number.isFinite(deadlineTime);
+        const deadlineCurrent = deadlineValid && new Date(clock()).getTime() <= deadlineTime;
+        const sourceClaimed = claimedReplacementParentIds.has(String(unit._id));
+        const eligibleForReplacementExchange = unit.outcome === 'ReplacementDelivered'
+          && deadlineCurrent
+          && !hasOrderBarrier
+          && !sourceClaimed;
+        return {
+          id: String(unit._id),
+          orderId: String(unit.orderId),
+          orderDetailId: String(unit.orderDetailId),
+          productId: String(unit.productId),
+          parentUnitId: unit.parentUnitId ? String(unit.parentUnitId) : null,
+          cycle: Number(unit.cycle || 0),
+          outcome: unit.outcome,
+          replacementDeliveredAt: unit.replacementDeliveredAt || null,
+          exchangeDeadlineAt: unit.exchangeDeadlineAt || null,
+          eligibleForReplacementExchange,
+        };
+      });
     }
     if (audience === 'Warehouse') {
       delete response.customerId;
@@ -893,7 +975,7 @@ function createExchangeService({
             caseType: 'EXCHANGE',
             caseId: exchangeCase._id,
           }, session);
-          if (!lock) throw new ApiError(409, 'This Order already has an active after-sales case');
+          if (!lock) throw createActiveAfterSalesConflict(null);
           const lines = await repository.createLines(normalizedLines.map(({ detail, quantity }) => ({
             exchangeCaseId: exchangeCase._id,
             orderDetailId: detail._id,
@@ -950,10 +1032,15 @@ function createExchangeService({
           return exchangeCase;
         });
       } catch (error) {
+        if (error?.errorCode === ACTIVE_AFTER_SALES_ERROR_CODE) {
+          throw await activeAfterSalesConflict(order._id, customerId);
+        }
         if (error?.code === 11000) {
           const replay = await repository.findCaseByIdempotency(customerId, idempotencyKey);
           if (replay) return loadCreateReplay(replay, customerId, input);
-          throw new ApiError(409, 'A selected physical unit is already owned by another Exchange');
+          const conflict = await activeAfterSalesConflict(order._id, customerId, undefined, true);
+          if (conflict) throw conflict;
+          throw classifyExchangeDuplicateConflict(error);
         }
         throw error;
       }
@@ -1507,10 +1594,12 @@ function createExchangeService({
       const idempotencyKey = normalizeIdempotencyKey(input.idempotencyKey);
       const exchangeCase = await repository.findCaseById(id);
       if (!exchangeCase) throw new ApiError(404, 'Exchange request not found');
-      const incidentWait = ['AwaitingExactStockChoice', 'WaitingForExactStock'].includes(exchangeCase.status)
-        && exchangeCase.waitingFor === 'INCIDENT_RESEND';
-      if (!['OutboundFulfillment', 'ReplacementShipped', 'DeliveryIncident'].includes(exchangeCase.status)
-        && !incidentWait) {
+      const outboundBlockedCause = [
+        'REJECTED_ORIGINAL_RECONCILIATION',
+        'INCIDENT_RESEND_IN_TRANSIT',
+      ].includes(exchangeCase.waitingFor);
+      if (outboundBlockedCause
+        || !['OutboundFulfillment', 'ReplacementShipped', 'DeliveryIncident'].includes(exchangeCase.status)) {
         throw new ApiError(409, 'Inspection must finalize before outbound shipment');
       }
       const shipmentKey = `${String(id)}:${idempotencyKey}`;

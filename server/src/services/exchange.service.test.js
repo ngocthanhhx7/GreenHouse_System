@@ -92,7 +92,9 @@ function makeHarness() {
       return lock;
     },
     async findOrderLock(orderId) {
-      return state.locks.find((item) => item.orderId === orderId && item.status === 'Active') || null;
+      return state.locks.find((item) => (
+        item.orderId === orderId && ['Active', 'ClosedPermanently'].includes(item.status)
+      )) || null;
     },
     async createCase(data) {
       const item = { _id: `exchange-${state.cases.length + 1}`, ...data };
@@ -254,6 +256,13 @@ function makeHarness() {
           && !item.parentUnitId)
         .map((item) => Number(item.originalUnitOrdinal));
     },
+    async listClaimedReplacementParentIds(orderId) {
+      return state.units
+        .filter((item) => item.orderId === orderId
+          && item.parentUnitId
+          && item.exclusivePhysicalClaimKey)
+        .map((item) => String(item.parentUnitId));
+    },
     async releaseUnitClaims(caseId) {
       const units = state.units.filter((item) => item.exchangeCaseId === caseId);
       units.forEach((unit) => { delete unit.exclusivePhysicalClaimKey; });
@@ -303,6 +312,15 @@ function validRequest(overrides = {}) {
     lines: [{ orderDetailId: 'line-1', quantity: 2 }],
     ...overrides,
   };
+}
+
+async function captureError(work) {
+  try {
+    await work();
+  } catch (error) {
+    return error;
+  }
+  assert.fail('Expected operation to reject');
 }
 
 async function prepareInspectedExchange(harness, suffix = 'prepared') {
@@ -450,14 +468,293 @@ describe('SL-002 Exchange service', () => {
   });
 
   it('blocks a second after-sales case through the shared order lock', async () => {
+    harness.state.returnRequests = [{
+      _id: 'return-1',
+      orderId: 'order-1',
+      customerId: 'customer-1',
+      status: 'Approved',
+      reason: 'must stay private',
+      evidenceImages: ['private.jpg'],
+      refundAmount: 999999,
+      bankAccount: 'private',
+    }];
+    harness.repository.findReturnRequestById = async (id) => (
+      harness.state.returnRequests.find((item) => item._id === id) || null
+    );
     await harness.repository.claimOrderLock({
       orderId: 'order-1', caseType: 'RETURN_REFUND', caseId: 'return-1',
     });
-    await assert.rejects(
-      harness.service.createCustomerRequest('customer-1', validRequest()),
-      /active after-sales case/i
-    );
+
+    const error = await captureError(() => (
+      harness.service.createCustomerRequest('customer-1', validRequest())
+    ));
+    assert.equal(error.statusCode, 409);
+    assert.equal(error.errorCode, 'AFTER_SALES_CASE_ACTIVE');
+    assert.equal(error.message, 'This Order already has an active after-sales case');
+    assert.deepEqual(error.data, {
+      currentCase: { type: 'RETURN_REFUND', id: 'return-1', status: 'Approved' },
+      action: { label: 'Xem yêu cầu đang xử lý', href: '/return-refunds' },
+    });
+    assert.doesNotMatch(JSON.stringify(error.data), /reason|evidence|note|lock|cod|bank|payout|money|amount/i);
     assert.equal(harness.state.cases.length, 0);
+  });
+
+  it('returns data null for a corrupt or foreign active lock', async () => {
+    harness.state.cases.push({
+      _id: 'exchange-foreign',
+      orderId: 'order-1',
+      customerId: 'customer-foreign',
+      status: 'Submitted',
+      reason: 'private',
+    });
+    harness.state.locks.push({
+      _id: 'lock-foreign',
+      orderId: 'order-1',
+      caseType: 'EXCHANGE',
+      caseId: 'exchange-foreign',
+      status: 'Active',
+      secretNote: 'private',
+    });
+
+    const error = await captureError(() => (
+      harness.service.createCustomerRequest('customer-1', validRequest())
+    ));
+    assert.equal(error.statusCode, 409);
+    assert.equal(error.errorCode, 'AFTER_SALES_CASE_ACTIVE');
+    assert.equal(error.message, 'This Order already has an active after-sales case');
+    assert.equal(error.data, null);
+  });
+
+  it('maps an E11000 winner race to the same owner-safe typed conflict', async () => {
+    const originalCreateCase = harness.repository.createCase;
+    harness.repository.createCase = async () => {
+      harness.state.cases.push({
+        _id: 'exchange-winner',
+        orderId: 'order-1',
+        customerId: 'customer-1',
+        status: 'Submitted',
+        reason: 'private winner reason',
+        evidenceImages: ['private-winner.jpg'],
+      });
+      harness.state.locks.push({
+        _id: 'lock-winner',
+        orderId: 'order-1',
+        caseType: 'EXCHANGE',
+        caseId: 'exchange-winner',
+        status: 'Active',
+      });
+      const error = new Error('duplicate key winner');
+      error.code = 11000;
+      throw error;
+    };
+
+    const racingService = harness.createService({
+      transactionManager: { async withTransaction(work) { return work({}); } },
+    });
+    const error = await captureError(() => (
+      racingService.createCustomerRequest('customer-1', validRequest({
+        idempotencyKey: 'exchange-loser-race-0001',
+      }))
+    ));
+    harness.repository.createCase = originalCreateCase;
+
+    assert.equal(error.statusCode, 409);
+    assert.equal(error.errorCode, 'AFTER_SALES_CASE_ACTIVE');
+    assert.equal(error.message, 'This Order already has an active after-sales case');
+    assert.deepEqual(error.data, {
+      currentCase: { type: 'EXCHANGE', id: 'exchange-winner', status: 'Submitted' },
+      action: { label: 'Xem yêu cầu đang xử lý', href: '/exchanges/exchange-winner' },
+    });
+    assert.doesNotMatch(JSON.stringify(error.data), /reason|evidence|note|lock|cod|bank|payout|money|amount/i);
+  });
+
+  it('does not misclassify a non-lock E11000 collision as an active after-sales case', async () => {
+    const before = structuredClone(harness.state);
+    harness.repository.createCase = async () => {
+      const error = new Error('duplicate request code');
+      error.code = 11000;
+      error.keyPattern = { requestCode: 1 };
+      error.keyValue = { requestCode: 'EX-DUPLICATE' };
+      throw error;
+    };
+
+    const error = await captureError(() => (
+      harness.service.createCustomerRequest('customer-1', validRequest({
+        idempotencyKey: 'exchange-request-code-race-0001',
+      }))
+    ));
+
+    assert.equal(error.statusCode, 409);
+    assert.notEqual(error.errorCode, 'AFTER_SALES_CASE_ACTIVE');
+    assert.match(error.message, /request code/i);
+    assert.doesNotMatch(error.message, /physical unit/i);
+    assert.doesNotMatch(error.message, /EX-DUPLICATE/i);
+    assert.deepEqual(harness.state, before);
+  });
+
+  it('classifies physical-claim and unknown duplicate collisions without leaking key values', async () => {
+    for (const scenario of [
+      {
+        keyPattern: { exclusivePhysicalClaimKey: 1 },
+        keyValue: { exclusivePhysicalClaimKey: 'REPLACEMENT:secret-unit' },
+        expected: /physical unit/i,
+      },
+      {
+        keyPattern: { unknownInternalKey: 1 },
+        keyValue: { unknownInternalKey: 'private-value' },
+        expected: /duplicate command/i,
+      },
+      {
+        keyPattern: { unitKey: 1 },
+        keyValue: { unitKey: 'private-lineage-key' },
+        expected: /unit lineage/i,
+      },
+    ]) {
+      harness.repository.createCase = async () => {
+        const error = new Error('duplicate key');
+        error.code = 11000;
+        error.keyPattern = scenario.keyPattern;
+        error.keyValue = scenario.keyValue;
+        throw error;
+      };
+      const error = await captureError(() => (
+        harness.service.createCustomerRequest('customer-1', validRequest({
+          idempotencyKey: `exchange-duplicate-${Object.keys(scenario.keyPattern)[0]}`,
+        }))
+      ));
+      assert.equal(error.statusCode, 409);
+      assert.notEqual(error.errorCode, 'AFTER_SALES_CASE_ACTIVE');
+      assert.match(error.message, scenario.expected);
+      assert.doesNotMatch(error.message, /secret-unit|private-value|private-lineage-key/i);
+    }
+  });
+
+  it('marks only unclaimed delivered replacement units as eligible across multiple cycles', async () => {
+    harness.state.units.push(
+      {
+        _id: 'replacement-cycle-1',
+        orderId: 'order-1',
+        orderDetailId: 'line-1',
+        productId: 'product-1',
+        exchangeCaseId: 'historic-case-1',
+        parentUnitId: null,
+        cycle: 1,
+        outcome: 'ReplacementDelivered',
+        exchangeDeadlineAt: new Date(harness.now.getTime() + DAY),
+      },
+      {
+        _id: 'replacement-cycle-2-active',
+        orderId: 'order-1',
+        orderDetailId: 'line-1',
+        productId: 'product-1',
+        exchangeCaseId: 'historic-case-2',
+        parentUnitId: 'replacement-cycle-1',
+        exclusivePhysicalClaimKey: 'REPLACEMENT:replacement-cycle-1',
+        cycle: 2,
+        outcome: 'ReplacementDelivered',
+        exchangeDeadlineAt: new Date(harness.now.getTime() + DAY),
+      }
+    );
+    harness.state.cases.push(
+      {
+        _id: 'historic-case-1', orderId: 'order-1', customerId: 'customer-1',
+        status: 'Completed', reason: 'historic', evidenceImages: [],
+      },
+      {
+        _id: 'historic-case-2', orderId: 'order-1', customerId: 'customer-1',
+        status: 'Completed', reason: 'historic', evidenceImages: [],
+      }
+    );
+
+    const first = await harness.service.getCustomerRequest('customer-1', 'historic-case-1');
+    const second = await harness.service.getCustomerRequest('customer-1', 'historic-case-2');
+
+    assert.equal(first.units[0].eligibleForReplacementExchange, false);
+    assert.equal(second.units[0].eligibleForReplacementExchange, true);
+  });
+
+  it('restores replacement eligibility after a later child claim is released', async () => {
+    harness.state.units.push(
+      {
+        _id: 'replacement-parent-released',
+        orderId: 'order-1',
+        orderDetailId: 'line-1',
+        productId: 'product-1',
+        exchangeCaseId: 'historic-parent',
+        parentUnitId: null,
+        cycle: 1,
+        outcome: 'ReplacementDelivered',
+        exchangeDeadlineAt: new Date(harness.now.getTime() + DAY),
+      },
+      {
+        _id: 'replacement-child-released',
+        orderId: 'order-1',
+        orderDetailId: 'line-1',
+        productId: 'product-1',
+        exchangeCaseId: 'historic-child',
+        parentUnitId: 'replacement-parent-released',
+        cycle: 2,
+        outcome: 'Pending',
+      }
+    );
+    harness.state.cases.push({
+      _id: 'historic-parent', orderId: 'order-1', customerId: 'customer-1',
+      status: 'Completed', reason: 'historic', evidenceImages: [],
+    });
+
+    const result = await harness.service.getCustomerRequest('customer-1', 'historic-parent');
+
+    assert.equal(result.units[0].eligibleForReplacementExchange, true);
+  });
+
+  it('keeps an expired released parent and a permanently closed Return barrier ineligible', async () => {
+    harness.state.units.push(
+      {
+        _id: 'replacement-parent-expired',
+        orderId: 'order-1',
+        orderDetailId: 'line-1',
+        productId: 'product-1',
+        exchangeCaseId: 'historic-expired',
+        parentUnitId: null,
+        cycle: 1,
+        outcome: 'ReplacementDelivered',
+        exchangeDeadlineAt: new Date(harness.now.getTime() - 1),
+      },
+      {
+        _id: 'replacement-parent-return-barrier',
+        orderId: 'order-1',
+        orderDetailId: 'line-1',
+        productId: 'product-1',
+        exchangeCaseId: 'historic-barrier',
+        parentUnitId: null,
+        cycle: 1,
+        outcome: 'ReplacementDelivered',
+        exchangeDeadlineAt: new Date(harness.now.getTime() + DAY),
+      }
+    );
+    harness.state.cases.push(
+      {
+        _id: 'historic-expired', orderId: 'order-1', customerId: 'customer-1',
+        status: 'Completed', reason: 'historic', evidenceImages: [],
+      },
+      {
+        _id: 'historic-barrier', orderId: 'order-1', customerId: 'customer-1',
+        status: 'Completed', reason: 'historic', evidenceImages: [],
+      }
+    );
+    harness.state.locks.push({
+      _id: 'return-closed-lock',
+      orderId: 'order-1',
+      caseType: 'RETURN_REFUND',
+      caseId: 'return-completed',
+      status: 'ClosedPermanently',
+    });
+
+    const expired = await harness.service.getCustomerRequest('customer-1', 'historic-expired');
+    const blocked = await harness.service.getCustomerRequest('customer-1', 'historic-barrier');
+
+    assert.equal(expired.units[0].eligibleForReplacementExchange, false);
+    assert.equal(blocked.units[0].eligibleForReplacementExchange, false);
   });
 
   it('derives Shop payer and reserves every exact SKU atomically on approval', async () => {
@@ -653,6 +950,61 @@ describe('SL-002 Exchange service', () => {
     });
     assert.equal(harness.state.cases.find((item) => item._id === request.id).status, 'Completed');
     assert.equal(harness.state.notifications.filter((item) => item.type === 'EXCHANGE_COMPLETED').length, 1);
+  });
+
+  it('uses the exact outbound status and waitingFor matrix at the backend boundary', async () => {
+    const allowed = [
+      { status: 'OutboundFulfillment', waitingFor: '' },
+      { status: 'ReplacementShipped', waitingFor: '' },
+      { status: 'DeliveryIncident', waitingFor: '' },
+      { status: 'DeliveryIncident', waitingFor: 'INCIDENT_RESEND' },
+    ];
+    for (const [index, scenario] of allowed.entries()) {
+      const local = makeHarness();
+      const request = await prepareInspectedExchange(local, `outbound-allowed-${index}`);
+      const exchangeCase = local.state.cases.find((item) => item._id === request.id);
+      Object.assign(exchangeCase, scenario);
+      const line = local.state.lines.find((item) => item.exchangeCaseId === request.id);
+      const result = await local.service.createOutboundShipment('warehouse-1', request.id, {
+        idempotencyKey: `outbound-allowed-command-${index}`,
+        exchangeLineId: line._id,
+        direction: 'REPLACEMENT_TO_CUSTOMER',
+        quantity: 2,
+        carrierName: 'GHN',
+        trackingCode: `OUTBOUND-ALLOWED-${index}`,
+        shippedAt: local.now,
+      });
+      assert.equal(result.shipment.status, 'InTransit');
+    }
+
+    const blocked = [
+      { status: 'OutboundFulfillment', waitingFor: 'REJECTED_ORIGINAL_RECONCILIATION' },
+      { status: 'DeliveryIncident', waitingFor: 'INCIDENT_RESEND_IN_TRANSIT' },
+      { status: 'AwaitingExactStockChoice', waitingFor: 'INCIDENT_RESEND' },
+      { status: 'WaitingForExactStock', waitingFor: 'INCIDENT_RESEND' },
+      { status: 'Submitted', waitingFor: '' },
+    ];
+    for (const [index, scenario] of blocked.entries()) {
+      const local = makeHarness();
+      const request = await prepareInspectedExchange(local, `outbound-blocked-${index}`);
+      const exchangeCase = local.state.cases.find((item) => item._id === request.id);
+      Object.assign(exchangeCase, scenario);
+      const line = local.state.lines.find((item) => item.exchangeCaseId === request.id);
+      const before = structuredClone(local.state);
+      await assert.rejects(
+        () => local.service.createOutboundShipment('warehouse-1', request.id, {
+          idempotencyKey: `outbound-blocked-command-${index}`,
+          exchangeLineId: line._id,
+          direction: 'REPLACEMENT_TO_CUSTOMER',
+          quantity: 2,
+          carrierName: 'GHN',
+          trackingCode: `OUTBOUND-BLOCKED-${index}`,
+          shippedAt: local.now,
+        }),
+        /outbound|inspection|incident|reconciliation|in transit/i,
+      );
+      assert.deepEqual(local.state, before);
+    }
   });
 
   it('records mutually exclusive sellable, damaged, and rejected Inventory lineage per physical unit', async () => {
