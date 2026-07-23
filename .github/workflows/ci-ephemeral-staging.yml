@@ -1,0 +1,259 @@
+name: CI and ephemeral staging
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ephemeral-staging-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CI: 'true'
+      NODE_ENV: test
+      PORT: '5000'
+      MONGODB_URI: mongodb://127.0.0.1:27017/greenhome_kitchen?replicaSet=rs0
+      CORS_ORIGINS: http://127.0.0.1:4173
+      APP_PUBLIC_URL: http://127.0.0.1:4173
+      MAIL_PROVIDER: fake
+      CI_EPHEMERAL_CONFIRM: CI-EPHEMERAL-STAGING
+      CI_API_BASE_URL: http://127.0.0.1:5000/api
+      CI_FRONTEND_URL: http://127.0.0.1:4173
+      VITE_API_BASE_URL: http://127.0.0.1:5000/api
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            server/package-lock.json
+            client/package-lock.json
+
+      - name: Create artifact directory
+        run: mkdir -p artifacts/ephemeral-staging
+
+      - name: Generate job-only secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          make_secret() {
+            local name="$1"
+            local value
+            value="$(openssl rand -hex 32)"
+            echo "::add-mask::$value"
+            echo "$name=$value" >> "$GITHUB_ENV"
+          }
+          make_secret JWT_SECRET
+          make_secret RESET_OTP_SECRET
+          make_secret CARRIER_WEBHOOK_SECRET
+          make_secret REFUND_DESTINATION_ENCRYPTION_KEY
+          make_secret RETURN_EVIDENCE_CLAIM_SECRET
+          make_secret CI_STAGING_PASSWORD
+
+      - name: Install backend dependencies
+        run: npm ci
+        working-directory: server
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: client
+
+      - name: Run backend tests
+        id: backend_tests
+        shell: bash
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee ../artifacts/ephemeral-staging/backend-tests.log
+        working-directory: server
+
+      - name: Audit backend production dependencies
+        id: backend_audit
+        shell: bash
+        run: |
+          set -o pipefail
+          npm audit --omit=dev 2>&1 | tee ../artifacts/ephemeral-staging/backend-audit.log
+        working-directory: server
+
+      - name: Run frontend tests
+        id: frontend_tests
+        shell: bash
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee ../artifacts/ephemeral-staging/frontend-tests.log
+        working-directory: client
+
+      - name: Audit frontend production dependencies
+        id: frontend_audit
+        shell: bash
+        run: |
+          set -o pipefail
+          npm audit --omit=dev 2>&1 | tee ../artifacts/ephemeral-staging/frontend-audit.log
+        working-directory: client
+
+      - name: Build production frontend
+        id: frontend_build
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run build 2>&1 | tee ../artifacts/ephemeral-staging/frontend-build.log
+        working-directory: client
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+        working-directory: client
+
+      - name: Start MongoDB replica set
+        id: mongodb
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --detach \
+            --name greenhome-ci-mongo \
+            --publish 27017:27017 \
+            mongo@sha256:5351bff2b5d1563e3fa603a74b9be85ef9323e10aeb0b45cea933a93876e77fd \
+            --replSet rs0 --bind_ip_all
+          for attempt in $(seq 1 30); do
+            if docker exec greenhome-ci-mongo mongosh --quiet --eval \
+              'try { rs.initiate({_id:"rs0",members:[{_id:0,host:"127.0.0.1:27017"}]}) } catch (error) { if (error.codeName !== "AlreadyInitialized") throw error }' \
+              >/dev/null 2>&1; then
+              if docker exec greenhome-ci-mongo mongosh --quiet --eval \
+                'quit(rs.status().myState === 1 ? 0 : 1)' >/dev/null 2>&1; then
+                docker exec greenhome-ci-mongo mongosh --quiet --eval \
+                  'JSON.stringify({ok:rs.status().ok,myState:rs.status().myState})' \
+                  | tee artifacts/ephemeral-staging/mongodb-status.log
+                exit 0
+              fi
+            fi
+            sleep 2
+          done
+          docker logs greenhome-ci-mongo > artifacts/ephemeral-staging/mongodb.log 2>&1 || true
+          echo "MongoDB replica set did not become primary" >&2
+          exit 1
+
+      - name: Run migrations twice
+        id: migrations
+        shell: bash
+        run: |
+          set -euo pipefail
+          for pass in 1 2; do
+            {
+              echo "migration_pass=$pass"
+              npm --prefix server run migrate:product-sku-index
+              npm --prefix server run migrate:cod-reconciliation
+              npm --prefix server run migrate:sl002
+            } 2>&1 | tee -a artifacts/ephemeral-staging/migrations.log
+          done
+
+      - name: Prepare CI actors
+        id: actors
+        shell: bash
+        run: |
+          set -o pipefail
+          npm --prefix server run ci:actors 2>&1 \
+            | tee artifacts/ephemeral-staging/actors.log
+
+      - name: Verify SL-001
+        id: sl001
+        shell: bash
+        run: |
+          set -o pipefail
+          npm --prefix server run verify:sl001 2>&1 \
+            | tee artifacts/ephemeral-staging/sl001-verification.log
+
+      - name: Verify SL-002
+        id: sl002
+        shell: bash
+        run: |
+          set -o pipefail
+          npm --prefix server run verify:sl002 2>&1 \
+            | tee artifacts/ephemeral-staging/sl002-verification.log
+
+      - name: Start API and production frontend preview
+        id: start_apps
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm --prefix server start > artifacts/ephemeral-staging/api.log 2>&1 &
+          echo "$!" > artifacts/ephemeral-staging/api.pid
+          npm --prefix client run preview -- --host 127.0.0.1 --port 4173 \
+            > artifacts/ephemeral-staging/frontend.log 2>&1 &
+          echo "$!" > artifacts/ephemeral-staging/frontend.pid
+
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:5000/api/health >/dev/null \
+              && curl --fail --silent http://127.0.0.1:4173/ >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "API or frontend preview did not become ready" >&2
+          exit 1
+
+      - name: Run live HTTP smoke
+        id: http_smoke
+        run: npm run verify:ephemeral-http
+        working-directory: server
+
+      - name: Run browser smoke
+        id: browser_smoke
+        run: npm run test:ephemeral-browser
+        working-directory: client
+
+      - name: Stop disposable services
+        if: always()
+        shell: bash
+        run: |
+          for pid_file in artifacts/ephemeral-staging/api.pid artifacts/ephemeral-staging/frontend.pid; do
+            if [[ -f "$pid_file" ]]; then
+              kill "$(cat "$pid_file")" 2>/dev/null || true
+            fi
+          done
+          docker logs greenhome-ci-mongo > artifacts/ephemeral-staging/mongodb.log 2>&1 || true
+          docker rm --force greenhome-ci-mongo >/dev/null 2>&1 || true
+
+      - name: Write workflow summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## GreenHome CI and ephemeral staging"
+            echo
+            echo "| Phase | Outcome |"
+            echo "| --- | --- |"
+            echo "| Backend tests | ${{ steps.backend_tests.outcome }} |"
+            echo "| Backend audit | ${{ steps.backend_audit.outcome }} |"
+            echo "| Frontend tests | ${{ steps.frontend_tests.outcome }} |"
+            echo "| Frontend audit | ${{ steps.frontend_audit.outcome }} |"
+            echo "| Frontend build | ${{ steps.frontend_build.outcome }} |"
+            echo "| MongoDB replica set | ${{ steps.mongodb.outcome }} |"
+            echo "| Migrations | ${{ steps.migrations.outcome }} |"
+            echo "| CI actors | ${{ steps.actors.outcome }} |"
+            echo "| SL-001 | ${{ steps.sl001.outcome }} |"
+            echo "| SL-002 | ${{ steps.sl002.outcome }} |"
+            echo "| HTTP smoke | ${{ steps.http_smoke.outcome }} |"
+            echo "| Browser smoke | ${{ steps.browser_smoke.outcome }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload ephemeral staging evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ephemeral-staging-${{ github.run_id }}
+          path: artifacts/ephemeral-staging
+          if-no-files-found: warn
+          retention-days: 7
