@@ -959,6 +959,23 @@ describe('return/refund service', () => {
       idempotencyKey: 'payout-misroute-original-001', method: 'MANUAL', providerReference: 'bank-misroute-001',
       status: 'Succeeded', occurredAt: now, reconciliationNote: 'Initial receipt later disputed',
     });
+    let lockStatus = 'ClosedPermanently';
+    repository.reopenOrderLock = async (orderId, caseId) => {
+      assert.equal(orderId, 'order-1');
+      assert.equal(caseId, requestId);
+      if (lockStatus !== 'ClosedPermanently') return null;
+      lockStatus = 'Active';
+      return { orderId, caseId, status: lockStatus };
+    };
+    repository.releaseOrderLock = async (orderId, caseId, terminalStatus, closePermanently) => {
+      assert.equal(orderId, 'order-1');
+      assert.equal(caseId, requestId);
+      assert.equal(terminalStatus, 'Completed');
+      assert.equal(closePermanently, true);
+      if (lockStatus !== 'Active') return null;
+      lockStatus = 'ClosedPermanently';
+      return { orderId, caseId, status: lockStatus };
+    };
     const incident = await service.reportPayoutIncident('staff-1', requestId, {
       idempotencyKey: 'incident-system-mismatch-001',
       cause: 'STAFF_SYSTEM_PROVIDER_MISMATCH',
@@ -970,6 +987,7 @@ describe('return/refund service', () => {
     assert.equal(repository.refunds[0].status, 'HandedOff');
     assert.equal(repository.refunds[0].payoutStatus, 'Unknown');
     assert.equal(repository.orders[0].orderStatus, 'Delivered');
+    assert.equal(lockStatus, 'Active');
 
     const recovered = await service.recordPayoutEvidence('staff-1', requestId, {
       idempotencyKey: 'payout-misroute-recovery-001', method: 'MANUAL', providerReference: 'bank-recovery-001',
@@ -980,6 +998,7 @@ describe('return/refund service', () => {
     assert.equal(repository.payoutIncidents[0].status, 'Resolved');
     assert.equal(repository.payoutIncidents[0].resolutionEvidenceId, repository.payoutEvidence[1]._id);
     assert.equal(repository.orders[0].orderStatus, 'Returned');
+    assert.equal(lockStatus, 'ClosedPermanently');
     const completionNotifications = notifications.filter((entry) => entry.type === 'RETURN_REFUND_COMPLETED');
     assert.equal(completionNotifications.length, 2);
     assert.equal(new Set(completionNotifications.map((entry) => entry.eventId)).size, 2);

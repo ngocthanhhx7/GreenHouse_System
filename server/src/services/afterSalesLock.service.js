@@ -53,6 +53,27 @@ function createAfterSalesLockService({ model = AfterSalesOrderLock, clock = () =
       ), session).lean();
     },
 
+    async reopenCompleted({ orderId, caseType, caseId }, session) {
+      return withSession(model.findOneAndUpdate(
+        {
+          orderId,
+          status: 'ClosedPermanently',
+          caseType,
+          caseId,
+          terminalStatus: 'Completed',
+        },
+        {
+          $set: {
+            status: 'Active',
+            acquiredAt: new Date(clock()),
+            releasedAt: null,
+            terminalStatus: '',
+          },
+        },
+        { new: true, runValidators: true }
+      ), session).lean();
+    },
+
     async transfer({ orderId, fromCaseType, fromCaseId, toCaseType, toCaseId }, session) {
       return withSession(model.findOneAndUpdate(
         { orderId, status: 'Active', caseType: fromCaseType, caseId: fromCaseId },
