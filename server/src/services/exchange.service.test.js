@@ -295,6 +295,7 @@ function makeHarness() {
     evidenceVerifier: (_customerId, items) => items,
     auditLogger: overrides.auditLogger || { log: async () => {} },
     notifier: overrides.notifier || { notify: async (data) => { state.notifications.push(data); } },
+    assignmentCoordinator: overrides.assignmentCoordinator || { async coordinate() {} },
     clock: () => new Date(now),
   });
   const service = createService();
@@ -385,6 +386,37 @@ describe('SL-002 Exchange service', () => {
   let harness;
 
   beforeEach(() => { harness = makeHarness(); });
+
+  it('does not assign Exchange after a passed Staff request loses its role', async () => {
+    const request = await harness.service.createCustomerRequest(
+      'customer-1',
+      validRequest({ idempotencyKey: 'exchange-role-race-0001' }),
+    );
+    const guarded = harness.createService({
+      assignmentCoordinator: {
+        async coordinate({ userId, expectedRole, session }) {
+          assert.equal(userId, 'staff-1');
+          assert.equal(expectedRole, 'Staff');
+          assert.ok(session);
+          const error = new Error('role changed after middleware');
+          error.errorCode = 'ASSIGNMENT_ACTOR_STALE';
+          throw error;
+        },
+      },
+    });
+
+    await assert.rejects(
+      () => guarded.decideRequest('staff-1', request.id, {
+        idempotencyKey: 'exchange-decision-role-race-0001',
+        decision: 'APPROVE',
+        responsibility: 'SHOP_FAULT',
+        reason: 'Shop fault',
+      }),
+      (error) => error.errorCode === 'ASSIGNMENT_ACTOR_STALE',
+    );
+    assert.equal(harness.state.cases[0].status, 'Submitted');
+    assert.equal(harness.state.cases[0].decidedBy, undefined);
+  });
 
   it('accepts an owned Delivered order exactly at the inclusive deadline and replays once', async () => {
     const first = await harness.service.createCustomerRequest('customer-1', validRequest());

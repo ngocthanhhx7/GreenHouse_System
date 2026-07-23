@@ -18,17 +18,7 @@ const userSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
-    phone: {
-      type: String,
-      required: true,
-      trim: true,
-    },
     phoneNumber: {
-      type: String,
-      default: '',
-      trim: true,
-    },
-    address: {
       type: String,
       required: true,
       trim: true,
@@ -55,6 +45,28 @@ const userSchema = new mongoose.Schema(
     passwordChangedAt: {
       type: Date,
       default: null,
+    },
+    credentialVersion: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    version: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    addressBookVersion: {
+      type: Number,
+      default: 0,
+      min: 0,
+      select: false,
+    },
+    assignmentEpoch: {
+      type: Number,
+      default: 0,
+      min: 0,
+      select: false,
     },
   },
   { timestamps: true }

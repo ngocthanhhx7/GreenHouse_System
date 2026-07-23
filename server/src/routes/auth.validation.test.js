@@ -21,16 +21,10 @@ describe('auth request validation', () => {
   before(() => { server = createApp({ rateLimit: false }).listen(0); });
   after(() => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
 
-  it('rejects invalid registration before touching persistence', async () => {
-    const result = await request(server, '/api/auth/register', { email: 'sai', password: '123' });
+  it('validates the two-step registration challenge before touching persistence', async () => {
+    const result = await request(server, '/api/auth/registration-challenges', { email: 'sai' });
     assert.equal(result.statusCode, 400);
-    assert.deepEqual(result.body.errors, [
-      { field: 'fullName', message: 'Họ tên là bắt buộc' },
-      { field: 'email', message: 'Email không hợp lệ' },
-      { field: 'phone', message: 'Số điện thoại là bắt buộc' },
-      { field: 'address', message: 'Địa chỉ là bắt buộc' },
-      { field: 'password', message: 'Mật khẩu phải có ít nhất 8 ký tự' },
-    ]);
+    assert.deepEqual(result.body.errors, [{ field: 'email', message: 'Email không hợp lệ' }]);
   });
 
   it('rejects login with field-specific errors', async () => {
@@ -58,6 +52,26 @@ describe('auth request validation', () => {
       { field: 'otp', message: 'Mã OTP phải gồm đúng 6 chữ số.' },
       { field: 'password', message: 'Mật khẩu mới phải có ít nhất 8 ký tự.' },
       { field: 'confirmPassword', message: 'Xác nhận mật khẩu không khớp.' },
+    ]);
+  });
+
+  it('validates every public invitation-acceptance field before persistence', async () => {
+    const result = await request(server, '/api/internal-invitations/accept', {
+      email: 'invalid',
+      token: '',
+      fullName: '',
+      phoneNumber: '123',
+      password: '',
+      confirmPassword: 'different',
+    });
+    assert.equal(result.statusCode, 400);
+    assert.deepEqual(result.body.errors.map((error) => error.field), [
+      'email',
+      'token',
+      'fullName',
+      'phoneNumber',
+      'password',
+      'confirmPassword',
     ]);
   });
 });

@@ -17,6 +17,9 @@ const ExchangeConversion = require('../models/exchangeConversion.model');
 const ReturnRefundRequest = require('../models/returnRefundRequest.model');
 const { afterSalesLockService } = require('./afterSalesLock.service');
 const {
+  assignmentCoordinator: defaultAssignmentCoordinator,
+} = require('./assignmentCoordination.service');
+const {
   ACTIVE_AFTER_SALES_ERROR_CODE,
   resolveActiveAfterSalesConflict,
   createActiveAfterSalesConflict,
@@ -458,6 +461,7 @@ function createExchangeService({
     }, session),
   },
   clock = () => new Date(),
+  assignmentCoordinator = defaultAssignmentCoordinator,
 } = {}) {
   async function activeAfterSalesConflict(orderId, customerId, session, requireVerified = false) {
     const resolved = await resolveActiveAfterSalesConflict({
@@ -756,6 +760,11 @@ function createExchangeService({
   async function attemptApproval(staffId, exchangeCase, data) {
     try {
       const result = await transactionManager.withTransaction(async (session) => {
+        await assignmentCoordinator.coordinate({
+          userId: staffId,
+          expectedRole: 'Staff',
+          session,
+        });
         const fresh = await repository.findCaseById(exchangeCase._id, session);
         if (!fresh || !['Submitted', 'WaitingForExactStock'].includes(fresh.status)) {
           throw new ApiError(409, 'Exchange request changed while Staff was approving it');
@@ -783,16 +792,23 @@ function createExchangeService({
     } catch (error) {
       if (!(error instanceof NoExactStockError)) throw error;
       const failedAt = new Date(clock());
-      const waiting = await repository.claimCase(exchangeCase._id, ['Submitted', 'WaitingForExactStock'], {
-        ...data,
-        status: 'AwaitingExactStockChoice',
-        approvedAt: null,
-        shipByAt: null,
-        decidedAt: failedAt,
-        decidedBy: staffId,
-        stockFailureReason: error.message,
-        waitingFor: 'INITIAL_APPROVAL',
-        incidentShipmentId: null,
+      const waiting = await transactionManager.withTransaction(async (session) => {
+        await assignmentCoordinator.coordinate({
+          userId: staffId,
+          expectedRole: 'Staff',
+          session,
+        });
+        return repository.claimCase(exchangeCase._id, ['Submitted', 'WaitingForExactStock'], {
+          ...data,
+          status: 'AwaitingExactStockChoice',
+          approvedAt: null,
+          shipByAt: null,
+          decidedAt: failedAt,
+          decidedBy: staffId,
+          stockFailureReason: error.message,
+          waitingFor: 'INITIAL_APPROVAL',
+          incidentShipmentId: null,
+        }, session);
       });
       if (!waiting) throw new ApiError(409, 'Exchange request changed while Staff was checking exact stock');
       return waiting;
@@ -1690,6 +1706,11 @@ function createExchangeService({
       let shipment;
       let consumedInventory = null;
       await transactionManager.withTransaction(async (session) => {
+        await assignmentCoordinator.coordinate({
+          userId: warehouseId,
+          expectedRole: 'WarehouseManager',
+          session,
+        });
         if (direction === 'REPLACEMENT_TO_CUSTOMER') {
           const reservations = await repository.listReservations(id, session);
           const reservation = reservations.find((item) => String(item.exchangeLineId) === String(line._id) && item.status === 'Reserved');
@@ -2025,6 +2046,11 @@ function createExchangeService({
       let consumedInventory = null;
       try {
         await transactionManager.withTransaction(async (session) => {
+          await assignmentCoordinator.coordinate({
+            userId: staffId,
+            expectedRole: 'Staff',
+            session,
+          });
           const currentActiveLeaves = activeIncidentLeaves(
             await repository.listShipments(id, session)
           );

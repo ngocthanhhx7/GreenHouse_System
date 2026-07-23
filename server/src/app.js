@@ -1,6 +1,8 @@
 const express = require('express');
 const cors = require('cors');
 const authRoutes = require('./routes/auth.routes');
+const internalInvitationRoutes = require('./routes/internalInvitation.routes');
+const adminAccountRoutes = require('./routes/adminAccount.routes');
 const cartRoutes = require('./routes/cart.routes');
 const categoryRoutes = require('./routes/category.routes');
 const orderRoutes = require('./routes/order.routes');
@@ -27,8 +29,14 @@ const { notFound, errorHandler } = require('./middlewares/error.middleware');
 const { requestId } = require('./middlewares/requestId.middleware');
 const { sendSuccess } = require('./utils/apiResponse');
 const { resolveCorsOrigins, createCorsOptions, createRateLimiter } = require('./middlewares/security.middleware');
+const { loadSession } = require('./middlewares/auth.middleware');
+const { createCsrfProtection } = require('./middlewares/csrf.middleware');
 
-function createApp({ rateLimit = true, uploadsRoot = path.resolve(__dirname, '../uploads') } = {}) {
+function createApp({
+  rateLimit = true,
+  authRateLimitMax = 20,
+  uploadsRoot = path.resolve(__dirname, '../uploads'),
+} = {}) {
   const app = express();
 
   app.use(requestId);
@@ -40,8 +48,21 @@ function createApp({ rateLimit = true, uploadsRoot = path.resolve(__dirname, '..
       req.rawBody = Buffer.from(buffer);
     },
   }));
+  app.use('/api', loadSession);
+  app.use('/api', createCsrfProtection({ allowedOrigins: resolveCorsOrigins() }));
   if (rateLimit) {
-    app.use('/api/auth', createRateLimiter({ max: 30 }));
+    app.use([
+      '/api/auth/login',
+      '/api/auth/registration-challenges',
+      '/api/auth/registrations',
+      '/api/auth/forgot-password',
+      '/api/auth/reset-password',
+      '/api/internal-invitations/accept',
+    ], createRateLimiter({
+      max: authRateLimitMax,
+      message: 'Bạn đã gửi quá nhiều yêu cầu xác thực, vui lòng thử lại sau.',
+      errorCode: 'AUTH_PUBLIC_RATE_LIMITED',
+    }));
     app.use('/api/contact', createRateLimiter({ max: 5, message: 'Bạn đã gửi quá nhiều yêu cầu liên hệ, vui lòng thử lại sau.' }));
   }
   const publicMediaOptions = {
@@ -59,6 +80,8 @@ function createApp({ rateLimit = true, uploadsRoot = path.resolve(__dirname, '..
     return sendSuccess(res, null, 'GreenHome API is running');
   });
   app.use('/api/auth', authRoutes);
+  app.use('/api', internalInvitationRoutes);
+  app.use('/api', adminAccountRoutes);
   app.use('/api', contactRoutes);
   app.use('/api', cartRoutes);
   app.use('/api', categoryRoutes);

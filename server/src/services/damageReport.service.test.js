@@ -69,6 +69,7 @@ describe('damage report service contract', () => {
       repository: createRepository(),
       transactionManager: { withTransaction: async (work) => work(null) },
       auditLogger: { async log() {} },
+      assignmentCoordinator: { async coordinate() {} },
     });
     await assert.rejects(
       () => service.createStaffReport('staff-1', {
@@ -86,12 +87,46 @@ describe('damage report service contract', () => {
     assert.equal(report.status, 'PendingReview');
   });
 
+  it('does not assign Damage after a passed Staff request loses its role', async () => {
+    const repository = createRepository();
+    const service = createDamageReportService({
+      repository,
+      transactionManager: { withTransaction: async (work) => work({ id: 'damage-race-tx' }) },
+      auditLogger: { async log() {} },
+      assignmentCoordinator: {
+        async coordinate({ userId, expectedRole, session }) {
+          assert.deepEqual(
+            { userId, expectedRole, session },
+            { userId: 'staff-1', expectedRole: 'Staff', session: { id: 'damage-race-tx' } },
+          );
+          const error = new Error('role changed after middleware');
+          error.errorCode = 'ASSIGNMENT_ACTOR_STALE';
+          throw error;
+        },
+      },
+    });
+
+    await assert.rejects(
+      () => service.createStaffReport('staff-1', {
+        inventoryId: 'inv-1',
+        quantity: 2,
+        reason: 'Broken during inspection',
+        evidence: ['evidence://damage-race'],
+        idempotencyKey: 'damage-race-1',
+      }),
+      (error) => error.errorCode === 'ASSIGNMENT_ACTOR_STALE',
+    );
+    assert.equal(repository.reports.length, 0);
+    assert.equal(repository.inventory.sellableQuantity, 10);
+  });
+
   it('applies only an evidence-backed Warehouse decision and records quarantine movement', async () => {
     const repository = createRepository();
     const service = createDamageReportService({
       repository,
       transactionManager: { withTransaction: async (work) => work(null) },
       auditLogger: { async log() {} },
+      assignmentCoordinator: { async coordinate() {} },
     });
     const report = await service.createStaffReport('staff-1', {
       inventoryId: 'inv-1',

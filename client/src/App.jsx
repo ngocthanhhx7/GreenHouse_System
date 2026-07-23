@@ -12,6 +12,7 @@ import NotificationPage from './pages/notifications/NotificationPage.jsx';
 import NotificationDetailPage from './pages/notifications/NotificationDetailPage.jsx';
 import LoginPage from './pages/auth/LoginPage.jsx';
 import RegisterPage from './pages/auth/RegisterPage.jsx';
+import AcceptInvitationPage from './pages/auth/AcceptInvitationPage.jsx';
 import ProfilePage from './pages/profile/ProfilePage.jsx';
 import HomePage from './pages/public/HomePage.jsx';
 import ProductListingPage from './pages/public/ProductListingPage.jsx';
@@ -56,6 +57,7 @@ import WarehouseExchangeQueuePage from './pages/warehouse/ExchangeQueuePage.jsx'
 import ExchangeInspectionPage from './pages/warehouse/ExchangeInspectionPage.jsx';
 import ReplenishmentAdminPage from './pages/admin/ReplenishmentAdminPage.jsx';
 import WarehouseDamageReportsPage from './pages/warehouse/DamageReportsPage.jsx';
+import AccountManagementPage from './pages/admin/AccountManagementPage.jsx';
 
 export default function App() {
   return (
@@ -68,6 +70,7 @@ export default function App() {
         <Route path="contact" element={<ContactPage />} />
         <Route path="login" element={<LoginPage />} />
         <Route path="register" element={<RegisterPage />} />
+        <Route path="accept-invitation" element={<AcceptInvitationPage />} />
         <Route path="unauthorized" element={<UnauthorizedPage />} />
         <Route path="forbidden" element={<ForbiddenPage />} />
       </Route>
@@ -412,6 +415,14 @@ export default function App() {
           element={
             <RoleRoute allowedRoles={['Admin']}>
               <SystemSettingsPage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="admin/accounts"
+          element={
+            <RoleRoute allowedRoles={['Admin']}>
+              <AccountManagementPage />
             </RoleRoute>
           }
         />

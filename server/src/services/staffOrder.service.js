@@ -13,6 +13,9 @@ const OrderReservation = require('../models/orderReservation.model');
 const Invoice = require('../models/invoice.model');
 const { logAudit } = require('../utils/auditLogger');
 const { canTransitionOrderStatus, getAllowedOrderStatusTransitions } = require('../utils/orderStateMachine');
+const {
+  assignmentCoordinator: defaultAssignmentCoordinator,
+} = require('./assignmentCoordination.service');
 
 const INVOICE_ELIGIBLE_STATUSES = new Set(['Confirmed', 'StockExportRequested', 'Packed', 'Shipped', 'Delivered']);
 const RETURN_WINDOW_MS = 5 * 24 * 60 * 60 * 1000;
@@ -240,7 +243,12 @@ function createModelOrderRepository() {
   };
 }
 
-function createStaffOrderService({ orderRepository = createModelOrderRepository(), auditLogger = { log: logAudit }, transactionManager = createModelTransactionManager() } = {}) {
+function createStaffOrderService({
+  orderRepository = createModelOrderRepository(),
+  auditLogger = { log: logAudit },
+  transactionManager = createModelTransactionManager(),
+  assignmentCoordinator = defaultAssignmentCoordinator,
+} = {}) {
   async function getOrderOrThrow(orderId, session) {
     const order = await orderRepository.findOrderById(orderId, session);
     if (!order) throw new ApiError(404, 'Order not found');
@@ -353,6 +361,11 @@ function createStaffOrderService({ orderRepository = createModelOrderRepository(
       const idempotencyKey = normalizeIdempotencyKey(input.idempotencyKey);
       const requestHash = hashCommand({ note });
       const result = await transactionManager.withTransaction(async (session) => {
+        await assignmentCoordinator.coordinate({
+          userId: staffId,
+          expectedRole: 'Staff',
+          session,
+        });
         const order = await getOrderOrThrow(orderId, session);
         if (idempotencyKey && order.staffConfirmIdempotencyKey) {
           if (order.staffConfirmIdempotencyKey !== idempotencyKey || order.staffConfirmRequestHash !== requestHash) {
@@ -407,6 +420,11 @@ function createStaffOrderService({ orderRepository = createModelOrderRepository(
 
     async requestStockExport(staffId, orderId, input = {}) {
       const result = await transactionManager.withTransaction(async (session) => {
+        await assignmentCoordinator.coordinate({
+          userId: staffId,
+          expectedRole: 'Staff',
+          session,
+        });
         const order = await getOrderOrThrow(orderId, session);
         const existing = await orderRepository.findOpenStockExportRequest(orderId, session);
         if (existing) throw new ApiError(409, 'Stock export request already exists');

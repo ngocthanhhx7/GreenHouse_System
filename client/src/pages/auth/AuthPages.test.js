@@ -19,8 +19,9 @@ describe('public authentication responsive contract', () => {
     assert.match(register, /className="auth-form-panel"/);
     assert.match(login, /htmlFor="login-email"/);
     assert.match(login, /htmlFor="login-password"/);
-    assert.match(register, /htmlFor="register-full-name"/);
-    assert.match(register, /htmlFor="register-address"/);
+    assert.match(register, /requestRegistrationChallenge/);
+    assert.match(register, /htmlFor="register-otp"/);
+    assert.doesNotMatch(register, /register-address|name="address"/);
   });
 
   it('keeps async auth feedback accessible and prevents duplicate submissions', () => {

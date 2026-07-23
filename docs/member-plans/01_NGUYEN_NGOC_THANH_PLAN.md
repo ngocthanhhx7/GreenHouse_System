@@ -322,3 +322,27 @@ review and closure on `feature/sl-002-postmerge-closure`:
 - Keep the previously merged saved-address Checkout correction isolated; no
   Checkout, Address Book, Cart, Payment or PayOS file belongs to this SL-002
   closure diff.
+
+## Implementation Addendum 2026-07-24 - SL-007 Account/Auth/RBAC
+
+Nguyễn Ngọc Thành phụ trách triển khai và tích hợp SL-007 trên branch
+`feature/sl-007-account-auth-rbac` bằng danh tính
+`Nguyễn Ngọc Thành <thanhnnhe186491@fpt.edu.vn>`:
+
+- Customer registration xác minh email, internal invitation, login throttling,
+  cookie session, CSRF, logout/revocation và password reset/change.
+- Fixed single-role RBAC, Admin account governance, durable audit-backed
+  idempotency và active-assignment handoff không impersonation.
+- Self profile/avatar và Customer-only structured address book với giới hạn 10,
+  đúng một default và default switch trong transaction.
+- Migration/index/verifier, actor regression, traceability, release audit và
+  handoff thuộc Definition of Done của SL-007.
+- Credential/session race, address-book concurrency và role-transfer/active
+  assignment race được đóng bằng version/fence cùng Mongo transaction; migration
+  backfill User/UserSession và tạo 16 index lặp an toàn.
+- Notification model/service/API/UI và consumption/retry/reporting tiếp tục do
+  Nguyễn Quang Huy sở hữu; Thành chỉ sở hữu DomainOutbox/EmailOutbox, Gmail/OTP,
+  Audit, PayOS và final integration.
+
+Release evidence được ghi tại `docs/reviews/SL-007_RELEASE_AUDIT.md`,
+`docs/reviews/SL-007_G3_TRACEABILITY.md` và `docs/reviews/SL-007_HANDOFF.md`.

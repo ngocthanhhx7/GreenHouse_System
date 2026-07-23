@@ -52,11 +52,19 @@ const userAddressSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    version: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
   },
   { timestamps: true }
 );
 
-userAddressSchema.index({ userId: 1, createdAt: -1 });
+userAddressSchema.index(
+  { userId: 1, createdAt: -1 },
+  { name: 'sl007_address_owner_created' },
+);
 userAddressSchema.index(
   { userId: 1, isDefault: 1 },
   {

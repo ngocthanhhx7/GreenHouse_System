@@ -1,4 +1,4 @@
-import { DEFAULT_BASE_URL, TOKEN_KEY, apiRequest } from './apiClient.js';
+import { DEFAULT_BASE_URL, apiRequest, getCsrfToken } from './apiClient.js';
 
 async function parseResponse(response) {
   const payload = await response.json();
@@ -20,9 +20,7 @@ function buildQuery(params = {}) {
 export function createProductService({ baseUrl = DEFAULT_BASE_URL, fetcher = fetch } = {}) {
   function authHeaders({ json = true } = {}) {
     const headers = json ? { 'Content-Type': 'application/json' } : {};
-    if (typeof window === 'undefined') return headers;
-    const token = window.localStorage.getItem(TOKEN_KEY);
-    return { ...headers, ...(token ? { Authorization: `Bearer ${token}` } : {}) };
+    return { ...headers, ...(getCsrfToken() ? { 'X-CSRF-Token': getCsrfToken() } : {}) };
   }
 
   return {
@@ -41,6 +39,7 @@ export function createProductService({ baseUrl = DEFAULT_BASE_URL, fetcher = fet
           method: 'POST',
           headers: authHeaders(),
           body: JSON.stringify(input),
+          credentials: 'include',
         })
       );
     },
@@ -63,6 +62,7 @@ export function createProductService({ baseUrl = DEFAULT_BASE_URL, fetcher = fet
         method: 'POST',
         headers: authHeaders({ json: false }),
         body,
+        credentials: 'include',
       }));
     },
     async deleteImage(url) {
@@ -70,6 +70,7 @@ export function createProductService({ baseUrl = DEFAULT_BASE_URL, fetcher = fet
         method: 'DELETE',
         headers: authHeaders(),
         body: JSON.stringify({ url }),
+        credentials: 'include',
       }));
     },
   };

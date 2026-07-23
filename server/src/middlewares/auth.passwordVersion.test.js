@@ -11,36 +11,38 @@ function responseRecorder() {
   };
 }
 
-const user = {
-  _id: 'user-1', fullName: 'Nguyễn Ngọc Thành', email: 'thanh@example.com', phone: '0900000000',
-  roleId: { roleName: 'Customer' }, status: 'Active', passwordChangedAt: new Date('2026-07-22T03:00:00.000Z'),
-};
-
-describe('authentication password version', () => {
-  it('rejects a JWT issued before the latest password reset', async () => {
+describe('SL-007 cookie session authentication', () => {
+  it('AT-140 rejects a bearer token when no protected session cookie exists', async () => {
     const authenticate = createAuthenticate({
-      verifyToken: () => ({ sub: 'user-1', pwd: 0 }),
-      findUserById: async () => user,
+      sessionService: { async authenticate() { throw new Error('must not receive bearer'); } },
     });
-    const req = { headers: { authorization: 'Bearer old-token' } };
+    const req = { headers: { authorization: 'Bearer legacy-token' } };
     const res = responseRecorder();
     let nextCalled = false;
     await authenticate(req, res, () => { nextCalled = true; });
     assert.equal(res.statusCode, 401);
-    assert.equal(res.payload.errorCode, 'AUTH_TOKEN_STALE');
+    assert.equal(res.payload.errorCode, 'SESSION_MISSING');
     assert.equal(nextCalled, false);
   });
 
-  it('accepts a JWT carrying the current password version', async () => {
+  it('AT-140 authenticates only the current server session and attaches its persisted user', async () => {
     const authenticate = createAuthenticate({
-      verifyToken: () => ({ sub: 'user-1', pwd: user.passwordChangedAt.getTime() }),
-      findUserById: async () => user,
+      sessionService: {
+        async authenticate(selector) {
+          assert.equal(selector, 'opaque-selector');
+          return {
+            user: { id: 'user-1', email: 'thanh@example.com', role: 'Customer', status: 'Active' },
+            session: { id: 'session-1', csrfSecret: 'csrf-secret' },
+          };
+        },
+      },
     });
-    const req = { headers: { authorization: 'Bearer current-token' } };
+    const req = { headers: { cookie: 'gh_session=opaque-selector' } };
     const res = responseRecorder();
     let nextCalled = false;
     await authenticate(req, res, () => { nextCalled = true; });
     assert.equal(nextCalled, true);
     assert.equal(req.user.email, 'thanh@example.com');
+    assert.equal(req.authSession.id, 'session-1');
   });
 });

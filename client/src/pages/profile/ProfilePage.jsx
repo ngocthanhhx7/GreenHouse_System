@@ -23,7 +23,7 @@ export default function ProfilePage() {
   const isCustomer = user?.role === 'Customer';
   const [profile, setProfile] = useState(null);
   const [addresses, setAddresses] = useState([]);
-  const [profileForm, setProfileForm] = useState({ fullName: '', phoneNumber: '', address: '' });
+  const [profileForm, setProfileForm] = useState({ fullName: '', phoneNumber: '' });
   const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
   const [addressForm, setAddressForm] = useState(EMPTY_ADDRESS);
   const [editingAddressId, setEditingAddressId] = useState(null);
@@ -45,7 +45,6 @@ export default function ProfilePage() {
       setProfileForm({
         fullName: profileResult.fullName || '',
         phoneNumber: profileResult.phoneNumber || '',
-        address: profileResult.address || '',
       });
       setAddresses(addressResult.items || []);
     } catch (requestError) {
@@ -233,7 +232,7 @@ export default function ProfilePage() {
         <div className="profile-identity-copy">
           <h2>{profile?.fullName}</h2>
           <p>{profile?.email}</p>
-          <span>{translateRole(profile?.role?.roleName || user?.role)}</span>
+          <span>{translateRole(profile?.role?.roleName || user?.role)} · {profile?.status || user?.status}</span>
         </div>
         <div className="profile-avatar-actions">
           <label className="btn btn-success" aria-disabled={busy === 'avatar'}>
@@ -251,7 +250,6 @@ export default function ProfilePage() {
           <form className="account-form" onSubmit={submitProfile}>
             <label>Họ và tên<input name="fullName" autoComplete="name" value={profileForm.fullName} minLength="2" maxLength="120" required onChange={(event) => setProfileForm({ ...profileForm, fullName: event.target.value })} /></label>
             <label>Số điện thoại<input name="phoneNumber" autoComplete="tel" value={profileForm.phoneNumber} inputMode="tel" pattern="(?:\+84|0)(?:3|5|7|8|9)[0-9]{8}" required onChange={(event) => setProfileForm({ ...profileForm, phoneNumber: event.target.value })} /></label>
-            <label className="full-width">Địa chỉ cơ bản<textarea name="address" autoComplete="street-address" value={profileForm.address} maxLength="500" required onChange={(event) => setProfileForm({ ...profileForm, address: event.target.value })} /></label>
             <button className="btn btn-success" type="submit" disabled={busy === 'profile'}>{busy === 'profile' ? 'Đang lưu...' : 'Lưu thay đổi'}</button>
           </form>
         </section>

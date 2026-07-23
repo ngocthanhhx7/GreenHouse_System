@@ -74,4 +74,43 @@ describe('app security defaults', () => {
       await rm(uploadsRoot, { recursive: true, force: true });
     }
   });
+
+  it('shares an IP abuse budget across login, public OTP and invitation endpoints', async () => {
+    const limitedServer = createApp({ authRateLimitMax: 2 }).listen(0);
+    const body = JSON.stringify({ email: 'invalid' });
+    const options = (path) => ({
+      method: 'POST',
+      path,
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body),
+      },
+    });
+    try {
+      const first = await request(
+        limitedServer,
+        options('/api/auth/login'),
+        body,
+      );
+      const second = await request(
+        limitedServer,
+        options('/api/auth/registration-challenges'),
+        body,
+      );
+      const blocked = await request(
+        limitedServer,
+        options('/api/auth/forgot-password'),
+        body,
+      );
+
+      assert.equal(first.res.statusCode, 400);
+      assert.equal(second.res.statusCode, 400);
+      assert.equal(blocked.res.statusCode, 429);
+      assert.equal(blocked.body.errorCode, 'AUTH_PUBLIC_RATE_LIMITED');
+    } finally {
+      await new Promise((resolve, reject) => limitedServer.close((error) => (
+        error ? reject(error) : resolve()
+      )));
+    }
+  });
 });

@@ -14,29 +14,25 @@ const ACCOUNTS = [
     roleName: 'Customer',
     fullName: 'Khach Hang',
     email: 'khachhang@greenhome.test',
-    phone: '0910000001',
-    address: 'Ha Noi',
+    phoneNumber: '0910000001',
   },
   {
     roleName: 'Staff',
     fullName: 'Nhan Vien',
     email: 'nhanvien@greenhome.test',
-    phone: '0910000002',
-    address: 'Ha Noi',
+    phoneNumber: '0910000002',
   },
   {
     roleName: 'WarehouseManager',
     fullName: 'Quan Ly Kho',
     email: 'quanlykho@greenhome.test',
-    phone: '0910000003',
-    address: 'Ha Noi',
+    phoneNumber: '0910000003',
   },
   {
     roleName: 'Admin',
     fullName: 'Quan Tri Vien',
     email: 'quantrivien@greenhome.test',
-    phone: '0910000004',
-    address: 'Ha Noi',
+    phoneNumber: '0910000004',
   },
 ];
 
@@ -58,8 +54,7 @@ async function createAccounts() {
         $set: {
           fullName: account.fullName,
           email: account.email,
-          phone: account.phone,
-          address: account.address,
+          phoneNumber: account.phoneNumber,
           passwordHash,
           roleId: role._id,
           status: 'Active',
@@ -75,7 +70,7 @@ async function createAccounts() {
     console.log(`  ${account.roleName}:`);
     console.log(`    Email:    ${account.email}`);
     console.log(`    FullName: ${account.fullName}`);
-    console.log(`    Phone:    ${account.phone}`);
+    console.log(`    Phone:    ${account.phoneNumber}`);
     console.log('');
   }
   console.log('======================================\n');

@@ -77,8 +77,7 @@ async function prepareCiActors({
         $set: {
           fullName: actor.fullName,
           email: actor.email,
-          phone: actor.phone,
-          address: 'CI ephemeral staging only',
+          phoneNumber: actor.phone,
           passwordHash,
           roleId: roleByName.get(actor.roleName)._id,
           status: 'Active',

@@ -7,6 +7,9 @@ const ReplenishmentRequest = require('../models/replenishmentRequest.model');
 const { notificationService } = require('./notification.service');
 const { lowStockAlertLifecycle: defaultLowStockLifecycle } = require('./lowStockAlertLifecycle.service');
 const { logAudit } = require('../utils/auditLogger');
+const {
+  assignmentCoordinator: defaultAssignmentCoordinator,
+} = require('./assignmentCoordination.service');
 
 const ACTIVE_REQUEST_STATUSES = ['PendingApproval', 'Approved', 'PartiallyReceived', 'ShortClosurePending'];
 const RECEIVABLE_STATUSES = ['Approved', 'PartiallyReceived'];
@@ -189,6 +192,7 @@ function createReplenishmentService({
   transactionManager = createModelTransactionManager(),
   eventPublisher = notificationService,
   lowStockLifecycle = null,
+  assignmentCoordinator = defaultAssignmentCoordinator,
 } = {}) {
   async function writeAudit(userId, action, targetId, description) {
     await auditLogger.log({
@@ -262,20 +266,27 @@ function createReplenishmentService({
 
       let request;
       try {
-        request = await repository.createRequest({
-          productId: productIdOf(inventory),
-          inventoryId: inventory._id,
-          requestedBy: userId,
-          quantity,
-          requestedQuantity: quantity,
-          approvedQuantity: null,
-          receivedQuantity: 0,
-          netAcceptedQuantity: 0,
-          status: 'PendingApproval',
-          reason,
-          evidence: input.evidence,
-          idempotencyKey,
-          receipts: [],
+        request = await transactionManager.withTransaction(async (session) => {
+          await assignmentCoordinator.coordinate({
+            userId,
+            expectedRole: 'WarehouseManager',
+            session,
+          });
+          return repository.createRequest({
+            productId: productIdOf(inventory),
+            inventoryId: inventory._id,
+            requestedBy: userId,
+            quantity,
+            requestedQuantity: quantity,
+            approvedQuantity: null,
+            receivedQuantity: 0,
+            netAcceptedQuantity: 0,
+            status: 'PendingApproval',
+            reason,
+            evidence: input.evidence,
+            idempotencyKey,
+            receipts: [],
+          }, session);
         });
       } catch (error) {
         if (error?.code !== 11000) throw error;
@@ -441,6 +452,11 @@ function createReplenishmentService({
       let result;
       try {
         result = await transactionManager.withTransaction(async (session) => {
+          await assignmentCoordinator.coordinate({
+            userId,
+            expectedRole: 'WarehouseManager',
+            session,
+          });
           const request = await repository.findRequestById(id, session);
           if (!request) throw new ApiError(404, 'Replenishment request not found');
           if (!RECEIVABLE_STATUSES.includes(request.status)) {

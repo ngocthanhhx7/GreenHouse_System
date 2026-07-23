@@ -8,6 +8,9 @@ const OrderDetail = require('../models/orderDetail.model');
 const { logAudit } = require('../utils/auditLogger');
 const { notificationService } = require('./notification.service');
 const { lowStockAlertLifecycle: defaultLowStockLifecycle } = require('./lowStockAlertLifecycle.service');
+const {
+  assignmentCoordinator: defaultAssignmentCoordinator,
+} = require('./assignmentCoordination.service');
 
 const DAMAGE_REPORT_STATUSES = new Set([
   'PendingWarehouseConfirmation',
@@ -89,6 +92,7 @@ function createDamageReportService({
   auditLogger = { log: logAudit },
   eventPublisher = null,
   lowStockLifecycle = null,
+  assignmentCoordinator = defaultAssignmentCoordinator,
 } = {}) {
   async function emitEvent(event) {
     try {
@@ -148,6 +152,11 @@ function createDamageReportService({
       let result;
       try {
         result = await transactionManager.withTransaction(async (session) => {
+          await assignmentCoordinator.coordinate({
+            userId: staffId,
+            expectedRole: 'Staff',
+            session,
+          });
           const current = await repository.findInventoryById(inventoryId, session);
           if (!current) throw new ApiError(404, 'Inventory record not found');
           const currentSellable = Number(current.sellableQuantity ?? current.stockQuantity ?? 0);

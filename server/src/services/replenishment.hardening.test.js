@@ -180,6 +180,7 @@ function createService(repository, calls = [], events = []) {
     auditLogger: { async log() {} },
     eventPublisher: { async publishDomainEvent(event) { events.push(event); } },
     lowStockLifecycle: { async evaluate() {} },
+    assignmentCoordinator: { async coordinate() {} },
   });
 }
 

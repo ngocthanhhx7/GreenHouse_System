@@ -1,4 +1,4 @@
-import { DEFAULT_BASE_URL, TOKEN_KEY, apiRequest } from './apiClient.js';
+import { DEFAULT_BASE_URL, apiRequest, getCsrfToken } from './apiClient.js';
 
 async function parseResponse(response) {
   const payload = await response.json();
@@ -9,11 +9,9 @@ async function parseResponse(response) {
 }
 
 function authHeaders() {
-  if (typeof window === 'undefined') return { 'Content-Type': 'application/json' };
-  const token = window.localStorage.getItem(TOKEN_KEY);
   return {
     'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(getCsrfToken() ? { 'X-CSRF-Token': getCsrfToken() } : {}),
   };
 }
 
@@ -27,6 +25,7 @@ export function createCartService({ baseUrl = DEFAULT_BASE_URL, fetcher = fetch 
         await fetcher(`${baseUrl}/cart/items`, {
           method: 'POST',
           headers: authHeaders(),
+          credentials: 'include',
           body: JSON.stringify(input),
         })
       );

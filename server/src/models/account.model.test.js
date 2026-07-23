@@ -10,10 +10,12 @@ function assertPath(model, pathName) {
 }
 
 describe('account model contracts', () => {
-  it('keeps legacy user fields while adding profile metadata', () => {
-    ['phone', 'address', 'phoneNumber', 'avatarUrl', 'lastLoginAt'].forEach((field) => {
+  it('AT-145 keeps one canonical phone and removes legacy phone/free-form address authority', () => {
+    ['phoneNumber', 'avatarUrl', 'lastLoginAt', 'version'].forEach((field) => {
       assertPath(User, field);
     });
+    assert.equal(User.schema.path('phone'), undefined);
+    assert.equal(User.schema.path('address'), undefined);
   });
 
   it('stores structured user addresses and enforces one default per user', () => {
