@@ -418,6 +418,12 @@ function createMigrationRepository({ collections = defaultCollections() } = {}) 
       };
       const backfills = [];
       for (const review of reviews) {
+        if (
+          Object.hasOwn(review, 'version')
+          && (!Number.isInteger(review.version) || review.version < 1)
+        ) {
+          throw migrationError('SL008_REVIEW_VERSION_AMBIGUOUS');
+        }
         const hasExplicitIndependentFacts = (
           ['Published', 'Withdrawn'].includes(review.publicationStatus)
           && ['Allowed', 'HiddenByStaff'].includes(review.moderationStatus)
@@ -521,8 +527,8 @@ async function migrateSl008Review({
     };
   }
 
-  const reviewsBackfilled = await repository.backfillReviews(plan.backfills);
   const indexesCreated = await repository.ensureRequiredIndexes();
+  const reviewsBackfilled = await repository.backfillReviews(plan.backfills);
   const legacyIndexesDropped = await repository.dropLegacyUniqueIndexes();
   return {
     dryRun: false,

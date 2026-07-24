@@ -334,6 +334,71 @@ describe('SL-008 Review-only migration', () => {
     }
   });
 
+  it('fails present malformed Review versions before any migration operation', async () => {
+    const cases = [
+      ['zero', 0],
+      ['fractional', 1.5],
+      ['nonnumeric', 'x'],
+      ['null', null],
+    ];
+
+    for (const [name, version] of cases) {
+      const fixture = legacyFixture((data) => { data.reviews[0].version = version; });
+
+      await assert.rejects(
+        () => migration.migrateSl008Review({ repository: repositoryFor(fixture) }),
+        (error) => error?.code === 'SL008_REVIEW_VERSION_AMBIGUOUS',
+        name,
+      );
+      assert.deepEqual(mutations(fixture.operations), [], name);
+    }
+  });
+
+  it('certifies every required index before backfill and restarts safely after an injected index failure', async () => {
+    const fixture = legacyFixture();
+    const historyCollection = fixture.collections.contentHistories;
+    const originalCreateIndex = historyCollection.createIndex.bind(historyCollection);
+    historyCollection.createIndex = async function failOnce(key, options) {
+      if (options.name === 'review_content_history_version_unique') {
+        const error = new Error('injected index build failure');
+        error.code = 'SL008_REVIEW_INDEX_BUILD_FAILED';
+        throw error;
+      }
+      return originalCreateIndex(key, options);
+    };
+
+    await assert.rejects(
+      () => migration.migrateSl008Review({ repository: repositoryFor(fixture) }),
+      (error) => error?.code === 'SL008_REVIEW_INDEX_BUILD_FAILED',
+    );
+    assert.deepEqual(
+      mutations(fixture.operations).filter((operation) => operation.type !== 'createIndex'),
+      [],
+    );
+    assert.equal(
+      fixture.collections.reviews.indexes.some(
+        (index) => index.name === 'customerId_1_orderId_1_productId_1',
+      ),
+      true,
+    );
+
+    historyCollection.createIndex = originalCreateIndex;
+    const resumed = await migration.migrateSl008Review({ repository: repositoryFor(fixture) });
+    assert.equal(resumed.reviewsBackfilled, 1);
+    assert.equal(resumed.legacyIndexesDropped, 1);
+    const updatePosition = fixture.operations.findIndex((operation) => operation.type === 'updateOne');
+    const dropPosition = fixture.operations.findIndex((operation) => operation.type === 'dropIndex');
+    assert.ok(updatePosition >= 0);
+    assert.ok(dropPosition > updatePosition);
+    assert.ok(
+      fixture.operations
+        .filter((operation) => operation.type === 'createIndex')
+        .every((_operation, index, operations) => (
+          fixture.operations.indexOf(operations[index]) < updatePosition
+        )),
+    );
+  });
+
   it('backfills only proven Visible facts conditionally without changing timestamps or inventing history', async () => {
     const fixture = legacyFixture();
     const beforeHistory = clone(fixture.collections.contentHistories.documents);
