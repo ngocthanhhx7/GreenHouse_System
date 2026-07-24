@@ -237,3 +237,33 @@ Warehouse and Carrier exchange lifecycle. Nguyễn Ngọc Thành performs the
 separate post-merge integration review and closure; that review does not
 transfer original module authorship away from Nhật.
 
+## Ownership Addendum 2026-07-24 - SL-004 Fulfillment and Delivery Evidence
+
+Nguyễn Hữu Anh Nhật remains the primary implementation owner for SL-004. The
+approved SL-004/CR-001 design supersedes the historical generic status,
+separate Staff export-request, automatic packing, Staff-entered COD result, and
+editable-refund descriptions earlier in this plan.
+
+- Staff confirmation creates one Initial cycle and Pending exact export handoff.
+- Staff owns exact PackingRecord, external-Carrier handoff and
+  Staff-attributable evidence, destination acceptance record, and derived
+  terminal resolution.
+- Warehouse export/returned-parcel behavior is the seam owned with Lê Vũ Cường.
+- Customer owns only the owned projection, pre-handoff confirmation evidence,
+  and exact resend/wait/terminal choice.
+- Carrier remains an external signature-only integration, not a GreenHouse role.
+- No SL-006 implementation file is changed; SL-004 supplies immutable
+  CompletedSaleAt for the ranking seam.
+
+Local closure evidence: focused server `72/72`, focused client `17/17`,
+migration contract `6/6`, full server `747/747`, full client `190/190`, and
+`npm run build` PASS. The immutable-field migration fix also passed disposable
+replica-set double runs with raw cycle attachment verified, including a
+post-migration Resend request that remained unchanged on the repeat run.
+Detailed tracked evidence is in `docs/reviews/SL-004_G3_TRACEABILITY.md`,
+`SL-004_HANDOFF.md`, and `SL-004_RELEASE_AUDIT.md`.
+
+This is local, uncommitted implementation evidence. Target-database migration,
+signed-Carrier target verification, authenticated actor walkthroughs, outbox
+delivery verification, deployment, and production readiness are not claimed.
+

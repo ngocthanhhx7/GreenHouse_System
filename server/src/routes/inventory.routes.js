@@ -18,6 +18,6 @@ router.patch('/warehouse/inventory/:id/threshold-override', authenticate, author
 
 router.get('/warehouse/stock-exports', authenticate, authorizeRoles('WarehouseManager'), inventoryController.listStockExports);
 router.get('/warehouse/stock-exports/:id', authenticate, authorizeRoles('WarehouseManager'), inventoryController.getStockExport);
-router.patch('/warehouse/stock-exports/:id/status', authenticate, authorizeRoles('WarehouseManager'), inventoryController.updateStockExportStatus);
+router.post('/warehouse/stock-exports/:id/process', authenticate, authorizeRoles('WarehouseManager'), inventoryController.processStockExport);
 
 module.exports = router;

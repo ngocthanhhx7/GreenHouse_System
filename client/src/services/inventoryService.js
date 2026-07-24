@@ -1,9 +1,9 @@
-import { DEFAULT_BASE_URL, apiRequest } from './apiClient.js';
+import { DEFAULT_BASE_URL, apiRequest, createApiError } from './apiClient.js';
 
 async function parseResponse(response) {
   const payload = await response.json();
   if (!response.ok || payload.success === false) {
-    throw new Error(payload.message || 'Inventory request failed');
+    throw createApiError(payload, 'Inventory request failed');
   }
   return payload.data;
 }
@@ -51,10 +51,23 @@ export function createInventoryService({ baseUrl = DEFAULT_BASE_URL, fetcher } =
     async getStockExport(id) {
       return request(`/warehouse/stock-exports/${id}`);
     },
-    async updateStockExportStatus(id, input) {
-      return request(`/warehouse/stock-exports/${id}/status`, {
-        method: 'PATCH',
-        body: JSON.stringify(input),
+    async processStockExport(id, input = {}) {
+      const { idempotencyKey, ...payload } = input;
+      return request(`/warehouse/stock-exports/${id}/process`, {
+        method: 'POST',
+        headers: { 'Idempotency-Key': idempotencyKey },
+        body: JSON.stringify(payload),
+      });
+    },
+    async listReturnedParcels() {
+      return request('/warehouse/returned-parcels');
+    },
+    async recordReturnedParcelReceipt(shipmentId, input = {}) {
+      const { idempotencyKey, ...payload } = input;
+      return request(`/warehouse/shipments/${shipmentId}/returned-receipt`, {
+        method: 'POST',
+        headers: { 'Idempotency-Key': idempotencyKey },
+        body: JSON.stringify(payload),
       });
     },
   };

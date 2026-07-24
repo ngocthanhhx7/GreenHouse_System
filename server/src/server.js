@@ -15,6 +15,7 @@ const { orderPaymentExpiryService } = require('./services/orderPaymentExpiry.ser
 const { createOrderPaymentExpiryWorker } = require('./workers/orderPaymentExpiry.worker');
 const { orderService } = require('./services/order.service');
 const { paymentService } = require('./services/payment.service');
+const { fulfillmentService } = require('./services/fulfillment.service');
 const { createDomainOutboxWorker } = require('./workers/domainOutbox.worker');
 
 const PORT = process.env.PORT || 5000;
@@ -30,7 +31,7 @@ async function startServer() {
   const exchangeExpiryWorker = createExchangeExpiryWorker({ service: exchangeService });
   const orderPaymentExpiryWorker = createOrderPaymentExpiryWorker({ service: orderPaymentExpiryService });
   const domainOutboxWorker = createDomainOutboxWorker({
-    services: [orderService, paymentService, orderPaymentExpiryService],
+    services: [orderService, paymentService, orderPaymentExpiryService, fulfillmentService],
   });
   emailWorker.start();
   returnRefundExpiryWorker.start();

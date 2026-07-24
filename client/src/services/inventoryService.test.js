@@ -61,21 +61,25 @@ describe('client inventory service', () => {
     assert.deepEqual(result, envelope);
   });
 
-  it('updates stock export request status', async () => {
+  it('processes a stock export with a stable idempotency key', async () => {
     const service = createInventoryService({
       baseUrl: 'http://api.test/api',
       fetcher: async (url, options) => {
-        assert.equal(url, 'http://api.test/api/warehouse/stock-exports/export-1/status');
-        assert.equal(options.method, 'PATCH');
+        assert.equal(url, 'http://api.test/api/warehouse/stock-exports/export-1/process');
+        assert.equal(options.method, 'POST');
+        assert.equal(options.headers['Idempotency-Key'], 'export-command-1');
+        assert.equal(options.body, JSON.stringify({}));
         return {
           ok: true,
-          json: async () => ({ success: true, data: { stockExport: { status: 'Approved' } } }),
+          json: async () => ({ success: true, data: { stockExport: { status: 'Completed' } } }),
         };
       },
     });
 
-    const result = await service.updateStockExportStatus('export-1', { status: 'Approved' });
+    const result = await service.processStockExport('export-1', {
+      idempotencyKey: 'export-command-1',
+    });
 
-    assert.equal(result.stockExport.status, 'Approved');
+    assert.equal(result.stockExport.status, 'Completed');
   });
 });

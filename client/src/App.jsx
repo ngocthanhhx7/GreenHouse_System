@@ -50,6 +50,7 @@ import InventoryListPage from './pages/warehouse/InventoryListPage.jsx';
 import LowStockPage from './pages/warehouse/LowStockPage.jsx';
 import StockExportQueuePage from './pages/warehouse/StockExportQueuePage.jsx';
 import StockExportDetailPage from './pages/warehouse/StockExportDetailPage.jsx';
+import ReturnedParcelQueuePage from './pages/warehouse/ReturnedParcelQueuePage.jsx';
 import ReplenishmentPage from './pages/warehouse/ReplenishmentPage.jsx';
 import WarehouseReturnRefundQueuePage from './pages/warehouse/ReturnRefundQueuePage.jsx';
 import ReturnRefundInspectionPage from './pages/warehouse/ReturnRefundInspectionPage.jsx';
@@ -319,6 +320,14 @@ export default function App() {
           element={
             <RoleRoute allowedRoles={['WarehouseManager']}>
               <StockExportDetailPage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="warehouse/returned-parcels"
+          element={
+            <RoleRoute allowedRoles={['WarehouseManager']}>
+              <ReturnedParcelQueuePage />
             </RoleRoute>
           }
         />

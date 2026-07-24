@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import { staffOrderService } from '../../services/staffOrderService.js';
 import { formatCurrency, translateOrderStatus, translatePaymentMethod, translatePaymentStatus } from '../../utils/formatters.js';
 
-const STATUS_OPTIONS = ['', 'Pending', 'Confirmed', 'StockExportRequested', 'Packed', 'Shipped', 'Delivered'];
+const STATUS_OPTIONS = ['', 'Pending', 'Confirmed', 'Packed', 'Shipped', 'Delivered', 'DeliveryFailed'];
 
 export default function StaffOrderQueuePage() {
   const [status, setStatus] = useState('Pending');

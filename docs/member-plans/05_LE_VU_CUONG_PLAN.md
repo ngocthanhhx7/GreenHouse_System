@@ -353,3 +353,31 @@ This evidence establishes local implementation closure only. It does not claim a
   - legacy replenishment states became `PendingApproval`, `PartiallyReceived`, and `Completed`;
   - duplicate active replenishments were rejected before mutation with an actionable preflight error.
 - Detailed tracked evidence is in `docs/reviews/SL-005_RELEASE_AUDIT.md`, `docs/reviews/SL-005_G3_TRACEABILITY.md`, and `docs/reviews/SL-005_HANDOFF.md`.
+
+## Seam Addendum 2026-07-24 - SL-004 Warehouse Evidence
+
+Lê Vũ Cường remains the Warehouse seam owner consumed by Nguyễn Hữu Anh Nhật's
+primary SL-004 fulfillment implementation.
+
+- Warehouse runs one exact export command; it does not approve/reject a
+  commercial decision and never auto-packs the Order.
+- Export consumes complete SL-003 reservation lineage, blocks
+  `ReconciliationRequired`, posts one stable movement per line, and leaves the
+  Order Confirmed for Staff packing.
+- Warehouse has a returned-parcel queue and one exact, evidence-backed receipt
+  that classifies every physical line into sellable/damaged Inventory effects.
+- Warehouse has no delivery/COD/payment/refund/destination authority and sees no
+  bank/payout controls.
+- The SL-005 Inventory authority and four-dimension vocabulary remain intact.
+
+Seam evidence is included in focused server `72/72`, focused client `17/17`,
+full server `747/747`, full client `190/190`, and `npm run build` PASS.
+Migration contract evidence is `6/6`; disposable replica-set double runs
+verified the legacy export's attached Initial cycle, zero business writes on
+run two, and preservation of a post-migration Resend request. No target
+database was mutated.
+
+Remaining work is deployment-only evidence: target backup/preflight/migration,
+zero-write second run, authenticated Warehouse walkthrough, signed-Carrier
+target verification, and DomainOutbox worker verification. No production claim
+is made by this addendum.

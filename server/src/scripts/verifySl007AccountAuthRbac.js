@@ -43,12 +43,14 @@ function verifySl007AccountAuthRbac({ root = path.resolve(__dirname, '../..') } 
   const assignmentProducers = [
     'support.service.js',
     'staffOrder.service.js',
-    'inventory.service.js',
+    ['inventory.service.js', 'inventoryCore.service.js'],
     'damageReport.service.js',
     'replenishment.service.js',
     'returnRefund.service.js',
     'exchange.service.js',
-  ].map((file) => read(root, `src/services/${file}`));
+  ].map((entry) => (Array.isArray(entry) ? entry : [entry])
+    .map((file) => read(root, `src/services/${file}`))
+    .join('\n'));
   check('role-assignment-write-fence', 'Role transfer and every active assignment producer write the same session-bound User fence', /assignmentEpoch/.test(userModel) && /\$inc:\s*\{\s*assignmentEpoch/.test(assignmentCoordinator) && assignmentProducers.every((source) => /assignmentCoordinator\.coordinate/.test(source)), 'assignmentCoordination.service.js and active assignment producers');
 
   let clientFiles = [];

@@ -19,6 +19,7 @@ function createOrderRepository() {
     { _id: 'detail-1', orderId: 'order-1', productId: 'p1', productNameSnapshot: 'Green Pan', productSkuSnapshot: 'PAN-01', unitSnapshot: 'piece', productImageSnapshot: 'pan.jpg', quantity: 2, priceSnapshot: 25, subtotal: 50 },
   ];
   const exports = [];
+  const cycles = [];
   const payments = [
     { _id: 'payment-1', orderId: 'order-1', paymentMethod: 'COD', amount: 50, currency: 'VND', paymentStatus: 'Unpaid' },
     { _id: 'payment-2', orderId: 'order-2', paymentMethod: 'ONLINE', amount: 80, currency: 'VND', paymentStatus: 'Pending' },
@@ -36,7 +37,7 @@ function createOrderRepository() {
   const confirmationMutationSessions = [];
 
   return {
-    orders, exports, payments, attempts, refunds, invoices,
+    orders, exports, cycles, payments, attempts, refunds, invoices,
     get reservedQuantity() { return reservedQuantity; },
     get releaseCalls() { return releaseCalls; },
     get cancelExportCalls() { return cancelExportCalls; },
@@ -85,6 +86,12 @@ function createOrderRepository() {
       confirmationMutationSessions.push(session);
       return request;
     },
+    async createFulfillmentCycle(data, session) {
+      const cycle = { _id: `cycle-${cycles.length + 1}`, ...data };
+      cycles.push(cycle);
+      confirmationMutationSessions.push(session);
+      return cycle;
+    },
     async findPaymentByOrderId(orderId) { return payments.find((payment) => payment.orderId === orderId) || null; },
     async updatePayment(id, data) { const payment = payments.find((entry) => entry._id === id); Object.assign(payment, data); return payment; },
     async findLatestPaymentAttemptByOrder(orderId) { return attempts.filter((attempt) => attempt.orderId === orderId).at(-1) || null; },
@@ -125,7 +132,7 @@ describe('staff order service', () => {
     assert.deepEqual(result.items.map((item) => item.orderCode).sort(), ['ORD-1', 'ORD-2']);
   });
 
-  it('atomically confirms a pending order and creates its single stock export request', async () => {
+  it('atomically confirms a pending order and creates its initial cycle and single stock export request', async () => {
     const result = await service.confirmOrder('staff-1', 'order-1', { note: 'Reviewed' });
 
     assert.equal(result.orderStatus, 'Confirmed');
@@ -134,9 +141,16 @@ describe('staff order service', () => {
     assert.equal(orderRepository.exports[0].orderId, 'order-1');
     assert.equal(orderRepository.exports[0].requestedBy, 'staff-1');
     assert.equal(orderRepository.exports[0].status, 'Pending');
+    assert.equal(orderRepository.exports[0].requestKind, 'Initial');
+    assert.equal(orderRepository.exports[0].cycleId, 'cycle-1');
     assert.equal(orderRepository.exports[0].note, 'Reviewed');
-    assert.equal(orderRepository.confirmationMutationSessions.length, 2);
-    assert.equal(orderRepository.confirmationMutationSessions[0], orderRepository.confirmationMutationSessions[1]);
+    assert.equal(orderRepository.cycles.length, 1);
+    assert.equal(orderRepository.cycles[0].cycleType, 'Initial');
+    assert.equal(orderRepository.cycles[0].cycleNumber, 1);
+    assert.equal(orderRepository.confirmationMutationSessions.length, 3);
+    assert.ok(orderRepository.confirmationMutationSessions.every(
+      (session) => session === orderRepository.confirmationMutationSessions[0],
+    ));
     assert.equal(auditLogger.entries[0].action, 'STAFF_ORDER_CONFIRM');
   });
 
@@ -159,33 +173,6 @@ describe('staff order service', () => {
     await assert.rejects(() => service.confirmOrder('staff-1', 'order-1', {}), /Only Pending orders can be confirmed/);
 
     assert.equal(orderRepository.exports.length, 0);
-  });
-
-  it('does not assign StockExport after a passed Staff request loses its role', async () => {
-    orderRepository.orders[0].orderStatus = 'Confirmed';
-    const guarded = createStaffOrderService({
-      orderRepository,
-      auditLogger,
-      transactionManager: { async withTransaction(work) { return work({ id: 'stock-export-race-tx' }); } },
-      assignmentCoordinator: {
-        async coordinate({ userId, expectedRole, session }) {
-          assert.deepEqual(
-            { userId, expectedRole, session },
-            { userId: 'staff-1', expectedRole: 'Staff', session: { id: 'stock-export-race-tx' } },
-          );
-          const error = new Error('role changed after middleware');
-          error.errorCode = 'ASSIGNMENT_ACTOR_STALE';
-          throw error;
-        },
-      },
-    });
-
-    await assert.rejects(
-      () => guarded.requestStockExport('staff-1', 'order-1', {}),
-      (error) => error.errorCode === 'ASSIGNMENT_ACTOR_STALE',
-    );
-    assert.equal(orderRepository.exports.length, 0);
-    assert.equal(orderRepository.orders[0].orderStatus, 'Confirmed');
   });
 
   it('rejects confirmation when the exact reservation is no longer intact', async () => {
@@ -214,35 +201,7 @@ describe('staff order service', () => {
     assert.equal(replay.orderStatus, 'Confirmed');
     assert.equal(replay.idempotentReplay, true);
     assert.equal(orderRepository.exports.length, 1);
-  });
-
-  it('does not allow generic status update to bypass stock export request creation', async () => {
-    await service.confirmOrder('staff-1', 'order-1', {});
-    await assert.rejects(
-      () => service.updateStatus('staff-1', 'order-1', { nextStatus: 'StockExportRequested' }),
-      /Use the stock export request action/,
-    );
-    assert.equal(orderRepository.exports.length, 1);
-    assert.equal(orderRepository.orders[0].orderStatus, 'Confirmed');
-  });
-
-  it('does not let Staff move a stock-export-requested order to packed', async () => {
-    orderRepository.orders[0].orderStatus = 'StockExportRequested';
-    await assert.rejects(() => service.updateStatus('staff-1', 'order-1', { nextStatus: 'Packed' }), /Invalid order status transition/);
-  });
-
-  it('allows physical COD delivery without fabricating payment and opens one discrepancy', async () => {
-    orderRepository.orders[0].orderStatus = 'Packed';
-    await service.updateStatus('staff-1', 'order-1', { nextStatus: 'Shipped' });
-    const delivered = await service.updateStatus('staff-1', 'order-1', { nextStatus: 'Delivered' });
-    assert.equal(delivered.orderStatus, 'Delivered');
-    assert.equal(delivered.paymentStatus, 'Unpaid');
-    assert.equal(orderRepository.orders[0].codDiscrepancyStatus, 'Open');
-    assert.ok(orderRepository.orders[0].returnDeadlineAt);
-    await assert.rejects(
-      () => service.markCodCollected('staff-1', 'order-1', { note: 'Collected on handoff' }),
-      /Carrier evidence|required/i,
-    );
+    assert.equal(orderRepository.cycles.length, 1);
   });
 
   it('requires a cancel reason and creates one fixed refund obligation without rewriting paid records', async () => {

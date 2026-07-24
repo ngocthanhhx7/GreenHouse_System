@@ -90,9 +90,20 @@ async function getStockExport(req, res, next) {
   }
 }
 
-async function updateStockExportStatus(req, res, next) {
+async function processStockExport(req, res, next) {
   try {
-    return sendSuccess(res, await inventoryService.updateStockExportStatus(req.user.id, req.params.id, req.body), 'Stock export status updated');
+    return sendSuccess(
+      res,
+      await inventoryService.processStockExport(
+        req.user.id,
+        req.params.id,
+        {
+          ...(req.body || {}),
+          idempotencyKey: req.get('Idempotency-Key') || req.body?.idempotencyKey,
+        },
+      ),
+      'Exact stock export processed',
+    );
   } catch (error) {
     return next(error);
   }
@@ -105,7 +116,7 @@ module.exports = {
   listLowStock,
   listStockExports,
   getStockExport,
-  updateStockExportStatus,
+  processStockExport,
   recordPhysicalCount,
   setThresholdOverride,
   listLowStockAlerts,

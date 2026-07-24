@@ -1,7 +1,8 @@
 const ORDER_STATUS_TRANSITIONS = {
-  Confirmed: ['StockExportRequested'],
+  Pending: ['Confirmed'],
+  Confirmed: ['Packed'],
   Packed: ['Shipped'],
-  Shipped: ['Delivered'],
+  Shipped: ['Delivered', 'DeliveryFailed'],
 };
 
 function getAllowedOrderStatusTransitions(currentStatus) {

@@ -200,7 +200,8 @@ const DEMO_ORDER_SPECS = [
     orderCode: 'GH-DEMO-1003',
     paymentMethod: 'ONLINE',
     paymentStatus: 'Paid',
-    orderStatus: 'StockExportRequested',
+    // SL-004 keeps the Order Confirmed while its separately tracked export is Pending.
+    orderStatus: 'Confirmed',
     shippingAddress: '12 Nguyễn Trãi, Thanh Xuân, Hà Nội',
     transactionId: 'DEMO-TXN-1003',
     stockExportStatus: 'Pending',

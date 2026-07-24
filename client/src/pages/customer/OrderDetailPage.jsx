@@ -31,6 +31,14 @@ function newKey(prefix) {
 export default function OrderDetailPage() {
   const { id } = useParams();
   const [order, setOrder] = useState(null);
+  const [fulfillment, setFulfillment] = useState({ cycles: [], incidents: [] });
+  const [destinationCorrection, setDestinationCorrection] = useState({
+    receiverName: '',
+    receiverPhone: '',
+    shippingAddress: '',
+    customerConfirmationReference: '',
+  });
+  const [isSubmittingFulfillment, setIsSubmittingFulfillment] = useState(false);
   const [activeCase, setActiveCase] = useState(null);
   const [afterSalesMode, setAfterSalesMode] = useState('');
   const [returnReason, setReturnReason] = useState('');
@@ -55,12 +63,20 @@ export default function OrderDetailPage() {
   async function loadOrder() {
     setError('');
     try {
-      const [loadedOrder, exchangeResult, returnResult] = await Promise.all([
+      const [loadedOrder, fulfillmentResult, exchangeResult, returnResult] = await Promise.all([
         orderService.getOrder(id),
+        orderService.getFulfillment(id),
         exchangeService.listMyRequests(),
         returnRefundService.listMyRequests(),
       ]);
       setOrder(loadedOrder);
+      setFulfillment(fulfillmentResult || { cycles: [], incidents: [] });
+      setDestinationCorrection((current) => ({
+        ...current,
+        receiverName: current.receiverName || loadedOrder.receiverName || '',
+        receiverPhone: current.receiverPhone || loadedOrder.receiverPhone || '',
+        shippingAddress: current.shippingAddress || loadedOrder.shippingAddress || '',
+      }));
       const exchange = (exchangeResult.items || []).find((item) => (
         String(item.orderId) === String(id) && ACTIVE_EXCHANGE_STATUSES.has(item.status)
       ));
@@ -129,6 +145,45 @@ export default function OrderDetailPage() {
       setError(err.message);
     } finally {
       setIsCancelling(false);
+    }
+  }
+
+  async function submitDestinationCorrection(event) {
+    event.preventDefault();
+    setIsSubmittingFulfillment(true);
+    setError('');
+    try {
+      const result = await orderService.requestDestinationCorrection(id, {
+        ...destinationCorrection,
+        idempotencyKey: newKey(`destination-correction:${id}`),
+      });
+      setMessage(result.idempotentReplay
+        ? 'Destination correction này đã được ghi nhận trước đó.'
+        : 'Đã thêm ShipmentDestinationVersion mới; địa chỉ checkout không bị ghi đè.');
+      await loadOrder();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setIsSubmittingFulfillment(false);
+    }
+  }
+
+  async function chooseDeliveryIncident(deliveryIncident, choice) {
+    setIsSubmittingFulfillment(true);
+    setError('');
+    try {
+      const result = await orderService.chooseDeliveryIncident(id, deliveryIncident.id, {
+        choice,
+        idempotencyKey: newKey(`delivery-incident:${deliveryIncident.id}:${choice}`),
+      });
+      setMessage(result.idempotentReplay
+        ? 'Lựa chọn incident đã được ghi nhận trước đó.'
+        : 'Đã ghi nhận lựa chọn cho delivery incident trên cùng đơn hàng.');
+      await loadOrder();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setIsSubmittingFulfillment(false);
     }
   }
 
@@ -259,6 +314,73 @@ export default function OrderDetailPage() {
       {error && <div className="alert alert-danger">{error}</div>}
       {order && (
         <>
+          <section className="border rounded p-3 mb-4" aria-labelledby="fulfillment-heading">
+            <h2 className="h5" id="fulfillment-heading">Fulfillment &amp; shipment</h2>
+            <p className="text-secondary">Không có bản đồ hoặc theo dõi trực tiếp; đây là lịch sử bằng chứng Carrier đã ghi nhận.</p>
+            {(fulfillment.cycles || []).map((cycle) => (
+              <article className="border-top py-3" key={cycle.id}>
+                <h3 className="h6">Cycle {cycle.cycleNumber} · {cycle.cycleType} · {cycle.status}</h3>
+                {cycle.shipment && (
+                  <p>
+                    <strong>{cycle.shipment.carrierName}</strong> · trackingReference {cycle.shipment.trackingReference}
+                  </p>
+                )}
+                <h4 className="h6">Shipment history</h4>
+                <ul>{(cycle.events || []).map((shipmentEvent) => (
+                  <li key={shipmentEvent.id}>{shipmentEvent.eventType} · {shipmentEvent.occurredAt}</li>
+                ))}</ul>
+                <h4 className="h6">Destination history · destinationVersion</h4>
+                <ol>{(cycle.destinations || []).map((destinationVersion) => (
+                  <li key={destinationVersion.id}>
+                    ShipmentDestinationVersion {destinationVersion.version}: {destinationVersion.receiverName}, {destinationVersion.shippingAddress}
+                  </li>
+                ))}</ol>
+              </article>
+            ))}
+            <p>
+              Return deadline: {order.returnDeadlineAt || '—'} · Exchange deadline: {order.exchangeDeadlineAt || '—'}
+            </p>
+
+            {['Confirmed', 'Packed', 'Shipped'].includes(order.orderStatus) && (
+              <form className="border-top pt-3" onSubmit={submitDestinationCorrection}>
+                <h3 className="h6">Destination correction</h3>
+                <p>Staff/Carrier sẽ xác thực bản mới; lịch sử destination trước đó luôn được giữ nguyên.</p>
+                <div className="row g-2">
+                  {Object.keys(destinationCorrection).map((field) => (
+                    <label className="col-md-6" key={field}>{field}
+                      <input className="form-control" value={destinationCorrection[field]} onChange={(event) => setDestinationCorrection({ ...destinationCorrection, [field]: event.target.value })} required />
+                    </label>
+                  ))}
+                </div>
+                <button className="btn btn-outline-success mt-3" type="submit" disabled={isSubmittingFulfillment}>
+                  {isSubmittingFulfillment ? 'Đang gửi…' : 'Gửi destination correction'}
+                </button>
+              </form>
+            )}
+
+            {(fulfillment.incidents || []).map((deliveryIncident) => (
+              <div className="border-top pt-3 mt-3" key={deliveryIncident.id}>
+                <h3 className="h6">Delivery incident · {deliveryIncident.incidentType}</h3>
+                <p>{deliveryIncident.status}</p>
+                {deliveryIncident.status === 'AwaitingWarehouseReceipt' && (
+                  <p className="text-muted">Đang chờ Warehouse nhận và phân loại đầy đủ kiện hàng trước khi chọn hướng xử lý.</p>
+                )}
+                {(deliveryIncident.availableChoices || []).length > 0 && (
+                  <div className="action-row">
+                    {deliveryIncident.availableChoices.includes('Resend') && (
+                      <button className="btn btn-outline-success" type="button" disabled={isSubmittingFulfillment} onClick={() => chooseDeliveryIncident(deliveryIncident, 'Resend')}>Resend · gửi lại</button>
+                    )}
+                    {deliveryIncident.availableChoices.includes('Wait') && (
+                      <button className="btn btn-outline-secondary" type="button" disabled={isSubmittingFulfillment} onClick={() => chooseDeliveryIncident(deliveryIncident, 'Wait')}>Wait · chờ hàng</button>
+                    )}
+                    {deliveryIncident.availableChoices.includes('TerminalRefund') && (
+                      <button className="btn btn-outline-danger" type="button" disabled={isSubmittingFulfillment} onClick={() => chooseDeliveryIncident(deliveryIncident, 'TerminalRefund')}>TerminalRefund · hoàn tiền toàn bộ</button>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </section>
           <div className="order-status-timeline">
             {['Pending', 'Confirmed', 'Packed', 'Shipped', 'Delivered'].map((status) => (
               <div className={`timeline-step ${order.orderStatus === status ? 'active' : ''}`} key={status}>

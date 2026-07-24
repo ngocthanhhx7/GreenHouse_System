@@ -1140,6 +1140,78 @@ describe('return/refund service', () => {
     assert.equal(repository.orders.at(-1).moneyObligationsSettled, true);
   });
 
+  it('keeps DeliveryFailed after its independent failed-delivery payout succeeds', async () => {
+    repository.orders.push({
+      _id: 'order-delivery-failed',
+      orderCode: 'GH-DELIVERY-FAILED-001',
+      customerId: 'customer-1',
+      totalAmount: 120,
+      currency: 'VND',
+      paymentMethod: 'ONLINE',
+      paymentStatus: 'Paid',
+      orderStatus: 'DeliveryFailed',
+      moneyObligationsSettled: false,
+    });
+    repository.payments.push({
+      _id: 'payment-delivery-failed',
+      orderId: 'order-delivery-failed',
+      amount: 120,
+      paymentStatus: 'Paid',
+    });
+    repository.attempts.push({
+      _id: 'attempt-delivery-failed',
+      orderId: 'order-delivery-failed',
+      amount: 120,
+      currency: 'VND',
+      paymentStatus: 'Paid',
+    });
+    repository.requests.push({
+      _id: 'request-delivery-failed',
+      orderId: 'order-delivery-failed',
+      requestCode: 'FD-GH-DELIVERY-FAILED-001',
+      customerId: 'customer-1',
+      reason: 'Terminal failed delivery resolution',
+      evidenceImages: [],
+      status: 'ReadyForRefund',
+      refundAmount: 120,
+      requestedAt: now,
+      obligationKey: 'FAILED_DELIVERY:incident-1:attempt-delivery-failed',
+    });
+    repository.refunds.push({
+      _id: 'refund-delivery-failed',
+      orderId: 'order-delivery-failed',
+      paymentAttemptId: 'attempt-delivery-failed',
+      customerId: 'customer-1',
+      returnRefundRequestId: 'request-delivery-failed',
+      amount: 120,
+      currency: 'VND',
+      reason: 'Terminal failed delivery resolution',
+      status: 'RefundPending',
+      payoutStatus: 'NotStarted',
+      obligationType: 'FAILED_DELIVERY',
+      obligationKey: 'FAILED_DELIVERY:incident-1:attempt-delivery-failed',
+    });
+    repository.releaseOrderLock = async () => {
+      assert.fail('FAILED_DELIVERY is not an after-sales Returned lock lifecycle');
+    };
+
+    await submitAndVerifyDestination('request-delivery-failed');
+    const result = await service.recordPayoutEvidence('staff-1', 'request-delivery-failed', {
+      idempotencyKey: 'failed-delivery-payout-001',
+      method: 'MANUAL',
+      providerReference: 'bank-failed-delivery-001',
+      status: 'Succeeded',
+      occurredAt: now,
+      reconciliationNote: 'Verified failed-delivery refund receipt',
+    });
+
+    assert.equal(result.request.status, 'Completed');
+    assert.equal(repository.refunds.at(-1).status, 'Refunded');
+    assert.equal(repository.orders.at(-1).orderStatus, 'DeliveryFailed');
+    assert.equal(repository.orders.at(-1).paymentStatus, 'Paid');
+    assert.equal(repository.orders.at(-1).moneyObligationsSettled, true);
+  });
+
   it('opens Customer-responsibility recovery without creating an automatic second payout for the exact confirmed destination', async () => {
     const requestId = await prepareReceivedRequest({ verifyDestination: true });
     await service.recordPayoutEvidence('staff-1', requestId, {
