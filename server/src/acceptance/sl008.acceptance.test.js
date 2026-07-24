@@ -1613,11 +1613,12 @@ describe('SL-008 Review behavioral acceptance', () => {
   it('AT-150 creates one Review atomically from the exact owned delivered OrderDetail', async () => {
     const fixture = buildReviewFixture();
     const createReview = requiredMethod(fixture.service, 'createReview');
+    const command = reviewCommand();
 
     const result = await runMutation(
       createReview,
       [actors.customer, 'product-1'],
-      reviewCommand(),
+      command,
       'review-create-0001',
     );
 
@@ -1645,9 +1646,9 @@ describe('SL-008 Review behavioral acceptance', () => {
     assert.equal(createCommandRecord.aggregateType, 'Review');
     assert.equal(createCommandRecord.operation, 'createReview');
     assert.equal(createCommandRecord.idempotencyKey, 'review-create-0001');
-    assert.equal(createCommandRecord.currentResultId, first.id);
-    assert.equal(createCommandRecord.currentResultVersion, first.version);
-    assert.deepEqual(createCommandRecord.result, first);
+    assert.equal(createCommandRecord.currentResultId, result.id);
+    assert.equal(createCommandRecord.currentResultVersion, result.version);
+    assert.deepEqual(createCommandRecord.result, result);
     assert.equal(
       createCommandRecord.fingerprint,
       commandFingerprint({
@@ -2433,6 +2434,7 @@ describe('SL-008 Review behavioral acceptance', () => {
     ].entries()) {
       const invalidFixture = buildReviewFixture();
       const invalidCreate = requiredMethod(invalidFixture.service, 'createReview');
+      const before = snapshotEffects(invalidFixture.state);
       await expectDomainError(
         () => runMutation(
           invalidCreate,
@@ -2442,9 +2444,11 @@ describe('SL-008 Review behavioral acceptance', () => {
         ),
         'COMMAND_VALIDATION_FAILED',
       );
-      assert.equal(invalidFixture.state.reviews.length, 0);
-      assert.equal(invalidFixture.state.audits.length, 0);
-      assert.equal(invalidFixture.state.outbox.length, 0);
+      assert.deepEqual(
+        snapshotEffects(invalidFixture.state),
+        before,
+        'invalid Review command metadata must not mutate references, rows, or counters',
+      );
     }
   });
 
