@@ -207,10 +207,10 @@ Hoàn thiện phần vận hành kho và các nghiệp vụ sau bán hàng để
 
 ### Phase 7 - After-Sale Delivery
 
-- [ ] Create SupportRequest model/APIs/UI.
-- [ ] Create ProductReview model/APIs/UI.
-- [ ] Enforce purchased delivered review rule.
-- [ ] Integrate review display into Product Detail.
+- [x] Create SupportRequest model/APIs/UI.
+- [x] Create ProductReview model/APIs/UI.
+- [x] Enforce purchased delivered review rule.
+- [x] Integrate review display into Product Detail.
 
 ### Phase 8 - Admin Closure
 
@@ -381,3 +381,33 @@ Remaining work is deployment-only evidence: target backup/preflight/migration,
 zero-write second run, authenticated Warehouse walkthrough, signed-Carrier
 target verification, and DomainOutbox worker verification. No production claim
 is made by this addendum.
+
+## Implementation Addendum 2026-07-25 - SL-008 Review and Support
+
+Le Vu Cuong owns the completed local SL-008 Product Review and Customer Support
+implementation on `feature/cuong-support-review`.
+
+- Review now uses one Customer+Product identity, delivered owned evidence,
+  independent publication/moderation state, immutable histories, safe public
+  aggregate paging and durable retry/version semantics.
+- Support now implements seven reference types, immutable chronological
+  messages, first claim, current-active-assignee operations, disabled-assignee
+  recovery, Customer withdraw and the exact 72-hour reopen window.
+- Customer and Staff UI use authorized selectors, safe paged projections,
+  role/state-specific controls, pending deduplication and typed field errors.
+- `npm run migrate:sl008` coordinates Review and Support preflight, dry-run,
+  locked indexes and repeat-safe apply without inventing ambiguous history.
+- Focused SL-008 server tests pass `129/129`; full server passes `909/909`;
+  full client passes `248/248`; the production client build passes.
+- Final remediation also closes stale-conflict privacy, production SL-007
+  disable-to-Support recovery in one Mongo transaction, production Role lookup,
+  same-key race replay, transactional fail-closed migration, exact history/state
+  proof, bounded ticket/message paging, collision-safe repeated recovery outbox
+  identity, and runtime-reopen resolver/assignee attribution.
+- Detailed tracked evidence is in `docs/reviews/SL-008_G3_TRACEABILITY.md`,
+  `docs/reviews/SL-008_HANDOFF.md`, and `docs/reviews/SL-008_RELEASE_AUDIT.md`.
+
+Nguyen Quang Huy owns downstream Notification consumption. Nguyen Ngoc Thanh
+retains final review/integration and EmailOutbox/Gmail ownership. Target backup,
+migration execution, zero-write second run and authenticated browser walkthrough
+remain deployment-owner actions.

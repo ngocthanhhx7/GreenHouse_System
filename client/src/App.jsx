@@ -187,6 +187,14 @@ export default function App() {
             </RoleRoute>
           }
         />
+        <Route
+          path="support/:ticketId"
+          element={
+            <RoleRoute allowedRoles={['Customer']}>
+              <SupportPage />
+            </RoleRoute>
+          }
+        />
       </Route>
 
       <Route
@@ -270,7 +278,7 @@ export default function App() {
           }
         />
         <Route
-          path="staff/support-requests/:id"
+          path="staff/support-requests/:ticketId"
           element={
             <RoleRoute allowedRoles={['Staff']}>
               <SupportDetailPage />

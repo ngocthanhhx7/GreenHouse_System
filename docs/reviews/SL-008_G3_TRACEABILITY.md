@@ -3,12 +3,12 @@
 Date: 2026-07-24
 Owner: Lê Vũ Cường `<levucuong0319@gmail.com>`
 Baseline: clean `origin/main` `2490fe2` (server `792/792`, client `206/206`)
-Status: `RED_ACCEPTANCE_CONTRACT_DEFINED — IMPLEMENTATION_NOT_STARTED`
+Status: `GREEN_LOCAL_IMPLEMENTATION_VERIFIED — READY_FOR_FINAL_RE_REVIEW`
 
-This is the binding G3 map for BR-083–093 and AT-150–174. The acceptance
-files intentionally describe wished-for behavior through the existing
-`createReviewService` and `createSupportService` factories. Production code is
-unchanged in this task.
+This is the binding G3 map for BR-083–093 and AT-150–174. Acceptance was
+defined before implementation and now executes against the production Review
+and Support services, HTTP boundaries, persistence adapters, migration seams,
+and client actor surfaces.
 
 ## Actor and permission matrix
 
@@ -136,7 +136,7 @@ business permissions, states, eligibility, or transitions.
 Every row has a distinct actor, invariant, state, API/UI boundary, executable
 evidence, baseline discrepancy, and current status.
 
-| AT | Actor | Exact rule/invariant | Required data/state | API/command or read boundary | Required UI evidence | Executable server/client test | Baseline discrepancy | Status |
+| AT | Actor | Exact rule/invariant | Required data/state | API/command or read boundary | Required UI evidence | Executable server/client test | Baseline discrepancy | Initial status |
 |---|---|---|---|---|---|---|---|---|
 | AT-150 | Customer | Create atomically from exact owned delivered OrderDetail | Customer+Product unique Review; supplied eligible detail; content history/audit/outbox | `createReview`; `POST /products/:id/reviews` | ProductDetail imports/mounts ProductReviewPanel; authorized selector; no raw ID input; submit handler | Server `AT-150 creates one Review...`; client `AT-150 imports and mounts...` | Legacy create accepts raw orderId and unique Customer+Order+Product | RED |
 | AT-151 | Customer/System | No supplied detail chooses newest deliveredAt, then greatest detail ID | Owned delivered Orders/details | `createReview` fallback | Server-issued eligible display selector | Server `AT-151 deterministically falls back...` | Legacy requires an order and has no deterministic fallback | RED |
@@ -200,7 +200,7 @@ The planned `migrateSl008ReviewSupport.js`:
 Production migration remains a deployment-owner action after backup and dry
 run.
 
-## Current RED evidence
+## Initial RED evidence (historical)
 
 Exact commands executed after this rework:
 
@@ -242,3 +242,56 @@ RED contract failures.
 
 All test modules load and execute. Failures are assertions for missing SL-008
 behavior/interface, not syntax, harness runtime, or test-fixture setup failures.
+
+## Current GREEN implementation evidence
+
+All AT-150–174 rows above are GREEN in the current feature branch. The `RED`
+values in the final column intentionally preserve the acceptance-first state
+recorded before implementation.
+
+### Production boundaries
+
+- Review domain, persistence, service, controllers, exact routes, immutable
+  histories and durable commands are implemented under `server/src/services`,
+  `server/src/models`, `server/src/controller`, and `server/src/routes`.
+- Support now has the exact Customer and Staff route families, seven reference
+  types, immutable `SupportMessage`, claim/assignment/priority/transfer/
+  resolve/reopen flows, safe projections, optimistic versioning, durable
+  command replay, AuditLog and DomainOutbox effects.
+- Mutable conversation fields are absent from the canonical SupportRequest
+  schema. Initial and later text exists only in immutable SupportMessage rows.
+  Command results and durable replay records store the allowlisted ticket DTO,
+  never `customerId`, message text, mutable response text, phone, or email.
+- Client actor surfaces use authorized Order/Product selectors and locked
+  controls; no raw identifier text input is accepted. Guest/Customer/Staff
+  Review surfaces and Customer/Staff Support surfaces are direct-navigation
+  guarded; Admin and Warehouse have no SL-008 route.
+- `npm run migrate:sl008` coordinates Review and Support preflight before any
+  write, supports `--dry-run`, creates/verifies the locked indexes, removes
+  provable legacy mutable Support text after immutable message backfill, fails
+  closed on ambiguity, and is repeat-safe in executable migration tests.
+
+### Verification snapshot — 2026-07-25
+
+```text
+focused SL-008 server: 129/129, 21 suites
+full server regression: 909/909, 151 suites
+full client regression: 248/248, 61 suites
+client production build: PASS (existing bundle-size warning only)
+git diff --check: clean except Windows line-ending notices
+```
+
+Production migration and an authenticated target-environment browser
+walkthrough remain deployment-owner actions; neither is claimed by this local
+implementation evidence.
+
+The initial independent review findings are closed in code and tests: foreign
+stale-conflict privacy, production disabled-assignee recovery in the SL-007
+transaction, persisted-role transfer validation, concurrent durable replay,
+transactional/fail-closed Support migration, exact InProgress Staff messaging,
+bounded Support paging, immutable command results, neutral assignee labels,
+all-active-ticket disable recovery, scoped outbox identity, and exact migration
+history/state proof. The final pass also locks unique outbox identity across
+repeated disable/reassign/disable, exact System attribution on inactive-assignee
+reopen, and retained resolver/assignee proof; independent review reported no
+remaining Critical, Important, or Minor findings.

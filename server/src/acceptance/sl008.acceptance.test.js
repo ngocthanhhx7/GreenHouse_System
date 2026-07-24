@@ -280,7 +280,7 @@ function assertExactPage(page, itemKeys, label) {
   for (const item of page.items) assertExactKeys(item, itemKeys, `${label} item`);
 }
 
-function assertExactSupportDetail(detail, label) {
+function assertExactSupportDetail(detail, label, { includeTransferTargets = false } = {}) {
   assertExactKeys(
     detail,
     [
@@ -289,6 +289,7 @@ function assertExactSupportDetail(detail, label) {
       'assignmentHistory',
       'priorityHistory',
       'resolutionHistory',
+      ...(includeTransferTargets ? ['transferTargets'] : []),
     ],
     `${label} detail`,
   );
@@ -300,6 +301,13 @@ function assertExactSupportDetail(detail, label) {
   assert.ok(Array.isArray(detail.assignmentHistory));
   assert.ok(Array.isArray(detail.priorityHistory));
   assert.ok(Array.isArray(detail.resolutionHistory));
+  if (includeTransferTargets) {
+    assert.ok(Array.isArray(detail.transferTargets));
+    for (const target of detail.transferTargets) {
+      assertExactKeys(target, ['id', 'displayName', 'status'], `${label} transfer target`);
+      assert.equal(target.status, 'Active');
+    }
+  }
   for (const item of detail.assignmentHistory) {
     assertExactKeys(
       item,
@@ -891,7 +899,10 @@ function runMutation(method, positionalArgs, command, idempotencyKey) {
   return method(...positionalArgs, command, commandOptions(idempotencyKey));
 }
 
-function buildSupportFixture({ now = '2026-07-24T12:00:00.000Z' } = {}) {
+function buildSupportFixture({
+  now = '2026-07-24T12:00:00.000Z',
+  ticketIdentityFactory,
+} = {}) {
   const state = {
     users: [
       { ...actors.customer },
@@ -1068,6 +1079,9 @@ function buildSupportFixture({ now = '2026-07-24T12:00:00.000Z' } = {}) {
       return state.commands.find(
         (item) => (
           item.actorId === String(identity.actorId)
+          && item.aggregateType === identity.aggregateType
+          && item.aggregateId === String(identity.aggregateId)
+          && item.operation === identity.operation
           && item.idempotencyKey === identity.idempotencyKey
         ),
       ) || null;
@@ -1216,6 +1230,7 @@ function buildSupportFixture({ now = '2026-07-24T12:00:00.000Z' } = {}) {
     outboxRepository: outbox,
     clock,
     now: () => clock.now(),
+    ticketIdentityFactory,
     assignmentCoordinator,
     orderCommandGateway: foreignMutationGateways.order,
     paymentCommandGateway: foreignMutationGateways.payment,
@@ -1369,6 +1384,13 @@ function assertAtomicWrites(scenario, first, key, countsBefore) {
   const aggregateId = String(first.id || scenario.aggregateScopeId);
   const version = Number(first.version);
   const timestamp = new Date(scenario.fixture.clock.now());
+  const expectedCommandFingerprint = commandFingerprint({
+    actorId,
+    aggregateId: scenario.aggregateScopeId,
+    aggregateType: scenario.aggregateType,
+    operation: scenario.methodName,
+    command: scenario.command,
+  });
   const expectedAudit = {
     actorId,
     action: scenario.eventType,
@@ -1397,6 +1419,22 @@ function assertAtomicWrites(scenario, first, key, countsBefore) {
     status: 'Pending',
     attempts: 0,
   };
+  if (scenario.aggregateType === 'SupportRequest') {
+    const identityFingerprint = commandFingerprint({
+      actorId,
+      aggregateId: scenario.aggregateScopeId,
+      aggregateType: scenario.aggregateType,
+      operation: scenario.methodName,
+      command: {
+        idempotencyKey: key,
+        commandFingerprint: expectedCommandFingerprint,
+        eventType: scenario.eventType,
+        targetId: aggregateId,
+        version,
+      },
+    });
+    expectedOutbox.identityKey = `SL008:${identityFingerprint}`;
+  }
   assert.deepEqual(
     state.outbox.slice(countsBefore.outbox),
     [expectedOutbox],
@@ -1409,13 +1447,7 @@ function assertAtomicWrites(scenario, first, key, countsBefore) {
     createdAt: timestamp,
     currentResultId: aggregateId,
     currentResultVersion: version,
-    fingerprint: commandFingerprint({
-      actorId,
-      aggregateId: scenario.aggregateScopeId,
-      aggregateType: scenario.aggregateType,
-      operation: scenario.methodName,
-      command: scenario.command,
-    }),
+    fingerprint: expectedCommandFingerprint,
     idempotencyKey: key,
     operation: scenario.methodName,
     result: first,
@@ -1638,7 +1670,7 @@ async function prepareSupportAtomicScenario(family) {
   fixture.state.users.find((item) => item.id === actors.staffA.id).status =
     'Disabled';
   if (family === 'disabled-assignee-clear') {
-    return atomicScenario(
+    const scenario = atomicScenario(
       fixture, ticket, 'ASSIGNEE_CLEARED', { assignmentHistory: 1 },
       'clearDisabledAssignee', [actors.staffA.id], {},
       {
@@ -1648,6 +1680,8 @@ async function prepareSupportAtomicScenario(family) {
         reason: 'ASSIGNEE_DISABLED',
       },
     );
+    scenario.aggregateScopeId = actors.staffA.id;
+    return scenario;
   }
   if (family === 'disabled-assignee-recovery') {
     ticket = await runMutation(
@@ -2744,6 +2778,19 @@ describe('SL-008 Review behavioral acceptance', () => {
 
 describe('SL-008 Support behavioral acceptance', () => {
   it('AT-161 accepts all seven Support type/reference combinations with unique New/unassigned/Normal tickets', async () => {
+    const identityFixture = buildSupportFixture({
+      ticketIdentityFactory: () => ({
+        _id: 'canonical-ticket-id',
+        ticketCode: 'SUP-20260724-CANONICAL',
+      }),
+    });
+    const identityTicket = await createSupportTicket(
+      identityFixture,
+      {},
+      'support-canonical-identity-0001',
+    );
+    assert.equal(identityTicket.ticketCode, 'SUP-20260724-CANONICAL');
+
     const fixture = buildSupportFixture();
     const cases = [
       ['Order', { orderId: 'order-1' }],
@@ -2766,7 +2813,17 @@ describe('SL-008 Support behavioral acceptance', () => {
       assert.equal(ticket.assigneeId, null);
       assert.equal(ticket.priority, 'Normal');
       assert.ok(ticket.ticketCode);
+      for (const privateField of ['customerId', 'content', 'response', 'handledBy', 'commandId']) {
+        assert.equal(
+          Object.prototype.hasOwnProperty.call(ticket, privateField),
+          false,
+          `Support command result must not expose ${privateField}`,
+        );
+      }
       codes.add(ticket.ticketCode);
+      const storedTicket = fixture.state.tickets.at(-1);
+      assert.equal(Object.prototype.hasOwnProperty.call(storedTicket, 'content'), false);
+      assert.equal(Object.prototype.hasOwnProperty.call(storedTicket, 'response'), false);
       assert.equal(fixture.state.messages.length, index + 1);
       const initialMessage = fixture.state.messages.at(-1);
       assert.equal(initialMessage.ticketId, ticket.id);
@@ -2886,8 +2943,8 @@ describe('SL-008 Support behavioral acceptance', () => {
         productId: undefined,
       }, `support-${type.toLowerCase()}-without-refs-0001`);
       assert.equal(withoutRefs.type, type);
-      assert.equal(withoutRefs.orderId, undefined);
-      assert.equal(withoutRefs.productId, undefined);
+      assert.equal(withoutRefs.orderId, null);
+      assert.equal(withoutRefs.productId, null);
 
       const withRefs = await createSupportTicket(fixture, {
         type,
@@ -2924,6 +2981,42 @@ describe('SL-008 Support behavioral acceptance', () => {
         assert.deepEqual(snapshotEffects(invalidFixture.state), before);
       }
     }
+  });
+
+  it('replays a successful Support create before revalidating later-stale references', async () => {
+    const fixture = buildSupportFixture();
+    const createRequest = requiredMethod(fixture.service, 'createRequest');
+    const command = supportCreate({
+      type: 'Product',
+      orderId: undefined,
+      productId: 'product-1',
+    });
+    const key = 'support-create-reference-replay-0001';
+    const created = await runMutation(createRequest, [actors.customer], command, key);
+    fixture.state.products.find((product) => product.id === 'product-1').status = 'Inactive';
+    const beforeReplay = snapshotEffects(fixture.state);
+
+    const replay = await runMutation(createRequest, [actors.customer], command, key);
+
+    assert.deepEqual(replay, created);
+    assert.deepEqual(snapshotEffects(fixture.state), beforeReplay);
+  });
+
+  it('scopes Support outbox identities when different actors reuse one transport key', async () => {
+    const fixture = buildSupportFixture();
+    const createRequest = requiredMethod(fixture.service, 'createRequest');
+    const command = supportCreate({
+      type: 'Account', orderId: undefined, productId: undefined,
+    });
+    const key = 'support-shared-transport-key-0001';
+
+    await runMutation(createRequest, [actors.customer], command, key);
+    await runMutation(createRequest, [actors.foreignCustomer], command, key);
+
+    assert.equal(fixture.state.outbox.length, 2);
+    assert.equal(new Set(fixture.state.outbox.map((entry) => entry.identityKey)).size, 2);
+    assert.equal(fixture.state.outbox.every((entry) => entry.identityKey.startsWith('SL008:')), true);
+    assert.equal(fixture.state.outbox.every((entry) => entry.idempotencyKey === key), true);
   });
 
   it('AT-165 keeps initial/later messages immutable, chronological, paged, and command-idempotent', async () => {
@@ -2990,14 +3083,11 @@ describe('SL-008 Support behavioral acceptance', () => {
       pagedMessages.map((item) => item.actorRole),
       ['Customer', 'Customer', 'Customer'],
     );
-    assert.ok(pagedMessages.every((item) => item.actorId === actors.customer.id));
+    assert.ok(pagedMessages.every((item) => !Object.hasOwn(item, 'actorId')));
     assert.ok(pagedMessages.every(
       (item) => new Date(item.createdAt).toISOString() === '2026-07-24T12:30:00.000Z',
     ));
-    assert.deepEqual(
-      pagedMessages.map((item) => item.commandId),
-      ['support-create-0001', 'support-message-0001', 'support-message-0002'],
-    );
+    assert.ok(pagedMessages.every((item) => !Object.hasOwn(item, 'commandId')));
     assert.equal(typeof fixture.service.editMessage, 'undefined');
     assert.equal(typeof fixture.service.deleteMessage, 'undefined');
     assert.equal(typeof fixture.service.overwriteMessage, 'undefined');
@@ -3035,6 +3125,27 @@ describe('SL-008 Support behavioral acceptance', () => {
       'SUPPORT_FORBIDDEN',
     );
     assert.deepEqual(snapshotEffects(fixture.state), beforeForeign);
+    const foreignStale = await expectDomainError(
+      () => runMutation(
+        appendMessage,
+        [actors.foreignCustomer, ticket.id],
+        {
+          message: 'Foreign stale-version probe.',
+          expectedVersion: ticket.version + 99,
+        },
+        'support-foreign-stale-probe-0001',
+      ),
+      'SUPPORT_FORBIDDEN',
+    );
+    assertPrivateErrorEnvelope(
+      foreignStale,
+      fixtureIdentifiers(fixture.state, [
+        actors.customer.id,
+        ticket.id,
+        'Foreign stale-version probe.',
+      ]),
+    );
+    assert.deepEqual(snapshotEffects(fixture.state), beforeForeign);
     await expectDomainError(
       () => runMutation(
         appendMessage,
@@ -3047,6 +3158,25 @@ describe('SL-008 Support behavioral acceptance', () => {
       ),
       'SUPPORT_FORBIDDEN',
     );
+    const assignedNew = fixture.state.tickets.find((item) => item.id === ticket.id);
+    assignedNew.assigneeId = actors.staffA.id;
+    assignedNew.handledBy = actors.staffA.id;
+    const beforeAssignedNew = snapshotEffects(fixture.state);
+    await expectDomainError(
+      () => runMutation(
+        appendMessage,
+        [actors.staffA, ticket.id],
+        {
+          message: 'Staff messages require exact InProgress state.',
+          expectedVersion: ticket.version,
+        },
+        'support-staff-assigned-new-message-0001',
+      ),
+      'SUPPORT_TRANSITION_INVALID',
+    );
+    assert.deepEqual(snapshotEffects(fixture.state), beforeAssignedNew);
+    assignedNew.assigneeId = null;
+    assignedNew.handledBy = null;
     const customerMessage = await runMutation(
       appendMessage,
       [actors.customer, ticket.id],
@@ -3185,6 +3315,26 @@ describe('SL-008 Support behavioral acceptance', () => {
     assert.equal(losers[0].reason.data.ticket.assigneeId, winners[0].value.assigneeId);
     assert.equal(losers[0].reason.data.ticket.status, 'InProgress');
     assert.equal(losers[0].reason.data.ticket.version, winners[0].value.version);
+  });
+
+  it('AT-174 coalesces concurrent identical Support commands into one durable result', async () => {
+    const fixture = buildSupportFixture();
+    const createRequest = requiredMethod(fixture.service, 'createRequest');
+    const invoke = () => runMutation(
+      createRequest,
+      [actors.customer],
+      supportCreate(),
+      'support-concurrent-same-key-0001',
+    );
+
+    const [first, second] = await Promise.all([invoke(), invoke()]);
+
+    assert.deepEqual(second, first);
+    assert.equal(fixture.state.tickets.length, 1);
+    assert.equal(fixture.state.messages.length, 1);
+    assert.equal(fixture.state.commands.length, 1);
+    assert.equal(fixture.state.audits.length, 1);
+    assert.equal(fixture.state.outbox.length, 1);
   });
 
   it('AT-168 enforces the current-Active-assignee actor matrix for Staff commands', async () => {
@@ -3455,6 +3605,11 @@ describe('SL-008 Support behavioral acceptance', () => {
         'SUPPORT_VALIDATION_FAILED',
       );
     }
+    const productionShapeTarget = fixture.state.users.find(
+      (item) => item.id === actors.staffB.id,
+    );
+    productionShapeTarget.roleId = { roleName: 'Staff' };
+    delete productionShapeTarget.role;
     const transferred = await runMutation(
       transfer,
       [actors.staffA, ticket.id],
@@ -3511,12 +3666,13 @@ describe('SL-008 Support behavioral acceptance', () => {
       actors.staffA.id,
       clearDisabledAssignee,
     );
-    await runMutation(
+    const clearedReplay = await runMutation(
       clearDisabledAssignee,
       [actors.staffA.id],
       {},
       `sl007-disable-${actors.staffA.id}`,
     );
+    assert.deepEqual(clearedReplay, cleared);
 
     assert.deepEqual(fixture.sl007SessionService.calls, [{
       userId: actors.staffA.id,
@@ -3564,6 +3720,129 @@ describe('SL-008 Support behavioral acceptance', () => {
       fixture.state.assignmentHistory.length,
       preservedAssignments.length + 2,
     );
+  });
+
+  it('AT-170 clears every active ticket assigned to one disabled Staff atomically', async () => {
+    const fixture = buildSupportFixture();
+    const first = await claimSupportTicket(fixture, await createSupportTicket(
+      fixture,
+      {},
+      'support-disable-batch-first-create-0001',
+    ));
+    const second = await claimSupportTicket(fixture, await createSupportTicket(
+      fixture,
+      { subject: 'Second assigned support case' },
+      'support-disable-batch-second-create-0001',
+    ));
+    let historical = await claimSupportTicket(fixture, await createSupportTicket(
+      fixture,
+      { subject: 'Historical resolved support case' },
+      'support-disable-batch-historical-create-0001',
+    ));
+    historical = await runMutation(
+      requiredMethod(fixture.service, 'resolve'),
+      [actors.staffA, historical.id],
+      { finalMessage: 'Historical case is complete.', expectedVersion: historical.version },
+      'support-disable-batch-historical-resolve-0001',
+    );
+    fixture.state.users.find((item) => item.id === actors.staffA.id).status = 'Disabled';
+    const clearDisabledAssignee = requiredMethod(fixture.service, 'clearDisabledAssignee');
+    const key = 'support-disable-batch-clear-0001';
+    const before = snapshotEffects(fixture.state);
+
+    const cleared = await runMutation(
+      clearDisabledAssignee,
+      [actors.staffA.id],
+      {},
+      key,
+    );
+    const replay = await runMutation(
+      clearDisabledAssignee,
+      [actors.staffA.id],
+      {},
+      key,
+    );
+
+    assert.deepEqual(replay, cleared);
+    assert.equal([first.id, second.id].every((id) => {
+      const ticket = fixture.state.tickets.find((item) => item.id === id);
+      return ticket.status === 'InProgress' && ticket.assigneeId === null;
+    }), true);
+    const retainedHistorical = fixture.state.tickets.find((item) => item.id === historical.id);
+    assert.equal(retainedHistorical.status, 'Resolved');
+    assert.equal(retainedHistorical.assigneeId, actors.staffA.id);
+    assert.equal(retainedHistorical.version, historical.version);
+    assert.equal(
+      fixture.state.assignmentHistory.length - before.assignmentHistory.length,
+      2,
+    );
+    assert.equal(fixture.state.commands.length - before.commands.length, 1);
+    assert.equal(fixture.state.audits.length - before.audits.length, 2);
+    assert.equal(fixture.state.outbox.length - before.outbox.length, 2);
+    const recoveryEvents = fixture.state.outbox.slice(before.outbox.length);
+    assert.equal(new Set(recoveryEvents.map((entry) => entry.identityKey)).size, 2);
+    assert.equal(recoveryEvents.every((entry) => entry.identityKey.startsWith('SL008:')), true);
+  });
+
+  it('AT-170 keeps repeated disable/reassign/disable outbox identities unique for one ticket', async () => {
+    const fixture = buildSupportFixture();
+    let ticket = await claimSupportTicket(fixture, await createSupportTicket(
+      fixture,
+      { subject: 'Repeated lifecycle recovery' },
+      'support-disable-repeat-create-0001',
+    ));
+    const clearDisabledAssignee = requiredMethod(fixture.service, 'clearDisabledAssignee');
+    const staff = fixture.state.users.find((item) => item.id === actors.staffA.id);
+
+    staff.status = 'Disabled';
+    ticket = await runMutation(
+      clearDisabledAssignee,
+      [actors.staffA.id],
+      {},
+      'support-disable-repeat-clear-0001',
+    );
+
+    staff.status = 'Active';
+    ticket = await claimSupportTicket(
+      fixture,
+      ticket,
+      actors.staffA,
+      {},
+      'support-disable-repeat-reclaim-0001',
+    );
+
+    staff.status = 'Disabled';
+    const effectsBeforeSecondClear = snapshotEffectCounts(fixture.state);
+    const transactionsBeforeSecondClear = fixture.state.transactions;
+    const secondClearKey = 'support-disable-repeat-clear-0002';
+    ticket = await runMutation(
+      clearDisabledAssignee,
+      [actors.staffA.id],
+      {},
+      secondClearKey,
+    );
+    const replay = await runMutation(
+      clearDisabledAssignee,
+      [actors.staffA.id],
+      {},
+      secondClearKey,
+    );
+
+    assert.deepEqual(replay, ticket);
+    assert.equal(ticket.status, 'InProgress');
+    assert.equal(ticket.assigneeId, null);
+    const recoveryEvents = fixture.state.outbox.filter(
+      (entry) => entry.eventType === 'ASSIGNEE_CLEARED' && entry.aggregateId === ticket.id,
+    );
+    assert.equal(recoveryEvents.length, 2);
+    assert.equal(new Set(recoveryEvents.map((entry) => entry.identityKey)).size, 2);
+    assert.equal(new Set(recoveryEvents.map((entry) => entry.version)).size, 2);
+    assert.equal(new Set(recoveryEvents.map((entry) => entry.idempotencyKey)).size, 2);
+    assert.deepEqual(
+      effectsDelta(effectsBeforeSecondClear, snapshotEffectCounts(fixture.state)),
+      oneCommandDelta({ assignmentHistory: 1 }),
+    );
+    assert.equal(fixture.state.transactions, transactionsBeforeSecondClear + 1);
   });
 
   it('AT-171 allows only approved withdraw/resolve transitions and resolves with one atomic final message', async () => {
@@ -3768,6 +4047,11 @@ describe('SL-008 Support behavioral acceptance', () => {
       actors.staffA.id,
     );
     assert.equal(inactiveBoundary.fixture.state.assignmentHistory.at(-1).afterAssigneeId, null);
+    assert.equal(
+      inactiveBoundary.fixture.state.assignmentHistory.at(-1).actorId,
+      actors.staffA.id,
+      'System clear history must identify the disabled assignee it recovered',
+    );
     assert.equal(
       inactiveBoundary.fixture.state.resolutionHistory.length,
       inactiveResolutionCount + 1,
@@ -4037,7 +4321,7 @@ describe('SL-008 Support behavioral acceptance', () => {
       { page: 1, pageSize: 20 },
     );
     assertExactSupportDetail(ownerDetail, 'Customer Support detail');
-    assertExactSupportDetail(staffDetail, 'Staff Support detail');
+    assertExactSupportDetail(staffDetail, 'Staff Support detail', { includeTransferTargets: true });
     assert.equal(ownerDetail.id, ownTicket.id);
     assert.equal(staffDetail.id, ownTicket.id);
     assert.ok(Array.isArray(ownerDetail.messages.items));
@@ -4075,14 +4359,17 @@ describe('SL-008 Support behavioral acceptance', () => {
       );
     }
 
-    await expectDomainError(
-      () => listOperational(actors.staffA, {
-        status: 'Open',
-        page: 0,
-        pageSize: 51,
-      }),
-      'SUPPORT_FILTER_INVALID',
-    );
+    for (const filters of [
+      { status: 'Open', page: 0, pageSize: 51 },
+      { dateFrom: '2026-02-30', page: 1, pageSize: 20 },
+      { dateTo: 'not-a-date', page: 1, pageSize: 20 },
+      { dateFrom: '2026-07-31', dateTo: '2026-07-01', page: 1, pageSize: 20 },
+    ]) {
+      await expectDomainError(
+        () => listOperational(actors.staffA, filters),
+        'SUPPORT_FILTER_INVALID',
+      );
+    }
     assert.doesNotMatch(
       JSON.stringify([fixture.state.audits, fixture.state.outbox]),
       /The delivered package needs support\.|email|phone|password|sessionToken/,
@@ -4160,18 +4447,22 @@ describe('SL-008 Support behavioral acceptance', () => {
       supportCreate(),
       supportOperationKey,
     );
-    const supportOperationBefore = snapshotEffects(supportOperationFixture.state);
-    const supportOperationConflict = await expectDomainError(
-      () => runMutation(
-        requiredMethod(supportOperationFixture.service, 'appendMessage'),
-        [actors.customer, supportOperationTicket.id],
-        { message: 'Operation conflict', expectedVersion: supportOperationTicket.version },
-        supportOperationKey,
-      ),
-      'IDEMPOTENCY_KEY_REUSED',
+    const supportOperationBefore = snapshotEffectCounts(supportOperationFixture.state);
+    const supportOperationResult = await runMutation(
+      requiredMethod(supportOperationFixture.service, 'appendMessage'),
+      [actors.customer, supportOperationTicket.id],
+      { message: 'Operation-scoped key reuse', expectedVersion: supportOperationTicket.version },
+      supportOperationKey,
     );
-    assert.equal(supportOperationConflict.statusCode, 409);
-    assert.deepEqual(snapshotEffects(supportOperationFixture.state), supportOperationBefore);
+    assert.equal(supportOperationResult.version, supportOperationTicket.version + 1);
+    assert.deepEqual(
+      effectsDelta(
+        supportOperationBefore,
+        snapshotEffectCounts(supportOperationFixture.state),
+      ),
+      oneCommandDelta({ messages: 1 }),
+      'the same raw key is independent across command operations',
+    );
 
     const supportAggregateFixture = buildSupportFixture();
     const supportFirstTicket = await createSupportTicket(
@@ -4191,18 +4482,22 @@ describe('SL-008 Support behavioral acceptance', () => {
       { message: 'First aggregate command', expectedVersion: supportFirstTicket.version },
       supportAggregateKey,
     );
-    const supportAggregateBefore = snapshotEffects(supportAggregateFixture.state);
-    const supportAggregateConflict = await expectDomainError(
-      () => runMutation(
-        requiredMethod(supportAggregateFixture.service, 'appendMessage'),
-        [actors.customer, supportSecondTicket.id],
-        { message: 'Second aggregate command', expectedVersion: supportSecondTicket.version },
-        supportAggregateKey,
-      ),
-      'IDEMPOTENCY_KEY_REUSED',
+    const supportAggregateBefore = snapshotEffectCounts(supportAggregateFixture.state);
+    const supportAggregateResult = await runMutation(
+      requiredMethod(supportAggregateFixture.service, 'appendMessage'),
+      [actors.customer, supportSecondTicket.id],
+      { message: 'Second aggregate command', expectedVersion: supportSecondTicket.version },
+      supportAggregateKey,
     );
-    assert.equal(supportAggregateConflict.statusCode, 409);
-    assert.deepEqual(snapshotEffects(supportAggregateFixture.state), supportAggregateBefore);
+    assert.equal(supportAggregateResult.version, supportSecondTicket.version + 1);
+    assert.deepEqual(
+      effectsDelta(
+        supportAggregateBefore,
+        snapshotEffectCounts(supportAggregateFixture.state),
+      ),
+      oneCommandDelta({ messages: 1 }),
+      'the same raw key is independent across Support aggregates',
+    );
 
     const matrix = [
       ...['create', 'update', 'publication', 'moderation'].map((family) => ({

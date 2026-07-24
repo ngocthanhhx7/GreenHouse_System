@@ -7,11 +7,14 @@ const supportCommandSchema = new mongoose.Schema({
   operation: { type: String, required: true, immutable: true },
   idempotencyKey: { type: String, required: true, immutable: true },
   fingerprint: { type: String, required: true, immutable: true },
-  currentResultId: { type: String, required: true },
-  currentResultVersion: { type: Number, required: true },
-  result: { type: mongoose.Schema.Types.Mixed, required: true },
+  currentResultId: { type: String, required: true, immutable: true },
+  currentResultVersion: { type: Number, required: true, immutable: true },
+  result: { type: mongoose.Schema.Types.Mixed, required: true, immutable: true },
 }, { timestamps: { createdAt: true, updatedAt: false } });
 
-supportCommandSchema.index({ actorId: 1, idempotencyKey: 1 }, { unique: true });
+supportCommandSchema.index(
+  { actorId: 1, aggregateId: 1, operation: 1, idempotencyKey: 1 },
+  { unique: true },
+);
 
 module.exports = mongoose.model('SupportCommand', supportCommandSchema);

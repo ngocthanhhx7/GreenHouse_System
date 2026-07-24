@@ -13,6 +13,7 @@
     "migrate:sl004": "node src/scripts/migrateSl004FulfillmentDelivery.js",
     "migrate:sl005": "node src/scripts/migrateSl005Inventory.js",
     "migrate:sl006": "node src/scripts/migrateSl006CatalogCart.js",
+    "migrate:sl008": "node src/scripts/migrateSl008ReviewSupport.js",
     "migrate:sl008-review": "node src/scripts/migrateSl008Review.js",
     "migrate:account-auth-rbac": "node src/scripts/migrateAccountAuthRbac.js",
     "verify:sl007-account-auth-rbac": "node src/scripts/verifySl007AccountAuthRbac.js",

@@ -38,22 +38,12 @@ const supportRequestSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
-    content: { type: String, required: true, trim: true, maxlength: 2000 },
     version: { type: Number, required: true, default: 1, min: 1 },
     status: { type: String, enum: ['New', 'InProgress', 'Resolved', 'Withdrawn'], default: 'New' },
     assigneeId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     handledBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
-      default: null,
-    },
-    response: {
-      type: String,
-      default: '',
-      trim: true,
-    },
-    respondedAt: {
-      type: Date,
       default: null,
     },
     closedAt: {
