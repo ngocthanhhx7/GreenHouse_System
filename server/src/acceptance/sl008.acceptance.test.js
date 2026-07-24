@@ -1,4 +1,6 @@
 const assert = require('node:assert/strict');
+const { readFileSync } = require('node:fs');
+const path = require('node:path');
 const { describe, it } = require('node:test');
 
 const { createReviewService } = require('../services/review.service');
@@ -14,6 +16,12 @@ const actors = {
   admin: { id: 'admin-1', role: 'Admin' },
   warehouse: { id: 'warehouse-1', role: 'WarehouseManager' },
 };
+
+function serverSource(relativePath) {
+  return readFileSync(path.join(__dirname, '..', relativePath), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '');
+}
 
 function requiredMethod(service, name) {
   assert.equal(
@@ -48,6 +56,43 @@ function snapshotEffects(state) {
     commands: state.commands?.length || 0,
     audits: state.audits.length,
     outbox: state.outbox.length,
+  };
+}
+
+function snapshotGroupedWrites(state) {
+  return structuredClone({
+    reviews: state.reviews || [],
+    tickets: state.tickets || [],
+    messages: state.messages || [],
+    contentHistory: state.contentHistory || [],
+    publicationHistory: state.publicationHistory || [],
+    moderationHistory: state.moderationHistory || [],
+    assignmentHistory: state.assignmentHistory || [],
+    priorityHistory: state.priorityHistory || [],
+    resolutionHistory: state.resolutionHistory || [],
+    commands: state.commands || [],
+    audits: state.audits || [],
+    outbox: state.outbox || [],
+  });
+}
+
+function mutationGateway(method) {
+  return {
+    calls: [],
+    async [method](...args) {
+      this.calls.push({ method, args: structuredClone(args) });
+    },
+  };
+}
+
+function buildForeignMutationGateways() {
+  return {
+    order: mutationGateway('updateStatus'),
+    payment: mutationGateway('refund'),
+    returnRefund: mutationGateway('updateDisposition'),
+    exchange: mutationGateway('updateStatus'),
+    shipment: mutationGateway('reschedule'),
+    inventory: mutationGateway('reserve'),
   };
 }
 
@@ -239,6 +284,7 @@ function buildReviewFixture({ now = '2026-07-24T12:00:00.000Z' } = {}) {
     },
   };
   const transactionManager = transactionManagerFor(state);
+  const foreignMutationGateways = buildForeignMutationGateways();
   const service = createReviewService({
     repository,
     transactionManager,
@@ -247,9 +293,24 @@ function buildReviewFixture({ now = '2026-07-24T12:00:00.000Z' } = {}) {
     outboxRepository: outbox,
     clock,
     now: () => clock.now(),
+    orderCommandGateway: foreignMutationGateways.order,
+    paymentCommandGateway: foreignMutationGateways.payment,
+    returnRefundCommandGateway: foreignMutationGateways.returnRefund,
+    exchangeCommandGateway: foreignMutationGateways.exchange,
+    shipmentCommandGateway: foreignMutationGateways.shipment,
+    inventoryCommandGateway: foreignMutationGateways.inventory,
   });
 
-  return { state, repository, auditLogger, outbox, clock, transactionManager, service };
+  return {
+    state,
+    repository,
+    auditLogger,
+    outbox,
+    clock,
+    transactionManager,
+    foreignMutationGateways,
+    service,
+  };
 }
 
 function reviewCommand(overrides = {}) {
@@ -258,9 +319,21 @@ function reviewCommand(overrides = {}) {
     content: 'Very useful product',
     orderDetailId: 'detail-001',
     expectedVersion: 0,
-    idempotencyKey: 'review-create-0001',
     ...overrides,
   };
+}
+
+function commandOptions(idempotencyKey) {
+  return { idempotencyKey };
+}
+
+function runMutation(method, positionalArgs, command, idempotencyKey) {
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(command, 'idempotencyKey'),
+    false,
+    'Idempotency-Key belongs in the final options argument, never the JSON command',
+  );
+  return method(...positionalArgs, command, commandOptions(idempotencyKey));
 }
 
 function buildSupportFixture({ now = '2026-07-24T12:00:00.000Z' } = {}) {
@@ -447,22 +520,7 @@ function buildSupportFixture({ now = '2026-07-24T12:00:00.000Z' } = {}) {
       ) || null;
     },
   };
-  function mutationGateway(method) {
-    return {
-      calls: [],
-      async [method](...args) {
-        this.calls.push({ method, args: structuredClone(args) });
-      },
-    };
-  }
-  const foreignMutationGateways = {
-    order: mutationGateway('updateStatus'),
-    payment: mutationGateway('refund'),
-    returnRefund: mutationGateway('updateDisposition'),
-    exchange: mutationGateway('updateStatus'),
-    shipment: mutationGateway('reschedule'),
-    inventory: mutationGateway('reserve'),
-  };
+  const foreignMutationGateways = buildForeignMutationGateways();
   const sl007SessionService = {
     calls: [],
     async revokeAllForUser(userId, reason) {
@@ -479,9 +537,12 @@ function buildSupportFixture({ now = '2026-07-24T12:00:00.000Z' } = {}) {
   const sl007Lifecycle = {
     async disableStaff(userId, clearAssignment) {
       await sl007SessionService.revokeAllForUser(userId, 'ACCOUNT_DISABLED');
-      return clearAssignment(String(userId), {
-        idempotencyKey: `sl007-disable-${userId}`,
-      });
+      return runMutation(
+        clearAssignment,
+        [String(userId)],
+        {},
+        `sl007-disable-${userId}`,
+      );
     },
   };
   const service = createSupportService({
@@ -523,23 +584,244 @@ function supportCreate(overrides = {}) {
     initialMessage: 'The delivered package needs support.',
     orderId: 'order-1',
     expectedVersion: 0,
-    idempotencyKey: 'support-create-0001',
     ...overrides,
   };
 }
 
-async function createSupportTicket(fixture, overrides = {}) {
+async function createSupportTicket(
+  fixture,
+  overrides = {},
+  idempotencyKey = 'support-create-0001',
+  actor = actors.customer,
+) {
   const createRequest = requiredMethod(fixture.service, 'createRequest');
-  return createRequest(actors.customer, supportCreate(overrides));
+  return runMutation(
+    createRequest,
+    [actor],
+    supportCreate(overrides),
+    idempotencyKey,
+  );
 }
 
-async function claimSupportTicket(fixture, ticket, actor = actors.staffA, overrides = {}) {
+async function claimSupportTicket(
+  fixture,
+  ticket,
+  actor = actors.staffA,
+  overrides = {},
+  idempotencyKey = `support-claim-${actor.id}-0001`,
+) {
   const claim = requiredMethod(fixture.service, 'claim');
-  return claim(actor, ticket.id, {
-    expectedVersion: ticket.version,
-    idempotencyKey: `support-claim-${actor.id}-0001`,
+  return runMutation(
+    claim,
+    [actor, ticket.id],
+    { expectedVersion: ticket.version, ...overrides },
+    idempotencyKey,
+  );
+}
+
+function effectsDelta(before, after) {
+  return Object.fromEntries(
+    Object.keys(before).map((key) => [key, after[key] - before[key]]),
+  );
+}
+
+function oneCommandDelta(overrides = {}) {
+  return {
+    reviews: 0,
+    tickets: 0,
+    messages: 0,
+    contentHistory: 0,
+    publicationHistory: 0,
+    moderationHistory: 0,
+    assignmentHistory: 0,
+    priorityHistory: 0,
+    resolutionHistory: 0,
+    commands: 1,
+    audits: 1,
+    outbox: 1,
     ...overrides,
-  });
+  };
+}
+
+function assertForeignMutationGatewaysUnused(fixture) {
+  assert.deepEqual(
+    Object.fromEntries(
+      Object.entries(fixture.foreignMutationGateways)
+        .map(([name, gateway]) => [name, gateway.calls.length]),
+    ),
+    {
+      order: 0,
+      payment: 0,
+      returnRefund: 0,
+      exchange: 0,
+      shipment: 0,
+      inventory: 0,
+    },
+  );
+}
+
+function atomicScenario(
+  fixture,
+  aggregate,
+  eventType,
+  delta,
+  methodName,
+  positionalArgs,
+  command,
+) {
+  const method = requiredMethod(fixture.service, methodName);
+  return {
+    fixture,
+    baseVersion: aggregate?.version ?? 0,
+    eventType,
+    expectedDelta: oneCommandDelta(delta),
+    invoke: (key) => runMutation(method, positionalArgs, command, key),
+  };
+}
+
+async function prepareReviewAtomicScenario(family) {
+  const fixture = buildReviewFixture();
+  const createReview = requiredMethod(fixture.service, 'createReview');
+  if (family === 'create') {
+    return atomicScenario(
+      fixture, null, 'REVIEW_CREATED',
+      { reviews: 1, contentHistory: 1 },
+      'createReview', [actors.customer, 'product-1'], reviewCommand(),
+    );
+  }
+
+  const review = await runMutation(
+    createReview,
+    [actors.customer, 'product-1'],
+    reviewCommand(),
+    `review-atomic-${family}-setup`,
+  );
+  const rows = {
+    update: [
+      'REVIEW_UPDATED', { contentHistory: 1 }, 'updateReview', actors.customer,
+      { rating: 4, content: 'Atomic update matrix' },
+    ],
+    publication: [
+      'REVIEW_PUBLICATION_CHANGED', { publicationHistory: 1 },
+      'setPublication', actors.customer, { publicationStatus: 'Withdrawn' },
+    ],
+    moderation: [
+      'REVIEW_MODERATION_CHANGED', { moderationHistory: 1 },
+      'moderate', actors.staffA,
+      {
+        moderationStatus: 'HiddenByStaff',
+        reason: 'Atomic moderation matrix',
+      },
+    ],
+  };
+  const [eventType, delta, method, actor, command] = rows[family];
+  return atomicScenario(
+    fixture, review, eventType, delta, method, [actor, review.id],
+    { ...command, expectedVersion: review.version },
+  );
+}
+
+async function prepareSupportAtomicScenario(family) {
+  const fixture = buildSupportFixture();
+  if (family === 'create') {
+    return atomicScenario(
+      fixture, null, 'SUPPORT_CREATED', { tickets: 1, messages: 1 },
+      'createRequest', [actors.customer], supportCreate(),
+    );
+  }
+
+  let ticket = await createSupportTicket(
+    fixture, {}, `support-atomic-${family}-create-setup`,
+  );
+  const unassignedRows = {
+    append: [
+      'SUPPORT_MESSAGE_APPENDED', { messages: 1 }, 'appendMessage',
+      actors.customer, { message: 'Atomic message matrix' },
+    ],
+    claim: [
+      'SUPPORT_CLAIMED', { assignmentHistory: 1 }, 'claim',
+      actors.staffA, {},
+    ],
+    withdraw: ['SUPPORT_WITHDRAWN', {}, 'withdraw', actors.customer, {}],
+  };
+  if (unassignedRows[family]) {
+    const [eventType, delta, method, actor, command] = unassignedRows[family];
+    return atomicScenario(
+      fixture, ticket, eventType, delta, method, [actor, ticket.id],
+      { ...command, expectedVersion: ticket.version },
+    );
+  }
+
+  ticket = await claimSupportTicket(
+    fixture, ticket, actors.staffA, {},
+    `support-atomic-${family}-claim-setup`,
+  );
+  const assignedRows = {
+    priority: [
+      'SUPPORT_PRIORITY_CHANGED', { priorityHistory: 1 }, 'changePriority',
+      {
+        priority: 'High',
+        reason: 'Atomic priority matrix',
+      },
+    ],
+    transfer: [
+      'SUPPORT_TRANSFERRED', { assignmentHistory: 1 }, 'transfer',
+      {
+        assigneeId: actors.staffB.id,
+        reason: 'Atomic transfer matrix',
+      },
+    ],
+    resolve: [
+      'SUPPORT_RESOLVED', { messages: 1, resolutionHistory: 1 }, 'resolve',
+      { finalMessage: 'Atomic resolution matrix' },
+    ],
+  };
+  if (assignedRows[family]) {
+    const [eventType, delta, method, command] = assignedRows[family];
+    return atomicScenario(
+      fixture, ticket, eventType, delta, method, [actors.staffA, ticket.id],
+      { ...command, expectedVersion: ticket.version },
+    );
+  }
+
+  fixture.state.users.find((item) => item.id === actors.staffA.id).status =
+    'Disabled';
+  if (family === 'disabled-assignee-clear') {
+    return atomicScenario(
+      fixture, ticket, 'ASSIGNEE_CLEARED', { assignmentHistory: 1 },
+      'clearDisabledAssignee', [actors.staffA.id], {},
+    );
+  }
+  if (family === 'disabled-assignee-recovery') {
+    ticket = await runMutation(
+      requiredMethod(fixture.service, 'clearDisabledAssignee'),
+      [actors.staffA.id],
+      {},
+      'support-atomic-recovery-clear-setup',
+    );
+    return atomicScenario(
+      fixture, ticket, 'SUPPORT_CLAIMED', { assignmentHistory: 1 },
+      'claim', [actors.staffB, ticket.id], { expectedVersion: ticket.version },
+    );
+  }
+
+  fixture.state.users.find((item) => item.id === actors.staffA.id).status =
+    'Active';
+  ticket = await runMutation(
+    requiredMethod(fixture.service, 'resolve'),
+    [actors.staffA, ticket.id],
+    {
+      finalMessage: 'Resolved before atomic reopen matrix',
+      expectedVersion: ticket.version,
+    },
+    'support-atomic-reopen-resolve-setup',
+  );
+  return atomicScenario(
+    fixture, ticket, 'SUPPORT_REOPENED',
+    { messages: 1, resolutionHistory: 1 },
+    'reopen', [actors.customer, ticket.id],
+    { message: 'Atomic reopen matrix', expectedVersion: ticket.version },
+  );
 }
 
 describe('SL-008 Review behavioral acceptance', () => {
@@ -547,7 +829,12 @@ describe('SL-008 Review behavioral acceptance', () => {
     const fixture = buildReviewFixture();
     const createReview = requiredMethod(fixture.service, 'createReview');
 
-    const result = await createReview(actors.customer, 'product-1', reviewCommand());
+    const result = await runMutation(
+      createReview,
+      [actors.customer, 'product-1'],
+      reviewCommand(),
+      'review-create-0001',
+    );
 
     assert.equal(result.orderDetailId, 'detail-001');
     assert.equal(result.customerId, actors.customer.id);
@@ -562,10 +849,11 @@ describe('SL-008 Review behavioral acceptance', () => {
     const tieFixture = buildReviewFixture();
     const createWithTie = requiredMethod(tieFixture.service, 'createReview');
 
-    const tieResult = await createWithTie(
-      actors.customer,
-      'product-1',
+    const tieResult = await runMutation(
+      createWithTie,
+      [actors.customer, 'product-1'],
       reviewCommand({ orderDetailId: undefined }),
+      'review-fallback-tie-0001',
     );
     assert.equal(tieResult.orderDetailId, 'detail-011');
 
@@ -574,13 +862,11 @@ describe('SL-008 Review behavioral acceptance', () => {
       (detail) => detail.id !== 'detail-011',
     );
     const createWithoutTie = requiredMethod(deliveredAtFixture.service, 'createReview');
-    const deliveredAtResult = await createWithoutTie(
-      actors.customer,
-      'product-1',
-      reviewCommand({
-        orderDetailId: undefined,
-        idempotencyKey: 'review-fallback-delivered-at-0001',
-      }),
+    const deliveredAtResult = await runMutation(
+      createWithoutTie,
+      [actors.customer, 'product-1'],
+      reviewCommand({ orderDetailId: undefined }),
+      'review-fallback-delivered-at-0001',
     );
     assert.equal(deliveredAtResult.orderDetailId, 'detail-010');
   });
@@ -589,17 +875,20 @@ describe('SL-008 Review behavioral acceptance', () => {
     const fixture = buildReviewFixture();
     const createReview = requiredMethod(fixture.service, 'createReview');
     const updateReview = requiredMethod(fixture.service, 'updateReview');
-    const created = await createReview(actors.customer, 'product-1', reviewCommand());
+    const created = await runMutation(
+      createReview,
+      [actors.customer, 'product-1'],
+      reviewCommand(),
+      'review-create-0001',
+    );
     const before = snapshotEffects(fixture.state);
 
     const duplicate = await expectDomainError(
-      () => createReview(
-        actors.customer,
-        'product-1',
-        reviewCommand({
-          orderDetailId: 'detail-011',
-          idempotencyKey: 'review-create-repeat-0002',
-        }),
+      () => runMutation(
+        createReview,
+        [actors.customer, 'product-1'],
+        reviewCommand({ orderDetailId: 'detail-011' }),
+        'review-create-repeat-0002',
       ),
       'REVIEW_ALREADY_EXISTS',
     );
@@ -611,12 +900,16 @@ describe('SL-008 Review behavioral acceptance', () => {
     assert.equal(duplicate.data.review.publicationStatus, 'Published');
     assert.equal(duplicate.data.review.moderationStatus, 'Allowed');
 
-    const updated = await updateReview(actors.customer, duplicate.data.review.id, {
-      rating: 4,
-      content: 'Updated from the existing Review identity.',
-      expectedVersion: duplicate.data.review.version,
-      idempotencyKey: 'review-existing-identity-update-0001',
-    });
+    const updated = await runMutation(
+      updateReview,
+      [actors.customer, duplicate.data.review.id],
+      {
+        rating: 4,
+        content: 'Updated from the existing Review identity.',
+        expectedVersion: duplicate.data.review.version,
+      },
+      'review-existing-identity-update-0001',
+    );
     assert.equal(updated.id, created.id);
     assert.equal(fixture.state.reviews.length, 1);
   });
@@ -625,7 +918,12 @@ describe('SL-008 Review behavioral acceptance', () => {
     const fixture = buildReviewFixture();
     const createReview = requiredMethod(fixture.service, 'createReview');
     const listPublic = requiredMethod(fixture.service, 'listPublic');
-    const created = await createReview(actors.customer, 'product-1', reviewCommand());
+    const created = await runMutation(
+      createReview,
+      [actors.customer, 'product-1'],
+      reviewCommand(),
+      'review-create-0001',
+    );
     const originalHistory = structuredClone(fixture.state.contentHistory);
     fixture.state.orders.find((item) => item.id === 'order-old').status = 'Returned';
     fixture.state.returnRefunds = [{
@@ -651,10 +949,12 @@ describe('SL-008 Review behavioral acceptance', () => {
 
     const beforeSecondCreate = snapshotEffects(fixture.state);
     const duplicate = await expectDomainError(
-      () => createReview(actors.customer, 'product-1', reviewCommand({
-        orderDetailId: 'detail-exchange',
-        idempotencyKey: 'review-after-sales-second-create-0001',
-      })),
+      () => runMutation(
+        createReview,
+        [actors.customer, 'product-1'],
+        reviewCommand({ orderDetailId: 'detail-exchange' }),
+        'review-after-sales-second-create-0001',
+      ),
       'REVIEW_ALREADY_EXISTS',
     );
     const publicPage = await listPublic('product-1', { page: 1, pageSize: 20 });
@@ -679,10 +979,11 @@ describe('SL-008 Review behavioral acceptance', () => {
       await t.test(`valid boundary ${index + 1}`, async () => {
         const fixture = buildReviewFixture();
         const createReview = requiredMethod(fixture.service, 'createReview');
-        const result = await createReview(
-          actors.customer,
-          'product-1',
-          reviewCommand({ ...input, idempotencyKey: `review-valid-${index}-0001` }),
+        const result = await runMutation(
+          createReview,
+          [actors.customer, 'product-1'],
+          reviewCommand(input),
+          `review-valid-${index}-0001`,
         );
         assert.equal(result.rating, input.rating);
         assert.equal(result.content, input.expected ?? input.content);
@@ -702,10 +1003,11 @@ describe('SL-008 Review behavioral acceptance', () => {
         const fixture = buildReviewFixture();
         const createReview = requiredMethod(fixture.service, 'createReview');
         await expectDomainError(
-          () => createReview(
-            actors.customer,
-            'product-1',
-            reviewCommand({ ...input, idempotencyKey: `review-invalid-${index}-0001` }),
+          () => runMutation(
+            createReview,
+            [actors.customer, 'product-1'],
+            reviewCommand(input),
+            `review-invalid-${index}-0001`,
           ),
           'REVIEW_VALIDATION_FAILED',
         );
@@ -740,13 +1042,11 @@ describe('SL-008 Review behavioral acceptance', () => {
       const createReview = requiredMethod(fixture.service, 'createReview');
       const before = snapshotEffects(fixture.state);
       const error = await expectDomainError(
-        () => createReview(
-          testCase.actor,
-          testCase.productId,
-          reviewCommand({
-            orderDetailId: testCase.orderDetailId,
-            idempotencyKey: `review-denied-${index}-0001`,
-          }),
+        () => runMutation(
+          createReview,
+          [testCase.actor, testCase.productId],
+          reviewCommand({ orderDetailId: testCase.orderDetailId }),
+          `review-denied-${index}-0001`,
         ),
         'REVIEW_NOT_ELIGIBLE',
       );
@@ -763,7 +1063,12 @@ describe('SL-008 Review behavioral acceptance', () => {
     const fixture = buildReviewFixture();
     const createReview = requiredMethod(fixture.service, 'createReview');
     const listPublic = requiredMethod(fixture.service, 'listPublic');
-    await createReview(actors.customer, 'product-1', reviewCommand());
+    await runMutation(
+      createReview,
+      [actors.customer, 'product-1'],
+      reviewCommand(),
+      'review-create-0001',
+    );
     await fixture.repository.insertReview({
       id: 'review-unicode-name',
       customerId: 'customer-3',
@@ -816,42 +1121,63 @@ describe('SL-008 Review behavioral acceptance', () => {
     const setPublication = requiredMethod(fixture.service, 'setPublication');
     const moderate = requiredMethod(fixture.service, 'moderate');
     const listPublic = requiredMethod(fixture.service, 'listPublic');
-    const created = await createReview(actors.customer, 'product-1', reviewCommand());
+    const created = await runMutation(
+      createReview,
+      [actors.customer, 'product-1'],
+      reviewCommand(),
+      'review-create-0001',
+    );
 
-    const withdrawn = await setPublication(actors.customer, created.id, {
-      publicationStatus: 'Withdrawn',
-      expectedVersion: created.version,
-      idempotencyKey: 'review-withdraw-0001',
-    });
+    const withdrawn = await runMutation(
+      setPublication,
+      [actors.customer, created.id],
+      {
+        publicationStatus: 'Withdrawn',
+        expectedVersion: created.version,
+      },
+      'review-withdraw-0001',
+    );
     assert.equal(withdrawn.publicationStatus, 'Withdrawn');
     assert.equal(withdrawn.moderationStatus, 'Allowed');
     assert.equal((await listPublic('product-1', { page: 1, pageSize: 20 })).total, 0);
 
-    const hidden = await moderate(actors.staffA, created.id, {
-      moderationStatus: 'HiddenByStaff',
-      reason: 'Contains prohibited promotional content',
-      expectedVersion: withdrawn.version,
-      idempotencyKey: 'review-moderate-0001',
-    });
+    const hidden = await runMutation(
+      moderate,
+      [actors.staffA, created.id],
+      {
+        moderationStatus: 'HiddenByStaff',
+        reason: 'Contains prohibited promotional content',
+        expectedVersion: withdrawn.version,
+      },
+      'review-moderate-0001',
+    );
     assert.equal(hidden.publicationStatus, 'Withdrawn');
     assert.equal(hidden.moderationStatus, 'HiddenByStaff');
     assert.equal((await listPublic('product-1', { page: 1, pageSize: 20 })).total, 0);
 
-    const republishedWhileHidden = await setPublication(actors.customer, created.id, {
-      publicationStatus: 'Published',
-      expectedVersion: hidden.version,
-      idempotencyKey: 'review-republish-0001',
-    });
+    const republishedWhileHidden = await runMutation(
+      setPublication,
+      [actors.customer, created.id],
+      {
+        publicationStatus: 'Published',
+        expectedVersion: hidden.version,
+      },
+      'review-republish-0001',
+    );
     assert.equal(republishedWhileHidden.publicationStatus, 'Published');
     assert.equal(republishedWhileHidden.moderationStatus, 'HiddenByStaff');
     assert.equal((await listPublic('product-1', { page: 1, pageSize: 20 })).total, 0);
 
-    const restored = await moderate(actors.staffA, created.id, {
-      moderationStatus: 'Allowed',
-      reason: 'Rechecked and approved for public display',
-      expectedVersion: republishedWhileHidden.version,
-      idempotencyKey: 'review-restore-0001',
-    });
+    const restored = await runMutation(
+      moderate,
+      [actors.staffA, created.id],
+      {
+        moderationStatus: 'Allowed',
+        reason: 'Rechecked and approved for public display',
+        expectedVersion: republishedWhileHidden.version,
+      },
+      'review-restore-0001',
+    );
     assert.equal(restored.publicationStatus, 'Published');
     assert.equal(restored.moderationStatus, 'Allowed');
     assert.equal((await listPublic('product-1', { page: 1, pageSize: 20 })).total, 1);
@@ -866,52 +1192,81 @@ describe('SL-008 Review behavioral acceptance', () => {
     const setPublication = requiredMethod(fixture.service, 'setPublication');
     const moderate = requiredMethod(fixture.service, 'moderate');
     const listPublic = requiredMethod(fixture.service, 'listPublic');
-    const created = await createReview(actors.customer, 'product-1', reviewCommand());
+    const created = await runMutation(
+      createReview,
+      [actors.customer, 'product-1'],
+      reviewCommand(),
+      'review-create-0001',
+    );
     const originalContentHistory = structuredClone(fixture.state.contentHistory);
 
-    const hidden = await moderate(actors.staffA, created.id, {
-      moderationStatus: 'HiddenByStaff',
-      reason: 'Temporarily hidden for policy review',
-      expectedVersion: created.version,
-      idempotencyKey: 'review-history-hide-0001',
-    });
-    const withdrawn = await setPublication(actors.customer, created.id, {
-      publicationStatus: 'Withdrawn',
-      expectedVersion: hidden.version,
-      idempotencyKey: 'review-history-withdraw-0001',
-    });
+    const hidden = await runMutation(
+      moderate,
+      [actors.staffA, created.id],
+      {
+        moderationStatus: 'HiddenByStaff',
+        reason: 'Temporarily hidden for policy review',
+        expectedVersion: created.version,
+      },
+      'review-history-hide-0001',
+    );
+    const withdrawn = await runMutation(
+      setPublication,
+      [actors.customer, created.id],
+      {
+        publicationStatus: 'Withdrawn',
+        expectedVersion: hidden.version,
+      },
+      'review-history-withdraw-0001',
+    );
     const firstModeration = structuredClone(fixture.state.moderationHistory[0]);
     const firstPublication = structuredClone(fixture.state.publicationHistory[0]);
 
-    const updated = await updateReview(actors.customer, created.id, {
-      rating: 4,
-      content: 'Updated customer content',
-      expectedVersion: withdrawn.version,
-      idempotencyKey: 'review-update-0001',
-    });
+    const updated = await runMutation(
+      updateReview,
+      [actors.customer, created.id],
+      {
+        rating: 4,
+        content: 'Updated customer content',
+        expectedVersion: withdrawn.version,
+      },
+      'review-update-0001',
+    );
     assert.equal(updated.moderationStatus, 'HiddenByStaff');
     assert.equal(updated.publicationStatus, 'Withdrawn');
     assert.equal((await listPublic('product-1', { page: 1, pageSize: 20 })).total, 0);
     const updatedContentHistory = structuredClone(fixture.state.contentHistory.at(-1));
 
-    const republished = await setPublication(actors.customer, created.id, {
-      publicationStatus: 'Published',
-      expectedVersion: updated.version,
-      idempotencyKey: 'review-history-republish-0001',
-    });
-    const restored = await moderate(actors.staffA, created.id, {
-      moderationStatus: 'Allowed',
-      reason: 'Policy review completed',
-      expectedVersion: republished.version,
-      idempotencyKey: 'review-history-restore-0001',
-    });
+    const republished = await runMutation(
+      setPublication,
+      [actors.customer, created.id],
+      {
+        publicationStatus: 'Published',
+        expectedVersion: updated.version,
+      },
+      'review-history-republish-0001',
+    );
+    const restored = await runMutation(
+      moderate,
+      [actors.staffA, created.id],
+      {
+        moderationStatus: 'Allowed',
+        reason: 'Policy review completed',
+        expectedVersion: republished.version,
+      },
+      'review-history-restore-0001',
+    );
     await expectDomainError(
-      () => updateReview(actors.staffA, created.id, {
-        rating: 1,
-        content: 'Staff overwrite',
-        expectedVersion: restored.version,
-        idempotencyKey: 'review-staff-edit-0001',
-      }),
+      () => runMutation(
+        updateReview,
+        [actors.staffA, created.id],
+        {
+          rating: 1,
+          content: 'Staff overwrite',
+          expectedVersion: restored.version,
+        },
+        'review-staff-edit-0001',
+      ),
       'REVIEW_FORBIDDEN',
     );
 
@@ -1013,12 +1368,16 @@ describe('SL-008 Review behavioral acceptance', () => {
     assert.equal(first.totalPages, 2);
     assert.equal(second.totalPages, 2);
 
-    await updateReview(actors.customer, 'review-d', {
-      rating: 2,
-      content: 'D edited later',
-      expectedVersion: 1,
-      idempotencyKey: 'review-stable-edit-0001',
-    });
+    await runMutation(
+      updateReview,
+      [actors.customer, 'review-d'],
+      {
+        rating: 2,
+        content: 'D edited later',
+        expectedVersion: 1,
+      },
+      'review-stable-edit-0001',
+    );
     const afterEditPage1 = await listPublic('product-1', { page: 1, pageSize: 2 });
     const afterEditPage2 = await listPublic('product-1', { page: 2, pageSize: 2 });
     const afterEdit = [...afterEditPage1.items, ...afterEditPage2.items]
@@ -1039,8 +1398,18 @@ describe('SL-008 Review behavioral acceptance', () => {
     const command = reviewCommand();
 
     const [first, replay] = await Promise.all([
-      createReview(actors.customer, 'product-1', command),
-      createReview(actors.customer, 'product-1', command),
+      runMutation(
+        createReview,
+        [actors.customer, 'product-1'],
+        command,
+        'review-create-0001',
+      ),
+      runMutation(
+        createReview,
+        [actors.customer, 'product-1'],
+        command,
+        'review-create-0001',
+      ),
     ]);
     assert.equal(first.id, replay.id);
     assert.equal(fixture.state.reviews.length, 1);
@@ -1051,11 +1420,20 @@ describe('SL-008 Review behavioral acceptance', () => {
     const publicationCommand = {
       publicationStatus: 'Withdrawn',
       expectedVersion: first.version,
-      idempotencyKey: 'review-publication-race-0001',
     };
     const [publication, publicationReplay] = await Promise.all([
-      setPublication(actors.customer, first.id, publicationCommand),
-      setPublication(actors.customer, first.id, publicationCommand),
+      runMutation(
+        setPublication,
+        [actors.customer, first.id],
+        publicationCommand,
+        'review-publication-race-0001',
+      ),
+      runMutation(
+        setPublication,
+        [actors.customer, first.id],
+        publicationCommand,
+        'review-publication-race-0001',
+      ),
     ]);
     assert.equal(publicationReplay.version, publication.version);
     assert.equal(publication.version, first.version + 1);
@@ -1073,11 +1451,20 @@ describe('SL-008 Review behavioral acceptance', () => {
       moderationStatus: 'HiddenByStaff',
       reason: 'Repeated moderation must apply once',
       expectedVersion: publication.version,
-      idempotencyKey: 'review-moderation-race-0001',
     };
     const [moderated, moderationReplay] = await Promise.all([
-      moderate(actors.staffA, first.id, moderationCommand),
-      moderate(actors.staffA, first.id, moderationCommand),
+      runMutation(
+        moderate,
+        [actors.staffA, first.id],
+        moderationCommand,
+        'review-moderation-race-0001',
+      ),
+      runMutation(
+        moderate,
+        [actors.staffA, first.id],
+        moderationCommand,
+        'review-moderation-race-0001',
+      ),
     ]);
     assert.equal(moderationReplay.version, moderated.version);
     assert.equal(moderated.version, publication.version + 1);
@@ -1093,12 +1480,16 @@ describe('SL-008 Review behavioral acceptance', () => {
 
     const beforeStale = snapshotEffects(fixture.state);
     await expectDomainError(
-      () => updateReview(actors.customer, first.id, {
-        rating: 4,
-        content: 'stale',
-        expectedVersion: publication.version,
-        idempotencyKey: 'review-stale-0001',
-      }),
+      () => runMutation(
+        updateReview,
+        [actors.customer, first.id],
+        {
+          rating: 4,
+          content: 'stale',
+          expectedVersion: publication.version,
+        },
+        'review-stale-0001',
+      ),
       'REVIEW_VERSION_CONFLICT',
     );
     assert.deepEqual(snapshotEffects(fixture.state), beforeStale);
@@ -1106,12 +1497,18 @@ describe('SL-008 Review behavioral acceptance', () => {
     const distinctKeyFixture = buildReviewFixture();
     const distinctCreate = requiredMethod(distinctKeyFixture.service, 'createReview');
     const distinctResults = await Promise.allSettled([
-      distinctCreate(actors.customer, 'product-1', reviewCommand({
-        idempotencyKey: 'review-distinct-race-a',
-      })),
-      distinctCreate(actors.customer, 'product-1', reviewCommand({
-        idempotencyKey: 'review-distinct-race-b',
-      })),
+      runMutation(
+        distinctCreate,
+        [actors.customer, 'product-1'],
+        reviewCommand(),
+        'review-distinct-race-a',
+      ),
+      runMutation(
+        distinctCreate,
+        [actors.customer, 'product-1'],
+        reviewCommand(),
+        'review-distinct-race-b',
+      ),
     ]);
     assert.equal(distinctResults.filter((item) => item.status === 'fulfilled').length, 1);
     assert.equal(distinctResults.filter((item) => item.status === 'rejected').length, 1);
@@ -1125,27 +1522,103 @@ describe('SL-008 Review behavioral acceptance', () => {
     assert.equal(distinctKeyFixture.state.outbox.length, 1);
 
     for (const [index, invalid] of [
-      { idempotencyKey: 'short' },
-      { idempotencyKey: 'x'.repeat(129) },
-      { expectedVersion: -1, idempotencyKey: 'review-invalid-version-0001' },
-      { expectedVersion: 1.5, idempotencyKey: 'review-invalid-version-0002' },
+      { command: {}, key: 'short' },
+      { command: {}, key: 'x'.repeat(129) },
+      { command: { expectedVersion: -1 }, key: 'review-invalid-version-0001' },
+      { command: { expectedVersion: 1.5 }, key: 'review-invalid-version-0002' },
     ].entries()) {
       const invalidFixture = buildReviewFixture();
       const invalidCreate = requiredMethod(invalidFixture.service, 'createReview');
       await expectDomainError(
-        () => invalidCreate(
-          actors.customer,
-          'product-1',
-          reviewCommand({
-            ...invalid,
-            idempotencyKey: invalid.idempotencyKey || `review-invalid-command-${index}`,
-          }),
+        () => runMutation(
+          invalidCreate,
+          [actors.customer, 'product-1'],
+          reviewCommand(invalid.command),
+          invalid.key || `review-invalid-command-${index}`,
         ),
         'COMMAND_VALIDATION_FAILED',
       );
       assert.equal(invalidFixture.state.reviews.length, 0);
       assert.equal(invalidFixture.state.audits.length, 0);
       assert.equal(invalidFixture.state.outbox.length, 0);
+    }
+  });
+
+  it('AT-158/173 denies every wrong-role Review command with zero effects', async () => {
+    const rows = [
+      ...[actors.staffA, actors.admin, actors.warehouse]
+        .map((actor) => ({ family: 'create', actor })),
+      ...[actors.staffA, actors.admin, actors.warehouse]
+        .map((actor) => ({ family: 'update', actor })),
+      ...[actors.staffA, actors.admin, actors.warehouse]
+        .map((actor) => ({ family: 'publication', actor })),
+      ...[actors.customer, actors.admin, actors.warehouse]
+        .map((actor) => ({ family: 'moderation', actor })),
+    ];
+
+    for (const [index, row] of rows.entries()) {
+      const fixture = buildReviewFixture();
+      const createReview = requiredMethod(fixture.service, 'createReview');
+      let invoke;
+      if (row.family === 'create') {
+        invoke = () => runMutation(
+          createReview,
+          [row.actor, 'product-1'],
+          reviewCommand(),
+          `review-role-${row.family}-${index}-0001`,
+        );
+      } else {
+        const review = await runMutation(
+          createReview,
+          [actors.customer, 'product-1'],
+          reviewCommand(),
+          `review-role-${row.family}-${index}-setup`,
+        );
+        if (row.family === 'update') {
+          const updateReview = requiredMethod(fixture.service, 'updateReview');
+          invoke = () => runMutation(
+            updateReview,
+            [row.actor, review.id],
+            {
+              rating: 4,
+              content: 'Wrong-role edit attempt',
+              expectedVersion: review.version,
+            },
+            `review-role-${row.family}-${index}-0001`,
+          );
+        } else if (row.family === 'publication') {
+          const setPublication = requiredMethod(fixture.service, 'setPublication');
+          invoke = () => runMutation(
+            setPublication,
+            [row.actor, review.id],
+            {
+              publicationStatus: 'Withdrawn',
+              expectedVersion: review.version,
+            },
+            `review-role-${row.family}-${index}-0001`,
+          );
+        } else {
+          const moderate = requiredMethod(fixture.service, 'moderate');
+          invoke = () => runMutation(
+            moderate,
+            [row.actor, review.id],
+            {
+              moderationStatus: 'HiddenByStaff',
+              reason: 'Wrong-role moderation attempt',
+              expectedVersion: review.version,
+            },
+            `review-role-${row.family}-${index}-0001`,
+          );
+        }
+      }
+
+      const before = snapshotEffects(fixture.state);
+      await expectDomainError(invoke, 'REVIEW_FORBIDDEN');
+      assert.deepEqual(
+        snapshotEffects(fixture.state),
+        before,
+        `${row.actor.role} ${row.family} denial must have zero effects`,
+      );
     }
   });
 });
@@ -1168,8 +1641,7 @@ describe('SL-008 Support behavioral acceptance', () => {
         type,
         orderId: undefined,
         ...references,
-        idempotencyKey: `support-type-${index}-0001`,
-      });
+      }, `support-type-${index}-0001`);
       assert.equal(ticket.type, type);
       assert.equal(ticket.status, 'New');
       assert.equal(ticket.assigneeId, null);
@@ -1201,8 +1673,7 @@ describe('SL-008 Support behavioral acceptance', () => {
       const boundaryFixture = buildSupportFixture();
       const ticket = await createSupportTicket(boundaryFixture, {
         ...boundary,
-        idempotencyKey: `support-create-boundary-valid-${index}`,
-      });
+      }, `support-create-boundary-valid-${index}`);
       assert.equal(ticket.subject.length, boundary.subject.length);
       assert.equal(boundaryFixture.state.messages[0].content.length, boundary.initialMessage.length);
     }
@@ -1216,10 +1687,12 @@ describe('SL-008 Support behavioral acceptance', () => {
       const boundaryFixture = buildSupportFixture();
       const createRequest = requiredMethod(boundaryFixture.service, 'createRequest');
       await expectDomainError(
-        () => createRequest(actors.customer, supportCreate({
-          ...boundary,
-          idempotencyKey: `support-create-boundary-invalid-${index}`,
-        })),
+        () => runMutation(
+          createRequest,
+          [actors.customer],
+          supportCreate(boundary),
+          `support-create-boundary-invalid-${index}`,
+        ),
         'SUPPORT_VALIDATION_FAILED',
       );
       assert.equal(boundaryFixture.state.tickets.length, 0);
@@ -1233,9 +1706,11 @@ describe('SL-008 Support behavioral acceptance', () => {
       const createRequest = requiredMethod(fixture.service, 'createRequest');
       const before = snapshotEffects(fixture.state);
       const error = await expectDomainError(
-        () => createRequest(
-          actors.customer,
-          supportCreate({ orderId, idempotencyKey: `support-order-denied-${index}-0001` }),
+        () => runMutation(
+          createRequest,
+          [actors.customer],
+          supportCreate({ orderId }),
+          `support-order-denied-${index}-0001`,
         ),
         'SUPPORT_REFERENCE_NOT_FOUND',
       );
@@ -1256,12 +1731,16 @@ describe('SL-008 Support behavioral acceptance', () => {
       const createRequest = requiredMethod(fixture.service, 'createRequest');
       const before = snapshotEffects(fixture.state);
       await expectDomainError(
-        () => createRequest(actors.customer, supportCreate({
-          type: 'Product',
-          orderId: undefined,
-          ...references,
-          idempotencyKey: `support-product-denied-${index}-0001`,
-        })),
+        () => runMutation(
+          createRequest,
+          [actors.customer],
+          supportCreate({
+            type: 'Product',
+            orderId: undefined,
+            ...references,
+          }),
+          `support-product-denied-${index}-0001`,
+        ),
         'SUPPORT_REFERENCE_NOT_FOUND',
       );
       assert.deepEqual(snapshotEffects(fixture.state), before);
@@ -1275,8 +1754,7 @@ describe('SL-008 Support behavioral acceptance', () => {
         type,
         orderId: undefined,
         productId: undefined,
-        idempotencyKey: `support-${type.toLowerCase()}-without-refs-0001`,
-      });
+      }, `support-${type.toLowerCase()}-without-refs-0001`);
       assert.equal(withoutRefs.type, type);
       assert.equal(withoutRefs.orderId, undefined);
       assert.equal(withoutRefs.productId, undefined);
@@ -1285,8 +1763,7 @@ describe('SL-008 Support behavioral acceptance', () => {
         type,
         orderId: 'order-1',
         productId: 'product-1',
-        idempotencyKey: `support-${type.toLowerCase()}-with-refs-0001`,
-      });
+      }, `support-${type.toLowerCase()}-with-refs-0001`);
       assert.equal(withRefs.orderId, 'order-1');
       assert.equal(withRefs.productId, 'product-1');
 
@@ -1298,11 +1775,12 @@ describe('SL-008 Support behavioral acceptance', () => {
         const createRequest = requiredMethod(invalidFixture.service, 'createRequest');
         const before = snapshotEffects(invalidFixture.state);
         await expectDomainError(
-          () => createRequest(actors.customer, supportCreate({
-            type,
-            ...references,
-            idempotencyKey: `support-${type.toLowerCase()}-invalid-${index}-0001`,
-          })),
+          () => runMutation(
+            createRequest,
+            [actors.customer],
+            supportCreate({ type, ...references }),
+            `support-${type.toLowerCase()}-invalid-${index}-0001`,
+          ),
           'SUPPORT_REFERENCE_NOT_FOUND',
         );
         assert.deepEqual(snapshotEffects(invalidFixture.state), before);
@@ -1318,15 +1796,28 @@ describe('SL-008 Support behavioral acceptance', () => {
     const command = {
       message: 'x',
       expectedVersion: ticket.version,
-      idempotencyKey: 'support-message-0001',
     };
-    const first = await appendMessage(actors.customer, ticket.id, command);
-    const replay = await appendMessage(actors.customer, ticket.id, command);
-    const third = await appendMessage(actors.customer, ticket.id, {
-      message: 'm'.repeat(2000),
-      expectedVersion: first.version,
-      idempotencyKey: 'support-message-0002',
-    });
+    const first = await runMutation(
+      appendMessage,
+      [actors.customer, ticket.id],
+      command,
+      'support-message-0001',
+    );
+    const replay = await runMutation(
+      appendMessage,
+      [actors.customer, ticket.id],
+      command,
+      'support-message-0001',
+    );
+    const third = await runMutation(
+      appendMessage,
+      [actors.customer, ticket.id],
+      {
+        message: 'm'.repeat(2000),
+        expectedVersion: first.version,
+      },
+      'support-message-0002',
+    );
 
     assert.equal(first.id, replay.id);
     assert.equal(fixture.state.messages.length, 3);
@@ -1376,11 +1867,12 @@ describe('SL-008 Support behavioral acceptance', () => {
     for (const [index, message] of ['', 'm'.repeat(2001)].entries()) {
       const before = snapshotEffects(fixture.state);
       await expectDomainError(
-        () => appendMessage(actors.customer, ticket.id, {
-          message,
-          expectedVersion: third.version,
-          idempotencyKey: `support-message-invalid-${index}`,
-        }),
+        () => runMutation(
+          appendMessage,
+          [actors.customer, ticket.id],
+          { message, expectedVersion: third.version },
+          `support-message-invalid-${index}`,
+        ),
         'SUPPORT_VALIDATION_FAILED',
       );
       assert.deepEqual(snapshotEffects(fixture.state), before);
@@ -1393,72 +1885,105 @@ describe('SL-008 Support behavioral acceptance', () => {
     const appendMessage = requiredMethod(fixture.service, 'appendMessage');
     const beforeForeign = snapshotEffects(fixture.state);
     await expectDomainError(
-      () => appendMessage(actors.foreignCustomer, ticket.id, {
-        message: 'Foreign Customer message.',
-        expectedVersion: ticket.version,
-        idempotencyKey: 'support-foreign-customer-message-0001',
-      }),
+      () => runMutation(
+        appendMessage,
+        [actors.foreignCustomer, ticket.id],
+        {
+          message: 'Foreign Customer message.',
+          expectedVersion: ticket.version,
+        },
+        'support-foreign-customer-message-0001',
+      ),
       'SUPPORT_FORBIDDEN',
     );
     assert.deepEqual(snapshotEffects(fixture.state), beforeForeign);
     await expectDomainError(
-      () => appendMessage(actors.staffA, ticket.id, {
-        message: 'Staff cannot message an unassigned New ticket.',
-        expectedVersion: ticket.version,
-        idempotencyKey: 'support-staff-new-message-0001',
-      }),
+      () => runMutation(
+        appendMessage,
+        [actors.staffA, ticket.id],
+        {
+          message: 'Staff cannot message an unassigned New ticket.',
+          expectedVersion: ticket.version,
+        },
+        'support-staff-new-message-0001',
+      ),
       'SUPPORT_FORBIDDEN',
     );
-    const customerMessage = await appendMessage(actors.customer, ticket.id, {
-      message: 'Owner message while New.',
-      expectedVersion: ticket.version,
-      idempotencyKey: 'support-owner-new-0001',
-    });
+    const customerMessage = await runMutation(
+      appendMessage,
+      [actors.customer, ticket.id],
+      {
+        message: 'Owner message while New.',
+        expectedVersion: ticket.version,
+      },
+      'support-owner-new-0001',
+    );
     const claimed = await claimSupportTicket(fixture, customerMessage);
 
-    const customerInProgress = await appendMessage(actors.customer, ticket.id, {
-      message: 'Owner message while InProgress.',
-      expectedVersion: claimed.version,
-      idempotencyKey: 'support-owner-in-progress-0001',
-    });
+    const customerInProgress = await runMutation(
+      appendMessage,
+      [actors.customer, ticket.id],
+      {
+        message: 'Owner message while InProgress.',
+        expectedVersion: claimed.version,
+      },
+      'support-owner-in-progress-0001',
+    );
     await expectDomainError(
-      () => appendMessage(actors.staffB, ticket.id, {
-        message: 'Non-assignee message.',
-        expectedVersion: customerInProgress.version,
-        idempotencyKey: 'support-non-assignee-message-0001',
-      }),
+      () => runMutation(
+        appendMessage,
+        [actors.staffB, ticket.id],
+        {
+          message: 'Non-assignee message.',
+          expectedVersion: customerInProgress.version,
+        },
+        'support-non-assignee-message-0001',
+      ),
       'SUPPORT_FORBIDDEN',
     );
-    const staffMessage = await appendMessage(actors.staffA, ticket.id, {
-      message: 'Current assignee message.',
-      expectedVersion: customerInProgress.version,
-      idempotencyKey: 'support-assignee-message-0001',
-    });
+    const staffMessage = await runMutation(
+      appendMessage,
+      [actors.staffA, ticket.id],
+      {
+        message: 'Current assignee message.',
+        expectedVersion: customerInProgress.version,
+      },
+      'support-assignee-message-0001',
+    );
     const beforeStale = snapshotEffects(fixture.state);
     await expectDomainError(
-      () => appendMessage(actors.customer, ticket.id, {
-        message: 'Stale message.',
-        expectedVersion: claimed.version,
-        idempotencyKey: 'support-stale-message-0001',
-      }),
+      () => runMutation(
+        appendMessage,
+        [actors.customer, ticket.id],
+        { message: 'Stale message.', expectedVersion: claimed.version },
+        'support-stale-message-0001',
+      ),
       'SUPPORT_VERSION_CONFLICT',
     );
     assert.deepEqual(snapshotEffects(fixture.state), beforeStale);
 
     const resolve = requiredMethod(fixture.service, 'resolve');
-    const resolved = await resolve(actors.staffA, ticket.id, {
-      finalMessage: 'Terminal resolution message.',
-      expectedVersion: staffMessage.version,
-      idempotencyKey: 'support-message-terminal-resolve-0001',
-    });
+    const resolved = await runMutation(
+      resolve,
+      [actors.staffA, ticket.id],
+      {
+        finalMessage: 'Terminal resolution message.',
+        expectedVersion: staffMessage.version,
+      },
+      'support-message-terminal-resolve-0001',
+    );
     for (const [index, actor] of [actors.customer, actors.staffA].entries()) {
       const beforeTerminal = snapshotEffects(fixture.state);
       await expectDomainError(
-        () => appendMessage(actor, ticket.id, {
-          message: 'Terminal tickets reject messages.',
-          expectedVersion: resolved.version,
-          idempotencyKey: `support-resolved-message-denied-${index}`,
-        }),
+        () => runMutation(
+          appendMessage,
+          [actor, ticket.id],
+          {
+            message: 'Terminal tickets reject messages.',
+            expectedVersion: resolved.version,
+          },
+          `support-resolved-message-denied-${index}`,
+        ),
         'SUPPORT_TRANSITION_INVALID',
       );
       assert.deepEqual(snapshotEffects(fixture.state), beforeTerminal);
@@ -1467,17 +1992,23 @@ describe('SL-008 Support behavioral acceptance', () => {
     const withdrawnFixture = buildSupportFixture();
     const withdrawnTicket = await createSupportTicket(withdrawnFixture);
     const withdraw = requiredMethod(withdrawnFixture.service, 'withdraw');
-    const withdrawn = await withdraw(actors.customer, withdrawnTicket.id, {
-      expectedVersion: withdrawnTicket.version,
-      idempotencyKey: 'support-message-withdraw-0001',
-    });
+    const withdrawn = await runMutation(
+      withdraw,
+      [actors.customer, withdrawnTicket.id],
+      { expectedVersion: withdrawnTicket.version },
+      'support-message-withdraw-0001',
+    );
     const appendWithdrawn = requiredMethod(withdrawnFixture.service, 'appendMessage');
     await expectDomainError(
-      () => appendWithdrawn(actors.customer, withdrawn.id, {
-        message: 'Withdrawn tickets reject messages.',
-        expectedVersion: withdrawn.version,
-        idempotencyKey: 'support-withdrawn-message-denied-0001',
-      }),
+      () => runMutation(
+        appendWithdrawn,
+        [actors.customer, withdrawn.id],
+        {
+          message: 'Withdrawn tickets reject messages.',
+          expectedVersion: withdrawn.version,
+        },
+        'support-withdrawn-message-denied-0001',
+      ),
       'SUPPORT_TRANSITION_INVALID',
     );
     assert.equal(typeof fixture.service.editMessage, 'undefined');
@@ -1491,14 +2022,18 @@ describe('SL-008 Support behavioral acceptance', () => {
     const ticket = await createSupportTicket(fixture);
     const claim = requiredMethod(fixture.service, 'claim');
     const results = await Promise.allSettled([
-      claim(actors.staffA, ticket.id, {
-        expectedVersion: ticket.version,
-        idempotencyKey: 'support-claim-race-a',
-      }),
-      claim(actors.staffB, ticket.id, {
-        expectedVersion: ticket.version,
-        idempotencyKey: 'support-claim-race-b',
-      }),
+      runMutation(
+        claim,
+        [actors.staffA, ticket.id],
+        { expectedVersion: ticket.version },
+        'support-claim-race-a',
+      ),
+      runMutation(
+        claim,
+        [actors.staffB, ticket.id],
+        { expectedVersion: ticket.version },
+        'support-claim-race-b',
+      ),
     ]);
 
     const winners = results.filter((item) => item.status === 'fulfilled');
@@ -1519,6 +2054,13 @@ describe('SL-008 Support behavioral acceptance', () => {
       {
         name: 'appendMessage',
         input: { message: 'Assignee operational update.' },
+        deniedActors: [
+          actors.foreignCustomer,
+          actors.staffB,
+          actors.inactiveStaff,
+          actors.admin,
+          actors.warehouse,
+        ],
       },
       {
         name: 'changePriority',
@@ -1539,7 +2081,7 @@ describe('SL-008 Support behavioral acceptance', () => {
         input: { finalMessage: 'The issue is resolved with a replacement.' },
       },
     ];
-    const deniedActors = [
+    const defaultDeniedActors = [
       actors.customer,
       actors.foreignCustomer,
       actors.staffB,
@@ -1550,36 +2092,149 @@ describe('SL-008 Support behavioral acceptance', () => {
 
     for (const [commandIndex, command] of commandCases.entries()) {
       const allowedFixture = buildSupportFixture();
-      const allowedTicket = await createSupportTicket(allowedFixture, {
-        idempotencyKey: `support-matrix-allowed-create-${commandIndex}`,
-      });
+      const allowedTicket = await createSupportTicket(
+        allowedFixture,
+        {},
+        `support-matrix-allowed-create-${commandIndex}`,
+      );
       const allowedClaim = await claimSupportTicket(allowedFixture, allowedTicket);
       const allowedCommand = requiredMethod(allowedFixture.service, command.name);
-      const allowed = await allowedCommand(actors.staffA, allowedTicket.id, {
-        ...command.input,
-        expectedVersion: allowedClaim.version,
-        idempotencyKey: `support-matrix-allowed-${command.name}-0001`,
-      });
+      const allowed = await runMutation(
+        allowedCommand,
+        [actors.staffA, allowedTicket.id],
+        { ...command.input, expectedVersion: allowedClaim.version },
+        `support-matrix-allowed-${command.name}-0001`,
+      );
       assert.ok(allowed);
 
-      for (const [actorIndex, actor] of deniedActors.entries()) {
+      for (const [actorIndex, actor] of (
+        command.deniedActors || defaultDeniedActors
+      ).entries()) {
         const fixture = buildSupportFixture();
-        const ticket = await createSupportTicket(fixture, {
-          idempotencyKey: `support-matrix-create-${commandIndex}-${actorIndex}`,
-        });
+        const ticket = await createSupportTicket(
+          fixture,
+          {},
+          `support-matrix-create-${commandIndex}-${actorIndex}`,
+        );
         const claimed = await claimSupportTicket(fixture, ticket);
         const serviceCommand = requiredMethod(fixture.service, command.name);
         const before = snapshotEffects(fixture.state);
         await expectDomainError(
-          () => serviceCommand(actor, ticket.id, {
-            ...command.input,
-            expectedVersion: claimed.version,
-            idempotencyKey: `support-matrix-denied-${command.name}-${actorIndex}`,
-          }),
+          () => runMutation(
+            serviceCommand,
+            [actor, ticket.id],
+            { ...command.input, expectedVersion: claimed.version },
+            `support-matrix-denied-${command.name}-${actorIndex}`,
+          ),
           'SUPPORT_FORBIDDEN',
         );
         assert.deepEqual(snapshotEffects(fixture.state), before);
       }
+    }
+  });
+
+  it('AT-166/168/173 table-drives wrong-role Support lifecycle commands with zero effects', async () => {
+    const rows = [
+      ...[actors.staffA, actors.admin, actors.warehouse]
+        .map((actor) => ({ family: 'create', actor })),
+      ...[actors.foreignCustomer, actors.staffA, actors.admin, actors.warehouse]
+        .map((actor) => ({ family: 'append', actor })),
+      ...[actors.foreignCustomer, actors.staffA, actors.admin, actors.warehouse]
+        .map((actor) => ({ family: 'withdraw', actor })),
+      ...[actors.foreignCustomer, actors.staffA, actors.admin, actors.warehouse]
+        .map((actor) => ({ family: 'reopen', actor })),
+      ...[
+        actors.customer,
+        actors.foreignCustomer,
+        actors.inactiveStaff,
+        actors.admin,
+        actors.warehouse,
+      ].map((actor) => ({ family: 'claim', actor })),
+    ];
+
+    for (const [index, row] of rows.entries()) {
+      const fixture = buildSupportFixture();
+      let invoke;
+      if (row.family === 'create') {
+        const createRequest = requiredMethod(fixture.service, 'createRequest');
+        invoke = () => runMutation(
+          createRequest,
+          [row.actor],
+          supportCreate(),
+          `support-role-${row.family}-${index}-0001`,
+        );
+      } else {
+        let ticket = await createSupportTicket(
+          fixture,
+          {},
+          `support-role-${row.family}-${index}-setup`,
+        );
+        if (row.family === 'append') {
+          const appendMessage = requiredMethod(fixture.service, 'appendMessage');
+          invoke = () => runMutation(
+            appendMessage,
+            [row.actor, ticket.id],
+            {
+              message: 'Wrong-role append attempt',
+              expectedVersion: ticket.version,
+            },
+            `support-role-${row.family}-${index}-0001`,
+          );
+        } else if (row.family === 'withdraw') {
+          const withdraw = requiredMethod(fixture.service, 'withdraw');
+          invoke = () => runMutation(
+            withdraw,
+            [row.actor, ticket.id],
+            { expectedVersion: ticket.version },
+            `support-role-${row.family}-${index}-0001`,
+          );
+        } else if (row.family === 'claim') {
+          const claim = requiredMethod(fixture.service, 'claim');
+          invoke = () => runMutation(
+            claim,
+            [row.actor, ticket.id],
+            { expectedVersion: ticket.version },
+            `support-role-${row.family}-${index}-0001`,
+          );
+        } else {
+          ticket = await claimSupportTicket(
+            fixture,
+            ticket,
+            actors.staffA,
+            {},
+            `support-role-${row.family}-${index}-claim-setup`,
+          );
+          const resolve = requiredMethod(fixture.service, 'resolve');
+          ticket = await runMutation(
+            resolve,
+            [actors.staffA, ticket.id],
+            {
+              finalMessage: 'Resolved before wrong-role reopen',
+              expectedVersion: ticket.version,
+            },
+            `support-role-${row.family}-${index}-resolve-setup`,
+          );
+          const reopen = requiredMethod(fixture.service, 'reopen');
+          invoke = () => runMutation(
+            reopen,
+            [row.actor, ticket.id],
+            {
+              message: 'Wrong-role reopen attempt',
+              expectedVersion: ticket.version,
+            },
+            `support-role-${row.family}-${index}-0001`,
+          );
+        }
+      }
+
+      const before = snapshotEffects(fixture.state);
+      await expectDomainError(invoke, 'SUPPORT_FORBIDDEN');
+      assert.deepEqual(
+        snapshotEffects(fixture.state),
+        before,
+        `${row.actor.role} ${row.family} denial must have zero effects`,
+      );
+      assertForeignMutationGatewaysUnused(fixture);
     }
   });
 
@@ -1593,12 +2248,16 @@ describe('SL-008 Support behavioral acceptance', () => {
 
     for (const [index, priority] of ['Low', 'Normal', 'High', 'Urgent'].entries()) {
       const beforePriority = current.priority;
-      current = await changePriority(actors.staffA, ticket.id, {
-        priority,
-        reason: 'Valid priority reason',
-        expectedVersion: current.version,
-        idempotencyKey: `support-priority-${index}-0001`,
-      });
+      current = await runMutation(
+        changePriority,
+        [actors.staffA, ticket.id],
+        {
+          priority,
+          reason: 'Valid priority reason',
+          expectedVersion: current.version,
+        },
+        `support-priority-${index}-0001`,
+      );
       const history = fixture.state.priorityHistory.at(-1);
       assert.equal(history.beforePriority, beforePriority);
       assert.equal(history.afterPriority, priority);
@@ -1615,11 +2274,12 @@ describe('SL-008 Support behavioral acceptance', () => {
       { priority: 'High', reason: 'x'.repeat(501) },
     ].entries()) {
       await expectDomainError(
-        () => changePriority(actors.staffA, ticket.id, {
-          ...invalid,
-          expectedVersion: current.version,
-          idempotencyKey: `support-priority-invalid-${index}`,
-        }),
+        () => runMutation(
+          changePriority,
+          [actors.staffA, ticket.id],
+          { ...invalid, expectedVersion: current.version },
+          `support-priority-invalid-${index}`,
+        ),
         'SUPPORT_VALIDATION_FAILED',
       );
     }
@@ -1629,32 +2289,44 @@ describe('SL-008 Support behavioral acceptance', () => {
       actors.admin,
     ].entries()) {
       await expectDomainError(
-        () => transfer(actors.staffA, ticket.id, {
-          assigneeId: target.id,
-          reason: 'Transfer to invalid or unavailable target',
-          expectedVersion: current.version,
-          idempotencyKey: `support-transfer-target-invalid-${index}`,
-        }),
+        () => runMutation(
+          transfer,
+          [actors.staffA, ticket.id],
+          {
+            assigneeId: target.id,
+            reason: 'Transfer to invalid or unavailable target',
+            expectedVersion: current.version,
+          },
+          `support-transfer-target-invalid-${index}`,
+        ),
         'SUPPORT_TRANSFER_TARGET_INVALID',
       );
     }
     for (const [index, reason] of ['four', 'x'.repeat(501)].entries()) {
       await expectDomainError(
-        () => transfer(actors.staffA, ticket.id, {
-          assigneeId: actors.staffB.id,
-          reason,
-          expectedVersion: current.version,
-          idempotencyKey: `support-transfer-reason-invalid-${index}`,
-        }),
+        () => runMutation(
+          transfer,
+          [actors.staffA, ticket.id],
+          {
+            assigneeId: actors.staffB.id,
+            reason,
+            expectedVersion: current.version,
+          },
+          `support-transfer-reason-invalid-${index}`,
+        ),
         'SUPPORT_VALIDATION_FAILED',
       );
     }
-    const transferred = await transfer(actors.staffA, ticket.id, {
-      assigneeId: actors.staffB.id,
-      reason: 'Specialist ownership transfer',
-      expectedVersion: current.version,
-      idempotencyKey: 'support-transfer-valid-0001',
-    });
+    const transferred = await runMutation(
+      transfer,
+      [actors.staffA, ticket.id],
+      {
+        assigneeId: actors.staffB.id,
+        reason: 'Specialist ownership transfer',
+        expectedVersion: current.version,
+      },
+      'support-transfer-valid-0001',
+    );
     assert.equal(transferred.assigneeId, actors.staffB.id);
     assert.equal(fixture.state.assignmentHistory.length, 2);
     const transferHistory = fixture.state.assignmentHistory.at(-1);
@@ -1671,18 +2343,26 @@ describe('SL-008 Support behavioral acceptance', () => {
     const ticket = await createSupportTicket(fixture);
     let claimed = await claimSupportTicket(fixture, ticket);
     const appendMessage = requiredMethod(fixture.service, 'appendMessage');
-    claimed = await appendMessage(actors.staffA, ticket.id, {
-      message: 'Operational context must survive Staff disable.',
-      expectedVersion: claimed.version,
-      idempotencyKey: 'support-disable-preserved-message-0001',
-    });
+    claimed = await runMutation(
+      appendMessage,
+      [actors.staffA, ticket.id],
+      {
+        message: 'Operational context must survive Staff disable.',
+        expectedVersion: claimed.version,
+      },
+      'support-disable-preserved-message-0001',
+    );
     const changePriority = requiredMethod(fixture.service, 'changePriority');
-    claimed = await changePriority(actors.staffA, ticket.id, {
-      priority: 'High',
-      reason: 'Customer impact remains high during recovery',
-      expectedVersion: claimed.version,
-      idempotencyKey: 'support-disable-preserved-priority-0001',
-    });
+    claimed = await runMutation(
+      changePriority,
+      [actors.staffA, ticket.id],
+      {
+        priority: 'High',
+        reason: 'Customer impact remains high during recovery',
+        expectedVersion: claimed.version,
+      },
+      'support-disable-preserved-priority-0001',
+    );
     const clearDisabledAssignee = requiredMethod(fixture.service, 'clearDisabledAssignee');
     fixture.state.users.find((item) => item.id === actors.staffA.id).status = 'Disabled';
     const preservedMessages = structuredClone(fixture.state.messages);
@@ -1691,11 +2371,14 @@ describe('SL-008 Support behavioral acceptance', () => {
 
     const cleared = await fixture.sl007Lifecycle.disableStaff(
       actors.staffA.id,
-      (userId, command) => clearDisabledAssignee(userId, command),
+      clearDisabledAssignee,
     );
-    await clearDisabledAssignee(actors.staffA.id, {
-      idempotencyKey: `sl007-disable-${actors.staffA.id}`,
-    });
+    await runMutation(
+      clearDisabledAssignee,
+      [actors.staffA.id],
+      {},
+      `sl007-disable-${actors.staffA.id}`,
+    );
 
     assert.deepEqual(fixture.sl007SessionService.calls, [{
       userId: actors.staffA.id,
@@ -1734,7 +2417,8 @@ describe('SL-008 Support behavioral acceptance', () => {
       fixture,
       cleared,
       actors.staffB,
-      { idempotencyKey: 'support-recovery-claim-0001' },
+      {},
+      'support-recovery-claim-0001',
     );
     assert.equal(recovered.assigneeId, actors.staffB.id);
     assert.equal(recovered.status, 'InProgress');
@@ -1748,19 +2432,25 @@ describe('SL-008 Support behavioral acceptance', () => {
     const withdrawFixture = buildSupportFixture();
     const newTicket = await createSupportTicket(withdrawFixture);
     const withdraw = requiredMethod(withdrawFixture.service, 'withdraw');
-    const withdrawn = await withdraw(actors.customer, newTicket.id, {
-      expectedVersion: newTicket.version,
-      idempotencyKey: 'support-withdraw-0001',
-    });
+    const withdrawn = await runMutation(
+      withdraw,
+      [actors.customer, newTicket.id],
+      { expectedVersion: newTicket.version },
+      'support-withdraw-0001',
+    );
     assert.equal(withdrawn.status, 'Withdrawn');
     const reopenWithdrawn = requiredMethod(withdrawFixture.service, 'reopen');
     const withdrawnBefore = snapshotEffects(withdrawFixture.state);
     await expectDomainError(
-      () => reopenWithdrawn(actors.customer, newTicket.id, {
-        message: 'Withdrawn tickets do not reopen.',
-        expectedVersion: withdrawn.version,
-        idempotencyKey: 'support-withdrawn-reopen-0001',
-      }),
+      () => runMutation(
+        reopenWithdrawn,
+        [actors.customer, newTicket.id],
+        {
+          message: 'Withdrawn tickets do not reopen.',
+          expectedVersion: withdrawn.version,
+        },
+        'support-withdrawn-reopen-0001',
+      ),
       'SUPPORT_TRANSITION_INVALID',
     );
     assert.deepEqual(snapshotEffects(withdrawFixture.state), withdrawnBefore);
@@ -1772,11 +2462,15 @@ describe('SL-008 Support behavioral acceptance', () => {
     const claimResolved = requiredMethod(resolveFixture.service, 'claim');
     const newBefore = snapshotEffects(resolveFixture.state);
     await expectDomainError(
-      () => resolve(actors.staffA, ticket.id, {
-        finalMessage: 'Cannot resolve an unclaimed New ticket.',
-        expectedVersion: ticket.version,
-        idempotencyKey: 'support-resolve-new-0001',
-      }),
+      () => runMutation(
+        resolve,
+        [actors.staffA, ticket.id],
+        {
+          finalMessage: 'Cannot resolve an unclaimed New ticket.',
+          expectedVersion: ticket.version,
+        },
+        'support-resolve-new-0001',
+      ),
       'SUPPORT_TRANSITION_INVALID',
     );
     assert.deepEqual(snapshotEffects(resolveFixture.state), newBefore);
@@ -1784,10 +2478,12 @@ describe('SL-008 Support behavioral acceptance', () => {
     const claimed = await claimSupportTicket(resolveFixture, ticket);
     const assignedBefore = snapshotEffects(resolveFixture.state);
     await expectDomainError(
-      () => withdrawResolved(actors.customer, ticket.id, {
-        expectedVersion: claimed.version,
-        idempotencyKey: 'support-withdraw-assigned-0001',
-      }),
+      () => runMutation(
+        withdrawResolved,
+        [actors.customer, ticket.id],
+        { expectedVersion: claimed.version },
+        'support-withdraw-assigned-0001',
+      ),
       'SUPPORT_TRANSITION_INVALID',
     );
     assert.deepEqual(snapshotEffects(resolveFixture.state), assignedBefore);
@@ -1795,21 +2491,26 @@ describe('SL-008 Support behavioral acceptance', () => {
     for (const [index, finalMessage] of ['', 'm'.repeat(2001)].entries()) {
       const beforeInvalidFinal = snapshotEffects(resolveFixture.state);
       await expectDomainError(
-        () => resolve(actors.staffA, ticket.id, {
-          finalMessage,
-          expectedVersion: claimed.version,
-          idempotencyKey: `support-resolve-invalid-final-${index}`,
-        }),
+        () => runMutation(
+          resolve,
+          [actors.staffA, ticket.id],
+          { finalMessage, expectedVersion: claimed.version },
+          `support-resolve-invalid-final-${index}`,
+        ),
         'SUPPORT_VALIDATION_FAILED',
       );
       assert.deepEqual(snapshotEffects(resolveFixture.state), beforeInvalidFinal);
     }
 
-    const resolved = await resolve(actors.staffA, ticket.id, {
-      finalMessage: 'The issue is resolved with a replacement.',
-      expectedVersion: claimed.version,
-      idempotencyKey: 'support-resolve-0001',
-    });
+    const resolved = await runMutation(
+      resolve,
+      [actors.staffA, ticket.id],
+      {
+        finalMessage: 'The issue is resolved with a replacement.',
+        expectedVersion: claimed.version,
+      },
+      'support-resolve-0001',
+    );
     assert.equal(resolved.status, 'Resolved');
     assert.ok(resolved.resolvedAt);
     assert.equal(resolveFixture.state.messages.at(-1).content, 'The issue is resolved with a replacement.');
@@ -1817,18 +2518,24 @@ describe('SL-008 Support behavioral acceptance', () => {
 
     const beforeDenied = snapshotEffects(resolveFixture.state);
     await expectDomainError(
-      () => claimResolved(actors.staffB, ticket.id, {
-        expectedVersion: resolved.version,
-        idempotencyKey: 'support-claim-resolved-0001',
-      }),
+      () => runMutation(
+        claimResolved,
+        [actors.staffB, ticket.id],
+        { expectedVersion: resolved.version },
+        'support-claim-resolved-0001',
+      ),
       'SUPPORT_TRANSITION_INVALID',
     );
     await expectDomainError(
-      () => resolve(actors.staffA, ticket.id, {
-        finalMessage: 'Cannot resolve twice.',
-        expectedVersion: resolved.version,
-        idempotencyKey: 'support-resolve-twice-0001',
-      }),
+      () => runMutation(
+        resolve,
+        [actors.staffA, ticket.id],
+        {
+          finalMessage: 'Cannot resolve twice.',
+          expectedVersion: resolved.version,
+        },
+        'support-resolve-twice-0001',
+      ),
       'SUPPORT_TRANSITION_INVALID',
     );
     assert.deepEqual(snapshotEffects(resolveFixture.state), beforeDenied);
@@ -1840,11 +2547,15 @@ describe('SL-008 Support behavioral acceptance', () => {
       const ticket = await createSupportTicket(fixture);
       const claimed = await claimSupportTicket(fixture, ticket);
       const resolve = requiredMethod(fixture.service, 'resolve');
-      const resolved = await resolve(actors.staffA, ticket.id, {
-        finalMessage: 'Resolved before reopen test.',
-        expectedVersion: claimed.version,
-        idempotencyKey: 'support-boundary-resolve-0001',
-      });
+      const resolved = await runMutation(
+        resolve,
+        [actors.staffA, ticket.id],
+        {
+          finalMessage: 'Resolved before reopen test.',
+          expectedVersion: claimed.version,
+        },
+        'support-boundary-resolve-0001',
+      );
       if (disableAssignee) {
         fixture.state.users.find((item) => item.id === actors.staffA.id).status = 'Disabled';
       }
@@ -1859,11 +2570,15 @@ describe('SL-008 Support behavioral acceptance', () => {
     atBoundary.fixture.clock.set(
       new Date(atBoundary.resolved.resolvedAt).getTime() + 72 * 60 * 60 * 1000,
     );
-    const reopened = await reopen(actors.customer, atBoundary.resolved.id, {
-      message: 'The same issue returned.',
-      expectedVersion: atBoundary.resolved.version,
-      idempotencyKey: 'support-reopen-boundary-0001',
-    });
+    const reopened = await runMutation(
+      reopen,
+      [actors.customer, atBoundary.resolved.id],
+      {
+        message: 'The same issue returned.',
+        expectedVersion: atBoundary.resolved.version,
+      },
+      'support-reopen-boundary-0001',
+    );
     assert.equal(reopened.status, 'InProgress');
     assert.equal(reopened.assigneeId, actors.staffA.id);
     assert.deepEqual(atBoundary.fixture.state.messages.slice(0, activeMessagesBefore.length), activeMessagesBefore);
@@ -1890,14 +2605,14 @@ describe('SL-008 Support behavioral acceptance', () => {
     inactiveBoundary.fixture.clock.set(
       new Date(inactiveBoundary.resolved.resolvedAt).getTime() + 72 * 60 * 60 * 1000,
     );
-    const reopenedInactive = await reopenInactive(
-      actors.customer,
-      inactiveBoundary.resolved.id,
+    const reopenedInactive = await runMutation(
+      reopenInactive,
+      [actors.customer, inactiveBoundary.resolved.id],
       {
         message: 'Reopened after the former assignee was disabled.',
         expectedVersion: inactiveBoundary.resolved.version,
-        idempotencyKey: 'support-reopen-inactive-assignee-0001',
       },
+      'support-reopen-inactive-assignee-0001',
     );
     assert.equal(reopenedInactive.status, 'InProgress');
     assert.equal(reopenedInactive.assigneeId, null);
@@ -1933,20 +2648,119 @@ describe('SL-008 Support behavioral acceptance', () => {
     );
     const before = snapshotEffects(afterBoundary.fixture.state);
     await expectDomainError(
-      () => reopenLate(actors.customer, afterBoundary.resolved.id, {
-        message: 'One millisecond too late.',
-        expectedVersion: afterBoundary.resolved.version,
-        idempotencyKey: 'support-reopen-late-0001',
-      }),
+      () => runMutation(
+        reopenLate,
+        [actors.customer, afterBoundary.resolved.id],
+        {
+          message: 'One millisecond too late.',
+          expectedVersion: afterBoundary.resolved.version,
+        },
+        'support-reopen-late-0001',
+      ),
       'SUPPORT_REOPEN_WINDOW_EXPIRED',
     );
     assert.deepEqual(snapshotEffects(afterBoundary.fixture.state), before);
   });
 
   it('AT-173 protects Review management and returns role-safe Support list/detail projections privately', async () => {
+    const app = serverSource('app.js');
+    const reviewRoutes = serverSource('routes/review.routes.js');
+    const reviewController = serverSource('controller/review.controller.js');
+    assert.match(app, /app\.use\(\s*['"]\/api['"]\s*,\s*reviewRoutes\s*\)/);
+    assert.match(
+      reviewRoutes,
+      /router\.get\(\s*['"]\/customer\/reviews['"]\s*,\s*authenticate\s*,\s*authorizeRoles\(\s*['"]Customer['"]\s*\)\s*,\s*reviewController\.listOwnReviews\s*\)/,
+    );
+    assert.match(
+      reviewController,
+      /async function listOwnReviews\s*\([^)]*\)\s*\{[\s\S]{0,1200}reviewService\.listOwn\(\s*req\.user\s*,\s*\{[\s\S]{0,400}page\s*:\s*req\.query\.page[\s\S]{0,400}pageSize\s*:\s*req\.query\.pageSize/,
+    );
+
     const reviewFixture = buildReviewFixture();
     const createReview = requiredMethod(reviewFixture.service, 'createReview');
-    await createReview(actors.customer, 'product-1', reviewCommand());
+    await runMutation(
+      createReview,
+      [actors.customer, 'product-1'],
+      reviewCommand(),
+      'review-own-primary-create-0001',
+    );
+    const listOwnReviews = requiredMethod(reviewFixture.service, 'listOwn');
+    const initiallyForeign = await listOwnReviews(
+      actors.foreignCustomer,
+      { page: 1, pageSize: 1 },
+    );
+    assert.equal(initiallyForeign.total, 0);
+    await runMutation(
+      createReview,
+      [actors.foreignCustomer, 'product-1'],
+      reviewCommand({
+        orderDetailId: 'detail-foreign',
+        content: 'Foreign customer own review',
+      }),
+      'review-own-foreign-create-0001',
+    );
+    const ownReviews = await listOwnReviews(actors.customer, { page: 1, pageSize: 1 });
+    const foreignOwnReviews = await listOwnReviews(
+      actors.foreignCustomer,
+      { page: 1, pageSize: 1 },
+    );
+    assert.equal(ownReviews.total, 1);
+    assert.equal(ownReviews.page, 1);
+    assert.equal(ownReviews.pageSize, 1);
+    assert.equal(ownReviews.totalPages, 1);
+    assert.equal(foreignOwnReviews.total, 1);
+    const defaultOwnReviews = await listOwnReviews(actors.customer, {});
+    assert.equal(defaultOwnReviews.page, 1);
+    assert.equal(defaultOwnReviews.pageSize, 20);
+    const maximumOwnReviews = await listOwnReviews(
+      actors.customer,
+      { page: 1, pageSize: 50 },
+    );
+    assert.equal(maximumOwnReviews.pageSize, 50);
+    assert.equal(ownReviews.items[0].content, 'Very useful product');
+    assert.equal(
+      foreignOwnReviews.items[0].content,
+      'Foreign customer own review',
+    );
+    assert.deepEqual(Object.keys(ownReviews.items[0]).sort(), [
+      'content',
+      'createdAt',
+      'historySummary',
+      'id',
+      'moderationStatus',
+      'productId',
+      'publicationStatus',
+      'rating',
+      'updatedAt',
+      'version',
+    ]);
+    assert.equal(ownReviews.items[0].publicationStatus, 'Published');
+    assert.equal(ownReviews.items[0].moderationStatus, 'Allowed');
+    assert.equal(ownReviews.items[0].version, 1);
+    assert.deepEqual(
+      Object.keys(ownReviews.items[0].historySummary).sort(),
+      ['contentEntries', 'moderationEntries', 'publicationEntries'],
+    );
+    assert.doesNotMatch(
+      JSON.stringify([ownReviews, foreignOwnReviews]),
+      /customerId|orderId|orderDetailId|email|phone|address/,
+    );
+    for (const actor of [actors.guest, actors.staffA, actors.admin, actors.warehouse]) {
+      await expectDomainError(
+        () => listOwnReviews(actor, { page: 1, pageSize: 20 }),
+        'REVIEW_FORBIDDEN',
+      );
+    }
+    for (const filter of [
+      { page: 0, pageSize: 20 },
+      { page: 1, pageSize: 51 },
+    ]) {
+      await expectDomainError(
+        () => listOwnReviews(actors.customer, filter),
+        'REVIEW_FILTER_INVALID',
+      );
+    }
+
     const listModeration = requiredMethod(reviewFixture.service, 'listModeration');
     const moderationPage = await listModeration(actors.staffA, {
       page: 1,
@@ -1955,7 +2769,7 @@ describe('SL-008 Support behavioral acceptance', () => {
       publicationStatus: 'Published',
       moderationStatus: 'Allowed',
     });
-    assert.equal(moderationPage.total, 1);
+    assert.equal(moderationPage.total, 2);
     assert.doesNotMatch(
       JSON.stringify(moderationPage),
       /orderId|orderDetailId|email|phone/,
@@ -1976,11 +2790,12 @@ describe('SL-008 Support behavioral acceptance', () => {
     const fixture = buildSupportFixture();
     const ownTicket = await createSupportTicket(fixture);
     const createRequest = requiredMethod(fixture.service, 'createRequest');
-    const foreignTicket = await createRequest(actors.foreignCustomer, supportCreate({
-      type: 'Other',
-      orderId: undefined,
-      idempotencyKey: 'support-foreign-owner-0001',
-    }));
+    const foreignTicket = await runMutation(
+      createRequest,
+      [actors.foreignCustomer],
+      supportCreate({ type: 'Other', orderId: undefined }),
+      'support-foreign-owner-0001',
+    );
     const listOwn = requiredMethod(fixture.service, 'listOwn');
     const listOperational = requiredMethod(fixture.service, 'listOperational');
     const getDetail = requiredMethod(fixture.service, 'getDetail');
@@ -2069,125 +2884,125 @@ describe('SL-008 Support behavioral acceptance', () => {
     );
   });
 
-  it('AT-174 rolls back grouped writes, retries delivery safely, and never mutates foreign domains', async () => {
-    const reviewFixture = buildReviewFixture();
-    const createReview = requiredMethod(reviewFixture.service, 'createReview');
-    const reviewAtomicCommand = reviewCommand({
-      idempotencyKey: 'review-atomic-retry-0001',
-    });
-    reviewFixture.outbox.failNext = true;
-    await expectDomainError(
-      () => createReview(actors.customer, 'product-1', reviewAtomicCommand),
-      'OUTBOX_WRITE_FAILED',
-    );
-    assert.deepEqual(snapshotEffects(reviewFixture.state), {
-      reviews: 0,
-      tickets: 0,
-      messages: 0,
-      contentHistory: 0,
-      publicationHistory: 0,
-      moderationHistory: 0,
-      assignmentHistory: 0,
-      priorityHistory: 0,
-      resolutionHistory: 0,
-      commands: 0,
-      audits: 0,
-      outbox: 0,
-    });
-    assert.equal(reviewFixture.state.commands.length, 0);
-    const appliedReview = await createReview(
-      actors.customer,
-      'product-1',
-      reviewAtomicCommand,
-    );
-    const replayedReview = await createReview(
-      actors.customer,
-      'product-1',
-      reviewAtomicCommand,
-    );
-    assert.equal(replayedReview.id, appliedReview.id);
-    assert.equal(reviewFixture.state.reviews.length, 1);
-    assert.equal(reviewFixture.state.contentHistory.length, 1);
-    assert.equal(reviewFixture.state.commands.length, 1);
-    assert.equal(reviewFixture.state.audits.length, 1);
-    assert.equal(reviewFixture.state.outbox.length, 1);
+  it('AT-174 table-drives grouped rollback and same-key replay across every SL-008 mutation family', async () => {
+    const matrix = [
+      ...['create', 'update', 'publication', 'moderation'].map((family) => ({
+        scope: 'review',
+        family,
+        prepare: () => prepareReviewAtomicScenario(family),
+      })),
+      ...[
+        'create',
+        'append',
+        'claim',
+        'priority',
+        'transfer',
+        'withdraw',
+        'resolve',
+        'reopen',
+        'disabled-assignee-clear',
+        'disabled-assignee-recovery',
+      ].map((family) => ({
+        scope: 'support',
+        family,
+        prepare: () => prepareSupportAtomicScenario(family),
+      })),
+    ];
 
-    const fixture = buildSupportFixture();
-    const createRequest = requiredMethod(fixture.service, 'createRequest');
-    const command = supportCreate({ idempotencyKey: 'support-atomic-retry-0001' });
-    const foreignBefore = structuredClone(fixture.state.foreignDomains);
-    fixture.outbox.failNext = true;
+    for (const row of matrix) {
+      const scenario = await row.prepare();
+      const { fixture } = scenario;
+      const key = `atomic-${row.scope}-${row.family}-0001`;
+      const effectsBefore = snapshotEffects(fixture.state);
+      const groupedWritesBefore = snapshotGroupedWrites(fixture.state);
+      const foreignBefore = structuredClone(fixture.state.foreignDomains || null);
+      const eventCountBefore = fixture.state.outbox.filter(
+        (entry) => entry.eventType === scenario.eventType,
+      ).length;
+      fixture.outbox.failNext = true;
 
-    await expectDomainError(
-      () => createRequest(actors.customer, command),
-      'OUTBOX_WRITE_FAILED',
-    );
-    assert.equal(fixture.state.tickets.length, 0);
-    assert.equal(fixture.state.messages.length, 0);
-    assert.equal(fixture.state.audits.length, 0);
-    assert.equal(fixture.state.outbox.length, 0);
-    assert.equal(fixture.state.commands.length, 0);
+      await expectDomainError(
+        () => scenario.invoke(key),
+        'OUTBOX_WRITE_FAILED',
+      );
+      assert.deepEqual(
+        snapshotGroupedWrites(fixture.state),
+        groupedWritesBefore,
+        `${row.scope}/${row.family} must exactly roll back aggregate/history/message/audit/outbox/command`,
+      );
+      assertForeignMutationGatewaysUnused(fixture);
 
-    const applied = await createRequest(actors.customer, command);
-    const replay = await createRequest(actors.customer, command);
-    assert.equal(applied.id, replay.id);
-    assert.equal(fixture.state.tickets.length, 1);
-    assert.equal(fixture.state.messages.length, 1);
-    assert.equal(fixture.state.audits.length, 1);
-    assert.equal(fixture.state.outbox.length, 1);
-    assert.equal(fixture.state.commands.length, 1);
-    assert.deepEqual(fixture.state.foreignDomains, foreignBefore);
-    assert.equal(fixture.state.outbox[0].payload?.initialMessage, undefined);
-    assert.equal(
-      String(fixture.state.audits[0].description || '').includes('The delivered package'),
-      false,
-    );
+      const first = await scenario.invoke(key);
+      const effectsAfterFirst = snapshotEffects(fixture.state);
+      const groupedWritesAfterFirst = snapshotGroupedWrites(fixture.state);
+      const replay = await scenario.invoke(key);
+      assert.deepEqual(replay, first, `${row.scope}/${row.family} replay result`);
+      assert.equal(first.version, scenario.baseVersion + 1);
+      assert.deepEqual(
+        snapshotGroupedWrites(fixture.state),
+        groupedWritesAfterFirst,
+        `${row.scope}/${row.family} replay must not alter grouped state`,
+      );
+      assert.deepEqual(
+        effectsDelta(effectsBefore, effectsAfterFirst),
+        scenario.expectedDelta,
+        `${row.scope}/${row.family} exact single grouped-write delta`,
+      );
+      assert.equal(
+        fixture.state.outbox.filter(
+          (entry) => entry.eventType === scenario.eventType,
+        ).length,
+        eventCountBefore + 1,
+      );
+      assert.doesNotMatch(
+        JSON.stringify([
+          fixture.state.audits.slice(effectsBefore.audits),
+          fixture.state.outbox.slice(effectsBefore.outbox),
+        ]),
+        /Very useful product|Atomic update matrix|Atomic moderation matrix|Delivery package issue|The delivered package needs support|Atomic message matrix|Atomic priority matrix|Atomic transfer matrix|Atomic resolution matrix|Resolved before atomic reopen matrix|Atomic reopen matrix/,
+      );
 
-    const claim = requiredMethod(fixture.service, 'claim');
-    const beforeStale = snapshotEffects(fixture.state);
-    await expectDomainError(
-      () => claim(actors.staffA, applied.id, {
-        expectedVersion: 0,
-        idempotencyKey: 'support-stale-claim-0001',
-      }),
-      'SUPPORT_VERSION_CONFLICT',
-    );
-    assert.deepEqual(snapshotEffects(fixture.state), beforeStale);
+      assert.deepEqual(fixture.state.foreignDomains || null, foreignBefore);
+      assertForeignMutationGatewaysUnused(fixture);
+    }
 
     for (const [index, invalid] of [
-      { idempotencyKey: 'short' },
-      { idempotencyKey: 'x'.repeat(129) },
-      { expectedVersion: -1, idempotencyKey: 'support-invalid-version-0001' },
-      { expectedVersion: 1.5, idempotencyKey: 'support-invalid-version-0002' },
+      { command: {}, key: 'short' },
+      { command: {}, key: 'x'.repeat(129) },
+      { command: { expectedVersion: -1 }, key: 'support-invalid-version-0001' },
+      { command: { expectedVersion: 1.5 }, key: 'support-invalid-version-0002' },
     ].entries()) {
-      const invalidFixture = buildSupportFixture();
-      const invalidCreate = requiredMethod(invalidFixture.service, 'createRequest');
+      const fixture = buildSupportFixture();
+      const createRequest = requiredMethod(fixture.service, 'createRequest');
       await expectDomainError(
-        () => invalidCreate(actors.customer, supportCreate({
-          ...invalid,
-          idempotencyKey: invalid.idempotencyKey || `support-invalid-command-${index}`,
-        })),
+        () => runMutation(
+          createRequest,
+          [actors.customer],
+          supportCreate(invalid.command),
+          invalid.key || `support-invalid-command-${index}`,
+        ),
         'COMMAND_VALIDATION_FAILED',
       );
-      assert.equal(invalidFixture.state.tickets.length, 0);
-      assert.equal(invalidFixture.state.audits.length, 0);
-      assert.equal(invalidFixture.state.outbox.length, 0);
+      assert.deepEqual(snapshotEffects(fixture.state), oneCommandDelta({
+        commands: 0,
+        audits: 0,
+        outbox: 0,
+      }));
+      assertForeignMutationGatewaysUnused(fixture);
     }
 
-    const beforeDelivery = structuredClone(fixture.state.foreignDomains);
-    fixture.outbox.failDeliveryNext = true;
+    const deliveryScenario = await prepareSupportAtomicScenario('create');
+    await deliveryScenario.invoke('support-delivery-retry-0001');
+    deliveryScenario.fixture.outbox.failDeliveryNext = true;
     await expectDomainError(
-      () => fixture.outbox.deliverNext(),
+      () => deliveryScenario.fixture.outbox.deliverNext(),
       'OUTBOX_DELIVERY_FAILED',
     );
-    assert.equal(fixture.state.outbox[0].status, 'Pending');
-    assert.equal(fixture.state.outbox[0].attempts, 1);
-    const delivered = await fixture.outbox.deliverNext();
+    assert.equal(deliveryScenario.fixture.state.outbox[0].status, 'Pending');
+    assert.equal(deliveryScenario.fixture.state.outbox[0].attempts, 1);
+    const delivered = await deliveryScenario.fixture.outbox.deliverNext();
     assert.equal(delivered.status, 'Delivered');
     assert.equal(delivered.attempts, 2);
-    assert.deepEqual(fixture.state.foreignDomains, beforeDelivery);
-    for (const gateway of Object.values(fixture.foreignMutationGateways)) {
-      assert.equal(gateway.calls.length, 0);
-    }
+    assertForeignMutationGatewaysUnused(deliveryScenario.fixture);
   });
 });

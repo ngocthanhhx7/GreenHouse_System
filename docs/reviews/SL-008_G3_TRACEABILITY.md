@@ -15,7 +15,7 @@ unchanged in this task.
 | Actor | Allowed SL-008 behavior | Explicit denial |
 |---|---|---|
 | Guest | Public Review list/count/one-decimal mean only | Review commands; all Support reads/commands |
-| Customer | Own Review create/update/publication; own Support create/read/message/withdraw/reopen | Foreign records; moderation; claim; priority; transfer; resolve |
+| Customer | Own Review create/read/update/publication; own Support create/read/message/withdraw/reopen | Foreign records; moderation; claim; priority; transfer; resolve |
 | Staff | Minimum Review moderation projection/command; Support operational projection; claim/recovery; current-Active-assignee message/priority/transfer/resolve | Customer publication/content edit/delete; commands on another assignee's ticket |
 | Admin | None | All SL-008 routes and controls, including direct navigation |
 | WarehouseManager | None | All SL-008 routes and controls, including direct navigation |
@@ -57,6 +57,7 @@ publication.
 | Method/route | Actor | Request/read contract |
 |---|---|---|
 | `GET /api/products/:productId/reviews?page&pageSize` | Guest | Exact public visible projection and aggregate |
+| `GET /api/customer/reviews?page&pageSize` | Customer | Own safe Review management page with publication/moderation/version/history summary |
 | `POST /api/products/:productId/reviews` | Customer | `{orderDetailId?,rating,content?,expectedVersion}` |
 | `PATCH /api/reviews/:reviewId` | owning Customer | `{rating,content?,expectedVersion}` |
 | `PATCH /api/reviews/:reviewId/publication` | owning Customer | `{publicationStatus,expectedVersion}` |
@@ -109,7 +110,7 @@ business permissions, states, eligibility, or transitions.
 | Support reference interpretation | Order/Payment/ReturnRefund/Exchange require owned Order; Product requires Active Product and may include owned Order; Account/Other refs optional but valid when supplied | Makes the approved type/reference matrix executable and privacy-safe |
 | Reason size | Priority/transfer reason is normalized 5–500 characters | Persists useful immutable history while bounding input; does not grant a transition |
 | Paging | Default `page=1`, `pageSize=20`; maximum `pageSize=50` | Prevents unbounded reads and makes AT-159/165/173 stable |
-| Command identity | Every mutation has `Idempotency-Key` header, normalized 8–128 characters | Provides the durable retry/race identity required by AT-160/174 |
+| Command identity | Every mutation has `Idempotency-Key` header, normalized 8–128 characters; public services receive it only as the separate final options argument while JSON retains `expectedVersion` and never embeds the key | Provides the durable retry/race identity required by AT-160/174 without mixing transport metadata into command facts |
 | Optimistic state | Create uses `expectedVersion=0`; later state mutation must match current non-negative integer version in JSON | Gives stale losers a deterministic no-effect conflict under AT-160/174 |
 | Atomicity | Aggregate, immutable history, audit, command result, and DomainOutbox share one transaction | Enforces approved all-or-none effects and delivery retry |
 | Migration | Fail fast on ambiguous duplicate Customer+Product Reviews or legacy mutable-history ambiguity; never delete or choose canonical data | Preserves approved one-identity and immutable-history semantics without inventing facts |
@@ -128,7 +129,7 @@ business permissions, states, eligibility, or transitions.
 | BR-090 | Assignment, priority, transfer, disable recovery, and current-assignee operations | Support assignment/priority service and SL-007 adapter | AT-167–170 |
 | BR-091 | Private denials and Guest/Customer/Staff minimum projections; no Admin/Warehouse commands | Routes/RBAC/mappers/UI guards | AT-155, AT-156, AT-166, AT-168, AT-173 |
 | BR-092 | Support never mutates Order/Payment/Return/Exchange/Shipment/Inventory | Repository dependency boundary | AT-174 foreign-domain snapshot assertions |
-| BR-093 | Idempotency/version plus atomic domain/history/audit/outbox | Shared command transaction/persistence | AT-160 Review and AT-174 Support/server/client |
+| BR-093 | Idempotency/version plus atomic domain/history/audit/outbox | Shared command transaction/persistence | AT-160 and AT-174 Review/Support server/client |
 
 ## AT-150–174 requirement → code → test matrix
 
@@ -147,7 +148,7 @@ evidence, baseline discrepancy, and current status.
 | AT-157 | Customer/Staff | Publication and moderation change independently | `Published/Withdrawn`; `Allowed/HiddenByStaff`; separate histories | `setPublication`, `moderate` | Customer withdraw/republish separate from Staff reasoned moderation | Server/client `AT-157...` | Legacy one `Visible/Hidden` status | RED |
 | AT-158 | Customer/Staff | Histories immutable; no delete; Staff cannot edit content/publication | append-only content/publication/moderation records | `updateReview`; no delete; Staff edit forbidden | Customer edit handler; no delete; Staff moderation-only UI | Server/client `AT-158...` | Legacy overwrites document and has no histories | RED |
 | AT-159 | Guest | List/count/one-decimal mean share exact visible set; createdAt DESC+ID DESC paging; edit does not reposition | public query/index; immutable createdAt; updatedAt changes only | `listPublic`; public GET paging | aggregate/totalPages/pageSize/toFixed(1) | Server/client `AT-159...` | Legacy unbounded list/in-memory mean; no stable ID tie break | RED |
-| AT-160 | Customer/Staff/System | Replay/race applies once; stale loser has no aggregate/history/audit/outbox effects | command key/fingerprint/result; version; transaction | All Review commands; command headers/body | Four mocked command requests verify key+version | Server `AT-160 applies distinct/same-key races...`; four client `AT-160 sends...` tests | Legacy has no key/version/transactional outbox | RED |
+| AT-160 | Customer/Staff/System | Replay/race applies once; stale loser has no aggregate/history/audit/outbox effects; key is service options/header metadata, never JSON | command key/fingerprint/result; version; transaction | All Review commands; separate final `{idempotencyKey}` options and JSON `expectedVersion` | Four mocked command requests verify header key+JSON version; pending locks block repeated UI submit/click | Server `AT-160 applies distinct/same-key races...`; client command/pending tests | Legacy has no key/version/transactional outbox | RED |
 | AT-161 | Customer | Seven types enforce approved reference matrix; create unique/New/unassigned/Normal + immutable initial message | ticket code; SupportRequest; initial SupportMessage | `createRequest`; Support POST | All seven type values and type-dependent selectors | Server `AT-161 accepts all seven...`; client `AT-161 binds...` | Legacy lacks Exchange/Account and stores mutable content | RED |
 | AT-162 | Customer/foreign Customer | Missing/foreign required Order is private denial with no effects | owned Order predicate | `createRequest` | Server-authorized Order selector and private field errors | Server `AT-162 denies...`; client `AT-162/163/164...` | Legacy optional raw Order input | RED |
 | AT-163 | Customer | Missing/inactive Product or Product+Order mismatch is denied without effects | Active Product and matching OrderDetail | `createRequest` | Active Product selector conditional on type | Server `AT-163 denies...`; client type/reference tests | Legacy lacks Active/match validation | RED |
@@ -160,8 +161,8 @@ evidence, baseline discrepancy, and current status.
 | AT-170 | System/Active Staff | Disable clears assignee once, retains InProgress/priority/messages/history, permits reclaim | active-assignment adapter; `ASSIGNEE_CLEARED`; recovery unassigned | `clearDisabledAssignee`, `claim` recovery | recovery label/reclaim; retained detail | Server/client `AT-170...` | Legacy handledBy stays disabled and has no recovery | RED |
 | AT-171 | owning Customer/current assignee | Withdraw only unassigned New; resolve atomically appends final response and deadline; no generic transitions | approved state map; final SupportMessage; resolution history | `withdraw`, `resolve` | New+unassigned withdraw; final response form; no generic status dropdown | Server/client `AT-171...` | Legacy generic response/status mutation | RED |
 | AT-172 | owning Customer | Reopen by message is allowed through exact resolvedAt+72h and denied at +1ms; retain an Active current assignee and clear only an inactive one | resolvedAt/deadline; reopen history/message; `InProgress`; conditional assignee retention/clear | `reopen` | server deadline display and disabled expired action | Server/client `AT-172...` | Legacy Resolved is terminal | RED |
-| AT-173 | Guest/Customer/Staff/Admin/Warehouse | Owner/filter projections are paged/private; invalid filters rejected; direct navigation obeys RBAC | safe DTOs; filter validator; route role guards | public Review, own Support, Staff operational reads | filters type/date/status/priority/assignee; field errors; Customer/Staff routes only | Server `AT-173 returns...`; three client `AT-173...` tests | Legacy leaks internal IDs/content and has partial filters; no Staff Review route | RED |
-| AT-174 | System/all command actors | Grouped failure rolls back; retry/replay applies once; audit/outbox omit text; foreign domains unchanged | command/audit/outbox in transaction; foreign snapshots | all Support commands | Nine mocked Support command request tests verify header+version | Server `AT-174 rolls back...`; nine client `AT-174 sends...` tests | Legacy Support audit contains subject/text and has no outbox/idempotency/version | RED |
+| AT-173 | Guest/Customer/Staff/Admin/Warehouse | Customer own Reviews and owner/Staff Support projections are paged/private; invalid filters rejected; direct navigation obeys RBAC | safe DTOs; Customer own Review publication/moderation/version/history summary; protected Customer route and role guards | public Review, protected `GET /customer/reviews`, own Support, Staff moderation/operational reads | ProductReviewPanel loads/paginates own safe management DTO; filters and field errors; Customer/Staff routes only | Server `AT-173 protects Review management...`; client own-read/navigation/projection tests | Legacy leaks internal IDs/content and has partial filters; no Customer own/Staff Review routes | RED |
+| AT-174 | System/all command actors | Every Review/Support mutation family restores the exact grouped-write snapshot on injected failure and same-key replay returns the identical result with one exact delta/event/version; audit/outbox omit text; foreign gateways remain unused | aggregate/history/message/command/audit/outbox in one transaction; injected foreign-domain gateway spies | 14-row matrix: Review create/update/publication/moderation; Support create/append/claim/priority/transfer/withdraw/resolve/reopen/disabled-clear/recovery | Review and Support pending locks; four Review and nine Support mocked commands verify header key+JSON version | Server `AT-174 table-drives...`; client command/pending tests | Legacy Support audit contains subject/text and has no outbox/idempotency/version | RED |
 
 ## Baseline discrepancies and dependency boundaries
 
@@ -205,11 +206,11 @@ Exact commands executed after this rework:
 
 ```text
 server> node --test src/acceptance/sl008.acceptance.test.js
-tests 34; pass 0; fail 34
+tests 36; pass 0; fail 36
 (25 AT tests plus nine explicit AT-154 boundary subtests)
 
 client> node --test src/acceptance/sl008UiContract.test.js
-tests 35; pass 0; fail 35
+tests 39; pass 0; fail 39
 ```
 
 Representative expected failures:

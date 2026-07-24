@@ -123,6 +123,59 @@ function fieldElement(source, fieldName) {
   return element[0];
 }
 
+function assertPendingMutationLock(
+  source,
+  serviceName,
+  methodName,
+  bodyPattern,
+  event = 'onClick|onSubmit',
+) {
+  const handler = boundHandler(source, serviceName, methodName, bodyPattern);
+  const serviceCallIndex = handler.body.search(
+    new RegExp(`${serviceName}\\.${methodName}\\s*\\(`),
+  );
+  const pendingSet = handler.body.match(
+    /(set\w*(?:Pending|Submitting|Saving|Busy))\s*\(\s*(?:true|['"][^'"]+['"])\s*\)/i,
+  );
+  assert.ok(pendingSet, `${handler.name} must enter a pending state before ${methodName}`);
+  const setter = pendingSet[1];
+  const stateName = `${setter[3].toLowerCase()}${setter.slice(4)}`;
+  const pendingGuard = handler.body.match(
+    new RegExp(`if\\s*\\([^)]*${stateName}[^)]*\\)\\s*(?:return\\b|\\{\\s*return\\b)`),
+  );
+  assert.ok(pendingGuard, `${handler.name} must reject a repeated pending invocation`);
+  assert.ok(
+    pendingGuard.index < serviceCallIndex,
+    `${handler.name} must guard before invoking ${methodName}`,
+  );
+  assert.ok(
+    pendingSet.index < serviceCallIndex,
+    `${handler.name} must enter pending state before invoking ${methodName}`,
+  );
+  const pendingClear = handler.body.match(
+    new RegExp(`${setter}\\s*\\(\\s*(?:false|null|['"]['"])\\s*\\)`),
+  );
+  assert.ok(pendingClear, `${handler.name} must clear its pending state`);
+  assert.ok(
+    pendingClear.index > serviceCallIndex,
+    `${handler.name} must clear pending state after invoking ${methodName}`,
+  );
+
+  const renderedEvent = new RegExp(
+    `(?:${event})\\s*=\\s*\\{${handler.name}\\}`,
+  ).exec(source);
+  assert.ok(renderedEvent, `${handler.name} must be bound to a rendered mutation control`);
+  const renderedControl = source.slice(
+    Math.max(0, renderedEvent.index - 1200),
+    renderedEvent.index + renderedEvent[0].length + 2400,
+  );
+  assert.match(
+    renderedControl,
+    new RegExp(`disabled\\s*=\\s*\\{[^}]*${stateName}[^}]*\\}`),
+  );
+  return handler.name;
+}
+
 function createRequestCapture(factory) {
   const requests = [];
   const service = factory({
@@ -249,6 +302,25 @@ describe('SL-008 Review UI integration contract', () => {
       /publicationStatus\s*:\s*['"]Published['"][\s\S]{0,500}expectedVersion/,
     );
     assert.notEqual(withdraw, republish);
+    const ownReview = renderedMap(panel, ['ownReviews', 'customerReviews']);
+    assert.match(ownReview, /review\.publicationStatus/);
+    assert.match(ownReview, /review\.moderationStatus/);
+    assert.match(
+      ownReview,
+      /Customer publication|Your publication/i,
+    );
+    assert.match(
+      ownReview,
+      /Staff moderation|Moderated by Staff/i,
+    );
+    assert.match(
+      ownReview,
+      /publicationStatus\s*===\s*['"]Published['"][\s\S]{0,1200}onClick\s*=\s*\{?[^}]*withdraw/i,
+    );
+    assert.match(
+      ownReview,
+      /publicationStatus\s*===\s*['"]Withdrawn['"][\s\S]{0,1200}onClick\s*=\s*\{?[^}]*republish/i,
+    );
     const moderationHandler = assertBoundHandler(
       moderation,
       'reviewService',
@@ -260,6 +332,10 @@ describe('SL-008 Review UI integration contract', () => {
       moderation,
       moderationHandler,
       /moderationStatus|HiddenByStaff|Allowed/,
+    );
+    assert.match(
+      moderation,
+      /Staff moderation|Moderation decision|Moderated by Staff/i,
     );
   });
 
@@ -276,6 +352,69 @@ describe('SL-008 Review UI integration contract', () => {
     );
     assert.doesNotMatch(panel, /deleteReview|removeReview/);
     assert.doesNotMatch(moderation, /updateReview|deleteReview|setPublication/);
+  });
+
+  it('AT-160 locks every Review mutation against repeated submit/click while pending', () => {
+    const panel = clientSource('components/review/ProductReviewPanel.jsx');
+    const moderation = clientSource('pages/staff/ReviewModerationPage.jsx');
+
+    assertPendingMutationLock(panel, 'reviewService', 'createReview');
+    assertPendingMutationLock(panel, 'reviewService', 'updateReview');
+    assertPendingMutationLock(
+      panel,
+      'reviewService',
+      'setPublication',
+      /publicationStatus\s*:\s*['"]Withdrawn['"]/,
+    );
+    assertPendingMutationLock(
+      panel,
+      'reviewService',
+      'setPublication',
+      /publicationStatus\s*:\s*['"]Published['"]/,
+    );
+    assertPendingMutationLock(moderation, 'reviewService', 'moderate');
+  });
+
+  it('AT-173 wires Customer own Review management to its protected safe paged read', async () => {
+    const panel = clientSource('components/review/ProductReviewPanel.jsx');
+    const loadOwn = boundHandler(panel, 'reviewService', 'listOwn');
+    assert.match(
+      panel,
+      new RegExp(
+        `role\\s*===?\\s*['"]Customer['"][\\s\\S]{0,1600}${loadOwn.name}\\s*\\(`,
+      ),
+    );
+    for (const field of ['page', 'pageSize']) {
+      assert.match(loadOwn.body, new RegExp(`\\b${field}\\b`));
+    }
+
+    const ownReview = renderedMap(panel, ['ownReviews', 'customerReviews']);
+    for (const field of [
+      'rating',
+      'content',
+      'publicationStatus',
+      'moderationStatus',
+      'version',
+      'historySummary',
+    ]) {
+      assert.match(ownReview, new RegExp(`review\\.${field}\\b`));
+    }
+    assert.doesNotMatch(
+      ownReview,
+      /customerId|orderId|orderDetailId|email|phone|address/,
+    );
+    assert.match(
+      panel,
+      /(?:ownReviewPage|reviewPage)[\s\S]{0,1400}(?:totalPages|pageSize)[\s\S]{0,1400}(?:onClick|onChange)/,
+    );
+
+    const { service, requests } = createRequestCapture(createReviewService);
+    assert.equal(typeof service.listOwn, 'function');
+    await service.listOwn({ page: 2, pageSize: 20 });
+    assert.equal(
+      requests[0].url,
+      'http://api.test/api/customer/reviews?page=2&pageSize=20',
+    );
   });
 
   it('AT-159 renders server aggregate/paging and sends public Review page parameters', async () => {
@@ -438,7 +577,15 @@ describe('SL-008 Customer Support UI integration contract', () => {
     assert.match(page, /privacy|do not include|sensitive|personal information/i);
     assert.doesNotMatch(
       page,
-      /(?:name|id)=["'][^"']*(?:priority|attachment)[^"']*["']|<input\b[^>]*type=["']file["']/i,
+      /(?:name|id)=["'][^"']*(?:priority|assignee|attachment)[^"']*["']|<input\b[^>]*type=["']file["']/i,
+    );
+    assert.doesNotMatch(
+      page,
+      /supportService\.(?:changePriority|transfer|uploadAttachment|addAttachment)\s*\(/,
+    );
+    assert.doesNotMatch(
+      page,
+      /<(?:input|textarea|select|button)\b(?=[^>]*(?:priority|assignee|attachment|type=["']file["']))[^>]*>/i,
     );
   });
 
@@ -551,6 +698,14 @@ describe('SL-008 Customer Support UI integration contract', () => {
       page,
       /reopenDeadline[\s\S]{0,1200}disabled=\{[^}]*(?:canReopen|deadline|expired)/i,
     );
+  });
+
+  it('AT-174 locks every Customer Support mutation against repeated submit/click while pending', () => {
+    const page = clientSource('pages/customer/SupportPage.jsx');
+
+    for (const method of ['createRequest', 'appendMessage', 'withdraw', 'reopen']) {
+      assertPendingMutationLock(page, 'supportService', method);
+    }
   });
 });
 
@@ -692,6 +847,16 @@ describe('SL-008 Staff Support UI integration contract', () => {
         + '?type=Order&dateFrom=2026-07-01&dateTo=2026-07-31'
         + '&status=New&priority=Normal&assigneeId=unassigned&page=1&pageSize=20',
     );
+  });
+
+  it('AT-174 locks every Staff Support mutation against repeated submit/click while pending', () => {
+    const queue = clientSource('pages/staff/SupportQueuePage.jsx');
+    const detail = clientSource('pages/staff/SupportDetailPage.jsx');
+
+    assertPendingMutationLock(queue, 'supportService', 'claim');
+    for (const method of ['appendMessage', 'changePriority', 'transfer', 'resolve']) {
+      assertPendingMutationLock(detail, 'supportService', method);
+    }
   });
 });
 
@@ -852,6 +1017,10 @@ describe('SL-008 direct-navigation RBAC and privacy contract', () => {
     );
     assert.match(
       app,
+      /path="(?:customer\/)?reviews"[\s\S]{0,400}allowedRoles=\{\[['"]Customer['"]\]\}/,
+    );
+    assert.match(
+      app,
       /path="staff\/support-requests"[\s\S]{0,400}allowedRoles=\{\[['"]Staff['"]\]\}/,
     );
     assert.match(
@@ -868,6 +1037,10 @@ describe('SL-008 direct-navigation RBAC and privacy contract', () => {
     );
     assert.doesNotMatch(app, /path="admin\/(?:reviews|support(?:-requests)?)"/);
     assert.doesNotMatch(app, /path="warehouse\/(?:reviews|support(?:-requests)?)"/);
+    assert.doesNotMatch(
+      app,
+      /path="(?:staff|admin|warehouse)\/customer\/reviews"/,
+    );
   });
 
   it('AT-173 ties safe Review/Support projections to protected reads and exact paged HTTP routes', async () => {
