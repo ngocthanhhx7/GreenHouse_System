@@ -20,7 +20,4 @@ router.patch('/staff/support-requests/:id/priority', authenticate, authorizeRole
 router.patch('/staff/support-requests/:id/transfer', authenticate, authorizeRoles('Staff'), supportController.transferRequest);
 router.patch('/staff/support-requests/:id/resolve', authenticate, authorizeRoles('Staff'), supportController.resolveRequest);
 
-// Legacy endpoint; kept as a compatibility shim while clients migrate to claim/messages/resolve.
-router.patch('/staff/support-requests/:id/response', authenticate, authorizeRoles('Staff'), supportController.respondToRequest);
-
 module.exports = router;
