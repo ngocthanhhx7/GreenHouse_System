@@ -1241,6 +1241,7 @@ function atomicScenario(
   methodName,
   positionalArgs,
   command,
+  expectedHistory = null,
 ) {
   const method = requiredMethod(fixture.service, methodName);
   const aggregateType = aggregate
@@ -1251,6 +1252,11 @@ function atomicScenario(
   const aggregateScopeId = aggregate?.id
     || (methodName === 'createReview' ? positionalArgs[1] : positionalArgs[0]?.id);
   const historyCollection = Object.keys(delta).find((key) => /History$/.test(key)) || null;
+  assert.equal(
+    Boolean(historyCollection),
+    expectedHistory !== null,
+    `${methodName} must declare exact history values iff it appends history`,
+  );
   return {
     fixture,
     baseVersion: aggregate?.version ?? 0,
@@ -1258,6 +1264,7 @@ function atomicScenario(
     aggregateType,
     aggregateScopeId,
     historyCollection,
+    expectedHistory: structuredClone(expectedHistory),
     methodName,
     command: structuredClone(command),
     eventType,
@@ -1332,67 +1339,20 @@ function assertAtomicWrites(scenario, first, key, countsBefore) {
     const history = state[scenario.historyCollection].slice(
       countsBefore[scenario.historyCollection],
     );
-    const expectedHistory = history[0];
-    assert.ok(expectedHistory, `${scenario.historyCollection} must append exactly one row`);
-    assert.equal(history.length, 1);
-    const historyKeys = {
-      contentHistory: ['reviewId', 'actorId', 'version', 'rating', 'content', 'createdAt'],
-      publicationHistory: [
-        'reviewId',
-        'actorId',
-        'version',
-        'beforeStatus',
-        'afterStatus',
-        'createdAt',
-      ],
-      moderationHistory: [
-        'reviewId',
-        'actorId',
-        'version',
-        'beforeStatus',
-        'afterStatus',
-        'reason',
-        'createdAt',
-      ],
-      assignmentHistory: [
-        'ticketId',
-        'actorId',
-        'version',
-        'beforeAssigneeId',
-        'afterAssigneeId',
-        'reason',
-        'createdAt',
-      ],
-      priorityHistory: [
-        'ticketId',
-        'actorId',
-        'version',
-        'beforePriority',
-        'afterPriority',
-        'reason',
-        'createdAt',
-      ],
-      resolutionHistory: [
-        'ticketId',
-        'actorId',
-        'version',
-        'transition',
-        'reopenDeadline',
-        'createdAt',
-      ],
-    };
-    assertExactKeys(
-      expectedHistory,
-      historyKeys[scenario.historyCollection],
-      `${scenario.historyCollection} exact write`,
+    const aggregateField = scenario.aggregateType === 'Review'
+      ? 'reviewId'
+      : 'ticketId';
+    assert.deepEqual(
+      history,
+      [{
+        [aggregateField]: aggregateId,
+        actorId,
+        version,
+        ...structuredClone(scenario.expectedHistory),
+        createdAt: timestamp,
+      }],
+      `${scenario.aggregateType}/${scenario.methodName} exact history write`,
     );
-    assert.equal(
-      expectedHistory.reviewId || expectedHistory.ticketId,
-      aggregateId,
-    );
-    assert.equal(expectedHistory.actorId, actorId);
-    assert.equal(expectedHistory.version, version);
-    assert.deepEqual(expectedHistory.createdAt, timestamp);
   }
   if (scenario.expectedDelta.messages) {
     const messages = state.messages.slice(countsBefore.messages);
@@ -1425,6 +1385,10 @@ async function prepareReviewAtomicScenario(family) {
       fixture, null, 'REVIEW_CREATED',
       { reviews: 1, contentHistory: 1 },
       'createReview', [actors.customer, 'product-1'], reviewCommand(),
+      {
+        rating: 5,
+        content: 'Very useful product',
+      },
     );
   }
 
@@ -1438,10 +1402,18 @@ async function prepareReviewAtomicScenario(family) {
     update: [
       'REVIEW_UPDATED', { contentHistory: 1 }, 'updateReview', actors.customer,
       { rating: 4, content: 'Atomic update matrix' },
+      {
+        rating: 4,
+        content: 'Atomic update matrix',
+      },
     ],
     publication: [
       'REVIEW_PUBLICATION_CHANGED', { publicationHistory: 1 },
       'setPublication', actors.customer, { publicationStatus: 'Withdrawn' },
+      {
+        beforeStatus: 'Published',
+        afterStatus: 'Withdrawn',
+      },
     ],
     moderation: [
       'REVIEW_MODERATION_CHANGED', { moderationHistory: 1 },
@@ -1450,12 +1422,18 @@ async function prepareReviewAtomicScenario(family) {
         moderationStatus: 'HiddenByStaff',
         reason: 'Atomic moderation matrix',
       },
+      {
+        beforeStatus: 'Allowed',
+        afterStatus: 'HiddenByStaff',
+        reason: 'Atomic moderation matrix',
+      },
     ],
   };
-  const [eventType, delta, method, actor, command] = rows[family];
+  const [eventType, delta, method, actor, command, expectedHistory] = rows[family];
   return atomicScenario(
     fixture, review, eventType, delta, method, [actor, review.id],
     { ...command, expectedVersion: review.version },
+    expectedHistory,
   );
 }
 
@@ -1479,14 +1457,28 @@ async function prepareSupportAtomicScenario(family) {
     claim: [
       'SUPPORT_CLAIMED', { assignmentHistory: 1 }, 'claim',
       actors.staffA, {},
+      {
+        actorRole: 'Staff',
+        beforeAssigneeId: null,
+        afterAssigneeId: actors.staffA.id,
+        reason: null,
+      },
     ],
     withdraw: ['SUPPORT_WITHDRAWN', {}, 'withdraw', actors.customer, {}],
   };
   if (unassignedRows[family]) {
-    const [eventType, delta, method, actor, command] = unassignedRows[family];
+    const [
+      eventType,
+      delta,
+      method,
+      actor,
+      command,
+      expectedHistory,
+    ] = unassignedRows[family];
     return atomicScenario(
       fixture, ticket, eventType, delta, method, [actor, ticket.id],
       { ...command, expectedVersion: ticket.version },
+      expectedHistory,
     );
   }
 
@@ -1494,11 +1486,21 @@ async function prepareSupportAtomicScenario(family) {
     fixture, ticket, actors.staffA, {},
     `support-atomic-${family}-claim-setup`,
   );
+  const resolvedAt = fixture.clock.now();
+  const reopenDeadline = new Date(
+    resolvedAt.getTime() + 72 * 60 * 60 * 1000,
+  );
   const assignedRows = {
     priority: [
       'SUPPORT_PRIORITY_CHANGED', { priorityHistory: 1 }, 'changePriority',
       {
         priority: 'High',
+        reason: 'Atomic priority matrix',
+      },
+      {
+        actorRole: 'Staff',
+        beforePriority: 'Normal',
+        afterPriority: 'High',
         reason: 'Atomic priority matrix',
       },
     ],
@@ -1508,17 +1510,38 @@ async function prepareSupportAtomicScenario(family) {
         assigneeId: actors.staffB.id,
         reason: 'Atomic transfer matrix',
       },
+      {
+        actorRole: 'Staff',
+        beforeAssigneeId: actors.staffA.id,
+        afterAssigneeId: actors.staffB.id,
+        reason: 'Atomic transfer matrix',
+      },
     ],
     resolve: [
       'SUPPORT_RESOLVED', { messages: 1, resolutionHistory: 1 }, 'resolve',
       { finalMessage: 'Atomic resolution matrix' },
+      {
+        actorRole: 'Staff',
+        beforeStatus: 'InProgress',
+        afterStatus: 'Resolved',
+        transition: 'Resolved',
+        resolvedAt,
+        reopenDeadline,
+      },
     ],
   };
   if (assignedRows[family]) {
-    const [eventType, delta, method, command] = assignedRows[family];
+    const [
+      eventType,
+      delta,
+      method,
+      command,
+      expectedHistory,
+    ] = assignedRows[family];
     return atomicScenario(
       fixture, ticket, eventType, delta, method, [actors.staffA, ticket.id],
       { ...command, expectedVersion: ticket.version },
+      expectedHistory,
     );
   }
 
@@ -1528,6 +1551,12 @@ async function prepareSupportAtomicScenario(family) {
     return atomicScenario(
       fixture, ticket, 'ASSIGNEE_CLEARED', { assignmentHistory: 1 },
       'clearDisabledAssignee', [actors.staffA.id], {},
+      {
+        actorRole: 'System',
+        beforeAssigneeId: actors.staffA.id,
+        afterAssigneeId: null,
+        reason: 'ASSIGNEE_DISABLED',
+      },
     );
   }
   if (family === 'disabled-assignee-recovery') {
@@ -1540,6 +1569,12 @@ async function prepareSupportAtomicScenario(family) {
     return atomicScenario(
       fixture, ticket, 'SUPPORT_CLAIMED', { assignmentHistory: 1 },
       'claim', [actors.staffB, ticket.id], { expectedVersion: ticket.version },
+      {
+        actorRole: 'Staff',
+        beforeAssigneeId: null,
+        afterAssigneeId: actors.staffB.id,
+        reason: null,
+      },
     );
   }
 
@@ -1554,11 +1589,23 @@ async function prepareSupportAtomicScenario(family) {
     },
     'support-atomic-reopen-resolve-setup',
   );
+  const priorResolvedAt = new Date(ticket.resolvedAt);
+  const priorReopenDeadline = new Date(
+    priorResolvedAt.getTime() + 72 * 60 * 60 * 1000,
+  );
   return atomicScenario(
     fixture, ticket, 'SUPPORT_REOPENED',
     { messages: 1, resolutionHistory: 1 },
     'reopen', [actors.customer, ticket.id],
     { message: 'Atomic reopen matrix', expectedVersion: ticket.version },
+    {
+      actorRole: 'Customer',
+      beforeStatus: 'Resolved',
+      afterStatus: 'InProgress',
+      transition: 'Reopened',
+      resolvedAt: priorResolvedAt,
+      reopenDeadline: priorReopenDeadline,
+    },
   );
 }
 
@@ -1771,6 +1818,7 @@ describe('SL-008 Review behavioral acceptance', () => {
       await t.test(`invalid boundary ${index + 1}`, async () => {
         const fixture = buildReviewFixture();
         const createReview = requiredMethod(fixture.service, 'createReview');
+        const before = snapshotEffects(fixture.state);
         await expectDomainError(
           () => runMutation(
             createReview,
@@ -1780,20 +1828,11 @@ describe('SL-008 Review behavioral acceptance', () => {
           ),
           'REVIEW_VALIDATION_FAILED',
         );
-        assert.deepEqual(snapshotEffectCounts(fixture.state), {
-          reviews: 0,
-          tickets: 0,
-          messages: 0,
-          contentHistory: 0,
-          publicationHistory: 0,
-          moderationHistory: 0,
-          assignmentHistory: 0,
-          priorityHistory: 0,
-          resolutionHistory: 0,
-          commands: 0,
-          audits: 0,
-          outbox: 0,
-        });
+        assert.deepEqual(
+          snapshotEffects(fixture.state),
+          before,
+          'invalid Review command must not mutate references, rows, or counters',
+        );
       });
     }
   });
@@ -4071,6 +4110,7 @@ describe('SL-008 Support behavioral acceptance', () => {
     ].entries()) {
       const fixture = buildSupportFixture();
       const createRequest = requiredMethod(fixture.service, 'createRequest');
+      const before = snapshotEffects(fixture.state);
       await expectDomainError(
         () => runMutation(
           createRequest,
@@ -4080,11 +4120,11 @@ describe('SL-008 Support behavioral acceptance', () => {
         ),
         'COMMAND_VALIDATION_FAILED',
       );
-      assert.deepEqual(snapshotEffectCounts(fixture.state), oneCommandDelta({
-        commands: 0,
-        audits: 0,
-        outbox: 0,
-      }));
+      assert.deepEqual(
+        snapshotEffects(fixture.state),
+        before,
+        'invalid Support command must not mutate references, rows, or counters',
+      );
       assertForeignMutationGatewaysUnused(fixture);
     }
 
