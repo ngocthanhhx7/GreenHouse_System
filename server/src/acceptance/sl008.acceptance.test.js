@@ -630,6 +630,28 @@ function buildReviewFixture({ now = '2026-07-24T12:00:00.000Z' } = {}) {
     async listPublicReviews(productId) {
       return state.reviews.filter((review) => review.productId === String(productId));
     },
+    async listReviews(filter = {}) {
+      return state.reviews.filter((review) => Object.entries(filter).every(
+        ([key, value]) => value === undefined || review[key] === String(value),
+      ));
+    },
+    async summarizeReviewHistories(reviewIds) {
+      const identifiers = new Set(reviewIds.map(String));
+      return Object.fromEntries([...identifiers].map((reviewId) => [
+        reviewId,
+        {
+          contentEntries: state.contentHistory.filter(
+            (entry) => String(entry.reviewId) === reviewId,
+          ).length,
+          publicationEntries: state.publicationHistory.filter(
+            (entry) => String(entry.reviewId) === reviewId,
+          ).length,
+          moderationEntries: state.moderationHistory.filter(
+            (entry) => String(entry.reviewId) === reviewId,
+          ).length,
+        },
+      ]));
+    },
   };
 
   const auditLogger = {
