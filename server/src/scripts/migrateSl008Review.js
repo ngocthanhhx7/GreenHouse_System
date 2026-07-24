@@ -126,7 +126,23 @@ async function readIndexes(collection) {
 }
 
 function hasExpectedOptions(index, spec) {
-  return sameKey(index.key, spec.key) && Boolean(index.unique) === Boolean(spec.unique);
+  const metadataOptions = new Set([
+    'v',
+    'ns',
+    'key',
+    'name',
+    'collection',
+    'background',
+  ]);
+  const normalizeOptions = (source) => Object.fromEntries(
+    Object.entries(source).flatMap(([option, value]) => {
+      if (metadataOptions.has(option) || value === undefined) return [];
+      if (['unique', 'sparse', 'hidden'].includes(option) && value !== true) return [];
+      return [[option, value]];
+    }),
+  );
+  return sameKey(index.key, spec.key)
+    && JSON.stringify(normalizeOptions(index)) === JSON.stringify(normalizeOptions(spec));
 }
 
 function assertHistoryIndexable(histories) {
@@ -340,13 +356,15 @@ function createMigrationRepository({ collections = defaultCollections() } = {}) 
     for (const spec of REQUIRED_INDEXES) {
       const indexes = byCollection[spec.collection];
       const named = indexes.find((index) => index.name === spec.name);
-      if (named && !hasExpectedOptions(named, spec)) {
+      const samePattern = indexes.filter((index) => sameKey(index.key, spec.key));
+      if (
+        (named && !hasExpectedOptions(named, spec))
+        || samePattern.some((index) => (
+          index.name !== spec.name || !hasExpectedOptions(index, spec)
+        ))
+      ) {
         throw migrationError('SL008_REVIEW_INDEX_CONFLICT');
       }
-      const equivalent = indexes.find((index) => (
-        index.name !== spec.name && hasExpectedOptions(index, spec)
-      ));
-      if (!named && equivalent) throw migrationError('SL008_REVIEW_INDEX_CONFLICT');
       if (!named) missingRequired.push(spec);
     }
 
@@ -400,9 +418,16 @@ function createMigrationRepository({ collections = defaultCollections() } = {}) 
       };
       const backfills = [];
       for (const review of reviews) {
-        const independentFactsMissing = !review.publicationStatus || !review.moderationStatus;
-        if (review.status === 'Hidden' && independentFactsMissing) {
-          throw migrationError('SL008_REVIEW_HIDDEN_AMBIGUOUS');
+        const hasExplicitIndependentFacts = (
+          ['Published', 'Withdrawn'].includes(review.publicationStatus)
+          && ['Allowed', 'HiddenByStaff'].includes(review.moderationStatus)
+        );
+        if (!hasExplicitIndependentFacts && review.status !== 'Visible') {
+          throw migrationError(
+            review.status === 'Hidden'
+              ? 'SL008_REVIEW_HIDDEN_AMBIGUOUS'
+              : 'SL008_REVIEW_STATUS_AMBIGUOUS',
+          );
         }
         const evidence = resolveEvidence(review, orders, orderDetails);
         const canonicalVersion = Number.isInteger(Number(review.version))

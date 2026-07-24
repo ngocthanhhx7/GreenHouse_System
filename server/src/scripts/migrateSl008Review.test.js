@@ -255,6 +255,85 @@ describe('SL-008 Review-only migration', () => {
     }
   });
 
+  it('rejects every required-key index whose name or semantic options are not exact before mutation', async () => {
+    const key = { customerId: 1, productId: 1 };
+    const cases = [
+      {
+        name: 'wrong name',
+        index: { name: 'customerId_1_productId_1', key, unique: true },
+      },
+      {
+        name: 'wrong unique option',
+        index: { name: 'review_customer_product_unique', key, unique: false },
+      },
+      {
+        name: 'wrong name and wrong unique option',
+        index: { name: 'unsafe_review_identity', key, unique: false },
+      },
+      {
+        name: 'unexpected sparse option',
+        index: {
+          name: 'review_customer_product_unique',
+          key,
+          unique: true,
+          sparse: true,
+        },
+      },
+      {
+        name: 'unexpected partial filter option',
+        index: {
+          name: 'review_customer_product_unique',
+          key,
+          unique: true,
+          partialFilterExpression: { status: 'Visible' },
+        },
+      },
+      {
+        name: 'unexpected storage-engine option',
+        index: {
+          name: 'review_customer_product_unique',
+          key,
+          unique: true,
+          storageEngine: { wiredTiger: { configString: 'block_compressor=zstd' } },
+        },
+      },
+    ];
+
+    for (const row of cases) {
+      const fixture = emptyFixture();
+      fixture.collections.reviews.indexes.push(clone(row.index));
+
+      await assert.rejects(
+        () => migration.migrateSl008Review({ repository: repositoryFor(fixture) }),
+        (error) => error?.code === 'SL008_REVIEW_INDEX_CONFLICT',
+        row.name,
+      );
+      assert.deepEqual(mutations(fixture.operations), [], row.name);
+    }
+  });
+
+  it('rejects non-Visible or missing legacy status without explicit independent state facts before mutation', async () => {
+    const cases = [
+      ['missing', (review) => { delete review.status; }],
+      ['null', (review) => { review.status = null; }],
+      ['blank', (review) => { review.status = ''; }],
+      ['malformed', (review) => { review.status = 'Archived'; }],
+      ['wrong case', (review) => { review.status = 'visible'; }],
+      ['ambiguous Hidden', (review) => { review.status = 'Hidden'; }],
+    ];
+
+    for (const [name, mutate] of cases) {
+      const fixture = legacyFixture((data) => mutate(data.reviews[0]));
+
+      await assert.rejects(
+        () => migration.migrateSl008Review({ repository: repositoryFor(fixture) }),
+        (error) => /^SL008_REVIEW_.*_AMBIGUOUS$/u.test(error?.code || ''),
+        name,
+      );
+      assert.deepEqual(mutations(fixture.operations), [], name);
+    }
+  });
+
   it('backfills only proven Visible facts conditionally without changing timestamps or inventing history', async () => {
     const fixture = legacyFixture();
     const beforeHistory = clone(fixture.collections.contentHistories.documents);
