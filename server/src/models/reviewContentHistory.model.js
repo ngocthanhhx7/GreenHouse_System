@@ -38,5 +38,9 @@ reviewContentHistorySchema.index(
   { reviewId: 1, version: 1 },
   { unique: true, name: 'review_content_history_version_unique' },
 );
+reviewContentHistorySchema.index(
+  { reviewId: 1, createdAt: 1, _id: 1 },
+  { name: 'review_content_history_chronological' },
+);
 
 module.exports = mongoose.model('ReviewContentHistory', reviewContentHistorySchema);

@@ -3,6 +3,13 @@ const ApiError = require('../utils/apiError');
 
 const PUBLICATION_STATUSES = new Set(['Published', 'Withdrawn']);
 const MODERATION_STATUSES = new Set(['Allowed', 'HiddenByStaff']);
+const HTML_ENTITY_REPLACEMENTS = {
+  amp: '&',
+  apos: "'",
+  gt: '>',
+  lt: '<',
+  quot: '"',
+};
 
 function reviewError(statusCode, errorCode, message, data = null) {
   return new ApiError(statusCode, message, [], errorCode, data);
@@ -18,6 +25,10 @@ function valueId(value) {
 
 function actorId(actor) {
   return valueId(actor?.id ?? actor?._id ?? actor);
+}
+
+function isCastError(error) {
+  return error?.name === 'CastError' || error?.constructor?.name === 'CastError';
 }
 
 function requireCustomer(actor) {
@@ -66,11 +77,36 @@ function normalizeContent(value) {
   if (typeof value !== 'string') {
     throw reviewError(400, 'REVIEW_VALIDATION_FAILED', 'Review input is invalid');
   }
-  const normalized = value.trim();
+  const normalized = sanitizePlainText(value);
   if (normalized.length > 1000) {
     throw reviewError(400, 'REVIEW_VALIDATION_FAILED', 'Review input is invalid');
   }
   return normalized;
+}
+
+function sanitizePlainText(value) {
+  return String(value ?? '')
+    .replace(/&(#x[\da-f]+|#\d+|[a-z]+);/giu, (match, entity) => {
+      const lower = entity.toLowerCase();
+      if (HTML_ENTITY_REPLACEMENTS[lower]) return HTML_ENTITY_REPLACEMENTS[lower];
+      if (lower.startsWith('#x')) {
+        const codePoint = Number.parseInt(lower.slice(2), 16);
+        return codePoint >= 0 && codePoint <= 0x10ffff
+          ? String.fromCodePoint(codePoint)
+          : match;
+      }
+      if (lower.startsWith('#')) {
+        const codePoint = Number.parseInt(lower.slice(1), 10);
+        return codePoint >= 0 && codePoint <= 0x10ffff
+          ? String.fromCodePoint(codePoint)
+          : match;
+      }
+      return match;
+    })
+    .replace(/<[^>]*>/gu, ' ')
+    .replace(/[<>]/gu, '')
+    .replace(/\s+/gu, ' ')
+    .trim();
 }
 
 function validateContentCommand(command) {
@@ -136,7 +172,7 @@ function normalizedReview(review) {
     orderId: valueId(review.orderId) || null,
     orderDetailId: valueId(review.orderDetailId) || null,
     rating: Number(review.rating),
-    content: String(review.content || ''),
+    content: sanitizePlainText(review.content),
     publicationStatus: review.publicationStatus
       || (legacyVisible ? 'Published' : 'Withdrawn'),
     moderationStatus: review.moderationStatus || 'Allowed',
@@ -254,11 +290,24 @@ function pageItems(items, { page, pageSize }, additions = {}) {
   };
 }
 
+function boundedPage(items, { page, pageSize }, total, additions = {}) {
+  return {
+    items,
+    total: Number(total),
+    page,
+    pageSize,
+    totalPages: Math.ceil(Number(total) / pageSize),
+    ...additions,
+  };
+}
+
 module.exports = {
   PUBLICATION_STATUSES,
   MODERATION_STATUSES,
   actorId,
+  boundedPage,
   commandFingerprint,
+  isCastError,
   normalizedReview,
   pageItems,
   parsePaging,

@@ -630,10 +630,45 @@ function buildReviewFixture({ now = '2026-07-24T12:00:00.000Z' } = {}) {
     async listPublicReviews(productId) {
       return state.reviews.filter((review) => review.productId === String(productId));
     },
+    async queryPublicReviews(productId, { skip = 0, limit = 20 } = {}) {
+      const visible = state.reviews
+        .filter((review) => (
+          review.productId === String(productId)
+          && review.publicationStatus === 'Published'
+          && review.moderationStatus === 'Allowed'
+        ))
+        .slice()
+        .sort((left, right) => {
+          const createdDifference = new Date(right.createdAt).getTime()
+            - new Date(left.createdAt).getTime();
+          return createdDifference || String(right.id).localeCompare(String(left.id), 'en');
+        });
+      return {
+        items: visible.slice(skip, skip + limit),
+        total: visible.length,
+        ratingSum: visible.reduce((sum, review) => sum + Number(review.rating), 0),
+      };
+    },
     async listReviews(filter = {}) {
       return state.reviews.filter((review) => Object.entries(filter).every(
         ([key, value]) => value === undefined || review[key] === String(value),
       ));
+    },
+    async queryReviews(filter = {}, { skip = 0, limit = 20 } = {}) {
+      const matches = state.reviews
+        .filter((review) => Object.entries(filter).every(
+          ([key, value]) => value === undefined || review[key] === String(value),
+        ))
+        .slice()
+        .sort((left, right) => {
+          const createdDifference = new Date(right.createdAt).getTime()
+            - new Date(left.createdAt).getTime();
+          return createdDifference || String(right.id).localeCompare(String(left.id), 'en');
+        });
+      return {
+        items: matches.slice(skip, skip + limit),
+        total: matches.length,
+      };
     },
     async summarizeReviewHistories(reviewIds) {
       const identifiers = new Set(reviewIds.map(String));

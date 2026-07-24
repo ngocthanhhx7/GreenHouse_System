@@ -45,6 +45,11 @@ describe('SL-008 Review persistence models', () => {
     for (const [path, index] of rows) {
       const model = loadModel(path);
       assert.equal(hasIndex(model, index, { unique: true }), true, path);
+      assert.equal(
+        hasIndex(model, { reviewId: 1, createdAt: 1, _id: 1 }),
+        true,
+        `${path} chronological index`,
+      );
       assert.equal(model.schema.path('reviewId').options.immutable, true, path);
       assert.equal(model.schema.path('version').options.immutable, true, path);
       assert.equal(model.schema.path('createdAt').options.immutable, true, path);

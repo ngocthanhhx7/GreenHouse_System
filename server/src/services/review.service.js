@@ -2,14 +2,14 @@ const crypto = require('node:crypto');
 const ApiError = require('../utils/apiError');
 const {
   actorId,
+  boundedPage,
   commandFingerprint,
+  isCastError,
   normalizedReview,
-  pageItems,
   parsePaging,
   requireActiveStaff,
   requireCustomer,
   reviewError,
-  reviewSort,
   toManagementDto,
   toModerationDto,
   toOwnDto,
@@ -199,45 +199,50 @@ function createReviewService(options = {}) {
   }
 
   async function resolveEligibility(customerId, productId, orderDetailId) {
-    const product = await repository.findProductById(productId);
-    if (!product || product.status !== 'Active') throw notEligible();
+    try {
+      const product = await repository.findProductById(productId);
+      if (!product) throw notEligible();
 
-    if (orderDetailId !== undefined && orderDetailId !== null) {
-      const detail = await repository.findOrderDetailById(orderDetailId);
-      if (!detail || valueId(detail.productId) !== String(productId)) throw notEligible();
-      const order = await repository.findOrderById(detail.orderId);
-      if (
-        !order
-        || valueId(order.customerId) !== String(customerId)
-        || !order.deliveredAt
-      ) {
-        throw notEligible();
+      if (orderDetailId !== undefined && orderDetailId !== null) {
+        const detail = await repository.findOrderDetailById(orderDetailId);
+        if (!detail || valueId(detail.productId) !== String(productId)) throw notEligible();
+        const order = await repository.findOrderById(detail.orderId);
+        if (
+          !order
+          || valueId(order.customerId) !== String(customerId)
+          || !order.deliveredAt
+        ) {
+          throw notEligible();
+        }
+        return { product, detail, order };
       }
-      return { product, detail, order };
-    }
 
-    const candidates = await repository.listOwnedDeliveredOrderDetails(
-      customerId,
-      productId,
-    );
-    const eligible = candidates
-      .filter((detail) => (
-        valueId(detail.productId) === String(productId)
-        && valueId(detail.order?.customerId) === String(customerId)
-        && detail.order?.deliveredAt
-      ))
-      .sort((left, right) => {
-        const deliveredDifference = new Date(right.order.deliveredAt).getTime()
-          - new Date(left.order.deliveredAt).getTime();
-        if (deliveredDifference !== 0) return deliveredDifference;
-        return valueId(right).localeCompare(valueId(left), 'en');
-      });
-    if (eligible.length === 0) throw notEligible();
-    return {
-      product,
-      detail: eligible[0],
-      order: eligible[0].order,
-    };
+      const candidates = await repository.listOwnedDeliveredOrderDetails(
+        customerId,
+        productId,
+      );
+      const eligible = candidates
+        .filter((detail) => (
+          valueId(detail.productId) === String(productId)
+          && valueId(detail.order?.customerId) === String(customerId)
+          && detail.order?.deliveredAt
+        ))
+        .sort((left, right) => {
+          const deliveredDifference = new Date(right.order.deliveredAt).getTime()
+            - new Date(left.order.deliveredAt).getTime();
+          if (deliveredDifference !== 0) return deliveredDifference;
+          return valueId(right).localeCompare(valueId(left), 'en');
+        });
+      if (eligible.length === 0) throw notEligible();
+      return {
+        product,
+        detail: eligible[0],
+        order: eligible[0].order,
+      };
+    } catch (error) {
+      if (isCastError(error)) throw notEligible();
+      throw error;
+    }
   }
 
   async function createReview(actor, productId, command = {}, finalOptions = {}) {
@@ -259,7 +264,13 @@ function createReviewService(options = {}) {
     return executeCommand(identity, () => withAggregateLock(
       `${actorId(actor)}\u0000${String(productId)}`,
       async () => {
-        const existing = await repository.findReviewByIdentity(actorId(actor), productId);
+        let existing;
+        try {
+          existing = await repository.findReviewByIdentity(actorId(actor), productId);
+        } catch (error) {
+          if (isCastError(error)) throw notEligible();
+          throw error;
+        }
         if (existing) throw duplicateError(existing);
         const { detail, order } = await resolveEligibility(
           actorId(actor),
@@ -349,7 +360,13 @@ function createReviewService(options = {}) {
     );
 
     return executeCommand(identity, async () => {
-      const observed = await repository.findReviewById(reviewId);
+      let observed;
+      try {
+        observed = await repository.findReviewById(reviewId);
+      } catch (error) {
+        if (isCastError(error)) throw forbidden();
+        throw error;
+      }
       if (!observed) throw forbidden();
       if (authorize === requireCustomer && valueId(observed.customerId) !== actorId(actor)) {
         throw forbidden();
@@ -358,7 +375,13 @@ function createReviewService(options = {}) {
       const occurredAt = new Date(now());
 
       return transactionManager.withTransaction(async (session) => {
-        const current = await repository.findReviewById(reviewId, session);
+        let current;
+        try {
+          current = await repository.findReviewById(reviewId, session);
+        } catch (error) {
+          if (isCastError(error)) throw forbidden();
+          throw error;
+        }
         if (!current) throw forbidden();
         if (authorize === requireCustomer && valueId(current.customerId) !== actorId(actor)) {
           throw forbidden();
@@ -501,46 +524,74 @@ function createReviewService(options = {}) {
 
   async function listPublic(productId, filters = {}) {
     const paging = parsePaging(filters);
-    const product = await repository.findProductById(productId);
+    let product;
+    try {
+      product = await repository.findProductById(productId);
+    } catch (error) {
+      if (isCastError(error)) return boundedPage([], paging, 0, { averageRating: 0 });
+      throw error;
+    }
     if (!product || product.status !== 'Active') {
-      return pageItems([], paging, { averageRating: 0 });
+      return boundedPage([], paging, 0, { averageRating: 0 });
     }
-    const category = await repository.findCategoryById(product.categoryId);
+    let category;
+    try {
+      category = await repository.findCategoryById(product.categoryId);
+    } catch (error) {
+      if (isCastError(error)) return boundedPage([], paging, 0, { averageRating: 0 });
+      throw error;
+    }
     if (!category || category.status !== 'Active') {
-      return pageItems([], paging, { averageRating: 0 });
+      return boundedPage([], paging, 0, { averageRating: 0 });
     }
-    const reviews = (await repository.listPublicReviews(productId))
-      .map(normalizedReview)
-      .filter((review) => (
-        review.publicationStatus === 'Published'
-        && review.moderationStatus === 'Allowed'
-      ))
-      .sort(reviewSort);
+    let query;
+    try {
+      query = await repository.queryPublicReviews(productId, {
+        skip: (paging.page - 1) * paging.pageSize,
+        limit: paging.pageSize,
+      });
+    } catch (error) {
+      if (isCastError(error)) return boundedPage([], paging, 0, { averageRating: 0 });
+      throw error;
+    }
+    const reviews = query.items.map(normalizedReview);
     const items = [];
     for (const review of reviews) {
       const user = await repository.findUserById(review.customerId);
       items.push(toPublicDto(review, user));
     }
-    const averageRating = reviews.length === 0
+    const averageRating = Number(query.total || 0) === 0
       ? 0
       : Number((
-        reviews.reduce((sum, review) => sum + review.rating, 0) / reviews.length
+        Number(query.ratingSum || 0) / Number(query.total)
       ).toFixed(1));
-    return pageItems(items, paging, { averageRating });
+    return boundedPage(items, paging, query.total, { averageRating });
   }
 
   async function listOwn(actor, filters = {}) {
     requireCustomer(actor);
     const paging = parsePaging(filters);
-    const reviews = (await repository.listReviews({ customerId: actorId(actor) }))
-      .sort(reviewSort);
+    let query;
+    try {
+      query = await repository.queryReviews(
+        { customerId: actorId(actor) },
+        {
+          skip: (paging.page - 1) * paging.pageSize,
+          limit: paging.pageSize,
+        },
+      );
+    } catch (error) {
+      if (isCastError(error)) throw forbidden();
+      throw error;
+    }
+    const reviews = query.items;
     const summaries = await repository.summarizeReviewHistories(
       reviews.map((review) => valueId(review)),
     );
     const items = reviews.map((review) => (
       toOwnDto(review, summaries[valueId(review)])
     ));
-    return pageItems(items, paging);
+    return boundedPage(items, paging, query.total);
   }
 
   async function listModeration(actor, filters = {}) {
@@ -564,12 +615,26 @@ function createReviewService(options = {}) {
     ) {
       throw reviewError(400, 'REVIEW_FILTER_INVALID', 'Review filter is invalid');
     }
-    const reviews = (await repository.listReviews({
-      productId: filters.productId,
-      publicationStatus: filters.publicationStatus,
-      moderationStatus: filters.moderationStatus,
-    })).sort(reviewSort);
-    return pageItems(reviews.map(toModerationDto), paging);
+    let query;
+    try {
+      query = await repository.queryReviews(
+        {
+          productId: filters.productId,
+          publicationStatus: filters.publicationStatus,
+          moderationStatus: filters.moderationStatus,
+        },
+        {
+          skip: (paging.page - 1) * paging.pageSize,
+          limit: paging.pageSize,
+        },
+      );
+    } catch (error) {
+      if (isCastError(error)) {
+        throw reviewError(400, 'REVIEW_FILTER_INVALID', 'Review filter is invalid');
+      }
+      throw error;
+    }
+    return boundedPage(query.items.map(toModerationDto), paging, query.total);
   }
 
   const service = {

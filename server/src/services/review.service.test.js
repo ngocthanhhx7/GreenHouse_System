@@ -9,6 +9,11 @@ function createRepository() {
     categoryId: 'category-1',
     name: 'Minimal Dinner Plate Set',
     status: 'Active',
+  }, {
+    _id: 'product-inactive',
+    categoryId: 'category-1',
+    name: 'Inactive legacy product',
+    status: 'Inactive',
   }];
   const categories = [{ _id: 'category-1', status: 'Active' }];
   const users = [{ _id: 'customer-1', fullName: 'Nguyen Van An', status: 'Active' }];
@@ -19,10 +24,22 @@ function createRepository() {
       orderStatus: 'Delivered',
       deliveredAt: new Date('2026-07-20T08:00:00.000Z'),
     },
+    {
+      _id: 'order-inactive-product',
+      customerId: 'customer-1',
+      orderStatus: 'Delivered',
+      deliveredAt: new Date('2026-07-21T08:00:00.000Z'),
+    },
     { _id: 'order-2', customerId: 'customer-1', orderStatus: 'Shipped' },
   ];
   const details = [
     { _id: 'detail-1', orderId: 'order-1', productId: 'product-1', productNameSnapshot: 'Minimal Dinner Plate Set' },
+    {
+      _id: 'detail-inactive-product',
+      orderId: 'order-inactive-product',
+      productId: 'product-inactive',
+      productNameSnapshot: 'Inactive legacy product',
+    },
     { _id: 'detail-2', orderId: 'order-2', productId: 'product-1', productNameSnapshot: 'Minimal Dinner Plate Set' },
   ];
   const reviews = [];
@@ -34,7 +51,7 @@ function createRepository() {
   return {
     reviews,
     async findProductById(id) {
-      return products.find((product) => product._id === id && product.status === 'Active') || null;
+      return products.find((product) => product._id === id) || null;
     },
     async findCategoryById(id) {
       return categories.find((category) => category._id === id) || null;
@@ -120,6 +137,23 @@ function createRepository() {
     async listPublicReviews(productId) {
       return reviews.filter((review) => review.productId === productId);
     },
+    async queryPublicReviews(productId, { skip = 0, limit = 20 } = {}) {
+      const visible = reviews
+        .filter((review) => (
+          review.productId === productId
+          && review.publicationStatus === 'Published'
+          && review.moderationStatus === 'Allowed'
+        ))
+        .slice()
+        .sort((left, right) => (
+          new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+        ));
+      return {
+        items: visible.slice(skip, skip + limit),
+        total: visible.length,
+        ratingSum: visible.reduce((sum, review) => sum + review.rating, 0),
+      };
+    },
     async listReviews(filter = {}) {
       if (typeof filter === 'string') {
         return reviews.filter((review) => (
@@ -130,6 +164,15 @@ function createRepository() {
       return reviews.filter((review) => Object.entries(filter).every(
         ([key, value]) => value === undefined || review[key] === value,
       ));
+    },
+    async queryReviews(filter = {}, { skip = 0, limit = 20 } = {}) {
+      const matches = reviews.filter((review) => Object.entries(filter).every(
+        ([key, value]) => value === undefined || review[key] === value,
+      ));
+      return {
+        items: matches.slice(skip, skip + limit),
+        total: matches.length,
+      };
     },
     async summarizeReviewHistories(reviewIds) {
       return Object.fromEntries(reviewIds.map((id) => [
@@ -205,6 +248,41 @@ describe('review service', () => {
       () => service.createCustomerReview('customer-1', 'product-1', { orderId: 'order-1', rating: 4, content: 'Second review' }),
       /already reviewed/
     );
+  });
+
+  it('allows an owned delivered detail for an inactive Product while keeping public reads hidden', async () => {
+    const result = await service.createReview(
+      { id: 'customer-1', role: 'Customer' },
+      'product-inactive',
+      {
+        orderDetailId: 'detail-inactive-product',
+        rating: 4,
+        content: 'Reviewed before catalog reactivation.',
+        expectedVersion: 0,
+      },
+      { idempotencyKey: 'review-inactive-product-0001' },
+    );
+
+    assert.equal(result.productId, 'product-inactive');
+    const publicPage = await service.listPublic('product-inactive', { page: 1, pageSize: 20 });
+    assert.equal(publicPage.total, 0);
+  });
+
+  it('stores and returns Review content as sanitized plain text', async () => {
+    const result = await service.createReview(
+      { id: 'customer-1', role: 'Customer' },
+      'product-1',
+      {
+        orderDetailId: 'detail-1',
+        rating: 5,
+        content: ' <script>alert("x")</script><b>Plain</b> &amp; text ',
+        expectedVersion: 0,
+      },
+      { idempotencyKey: 'review-content-sanitize-0001' },
+    );
+
+    assert.equal(result.content, 'alert("x") Plain & text');
+    assert.doesNotMatch(result.content, /<[^>]*>/u);
   });
 
   it('keeps legacy wrappers compatible with safe public and private reads', async () => {

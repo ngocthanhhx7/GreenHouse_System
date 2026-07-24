@@ -16,6 +16,10 @@ function withOptionalSession(query, session) {
   return session ? query.session(session) : query;
 }
 
+function withOptionalAggregateSession(aggregate, session) {
+  return session ? aggregate.session(session) : aggregate;
+}
+
 function toPlain(value) {
   if (!value) return value;
   return typeof value.toObject === 'function' ? value.toObject() : value;
@@ -158,6 +162,33 @@ function createModelRepository() {
       ).lean();
     },
 
+    async queryPublicReviews(productId, { skip = 0, limit = 20 } = {}, session) {
+      const filter = {
+        productId,
+        publicationStatus: 'Published',
+        moderationStatus: 'Allowed',
+      };
+      const itemsQuery = ProductReview.find(filter)
+        .sort({ createdAt: -1, _id: -1 })
+        .skip(skip)
+        .limit(limit);
+      const countQuery = ProductReview.countDocuments(filter);
+      const ratingQuery = ProductReview.aggregate([
+        { $match: filter },
+        { $group: { _id: null, ratingSum: { $sum: '$rating' } } },
+      ]);
+      const [items, total, ratingRows] = await Promise.all([
+        withOptionalSession(itemsQuery, session).lean(),
+        withOptionalSession(countQuery, session),
+        withOptionalAggregateSession(ratingQuery, session),
+      ]);
+      return {
+        items,
+        total,
+        ratingSum: ratingRows[0]?.ratingSum || 0,
+      };
+    },
+
     async listReviews(filter = {}, session) {
       const allowed = [
         'customerId',
@@ -171,6 +202,34 @@ function createModelRepository() {
           .map((key) => [key, filter[key]]),
       );
       return withOptionalSession(ProductReview.find(query), session).lean();
+    },
+
+    async queryReviews(
+      filter = {},
+      { skip = 0, limit = 20 } = {},
+      session,
+    ) {
+      const allowed = [
+        'customerId',
+        'productId',
+        'publicationStatus',
+        'moderationStatus',
+      ];
+      const query = Object.fromEntries(
+        allowed
+          .filter((key) => filter[key] !== undefined)
+          .map((key) => [key, filter[key]]),
+      );
+      const itemsQuery = ProductReview.find(query)
+        .sort({ createdAt: -1, _id: -1 })
+        .skip(skip)
+        .limit(limit);
+      const countQuery = ProductReview.countDocuments(query);
+      const [items, total] = await Promise.all([
+        withOptionalSession(itemsQuery, session).lean(),
+        withOptionalSession(countQuery, session),
+      ]);
+      return { items, total };
     },
 
     async summarizeReviewHistories(reviewIds, session) {

@@ -41,5 +41,9 @@ reviewModerationHistorySchema.index(
   { reviewId: 1, version: 1 },
   { unique: true, name: 'review_moderation_history_version_unique' },
 );
+reviewModerationHistorySchema.index(
+  { reviewId: 1, createdAt: 1, _id: 1 },
+  { name: 'review_moderation_history_chronological' },
+);
 
 module.exports = mongoose.model('ReviewModerationHistory', reviewModerationHistorySchema);
