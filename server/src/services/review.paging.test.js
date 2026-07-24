@@ -7,13 +7,7 @@ describe('Review bounded persistence reads', () => {
   it('passes stable skip/limit/count semantics to every Review page query', async () => {
     const calls = [];
     const repository = {
-      async findProductById() {
-        return { id: 'product-1', categoryId: 'category-1', status: 'Active' };
-      },
-      async findCategoryById() {
-        return { id: 'category-1', status: 'Active' };
-      },
-      async queryPublicReviews(productId, options) {
+      async queryPublicSnapshot(productId, options) {
         calls.push({ method: 'public', productId, options });
         return { items: [], total: 0, ratingSum: 0 };
       },
@@ -23,6 +17,9 @@ describe('Review bounded persistence reads', () => {
       },
       async listPublicReviews() {
         throw new Error('unbounded public read must not be used');
+      },
+      async queryPublicReviews() {
+        throw new Error('split public Review reads must not be used');
       },
       async listReviews() {
         throw new Error('unbounded management read must not be used');
@@ -35,7 +32,7 @@ describe('Review bounded persistence reads', () => {
 
     await service.listPublic('product-1', { page: 3, pageSize: 10 });
     await service.listOwn(
-      { id: 'customer-1', role: 'Customer' },
+      { id: 'customer-1', role: 'Customer', status: 'Active' },
       { page: 2, pageSize: 3 },
     );
     await service.listModeration(

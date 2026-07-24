@@ -79,22 +79,53 @@ function createModelRepository() {
       ).lean();
     },
 
-    async listOwnedDeliveredOrderDetails(customerId, productId, session) {
-      const orders = await withOptionalSession(
-        Order.find({ customerId, deliveredAt: { $ne: null } })
-          .select('_id customerId deliveredAt orderStatus'),
-        session,
-      ).lean();
-      if (orders.length === 0) return [];
-      const byId = new Map(orders.map((order) => [String(order._id), order]));
-      const details = await withOptionalSession(
-        OrderDetail.find({ orderId: { $in: [...byId.keys()] }, productId }),
-        session,
-      ).lean();
-      return details.map((detail) => ({
-        ...detail,
-        order: byId.get(String(detail.orderId)),
-      }));
+    async findOwnedDeliveredOrderDetail(customerId, productId, session) {
+      if (
+        !mongoose.isObjectIdOrHexString(String(customerId))
+        || !mongoose.isObjectIdOrHexString(String(productId))
+      ) {
+        return null;
+      }
+      const customerObjectId = new mongoose.Types.ObjectId(String(customerId));
+      const productObjectId = new mongoose.Types.ObjectId(String(productId));
+      const aggregate = OrderDetail.aggregate([
+        { $match: { productId: productObjectId } },
+        {
+          $lookup: {
+            from: Order.collection.name,
+            let: { orderId: '$orderId' },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ['$_id', '$$orderId'] },
+                      { $eq: ['$customerId', customerObjectId] },
+                      { $ne: ['$deliveredAt', null] },
+                    ],
+                  },
+                },
+              },
+              {
+                $project: {
+                  _id: 1,
+                  customerId: 1,
+                  deliveredAt: 1,
+                  orderStatus: 1,
+                },
+              },
+            ],
+            as: 'ownedDeliveredOrder',
+          },
+        },
+        { $unwind: '$ownedDeliveredOrder' },
+        { $set: { order: '$ownedDeliveredOrder' } },
+        { $unset: 'ownedDeliveredOrder' },
+        { $sort: { 'order.deliveredAt': -1, _id: -1 } },
+        { $limit: 1 },
+      ]);
+      const rows = await withOptionalAggregateSession(aggregate, session);
+      return rows[0] || null;
     },
 
     async findReviewByIdentity(customerId, productId, session) {
@@ -155,57 +186,136 @@ function createModelRepository() {
       return createOne(ReviewCommand, command, session);
     },
 
-    async listPublicReviews(productId, session) {
-      return withOptionalSession(
-        ProductReview.find({ productId }),
-        session,
-      ).lean();
-    },
-
-    async queryPublicReviews(productId, { skip = 0, limit = 20 } = {}, session) {
-      const filter = {
-        productId,
-        publicationStatus: 'Published',
-        moderationStatus: 'Allowed',
-      };
-      const itemsQuery = ProductReview.find(filter)
-        .sort({ createdAt: -1, _id: -1 })
-        .skip(skip)
-        .limit(limit);
-      const countQuery = ProductReview.countDocuments(filter);
-      const aggregateFilter = {
-        ...filter,
-        productId: new mongoose.Types.ObjectId(String(productId)),
-      };
-      const ratingQuery = ProductReview.aggregate([
-        { $match: aggregateFilter },
-        { $group: { _id: null, ratingSum: { $sum: '$rating' } } },
+    async queryPublicSnapshot(productId, { skip = 0, limit = 20 } = {}, session) {
+      if (!mongoose.isObjectIdOrHexString(String(productId))) {
+        return { items: [], total: 0, ratingSum: 0 };
+      }
+      const productObjectId = new mongoose.Types.ObjectId(String(productId));
+      const aggregate = Product.aggregate([
+        { $match: { _id: productObjectId, status: 'Active' } },
+        {
+          $lookup: {
+            from: Category.collection.name,
+            let: { categoryId: '$categoryId' },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ['$_id', '$$categoryId'] },
+                      { $eq: ['$status', 'Active'] },
+                    ],
+                  },
+                },
+              },
+              { $project: { _id: 1 } },
+            ],
+            as: 'activeCategory',
+          },
+        },
+        { $match: { 'activeCategory.0': { $exists: true } } },
+        {
+          $lookup: {
+            from: ProductReview.collection.name,
+            let: { productId: '$_id' },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ['$productId', '$$productId'] },
+                      { $eq: ['$publicationStatus', 'Published'] },
+                      { $eq: ['$moderationStatus', 'Allowed'] },
+                    ],
+                  },
+                },
+              },
+              {
+                $facet: {
+                  items: [
+                    { $sort: { createdAt: -1, _id: -1 } },
+                    { $skip: skip },
+                    { $limit: limit },
+                    {
+                      $lookup: {
+                        from: User.collection.name,
+                        let: { customerId: '$customerId' },
+                        pipeline: [
+                          {
+                            $match: {
+                              $expr: { $eq: ['$_id', '$$customerId'] },
+                            },
+                          },
+                          { $project: { _id: 0, displayName: 1, fullName: 1 } },
+                        ],
+                        as: 'safeCustomer',
+                      },
+                    },
+                    {
+                      $set: {
+                        customerDisplayName: {
+                          $ifNull: [
+                            {
+                              $let: {
+                                vars: {
+                                  customer: { $arrayElemAt: ['$safeCustomer', 0] },
+                                },
+                                in: {
+                                  $ifNull: [
+                                    '$$customer.displayName',
+                                    '$$customer.fullName',
+                                  ],
+                                },
+                              },
+                            },
+                            '',
+                          ],
+                        },
+                      },
+                    },
+                    { $unset: 'safeCustomer' },
+                  ],
+                  summary: [
+                    {
+                      $group: {
+                        _id: null,
+                        total: { $sum: 1 },
+                        ratingSum: { $sum: '$rating' },
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+            as: 'reviewSnapshot',
+          },
+        },
+        {
+          $set: {
+            snapshot: { $arrayElemAt: ['$reviewSnapshot', 0] },
+          },
+        },
+        {
+          $project: {
+            _id: 0,
+            items: { $ifNull: ['$snapshot.items', []] },
+            total: {
+              $ifNull: [
+                { $arrayElemAt: ['$snapshot.summary.total', 0] },
+                0,
+              ],
+            },
+            ratingSum: {
+              $ifNull: [
+                { $arrayElemAt: ['$snapshot.summary.ratingSum', 0] },
+                0,
+              ],
+            },
+          },
+        },
       ]);
-      const [items, total, ratingRows] = await Promise.all([
-        withOptionalSession(itemsQuery, session).lean(),
-        withOptionalSession(countQuery, session),
-        withOptionalAggregateSession(ratingQuery, session),
-      ]);
-      return {
-        items,
-        total,
-        ratingSum: ratingRows[0]?.ratingSum || 0,
-      };
-    },
-
-    async listReviews(filter = {}, session) {
-      const allowed = [
-        'customerId',
-        'productId',
-        'publicationStatus',
-        'moderationStatus',
-      ];
-      const query = Object.fromEntries(
-        allowed
-          .filter((key) => filter[key] !== undefined)
-          .map((key) => [key, filter[key]]),
-      );
-      return withOptionalSession(ProductReview.find(query), session).lean();
+      const rows = await withOptionalAggregateSession(aggregate, session);
+      return rows[0] || { items: [], total: 0, ratingSum: 0 };
     },
 
     async queryReviews(

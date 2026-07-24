@@ -64,6 +64,14 @@ function createReviewService(options = {}) {
     return reviewError(409, 'IDEMPOTENCY_KEY_REUSED', 'Idempotency key was reused');
   }
 
+  function invalidTransition() {
+    return reviewError(
+      409,
+      'REVIEW_INVALID_TRANSITION',
+      'Review state transition is invalid',
+    );
+  }
+
   function identityFor(actor, aggregateId, operation, command, idempotencyKey) {
     const identity = {
       actorId: actorId(actor),
@@ -217,27 +225,22 @@ function createReviewService(options = {}) {
         return { product, detail, order };
       }
 
-      const candidates = await repository.listOwnedDeliveredOrderDetails(
+      const eligible = await repository.findOwnedDeliveredOrderDetail(
         customerId,
         productId,
       );
-      const eligible = candidates
-        .filter((detail) => (
-          valueId(detail.productId) === String(productId)
-          && valueId(detail.order?.customerId) === String(customerId)
-          && detail.order?.deliveredAt
-        ))
-        .sort((left, right) => {
-          const deliveredDifference = new Date(right.order.deliveredAt).getTime()
-            - new Date(left.order.deliveredAt).getTime();
-          if (deliveredDifference !== 0) return deliveredDifference;
-          return valueId(right).localeCompare(valueId(left), 'en');
-        });
-      if (eligible.length === 0) throw notEligible();
+      if (
+        !eligible
+        || valueId(eligible.productId) !== String(productId)
+        || valueId(eligible.order?.customerId) !== String(customerId)
+        || !eligible.order?.deliveredAt
+      ) {
+        throw notEligible();
+      }
       return {
         product,
-        detail: eligible[0],
-        order: eligible[0].order,
+        detail: eligible,
+        order: eligible.order,
       };
     } catch (error) {
       if (isCastError(error)) throw notEligible();
@@ -343,6 +346,7 @@ function createReviewService(options = {}) {
     validate,
     changes,
     appendHistory,
+    validateTransition,
     mapResult = toManagementDto,
   }) {
     authorize(actor);
@@ -372,6 +376,7 @@ function createReviewService(options = {}) {
         throw forbidden();
       }
       if (Number(observed.version || 1) !== expectedVersion) throw versionConflict();
+      if (validateTransition) validateTransition(normalizedReview(observed), input);
       const occurredAt = new Date(now());
 
       return transactionManager.withTransaction(async (session) => {
@@ -387,6 +392,7 @@ function createReviewService(options = {}) {
           throw forbidden();
         }
         if (Number(current.version || 1) !== expectedVersion) throw versionConflict();
+        if (validateTransition) validateTransition(normalizedReview(current), input);
         const update = changes(current, input, occurredAt);
         const updated = await repository.updateReviewByVersion(
           reviewId,
@@ -457,6 +463,11 @@ function createReviewService(options = {}) {
       eventType: 'REVIEW_PUBLICATION_CHANGED',
       authorize: requireCustomer,
       validate: validatePublicationCommand,
+      validateTransition: (current, input) => {
+        if (current.publicationStatus === input.publicationStatus) {
+          throw invalidTransition();
+        }
+      },
       changes: (current, input, occurredAt) => ({
         publicationStatus: input.publicationStatus,
         status: (
@@ -493,6 +504,11 @@ function createReviewService(options = {}) {
       eventType: 'REVIEW_MODERATION_CHANGED',
       authorize: requireActiveStaff,
       validate: validateModerationCommand,
+      validateTransition: (current, input) => {
+        if (current.moderationStatus === input.moderationStatus) {
+          throw invalidTransition();
+        }
+      },
       changes: (current, input, occurredAt) => ({
         moderationStatus: input.moderationStatus,
         moderationReason: input.reason,
@@ -524,29 +540,9 @@ function createReviewService(options = {}) {
 
   async function listPublic(productId, filters = {}) {
     const paging = parsePaging(filters);
-    let product;
-    try {
-      product = await repository.findProductById(productId);
-    } catch (error) {
-      if (isCastError(error)) return boundedPage([], paging, 0, { averageRating: 0 });
-      throw error;
-    }
-    if (!product || product.status !== 'Active') {
-      return boundedPage([], paging, 0, { averageRating: 0 });
-    }
-    let category;
-    try {
-      category = await repository.findCategoryById(product.categoryId);
-    } catch (error) {
-      if (isCastError(error)) return boundedPage([], paging, 0, { averageRating: 0 });
-      throw error;
-    }
-    if (!category || category.status !== 'Active') {
-      return boundedPage([], paging, 0, { averageRating: 0 });
-    }
     let query;
     try {
-      query = await repository.queryPublicReviews(productId, {
+      query = await repository.queryPublicSnapshot(productId, {
         skip: (paging.page - 1) * paging.pageSize,
         limit: paging.pageSize,
       });
@@ -554,12 +550,10 @@ function createReviewService(options = {}) {
       if (isCastError(error)) return boundedPage([], paging, 0, { averageRating: 0 });
       throw error;
     }
-    const reviews = query.items.map(normalizedReview);
-    const items = [];
-    for (const review of reviews) {
-      const user = await repository.findUserById(review.customerId);
-      items.push(toPublicDto(review, user));
-    }
+    const items = query.items.map((review) => toPublicDto(
+      review,
+      { displayName: review.customerDisplayName },
+    ));
     const averageRating = Number(query.total || 0) === 0
       ? 0
       : Number((

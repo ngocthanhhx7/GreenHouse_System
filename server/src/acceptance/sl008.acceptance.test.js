@@ -1,16 +1,16 @@
 const assert = require('node:assert/strict');
-const crypto = require('node:crypto');
 const http = require('node:http');
 const { describe, it } = require('node:test');
 const mongoose = require('mongoose');
 
+const { commandFingerprint } = require('../services/review.domain');
 const { createReviewService } = require('../services/review.service');
 const { createSupportService } = require('../services/support.service');
 
 const actors = {
   guest: { id: null, role: 'Guest' },
-  customer: { id: 'customer-1', role: 'Customer' },
-  foreignCustomer: { id: 'customer-2', role: 'Customer' },
+  customer: { id: 'customer-1', role: 'Customer', status: 'Active' },
+  foreignCustomer: { id: 'customer-2', role: 'Customer', status: 'Active' },
   staffA: { id: 'staff-a', role: 'Staff', status: 'Active' },
   staffB: { id: 'staff-b', role: 'Staff', status: 'Active' },
   inactiveStaff: { id: 'staff-disabled', role: 'Staff', status: 'Disabled' },
@@ -497,6 +497,24 @@ function buildReviewFixture({ now = '2026-07-24T12:00:00.000Z' } = {}) {
         }))
         .filter((detail) => detail.order?.customerId === String(customerId) && detail.order.deliveredAt);
     },
+    async findOwnedDeliveredOrderDetail(customerId, productId) {
+      return state.orderDetails
+        .filter((detail) => detail.productId === String(productId))
+        .map((detail) => ({
+          ...detail,
+          order: state.orders.find((order) => order.id === detail.orderId),
+        }))
+        .filter((detail) => (
+          detail.order?.customerId === String(customerId)
+          && detail.order.deliveredAt
+        ))
+        .sort((left, right) => {
+          const deliveredDifference = new Date(right.order.deliveredAt).getTime()
+            - new Date(left.order.deliveredAt).getTime();
+          return deliveredDifference
+            || String(right.id).localeCompare(String(left.id), 'en');
+        })[0] || null;
+    },
     async findReviewByIdentity(customerId, productId) {
       return state.reviews.find(
         (item) => item.customerId === String(customerId) && item.productId === String(productId),
@@ -649,6 +667,37 @@ function buildReviewFixture({ now = '2026-07-24T12:00:00.000Z' } = {}) {
         ratingSum: visible.reduce((sum, review) => sum + Number(review.rating), 0),
       };
     },
+    async queryPublicSnapshot(productId, { skip = 0, limit = 20 } = {}) {
+      const product = state.products.find((item) => item.id === String(productId));
+      const category = state.categories.find(
+        (item) => item.id === String(product?.categoryId),
+      );
+      if (!product || product.status !== 'Active' || category?.status !== 'Active') {
+        return { items: [], total: 0, ratingSum: 0 };
+      }
+      const visible = state.reviews
+        .filter((review) => (
+          review.productId === String(productId)
+          && review.publicationStatus === 'Published'
+          && review.moderationStatus === 'Allowed'
+        ))
+        .slice()
+        .sort((left, right) => {
+          const createdDifference = new Date(right.createdAt).getTime()
+            - new Date(left.createdAt).getTime();
+          return createdDifference || String(right.id).localeCompare(String(left.id), 'en');
+        });
+      return {
+        items: visible.slice(skip, skip + limit).map((review) => ({
+          ...review,
+          customerDisplayName: state.users.find(
+            (user) => user.id === String(review.customerId),
+          )?.displayName || '',
+        })),
+        total: visible.length,
+        ratingSum: visible.reduce((sum, review) => sum + Number(review.rating), 0),
+      };
+    },
     async listReviews(filter = {}) {
       return state.reviews.filter((review) => Object.entries(filter).every(
         ([key, value]) => value === undefined || review[key] === String(value),
@@ -795,22 +844,6 @@ function reviewCommand(overrides = {}) {
 
 function commandOptions(idempotencyKey) {
   return { idempotencyKey };
-}
-
-function commandFingerprint({
-  aggregateId,
-  aggregateType,
-  actorId,
-  command,
-  operation,
-}) {
-  return crypto.createHash('sha256').update(JSON.stringify({
-    actorId: String(actorId),
-    aggregateId: String(aggregateId),
-    aggregateType,
-    operation,
-    command,
-  })).digest('hex');
 }
 
 async function assertMongoTransactionAdapter(serviceModule, label) {
@@ -1667,6 +1700,70 @@ async function prepareSupportAtomicScenario(family) {
 }
 
 describe('SL-008 Review behavioral acceptance', () => {
+  it('requires an explicitly Active Customer for every private Review boundary with zero effects', async () => {
+    const customerStates = [
+      { id: actors.customer.id, role: 'Customer' },
+      { id: actors.customer.id, role: 'Customer', status: 'Unknown' },
+      { id: actors.customer.id, role: 'Customer', status: 'Disabled' },
+    ];
+    const families = ['create', 'update', 'publication', 'listOwn'];
+
+    for (const [stateIndex, actor] of customerStates.entries()) {
+      for (const [familyIndex, family] of families.entries()) {
+        const fixture = buildReviewFixture();
+        const createReview = requiredMethod(fixture.service, 'createReview');
+        let invoke;
+        if (family === 'create') {
+          invoke = () => runMutation(
+            createReview,
+            [actor, 'product-1'],
+            reviewCommand(),
+            `review-customer-state-${stateIndex}-${familyIndex}`,
+          );
+        } else {
+          const review = await runMutation(
+            createReview,
+            [actors.customer, 'product-1'],
+            reviewCommand(),
+            `review-customer-state-setup-${stateIndex}-${familyIndex}`,
+          );
+          if (family === 'update') {
+            invoke = () => runMutation(
+              requiredMethod(fixture.service, 'updateReview'),
+              [actor, review.id],
+              {
+                rating: 4,
+                content: 'Forbidden inactive Customer update',
+                expectedVersion: review.version,
+              },
+              `review-customer-state-${stateIndex}-${familyIndex}`,
+            );
+          } else if (family === 'publication') {
+            invoke = () => runMutation(
+              requiredMethod(fixture.service, 'setPublication'),
+              [actor, review.id],
+              {
+                publicationStatus: 'Withdrawn',
+                expectedVersion: review.version,
+              },
+              `review-customer-state-${stateIndex}-${familyIndex}`,
+            );
+          } else {
+            invoke = () => requiredMethod(fixture.service, 'listOwn')(
+              actor,
+              { page: 1, pageSize: 20 },
+            );
+          }
+        }
+
+        const before = snapshotEffects(fixture.state);
+        const error = await expectDomainError(invoke, 'REVIEW_FORBIDDEN');
+        assert.equal(error.statusCode, 403);
+        assert.deepEqual(snapshotEffects(fixture.state), before);
+      }
+    }
+  });
+
   it('AT-150 creates one Review atomically from the exact owned delivered OrderDetail', async () => {
     const fixture = buildReviewFixture();
     const createReview = requiredMethod(fixture.service, 'createReview');
@@ -2057,6 +2154,44 @@ describe('SL-008 Review behavioral acceptance', () => {
     assert.equal(fixture.state.moderationHistory.length, 2);
   });
 
+  it('rejects same-state publication and moderation transitions with zero effects', async () => {
+    const fixture = buildReviewFixture();
+    const review = await runMutation(
+      requiredMethod(fixture.service, 'createReview'),
+      [actors.customer, 'product-1'],
+      reviewCommand(),
+      'review-same-state-setup-0001',
+    );
+    const cases = [
+      () => runMutation(
+        requiredMethod(fixture.service, 'setPublication'),
+        [actors.customer, review.id],
+        {
+          publicationStatus: 'Published',
+          expectedVersion: review.version,
+        },
+        'review-same-publication-0001',
+      ),
+      () => runMutation(
+        requiredMethod(fixture.service, 'moderate'),
+        [actors.staffA, review.id],
+        {
+          moderationStatus: 'Allowed',
+          reason: 'No actual moderation transition',
+          expectedVersion: review.version,
+        },
+        'review-same-moderation-0001',
+      ),
+    ];
+
+    for (const invoke of cases) {
+      const before = snapshotEffects(fixture.state);
+      const error = await expectDomainError(invoke, 'REVIEW_INVALID_TRANSITION');
+      assert.equal(error.statusCode, 409);
+      assert.deepEqual(snapshotEffects(fixture.state), before);
+    }
+  });
+
   it('AT-158 appends immutable histories and exposes no delete or Staff content edit', async () => {
     const fixture = buildReviewFixture();
     const createReview = requiredMethod(fixture.service, 'createReview');
@@ -2267,13 +2402,32 @@ describe('SL-008 Review behavioral acceptance', () => {
     const updateReview = requiredMethod(fixture.service, 'updateReview');
     const setPublication = requiredMethod(fixture.service, 'setPublication');
     const moderate = requiredMethod(fixture.service, 'moderate');
-    const command = reviewCommand();
+    const command = {
+      orderDetailId: 'detail-011',
+      rating: 5,
+      content: 'Very useful product',
+      expectedVersion: 0,
+      facts: {
+        purchase: { delivered: true, orderDetailId: 'detail-011' },
+        source: 'customer',
+      },
+    };
+    const reorderedCommand = {
+      facts: {
+        source: 'customer',
+        purchase: { orderDetailId: 'detail-011', delivered: true },
+      },
+      expectedVersion: 0,
+      content: 'Very useful product',
+      rating: 5,
+      orderDetailId: 'detail-011',
+    };
 
     const [first, replay] = await Promise.all([
       runMutation(
         createReview,
         [actors.customer, 'product-1'],
-        command,
+        reorderedCommand,
         'review-create-0001',
       ),
       runMutation(

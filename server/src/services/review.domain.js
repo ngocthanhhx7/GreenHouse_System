@@ -35,7 +35,7 @@ function requireCustomer(actor) {
   if (
     actor?.role !== 'Customer'
     || !actorId(actor)
-    || ['Disabled', 'Inactive'].includes(actor?.status)
+    || actor?.status !== 'Active'
   ) {
     throw reviewError(403, 'REVIEW_FORBIDDEN', 'Review operation is forbidden');
   }
@@ -153,13 +153,30 @@ function commandFingerprint({
   operation,
   command,
 }) {
-  return crypto.createHash('sha256').update(JSON.stringify({
+  return crypto.createHash('sha256').update(JSON.stringify(canonicalizeFacts({
     actorId: String(commandActorId),
     aggregateId: String(aggregateId),
     aggregateType,
     operation,
     command,
-  })).digest('hex');
+  }))).digest('hex');
+}
+
+function canonicalizeFacts(value) {
+  if (Array.isArray(value)) return value.map(canonicalizeFacts);
+  if (
+    value
+    && typeof value === 'object'
+    && (Object.getPrototypeOf(value) === Object.prototype
+      || Object.getPrototypeOf(value) === null)
+  ) {
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map((key) => [key, canonicalizeFacts(value[key])]),
+    );
+  }
+  return value;
 }
 
 function normalizedReview(review) {

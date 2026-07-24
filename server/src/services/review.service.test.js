@@ -80,6 +80,15 @@ function createRepository() {
           && detail.order.deliveredAt
         ));
     },
+    async findOwnedDeliveredOrderDetail(customerId, productId) {
+      return (await this.listOwnedDeliveredOrderDetails(customerId, productId))
+        .sort((left, right) => {
+          const deliveredDifference = new Date(right.order.deliveredAt).getTime()
+            - new Date(left.order.deliveredAt).getTime();
+          return deliveredDifference
+            || String(right._id).localeCompare(String(left._id), 'en');
+        })[0] || null;
+    },
     async findExistingReview(customerId, orderId, productId) {
       return reviews.find((review) => review.customerId === customerId && review.productId === productId) || null;
     },
@@ -150,6 +159,33 @@ function createRepository() {
         ));
       return {
         items: visible.slice(skip, skip + limit),
+        total: visible.length,
+        ratingSum: visible.reduce((sum, review) => sum + review.rating, 0),
+      };
+    },
+    async queryPublicSnapshot(productId, { skip = 0, limit = 20 } = {}) {
+      const product = products.find((item) => item._id === productId);
+      const category = categories.find((item) => item._id === product?.categoryId);
+      if (!product || product.status !== 'Active' || category?.status !== 'Active') {
+        return { items: [], total: 0, ratingSum: 0 };
+      }
+      const visible = reviews
+        .filter((review) => (
+          review.productId === productId
+          && review.publicationStatus === 'Published'
+          && review.moderationStatus === 'Allowed'
+        ))
+        .slice()
+        .sort((left, right) => (
+          new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+        ));
+      return {
+        items: visible.slice(skip, skip + limit).map((review) => ({
+          ...review,
+          customerDisplayName: users.find(
+            (user) => user._id === review.customerId,
+          )?.fullName || '',
+        })),
         total: visible.length,
         ratingSum: visible.reduce((sum, review) => sum + review.rating, 0),
       };
@@ -252,7 +288,7 @@ describe('review service', () => {
 
   it('allows an owned delivered detail for an inactive Product while keeping public reads hidden', async () => {
     const result = await service.createReview(
-      { id: 'customer-1', role: 'Customer' },
+      { id: 'customer-1', role: 'Customer', status: 'Active' },
       'product-inactive',
       {
         orderDetailId: 'detail-inactive-product',
@@ -270,7 +306,7 @@ describe('review service', () => {
 
   it('stores and returns Review content as sanitized plain text', async () => {
     const result = await service.createReview(
-      { id: 'customer-1', role: 'Customer' },
+      { id: 'customer-1', role: 'Customer', status: 'Active' },
       'product-1',
       {
         orderDetailId: 'detail-1',
@@ -294,7 +330,7 @@ describe('review service', () => {
 
     const publicPage = await service.listProductReviews('product-1');
     const ownPage = await service.listOwn(
-      { id: 'customer-1', role: 'Customer' },
+      { id: 'customer-1', role: 'Customer', status: 'Active' },
       { page: 1, pageSize: 20 },
     );
     const moderationPage = await service.listModeration(
@@ -335,7 +371,7 @@ describe('review service', () => {
     assert.equal(repository.reviews[0].status, 'Hidden');
 
     const withdrawn = await service.setPublication(
-      { id: 'customer-1', role: 'Customer' },
+      { id: 'customer-1', role: 'Customer', status: 'Active' },
       created.id,
       {
         publicationStatus: 'Withdrawn',
@@ -356,7 +392,7 @@ describe('review service', () => {
     assert.equal(repository.reviews[0].status, 'Hidden');
 
     await service.setPublication(
-      { id: 'customer-1', role: 'Customer' },
+      { id: 'customer-1', role: 'Customer', status: 'Active' },
       created.id,
       {
         publicationStatus: 'Published',

@@ -14,6 +14,9 @@ describe('Review identifier privacy boundary', () => {
       async findProductById() {
         throw castError('not-an-object-id');
       },
+      async queryPublicSnapshot() {
+        throw castError('not-an-object-id');
+      },
       async findCommand() {
         return null;
       },
@@ -34,7 +37,7 @@ describe('Review identifier privacy boundary', () => {
 
     await assert.rejects(
       () => service.createReview(
-        { id: 'customer-1', role: 'Customer' },
+        { id: 'customer-1', role: 'Customer', status: 'Active' },
         'not-an-object-id',
         {
           rating: 5,
@@ -48,7 +51,7 @@ describe('Review identifier privacy boundary', () => {
 
     await assert.rejects(
       () => service.updateReview(
-        { id: 'customer-1', role: 'Customer' },
+        { id: 'customer-1', role: 'Customer', status: 'Active' },
         'not-a-review-id',
         {
           rating: 4,
