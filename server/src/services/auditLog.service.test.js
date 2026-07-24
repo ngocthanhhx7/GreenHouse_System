@@ -6,6 +6,7 @@ const {
   createModelRepository,
   encodeCursor,
 } = require('./auditLog.service');
+const AuditLog = require('../models/auditLog.model');
 
 function canonicalLog(overrides = {}) {
   return {
@@ -115,6 +116,32 @@ describe('SL-009 audit log service', () => {
     assert.equal(JSON.stringify(item).includes('must-not-leak'), false);
   });
 
+  it('redacts and bounds legacy descriptions before returning compatibility DTO fields', async () => {
+    const service = createAuditLogService({
+      repository: {
+        async list() {
+          return {
+            items: [{
+              _id: '507f1f77bcf86cd799439099',
+              action: 'LEGACY_FAILURE',
+              targetEntity: 'SupportRequest',
+              targetId: 'support-1',
+              description: `token=secret ${'full support content '.repeat(100)}`,
+              timestamp: new Date('2026-07-01T02:00:00.000Z'),
+            }],
+            nextCursor: null,
+          };
+        },
+      },
+    });
+
+    const [item] = (await service.listAuditLogs()).items;
+    assert.equal(item.reason, '[REDACTED]');
+    assert.equal(item.description, '[REDACTED]');
+    assert.equal(JSON.stringify(item).includes('secret'), false);
+    assert.equal(JSON.stringify(item).includes('full support content'), false);
+  });
+
   it('AT-189 reports distinct Vietnamese field errors without querying', async () => {
     let queried = false;
     const service = createAuditLogService({
@@ -171,6 +198,37 @@ describe('SL-009 audit log service', () => {
     await service.listAuditLogs({ actorType: 'Carrier', actorId: 'carrier:ghn' });
     assert.equal(received.actorType, 'Carrier');
     assert.equal(received.actorId, 'carrier:ghn');
+  });
+
+  it('does not add an ObjectId userId fallback for a non-ObjectId external actor', async () => {
+    let castQuery;
+    const fakeModel = {
+      find(query) {
+        castQuery = AuditLog.find(query);
+        castQuery.cast(AuditLog);
+        return {
+          sort() {
+            return {
+              limit() {
+                return { lean: async () => [] };
+              },
+            };
+          },
+        };
+      },
+    };
+    const repository = createModelRepository(fakeModel);
+
+    await repository.list({
+      actorType: 'Carrier',
+      actorId: 'carrier:ghn',
+      limit: 20,
+    });
+
+    assert.deepEqual(castQuery.getFilter(), {
+      actorType: 'Carrier',
+      actorId: 'carrier:ghn',
+    });
   });
 
   it('AT-189 rejects an inverted date range with a range-specific field error', async () => {

@@ -4,6 +4,7 @@ const { describe, it, beforeEach } = require('node:test');
 const { createAuthService } = require('./auth.service');
 const { createSessionService, hashSessionSelector } = require('./session.service');
 const { hashPassword } = require('../utils/password');
+const AuditLog = require('../models/auditLog.model');
 
 function createUserRepository() {
   const users = [];
@@ -129,6 +130,32 @@ describe('auth service', () => {
       });
     }
     assert.deepEqual(results[0], results[1]);
+  });
+
+  it('keeps unknown-user login failure at 401 when the real AuditLog model validates it', async () => {
+    const service = createAuthService({
+      userRepository,
+      roleRepository,
+      auditLogger: {
+        async log(entry) {
+          const document = new AuditLog(entry);
+          await document.validate();
+          assert.equal(document.targetId, 'unknown');
+        },
+      },
+      passwordComparer: async () => false,
+      loginThrottle: {
+        async claimAttempt() {},
+        async claimFailure() {},
+        async clearEmail() {},
+      },
+      sessionService: { async createSession() { throw new Error('not expected'); } },
+    });
+
+    await assert.rejects(
+      () => service.login({ email: 'missing@example.com', password: 'WrongPassword123' }),
+      (error) => error.errorCode === 'AUTH_INVALID_CREDENTIALS' && error.statusCode === 401
+    );
   });
 
   it('AT-137 reveals Disabled guidance only after password proof and fails closed on invalid role', async () => {

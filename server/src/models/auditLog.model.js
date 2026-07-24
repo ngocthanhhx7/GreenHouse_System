@@ -1,13 +1,32 @@
 const { randomUUID } = require('node:crypto');
 const mongoose = require('mongoose');
 
-const { serializeAuditFacts } = require('../utils/auditSerializer');
+const { normalizeAuditReason, serializeAuditFacts } = require('../utils/auditSerializer');
 
 const immutableString = {
   type: String,
   trim: true,
   immutable: true,
 };
+
+const replayBindingSchema = new mongoose.Schema(
+  {
+    commandFingerprint: {
+      ...immutableString,
+      match: /^[a-f0-9]{64}$/i,
+      maxlength: 64,
+    },
+    priorTargetId: {
+      ...immutableString,
+      maxlength: 200,
+      match: /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,199}$/,
+    },
+  },
+  {
+    _id: false,
+    strict: 'throw',
+  }
+);
 
 const auditLogSchema = new mongoose.Schema(
   {
@@ -86,7 +105,8 @@ const auditLogSchema = new mongoose.Schema(
     reason: {
       ...immutableString,
       default: '',
-      maxlength: 1000,
+      maxlength: 500,
+      set: normalizeAuditReason,
     },
     previousState: {
       ...immutableString,
@@ -108,6 +128,12 @@ const auditLogSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.Mixed,
       default: () => ({}),
       set: serializeAuditFacts,
+      immutable: true,
+    },
+    replayBinding: {
+      type: replayBindingSchema,
+      default: undefined,
+      select: false,
       immutable: true,
     },
     timestamp: {
@@ -137,7 +163,8 @@ const auditLogSchema = new mongoose.Schema(
     description: {
       ...immutableString,
       default: '',
-      maxlength: 1000,
+      maxlength: 500,
+      set: normalizeAuditReason,
     },
   },
   {
@@ -153,12 +180,24 @@ function mergeLegacyFacts(document, bucket, value) {
   document.safeFacts = serializeAuditFacts({ ...current, [bucket]: value });
 }
 
+function mergeReplayBinding(document, value) {
+  const current = document.replayBinding?.toObject?.() || document.replayBinding || {};
+  document.replayBinding = { ...current, ...value };
+}
+
 auditLogSchema.virtual('before').set(function setLegacyBefore(value) {
   mergeLegacyFacts(this, 'previous', value);
+  const invitationId = String(value?.invitationId || '');
+  if (/^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,199}$/.test(invitationId)) {
+    mergeReplayBinding(this, { priorTargetId: invitationId });
+  }
   this.previousState = String(value?.state || value?.status || value?.role || '');
 });
 auditLogSchema.virtual('after').set(function setLegacyAfter(value) {
   mergeLegacyFacts(this, 'next', value);
+  if (/^[a-f0-9]{64}$/i.test(String(value?.commandFingerprint || ''))) {
+    mergeReplayBinding(this, { commandFingerprint: String(value.commandFingerprint) });
+  }
   this.newState = String(value?.state || value?.status || value?.role || '');
   if (Number.isInteger(Number(value?.version))) this.stateVersion = Number(value.version);
 });
@@ -184,8 +223,10 @@ auditLogSchema.pre('validate', function adaptLegacyFields(next) {
   }
   if (!this.targetType && this.targetEntity) this.targetType = this.targetEntity;
   if (!this.targetEntity && this.targetType) this.targetEntity = this.targetType;
-  if (!this.reason && this.description) this.reason = this.description;
-  if (!this.description && this.reason) this.description = this.reason;
+  this.reason = normalizeAuditReason(this.reason || this.description);
+  this.description = normalizeAuditReason(this.reason || this.description);
+  this.safeFacts = serializeAuditFacts(this.safeFacts);
+  if (!String(this.targetId || '').trim()) this.targetId = 'unknown';
   if (!this.businessEventId && this.eventId) this.businessEventId = this.eventId;
   if (!this.eventId && this.businessEventId) this.eventId = this.businessEventId;
   if (!this.correlationId) this.correlationId = this.businessEventId || this.auditId;
@@ -193,12 +234,21 @@ auditLogSchema.pre('validate', function adaptLegacyFields(next) {
   next();
 });
 
+auditLogSchema.pre('save', function sanitizeImmediatelyBeforePersistence(next) {
+  this.reason = normalizeAuditReason(this.reason || this.description);
+  this.description = this.reason;
+  this.safeFacts = serializeAuditFacts(this.safeFacts);
+  next();
+});
+
 auditLogSchema.index({ timestamp: -1, _id: -1 });
 auditLogSchema.index({ actorType: 1, actorId: 1, timestamp: -1, _id: -1 });
+auditLogSchema.index({ actorType: 1, timestamp: -1, _id: -1 });
 auditLogSchema.index({ actorId: 1, timestamp: -1, _id: -1 });
 auditLogSchema.index({ actorRole: 1, timestamp: -1, _id: -1 });
 auditLogSchema.index({ action: 1, timestamp: -1, _id: -1 });
 auditLogSchema.index({ targetType: 1, targetId: 1, timestamp: -1, _id: -1 });
+auditLogSchema.index({ targetType: 1, timestamp: -1, _id: -1 });
 auditLogSchema.index({ targetId: 1, timestamp: -1, _id: -1 });
 auditLogSchema.index({ outcome: 1, timestamp: -1, _id: -1 });
 auditLogSchema.index(

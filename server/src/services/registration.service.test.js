@@ -43,7 +43,14 @@ function createRepositories() {
     },
     async createUser(data) { const item = { _id: `user-${users.length + 1}`, ...data }; users.push(item); return item; },
     async findCustomerRole() { return role; },
-    async audit(entry) { audit.push(entry); },
+    async audit(entry) {
+      audit.push({
+        ...entry,
+        replayBinding: entry.after?.commandFingerprint
+          ? { commandFingerprint: entry.after.commandFingerprint }
+          : undefined,
+      });
+    },
     async enqueue(event) { outbox.push(event); },
   };
   return { repository, challenges, users, audit, outbox };
@@ -378,6 +385,13 @@ describe('verified Customer registration', () => {
       idempotencyKey: 'durable-complete',
     };
     const first = await firstService.completeRegistration(command);
+    state.audit[0] = {
+      ...state.audit[0],
+      replayBinding: {
+        commandFingerprint: state.audit[0].after.commandFingerprint,
+      },
+    };
+    delete state.audit[0].after;
 
     const restartedService = createRegistrationService(options);
     const replay = await restartedService.completeRegistration(command);

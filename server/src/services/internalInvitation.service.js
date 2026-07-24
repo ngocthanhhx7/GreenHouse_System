@@ -96,7 +96,7 @@ function createModelRepository() {
       return (session ? query.session(session) : query).lean();
     },
     async findAuditByEventId(eventId, session) {
-      const query = AuditLog.findOne({ eventId });
+      const query = AuditLog.findOne({ eventId }).select('+replayBinding');
       return (session ? query.session(session) : query).lean();
     },
     async create(data, session) {
@@ -264,7 +264,7 @@ function createInternalInvitationService({
     if (
       audit.action !== action
       || audit.targetEntity !== (action === 'AUTH_INVITATION_ACCEPTED' ? 'User' : 'InternalInvitation')
-      || audit.after?.commandFingerprint !== commandFingerprint
+      || audit.replayBinding?.commandFingerprint !== commandFingerprint
     ) {
       throw idempotencyKeyReused();
     }
@@ -363,16 +363,22 @@ function createInternalInvitationService({
 
     if (
       audit.action !== 'INTERNAL_INVITATION_RESENT'
-      || String(audit.before?.invitationId || '') !== String(invitationId)
-      || !audit.after?.email
+      || String(audit.replayBinding?.priorTargetId || '') !== String(invitationId)
     ) {
       throw idempotencyKeyReused();
     }
 
-    const invitation = repository.findByIdempotency
-      ? await repository.findByIdempotency(audit.after.email, idempotencyKey, session)
+    const invitation = repository.findAnyById
+      ? await repository.findAnyById(audit.targetId, session)
+      : repository.findById
+        ? await repository.findById(audit.targetId, session)
       : null;
-    if (!invitation || String(invitation._id) !== String(audit.targetId)) {
+    if (
+      !invitation
+      || String(invitation._id) !== String(audit.targetId)
+      || invitation.idempotencyKey !== idempotencyKey
+      || String(invitation.replacedInvitationId || '') !== String(invitationId)
+    ) {
       throw idempotencyKeyReused();
     }
     return { invitation: publicInvitation(invitation), replay: true };

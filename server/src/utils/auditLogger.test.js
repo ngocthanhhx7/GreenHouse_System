@@ -2,7 +2,12 @@ const assert = require('node:assert/strict');
 const { describe, it } = require('node:test');
 
 const AuditLog = require('../models/auditLog.model');
-const { logAudit, serializeAuditFacts, normalizeAuditEntry } = require('./auditLogger');
+const {
+  logAudit,
+  serializeAuditFacts,
+  normalizeAuditEntry,
+  normalizeAuditReason,
+} = require('./auditLogger');
 
 describe('audit logger transaction contract', () => {
   it('stores a unique non-empty business event identity', () => {
@@ -148,5 +153,38 @@ describe('audit logger transaction contract', () => {
     ]) {
       assert.equal(text.includes(secret), false, `leaked ${secret}`);
     }
+  });
+
+  it('rejects arrays and bounds typed strings before they become safe facts', () => {
+    const serialized = serializeAuditFacts({
+      status: 'x'.repeat(10_000),
+      providerReference: 'secret-token',
+      metadata: {
+        state: 'Completed',
+        status: ['Safe', 'token=secret-token'],
+        evidenceReference: ['evidence-1', 'full evidence body'],
+      },
+    });
+
+    assert.equal(serialized.status.length <= 120, true);
+    assert.deepEqual(serialized.metadata, { state: 'Completed' });
+    assert.equal(JSON.stringify(serialized).includes('secret-token'), false);
+    assert.equal(JSON.stringify(serialized).includes('full evidence body'), false);
+  });
+
+  it('normalizes, bounds and redacts unsafe audit reasons', () => {
+    assert.equal(normalizeAuditReason('  Approved   by policy  '), 'Approved by policy');
+    assert.equal(normalizeAuditReason('OTP=123456 raw callback body'), '[REDACTED]');
+    assert.equal(normalizeAuditReason('x'.repeat(5_000)).length, 500);
+
+    const normalized = normalizeAuditEntry({
+      action: 'AUTH_LOGIN_FAILURE',
+      targetEntity: 'User',
+      targetId: '',
+      description: 'session token=do-not-store',
+    });
+    assert.equal(normalized.reason, '[REDACTED]');
+    assert.equal(normalized.description, '[REDACTED]');
+    assert.equal(normalized.targetId, 'unknown');
   });
 });

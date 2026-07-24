@@ -49,7 +49,7 @@ function createModelRepository() {
       return (session ? query.session(session) : query).lean();
     },
     async findAuditByEventId(eventId, session) {
-      const query = AuditLog.findOne({ eventId });
+      const query = AuditLog.findOne({ eventId }).select('+replayBinding');
       return (session ? query.session(session) : query).lean();
     },
     async search({ query = '', roleName, status, page = 1, pageSize = 25 } = {}) {
@@ -232,7 +232,7 @@ function createAdminAccountService({
     if (!repository.findAuditByEventId) return null;
     const audit = await repository.findAuditByEventId(identity.eventId, session);
     if (!audit) return null;
-    const storedFingerprint = audit.after?.commandFingerprint;
+    const storedFingerprint = audit.replayBinding?.commandFingerprint;
     if (
       String(audit.userId) !== identity.actorUserId
       || String(audit.targetId) !== identity.targetUserId
@@ -241,15 +241,12 @@ function createAdminAccountService({
     ) {
       throw idempotencyConflict();
     }
-    let result = audit.after?.result || null;
-    if (!result) {
-      const current = await repository.findById(identity.targetUserId, session);
-      if (!current) throw idempotencyConflict();
-      result = {
-        user: minimumAccount(current),
-        revokedSessions: 0,
-      };
-    }
+    const current = await repository.findById(identity.targetUserId, session);
+    if (!current) throw idempotencyConflict();
+    const result = {
+      user: minimumAccount(current),
+      revokedSessions: 0,
+    };
     remember(identity, result);
     return { alreadyProcessed: true, ...result };
   }

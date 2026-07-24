@@ -99,7 +99,7 @@ function createModelRepository() {
       return (session ? query.session(session) : query).lean();
     },
     async findAuditByEventId(eventId, session) {
-      const query = AuditLog.findOne({ eventId });
+      const query = AuditLog.findOne({ eventId }).select('+replayBinding');
       return (session ? query.session(session) : query).lean();
     },
     async findLatest(email, session) {
@@ -370,7 +370,7 @@ function createRegistrationService({
         if (
           audit.action !== 'AUTH_REGISTER_VERIFIED'
           || audit.targetEntity !== 'User'
-          || audit.after?.commandFingerprint !== completionFingerprint
+          || audit.replayBinding?.commandFingerprint !== completionFingerprint
         ) {
           throw new ApiError(
             409,

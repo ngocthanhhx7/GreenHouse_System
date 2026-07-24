@@ -47,7 +47,17 @@ function createState() {
       },
       async handleDisabledAccount(input, session) { return { activeAssignments: [], ...input, session }; },
     },
-    auditLogger: { async log(entry, session) { audits.push({ ...entry, session }); } },
+    auditLogger: {
+      async log(entry, session) {
+        audits.push({
+          ...entry,
+          replayBinding: entry.after?.commandFingerprint
+            ? { commandFingerprint: entry.after.commandFingerprint }
+            : undefined,
+          session,
+        });
+      },
+    },
     transactionManager: {
       sessions: [],
       async withTransaction(work) {
@@ -192,6 +202,13 @@ describe('Admin account governance', () => {
       expectedVersion: 3,
       idempotencyKey: 'durable-disable',
     });
+    state.audits[0] = {
+      ...state.audits[0],
+      replayBinding: {
+        commandFingerprint: state.audits[0].after.commandFingerprint,
+      },
+    };
+    delete state.audits[0].after;
 
     const restartedService = createAdminAccountService(state);
     const replay = await restartedService.changeStatus({
@@ -246,6 +263,13 @@ describe('Admin account governance', () => {
       expectedVersion: 2,
       idempotencyKey: 'durable-transfer',
     });
+    state.audits[0] = {
+      ...state.audits[0],
+      replayBinding: {
+        commandFingerprint: state.audits[0].after.commandFingerprint,
+      },
+    };
+    delete state.audits[0].after;
 
     const restartedService = createAdminAccountService(state);
     const replay = await restartedService.transferRole({
@@ -317,15 +341,15 @@ describe('Admin account governance', () => {
     state.repository.findAuditByEventId = async (eventId) => {
       lookupCount += 1;
       if (lookupCount <= 2) return null;
+      const committedUser = state.users.find((user) => user._id === 'customer-1');
+      committedUser.status = 'Disabled';
+      committedUser.version = 4;
       return {
         eventId,
         userId: 'admin-1',
         action: 'ACCOUNT_STATUS_DISABLED',
         targetId: 'customer-1',
-        after: {
-          commandFingerprint,
-          result: winner,
-        },
+        replayBinding: { commandFingerprint },
       };
     };
     state.repository.updateStatus = async () => null;

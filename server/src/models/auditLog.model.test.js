@@ -82,11 +82,82 @@ describe('SL-009 AuditLog model contract', () => {
     const indexes = AuditLog.schema.indexes().map(([fields]) => JSON.stringify(fields));
     assert.ok(indexes.includes(JSON.stringify({ timestamp: -1, _id: -1 })));
     assert.ok(indexes.includes(JSON.stringify({ actorType: 1, actorId: 1, timestamp: -1, _id: -1 })));
+    assert.ok(indexes.includes(JSON.stringify({ actorType: 1, timestamp: -1, _id: -1 })));
     assert.ok(indexes.includes(JSON.stringify({ actorId: 1, timestamp: -1, _id: -1 })));
     assert.ok(indexes.includes(JSON.stringify({ actorRole: 1, timestamp: -1, _id: -1 })));
     assert.ok(indexes.includes(JSON.stringify({ action: 1, timestamp: -1, _id: -1 })));
     assert.ok(indexes.includes(JSON.stringify({ targetType: 1, targetId: 1, timestamp: -1, _id: -1 })));
+    assert.ok(indexes.includes(JSON.stringify({ targetType: 1, timestamp: -1, _id: -1 })));
     assert.ok(indexes.includes(JSON.stringify({ targetId: 1, timestamp: -1, _id: -1 })));
     assert.ok(indexes.includes(JSON.stringify({ outcome: 1, timestamp: -1, _id: -1 })));
+  });
+
+  it('re-sanitizes nested safe facts after assignment and before validation', async () => {
+    const document = new AuditLog({
+      actorType: 'System',
+      source: 'Worker',
+      action: 'SAFE_FACT_MUTATION_TEST',
+      targetType: 'Order',
+      targetId: 'order-1',
+      outcome: 'Success',
+      correlationId: 'safe-fact:1',
+      safeFacts: { status: 'Active', metadata: { state: 'Ready' } },
+    });
+
+    document.safeFacts.status = 'token=secret-after-assignment';
+    document.safeFacts.metadata.state = ['Ready', 'OTP=123456'];
+    await document.validate();
+
+    assert.deepEqual(document.safeFacts, {
+      metadata: {},
+    });
+    assert.equal(JSON.stringify(document.safeFacts).includes('secret-after-assignment'), false);
+    assert.equal(JSON.stringify(document.safeFacts).includes('123456'), false);
+  });
+
+  it('persists only dedicated typed replay bindings and no unrestricted after snapshot', async () => {
+    const document = new AuditLog({
+      userId: '507f1f77bcf86cd799439011',
+      action: 'ACCOUNT_STATUS_DISABLED',
+      eventId: 'account:disable:1',
+      targetEntity: 'User',
+      targetId: '507f1f77bcf86cd799439012',
+      description: 'Approved',
+      before: { invitationId: 'invite-old', status: 'Active' },
+      after: {
+        status: 'Disabled',
+        commandFingerprint: 'a'.repeat(64),
+        result: { phoneNumber: '0900000000', token: 'secret' },
+      },
+    });
+
+    await document.validate();
+    const persisted = document.toObject({ virtuals: false });
+    const reloaded = new AuditLog(persisted);
+    await reloaded.validate();
+
+    assert.deepEqual(reloaded.replayBinding?.toObject?.() || reloaded.replayBinding, {
+      commandFingerprint: 'a'.repeat(64),
+      priorTargetId: 'invite-old',
+    });
+    assert.equal(AuditLog.schema.path('replayBinding').options.select, false);
+    assert.equal(AuditLog.schema.path('after'), undefined);
+    assert.equal(JSON.stringify(persisted).includes('0900000000'), false);
+    assert.equal(JSON.stringify(persisted).includes('secret'), false);
+  });
+
+  it('normalizes an empty legacy target and unsafe description before model validation', async () => {
+    const document = new AuditLog({
+      userId: null,
+      action: 'AUTH_LOGIN_FAILURE',
+      targetEntity: 'User',
+      targetId: '',
+      description: 'password=do-not-store',
+    });
+
+    await document.validate();
+    assert.equal(document.targetId, 'unknown');
+    assert.equal(document.reason, '[REDACTED]');
+    assert.equal(document.description, '[REDACTED]');
   });
 });

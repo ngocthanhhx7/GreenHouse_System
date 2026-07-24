@@ -1,7 +1,8 @@
 const { randomUUID } = require('node:crypto');
 
 const AuditLog = require('../models/auditLog.model');
-const { serializeAuditFacts } = require('./auditSerializer');
+const { normalizeAuditReason, serializeAuditFacts } = require('./auditSerializer');
+const SAFE_REPLAY_ID = /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,199}$/;
 
 function text(value, fallback = '') {
   const normalized = String(value == null ? fallback : value).trim();
@@ -46,7 +47,17 @@ function normalizeAuditEntry(entry = {}) {
     ? null
     : Number(stateVersionValue);
   const targetType = text(entry.targetType || entry.targetEntity || entry.aggregateType);
-  const reason = text(entry.reason || entry.description);
+  const reason = normalizeAuditReason(entry.reason || entry.description);
+  const commandFingerprint = text(
+    entry.replayBinding?.commandFingerprint || entry.after?.commandFingerprint
+  );
+  const priorTargetId = text(
+    entry.replayBinding?.priorTargetId || entry.before?.invitationId
+  );
+  const replayBinding = {
+    ...(/^[a-f0-9]{64}$/i.test(commandFingerprint) ? { commandFingerprint } : {}),
+    ...(SAFE_REPLAY_ID.test(priorTargetId) ? { priorTargetId } : {}),
+  };
 
   return {
     auditId: entry.auditId,
@@ -56,7 +67,7 @@ function normalizeAuditEntry(entry = {}) {
     source: text(entry.source, actorType === 'User' ? 'Application' : actorType),
     action: text(entry.action),
     targetType,
-    targetId: text(entry.targetId || entry.aggregateId, 'unknown'),
+    targetId: text(entry.targetId || entry.aggregateId) || 'unknown',
     outcome: entry.outcome || 'Success',
     correlationId,
     businessEventId,
@@ -66,6 +77,7 @@ function normalizeAuditEntry(entry = {}) {
     newState,
     stateVersion: Number.isInteger(stateVersion) && stateVersion >= 0 ? stateVersion : null,
     safeFacts,
+    ...(Object.keys(replayBinding).length ? { replayBinding } : {}),
     timestamp: entry.timestamp || entry.occurredAt,
 
     // Compatibility projections for existing idempotency checks and cleanup scripts.
@@ -88,5 +100,6 @@ async function logAudit(entry, session) {
 module.exports = {
   logAudit,
   normalizeAuditEntry,
+  normalizeAuditReason,
   serializeAuditFacts,
 };

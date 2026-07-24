@@ -57,7 +57,17 @@ function createState() {
           error.code = 11000;
           throw error;
         }
-        audits.push(entry);
+        audits.push({
+          ...entry,
+          replayBinding: {
+            ...(entry.after?.commandFingerprint
+              ? { commandFingerprint: entry.after.commandFingerprint }
+              : {}),
+            ...(entry.before?.invitationId
+              ? { priorTargetId: String(entry.before.invitationId) }
+              : {}),
+          },
+        });
       },
       async enqueue(event) { outbox.push(event); },
     },
@@ -195,6 +205,13 @@ describe('internal invitations', () => {
       reason: 'Support staffing',
     };
     const first = await createInternalInvitationService(options).createInvitation(original);
+    state.audits[0] = {
+      ...state.audits[0],
+      replayBinding: {
+        commandFingerprint: state.audits[0].after.commandFingerprint,
+      },
+    };
+    delete state.audits[0].after;
     const replay = await createInternalInvitationService(options).createInvitation(original);
 
     assert.equal(replay.replay, true);
@@ -243,6 +260,11 @@ describe('internal invitations', () => {
       reason: 'Assignment withdrawn',
     };
     await service.revokeInvitation(command);
+    const revokeAudit = state.audits.find((entry) => entry.action === 'INTERNAL_INVITATION_REVOKED');
+    revokeAudit.replayBinding = {
+      commandFingerprint: revokeAudit.after.commandFingerprint,
+    };
+    delete revokeAudit.after;
     const replay = await createInternalInvitationService(options).revokeInvitation(command);
     assert.equal(replay.replay, true);
 
@@ -284,6 +306,11 @@ describe('internal invitations', () => {
       idempotencyKey: 'bound-accept',
     };
     const first = await service.acceptInvitation(command);
+    const acceptAudit = state.audits.find((entry) => entry.action === 'AUTH_INVITATION_ACCEPTED');
+    acceptAudit.replayBinding = {
+      commandFingerprint: acceptAudit.after.commandFingerprint,
+    };
+    delete acceptAudit.after;
     const replay = await createInternalInvitationService(options).acceptInvitation(command);
     assert.equal(replay.replay, true);
     assert.equal(replay.user.id, first.user.id);
@@ -501,6 +528,12 @@ describe('internal invitations', () => {
       idempotencyKey: 'resend-concurrent',
       actorUserId: 'admin-1',
     });
+    const resendAudit = state.audits.find((entry) => entry.action === 'INTERNAL_INVITATION_RESENT');
+    resendAudit.replayBinding = {
+      priorTargetId: resendAudit.before.invitationId,
+    };
+    delete resendAudit.before;
+    delete resendAudit.after;
 
     const committedAuditLookup = state.repository.findAuditByEventId;
     const committedInvitationLookup = state.repository.findByIdempotency;

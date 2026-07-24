@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 
 const ApiError = require('../utils/apiError');
 const AuditLog = require('../models/auditLog.model');
-const { serializeAuditFacts } = require('../utils/auditSerializer');
+const { normalizeAuditReason, serializeAuditFacts } = require('../utils/auditSerializer');
 
 const DEFAULT_LIMIT = 25;
 const MAX_LIMIT = 100;
@@ -145,7 +145,7 @@ function toAuditResponse(entry) {
   const recordId = String(entry.auditId || entry._id);
   const actorId = entry.actorId || entry.userId;
   const targetType = entry.targetType || entry.targetEntity;
-  const reason = entry.reason || entry.description || '';
+  const reason = normalizeAuditReason(entry.reason || entry.description);
   const businessEventId = entry.businessEventId || entry.eventId || `legacy:${recordId}`;
   const response = {
     auditId: recordId,
@@ -195,12 +195,16 @@ function createModelRepository(model = AuditLog) {
         query.actorType = filters.actorType;
       }
       if (filters.actorId !== undefined) {
-        predicates.push({
-          $or: [
-            { actorId: filters.actorId },
-            { userId: filters.actorId },
-          ],
-        });
+        if (filters.actorType !== 'User' && !mongoose.isValidObjectId(filters.actorId)) {
+          query.actorId = filters.actorId;
+        } else {
+          predicates.push({
+            $or: [
+              { actorId: filters.actorId },
+              { userId: filters.actorId },
+            ],
+          });
+        }
       }
       if (filters.targetType !== undefined) {
         predicates.push({
