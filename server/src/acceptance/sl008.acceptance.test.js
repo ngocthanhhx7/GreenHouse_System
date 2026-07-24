@@ -1,6 +1,8 @@
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const http = require('node:http');
 const { describe, it } = require('node:test');
+const mongoose = require('mongoose');
 
 const { createReviewService } = require('../services/review.service');
 const { createSupportService } = require('../services/support.service');
@@ -120,7 +122,40 @@ async function expectDomainError(work, errorCode) {
   return error;
 }
 
+const EFFECT_STATE_KEYS = [
+  'products',
+  'categories',
+  'users',
+  'orders',
+  'orderDetails',
+  'reviews',
+  'tickets',
+  'messages',
+  'contentHistory',
+  'publicationHistory',
+  'moderationHistory',
+  'assignmentHistory',
+  'priorityHistory',
+  'resolutionHistory',
+  'commands',
+  'audits',
+  'outbox',
+  'foreignDomains',
+  'sessionRevocations',
+  'nextReview',
+  'nextTicket',
+  'nextMessage',
+];
+
 function snapshotEffects(state) {
+  return structuredClone(Object.fromEntries(
+    EFFECT_STATE_KEYS
+      .filter((key) => Object.prototype.hasOwnProperty.call(state, key))
+      .map((key) => [key, state[key]]),
+  ));
+}
+
+function snapshotEffectCounts(state) {
   return {
     reviews: state.reviews?.length || 0,
     tickets: state.tickets?.length || 0,
@@ -154,6 +189,146 @@ function snapshotGroupedWrites(state) {
   });
 }
 
+function publicErrorEnvelope(error) {
+  return {
+    success: false,
+    message: String(error.message || ''),
+    statusCode: Number(error.statusCode || 500),
+    errors: structuredClone(error.errors || []),
+    errorCode: error.errorCode || null,
+    data: structuredClone(error.data ?? null),
+  };
+}
+
+function assertPrivateErrorEnvelope(error, forbiddenIdentifiers) {
+  const serialized = JSON.stringify(publicErrorEnvelope(error));
+  for (const identifier of new Set(
+    forbiddenIdentifiers.filter((value) => value !== undefined && value !== null),
+  )) {
+    assert.equal(
+      serialized.includes(String(identifier)),
+      false,
+      `private error envelope must not disclose fixture identifier ${identifier}`,
+    );
+  }
+}
+
+function fixtureIdentifiers(state, extras = []) {
+  const identifiers = [];
+  for (const collection of [
+    state.products,
+    state.categories,
+    state.users,
+    state.orders,
+    state.orderDetails,
+    state.reviews,
+    state.tickets,
+    state.messages,
+  ]) {
+    for (const item of collection || []) {
+      for (const key of [
+        'id',
+        'customerId',
+        'productId',
+        'categoryId',
+        'orderId',
+        'orderDetailId',
+        'assigneeId',
+        'ticketCode',
+        'sku',
+      ]) {
+        if (item[key] !== undefined && item[key] !== null) identifiers.push(item[key]);
+      }
+    }
+  }
+  return [...identifiers, ...extras];
+}
+
+function assertExactKeys(value, expectedKeys, label) {
+  assert.equal(value && typeof value, 'object', label);
+  assert.deepEqual(
+    Object.keys(value).sort(),
+    [...expectedKeys].sort(),
+    `${label} exact allowed keys`,
+  );
+}
+
+const SUPPORT_LIST_ITEM_KEYS = [
+  'id',
+  'ticketCode',
+  'type',
+  'subject',
+  'orderId',
+  'productId',
+  'status',
+  'priority',
+  'assigneeId',
+  'resolvedAt',
+  'reopenDeadline',
+  'version',
+  'createdAt',
+  'updatedAt',
+];
+
+function assertExactPage(page, itemKeys, label) {
+  assertExactKeys(
+    page,
+    ['items', 'total', 'page', 'pageSize', 'totalPages'],
+    `${label} page`,
+  );
+  assert.ok(Array.isArray(page.items), `${label} items`);
+  for (const item of page.items) assertExactKeys(item, itemKeys, `${label} item`);
+}
+
+function assertExactSupportDetail(detail, label) {
+  assertExactKeys(
+    detail,
+    [
+      ...SUPPORT_LIST_ITEM_KEYS,
+      'messages',
+      'assignmentHistory',
+      'priorityHistory',
+      'resolutionHistory',
+    ],
+    `${label} detail`,
+  );
+  assertExactPage(
+    detail.messages,
+    ['id', 'actorRole', 'content', 'createdAt'],
+    `${label} messages`,
+  );
+  assert.ok(Array.isArray(detail.assignmentHistory));
+  assert.ok(Array.isArray(detail.priorityHistory));
+  assert.ok(Array.isArray(detail.resolutionHistory));
+  for (const item of detail.assignmentHistory) {
+    assertExactKeys(
+      item,
+      [
+        'beforeAssigneeId',
+        'afterAssigneeId',
+        'actorRole',
+        'reason',
+        'createdAt',
+      ],
+      `${label} assignment history`,
+    );
+  }
+  for (const item of detail.priorityHistory) {
+    assertExactKeys(
+      item,
+      ['beforePriority', 'afterPriority', 'actorRole', 'reason', 'createdAt'],
+      `${label} priority history`,
+    );
+  }
+  for (const item of detail.resolutionHistory) {
+    assertExactKeys(
+      item,
+      ['transition', 'actorRole', 'reopenDeadline', 'createdAt'],
+      `${label} resolution history`,
+    );
+  }
+}
+
 function mutationGateway(method) {
   return {
     calls: [],
@@ -174,15 +349,76 @@ function buildForeignMutationGateways() {
   };
 }
 
+function transactionError(writer) {
+  const error = new Error(`${writer} must receive the active transaction session`);
+  error.statusCode = 500;
+  error.errorCode = 'TRANSACTION_SESSION_REQUIRED';
+  return error;
+}
+
+function assertTransactionSession(session, writer) {
+  if (
+    !session
+    || typeof session !== 'object'
+    || typeof session.registerUndo !== 'function'
+    || typeof session.recordWrite !== 'function'
+  ) {
+    throw transactionError(writer);
+  }
+  return session;
+}
+
+function requireTransactionSession(session, writer) {
+  assertTransactionSession(session, writer);
+  session.recordWrite(writer);
+  return session;
+}
+
+function transactionalMutation(
+  state,
+  session,
+  writer,
+  stateKeys,
+  mutate,
+  recordWriter = true,
+) {
+  const active = recordWriter
+    ? requireTransactionSession(session, writer)
+    : assertTransactionSession(session, writer);
+  const before = Object.fromEntries(
+    stateKeys.map((key) => [key, structuredClone(state[key])]),
+  );
+  active.registerUndo(() => {
+    for (const [key, value] of Object.entries(before)) state[key] = value;
+  });
+  return mutate();
+}
+
 function transactionManagerFor(state) {
+  const sessions = [];
   return {
+    sessions,
     async withTransaction(work) {
-      const snapshot = structuredClone(state);
+      const undo = [];
+      const session = {
+        id: `session-${sessions.length + 1}`,
+        writes: [],
+        status: 'Active',
+        registerUndo(rollback) {
+          undo.push(rollback);
+        },
+        recordWrite(writer) {
+          this.writes.push({ writer, sessionId: this.id });
+        },
+      };
+      sessions.push(session);
       try {
-        return await work({ id: `session-${state.transactions + 1}` });
+        const result = await work(session);
+        session.status = 'Committed';
+        return result;
       } catch (error) {
-        for (const key of Object.keys(state)) delete state[key];
-        Object.assign(state, snapshot);
+        for (const rollback of undo.reverse()) rollback();
+        session.status = 'RolledBack';
         throw error;
       } finally {
         state.transactions += 1;
@@ -269,48 +505,127 @@ function buildReviewFixture({ now = '2026-07-24T12:00:00.000Z' } = {}) {
     async findReviewById(id) {
       return state.reviews.find((item) => item.id === String(id)) || null;
     },
-    async insertReview(data) {
-      const review = {
-        id: data.id || `review-${state.nextReview++}`,
-        version: 1,
-        publicationStatus: 'Published',
-        moderationStatus: 'Allowed',
-        ...structuredClone(data),
-      };
-      state.reviews.push(review);
-      return structuredClone(review);
-    },
-    async createReview(data) {
-      return this.insertReview(data);
-    },
-    async updateReviewByVersion(id, expectedVersion, changes) {
-      const review = state.reviews.find(
-        (item) => item.id === String(id) && item.version === Number(expectedVersion),
+    async insertReview(data, session) {
+      return transactionalMutation(
+        state,
+        session,
+        'reviewRepository.insertReview',
+        ['reviews', 'nextReview'],
+        () => {
+          const review = {
+            id: data.id || `review-${state.nextReview++}`,
+            version: 1,
+            publicationStatus: 'Published',
+            moderationStatus: 'Allowed',
+            ...structuredClone(data),
+          };
+          state.reviews.push(review);
+          return structuredClone(review);
+        },
       );
-      if (!review) return null;
-      Object.assign(review, structuredClone(changes), { version: review.version + 1 });
-      return structuredClone(review);
     },
-    async appendContentHistory(entry) {
-      state.contentHistory.push(structuredClone(entry));
-      return entry;
+    async createReview(data, session) {
+      return this.insertReview(data, session);
     },
-    async appendPublicationHistory(entry) {
-      state.publicationHistory.push(structuredClone(entry));
-      return entry;
+    async updateReviewByVersion(id, expectedVersion, changes, session) {
+      return transactionalMutation(
+        state,
+        session,
+        'reviewRepository.updateReviewByVersion',
+        ['reviews'],
+        () => {
+          const review = state.reviews.find(
+            (item) => item.id === String(id) && item.version === Number(expectedVersion),
+          );
+          if (!review) return null;
+          Object.assign(review, structuredClone(changes), { version: review.version + 1 });
+          return structuredClone(review);
+        },
+      );
     },
-    async appendModerationHistory(entry) {
-      state.moderationHistory.push(structuredClone(entry));
-      return entry;
+    async appendContentHistory(entry, session) {
+      return transactionalMutation(
+        state,
+        session,
+        'reviewRepository.appendContentHistory',
+        ['contentHistory'],
+        () => {
+          state.contentHistory.push(structuredClone(entry));
+          return structuredClone(entry);
+        },
+      );
     },
-    async findCommand(actorId, key) {
+    async appendPublicationHistory(entry, session) {
+      return transactionalMutation(
+        state,
+        session,
+        'reviewRepository.appendPublicationHistory',
+        ['publicationHistory'],
+        () => {
+          state.publicationHistory.push(structuredClone(entry));
+          return structuredClone(entry);
+        },
+      );
+    },
+    async appendModerationHistory(entry, session) {
+      return transactionalMutation(
+        state,
+        session,
+        'reviewRepository.appendModerationHistory',
+        ['moderationHistory'],
+        () => {
+          state.moderationHistory.push(structuredClone(entry));
+          return structuredClone(entry);
+        },
+      );
+    },
+    async findCommand(identity) {
+      assert.equal(typeof identity, 'object', 'Review command lookup requires scoped identity');
+      for (const field of [
+        'actorId',
+        'aggregateType',
+        'aggregateId',
+        'operation',
+        'idempotencyKey',
+        'fingerprint',
+      ]) {
+        assert.notEqual(
+          identity?.[field],
+          undefined,
+          `Review command lookup requires ${field}`,
+        );
+      }
       return state.commands.find(
-        (item) => item.actorId === String(actorId) && item.idempotencyKey === key,
+        (item) => (
+          item.actorId === String(identity.actorId)
+          && item.idempotencyKey === identity.idempotencyKey
+        ),
       ) || null;
     },
-    async recordCommand(command) {
-      state.commands.push(structuredClone(command));
-      return command;
+    async recordCommand(command, session) {
+      assertExactKeys(command, [
+        'actorId',
+        'aggregateId',
+        'aggregateType',
+        'createdAt',
+        'currentResultId',
+        'currentResultVersion',
+        'fingerprint',
+        'idempotencyKey',
+        'operation',
+        'result',
+      ], 'Review command record');
+      assert.match(command.fingerprint, /^[a-f0-9]{64}$/);
+      return transactionalMutation(
+        state,
+        session,
+        'reviewRepository.recordCommand',
+        ['commands'],
+        () => {
+          state.commands.push(structuredClone(command));
+          return structuredClone(command);
+        },
+      );
     },
     async listPublicReviews(productId) {
       return state.reviews.filter((review) => review.productId === String(productId));
@@ -318,25 +633,45 @@ function buildReviewFixture({ now = '2026-07-24T12:00:00.000Z' } = {}) {
   };
 
   const auditLogger = {
-    async log(entry) {
-      state.audits.push(structuredClone(entry));
+    async log(entry, session) {
+      return transactionalMutation(
+        state,
+        session,
+        'reviewAuditLogger.log',
+        ['audits'],
+        () => {
+          state.audits.push(structuredClone(entry));
+          return structuredClone(entry);
+        },
+      );
     },
   };
   const outbox = {
     failNext: false,
     failDeliveryNext: false,
-    async enqueue(entry) {
+    async enqueue(entry, session) {
+      requireTransactionSession(session, 'reviewOutbox.enqueue');
       if (this.failNext) {
         this.failNext = false;
         const error = new Error('outbox persistence unavailable');
         error.errorCode = 'OUTBOX_WRITE_FAILED';
         throw error;
       }
-      state.outbox.push({
-        ...structuredClone(entry),
-        status: 'Pending',
-        attempts: 0,
-      });
+      return transactionalMutation(
+        state,
+        session,
+        'reviewOutbox.enqueue.persist',
+        ['outbox'],
+        () => {
+          state.outbox.push({
+            ...structuredClone(entry),
+            status: 'Pending',
+            attempts: 0,
+          });
+          return structuredClone(state.outbox.at(-1));
+        },
+        false,
+      );
     },
     async deliverNext() {
       const event = state.outbox.find((item) => item.status === 'Pending');
@@ -403,6 +738,58 @@ function reviewCommand(overrides = {}) {
 
 function commandOptions(idempotencyKey) {
   return { idempotencyKey };
+}
+
+function commandFingerprint({
+  aggregateId,
+  aggregateType,
+  actorId,
+  command,
+  operation,
+}) {
+  return crypto.createHash('sha256').update(JSON.stringify({
+    actorId: String(actorId),
+    aggregateId: String(aggregateId),
+    aggregateType,
+    operation,
+    command,
+  })).digest('hex');
+}
+
+async function assertMongoTransactionAdapter(serviceModule, label) {
+  const factory = serviceModule.createModelTransactionManager
+    || serviceModule.createMongoTransactionManager;
+  assert.equal(
+    typeof factory,
+    'function',
+    `${label} service must expose its default Mongo transaction adapter`,
+  );
+  const calls = [];
+  const session = {
+    async withTransaction(work) {
+      calls.push('withTransaction');
+      return work(session);
+    },
+    async endSession() {
+      calls.push('endSession');
+    },
+  };
+  const originalStartSession = mongoose.startSession;
+  mongoose.startSession = async () => {
+    calls.push('startSession');
+    return session;
+  };
+  try {
+    const adapter = factory();
+    const result = await adapter.withTransaction(async (activeSession) => {
+      assert.equal(activeSession, session);
+      return 'transaction-result';
+    });
+    assert.equal(result, 'transaction-result');
+    assert.deepEqual(calls, ['startSession', 'withTransaction', 'endSession']);
+  } finally {
+    mongoose.startSession = originalStartSession;
+  }
 }
 
 function runMutation(method, positionalArgs, command, idempotencyKey) {
@@ -478,60 +865,147 @@ function buildSupportFixture({ now = '2026-07-24T12:00:00.000Z' } = {}) {
     async findRequestById(id) {
       return this.findTicketById(id);
     },
-    async insertTicket(data) {
-      const number = state.nextTicket++;
-      const ticket = {
-        id: data.id || `ticket-${number}`,
-        ticketCode: data.ticketCode || `SUP-20260724-${String(number).padStart(4, '0')}`,
-        version: 1,
-        status: 'New',
-        assigneeId: null,
-        priority: 'Normal',
-        ...structuredClone(data),
-      };
-      state.tickets.push(ticket);
-      return structuredClone(ticket);
-    },
-    async createRequest(data) {
-      return this.insertTicket(data);
-    },
-    async updateTicketByVersion(id, expectedVersion, changes) {
-      const ticket = state.tickets.find(
-        (item) => item.id === String(id) && item.version === Number(expectedVersion),
+    async insertTicket(data, session) {
+      return transactionalMutation(
+        state,
+        session,
+        'supportRepository.insertTicket',
+        ['tickets', 'nextTicket'],
+        () => {
+          const number = state.nextTicket++;
+          const ticket = {
+            id: data.id || `ticket-${number}`,
+            ticketCode: data.ticketCode || `SUP-20260724-${String(number).padStart(4, '0')}`,
+            version: 1,
+            status: 'New',
+            assigneeId: null,
+            priority: 'Normal',
+            ...structuredClone(data),
+          };
+          state.tickets.push(ticket);
+          return structuredClone(ticket);
+        },
       );
-      if (!ticket) return null;
-      Object.assign(ticket, structuredClone(changes), { version: ticket.version + 1 });
-      return structuredClone(ticket);
     },
-    async appendMessage(entry) {
-      const message = {
-        id: entry.id || `message-${state.nextMessage++}`,
-        createdAt: entry.createdAt || new Date(),
-        ...structuredClone(entry),
-      };
-      state.messages.push(message);
-      return structuredClone(message);
+    async createRequest(data, session) {
+      return this.insertTicket(data, session);
     },
-    async appendAssignmentHistory(entry) {
-      state.assignmentHistory.push(structuredClone(entry));
-      return entry;
+    async updateTicketByVersion(id, expectedVersion, changes, session) {
+      return transactionalMutation(
+        state,
+        session,
+        'supportRepository.updateTicketByVersion',
+        ['tickets'],
+        () => {
+          const ticket = state.tickets.find(
+            (item) => item.id === String(id) && item.version === Number(expectedVersion),
+          );
+          if (!ticket) return null;
+          Object.assign(ticket, structuredClone(changes), { version: ticket.version + 1 });
+          return structuredClone(ticket);
+        },
+      );
     },
-    async appendPriorityHistory(entry) {
-      state.priorityHistory.push(structuredClone(entry));
-      return entry;
+    async appendMessage(entry, session) {
+      return transactionalMutation(
+        state,
+        session,
+        'supportRepository.appendMessage',
+        ['messages', 'nextMessage'],
+        () => {
+          const message = {
+            id: entry.id || `message-${state.nextMessage++}`,
+            createdAt: entry.createdAt || new Date(),
+            ...structuredClone(entry),
+          };
+          state.messages.push(message);
+          return structuredClone(message);
+        },
+      );
     },
-    async appendResolutionHistory(entry) {
-      state.resolutionHistory.push(structuredClone(entry));
-      return entry;
+    async appendAssignmentHistory(entry, session) {
+      return transactionalMutation(
+        state,
+        session,
+        'supportRepository.appendAssignmentHistory',
+        ['assignmentHistory'],
+        () => {
+          state.assignmentHistory.push(structuredClone(entry));
+          return structuredClone(entry);
+        },
+      );
     },
-    async findCommand(actorId, key) {
+    async appendPriorityHistory(entry, session) {
+      return transactionalMutation(
+        state,
+        session,
+        'supportRepository.appendPriorityHistory',
+        ['priorityHistory'],
+        () => {
+          state.priorityHistory.push(structuredClone(entry));
+          return structuredClone(entry);
+        },
+      );
+    },
+    async appendResolutionHistory(entry, session) {
+      return transactionalMutation(
+        state,
+        session,
+        'supportRepository.appendResolutionHistory',
+        ['resolutionHistory'],
+        () => {
+          state.resolutionHistory.push(structuredClone(entry));
+          return structuredClone(entry);
+        },
+      );
+    },
+    async findCommand(identity) {
+      assert.equal(typeof identity, 'object', 'Support command lookup requires scoped identity');
+      for (const field of [
+        'actorId',
+        'aggregateType',
+        'aggregateId',
+        'operation',
+        'idempotencyKey',
+        'fingerprint',
+      ]) {
+        assert.notEqual(
+          identity?.[field],
+          undefined,
+          `Support command lookup requires ${field}`,
+        );
+      }
       return state.commands.find(
-        (item) => item.actorId === String(actorId) && item.idempotencyKey === key,
+        (item) => (
+          item.actorId === String(identity.actorId)
+          && item.idempotencyKey === identity.idempotencyKey
+        ),
       ) || null;
     },
-    async recordCommand(command) {
-      state.commands.push(structuredClone(command));
-      return command;
+    async recordCommand(command, session) {
+      assertExactKeys(command, [
+        'actorId',
+        'aggregateId',
+        'aggregateType',
+        'createdAt',
+        'currentResultId',
+        'currentResultVersion',
+        'fingerprint',
+        'idempotencyKey',
+        'operation',
+        'result',
+      ], 'Support command record');
+      assert.match(command.fingerprint, /^[a-f0-9]{64}$/);
+      return transactionalMutation(
+        state,
+        session,
+        'supportRepository.recordCommand',
+        ['commands'],
+        () => {
+          state.commands.push(structuredClone(command));
+          return structuredClone(command);
+        },
+      );
     },
     async listTickets(filter = {}) {
       return state.tickets.filter((ticket) => Object.entries(filter).every(
@@ -544,25 +1018,45 @@ function buildSupportFixture({ now = '2026-07-24T12:00:00.000Z' } = {}) {
   };
 
   const auditLogger = {
-    async log(entry) {
-      state.audits.push(structuredClone(entry));
+    async log(entry, session) {
+      return transactionalMutation(
+        state,
+        session,
+        'supportAuditLogger.log',
+        ['audits'],
+        () => {
+          state.audits.push(structuredClone(entry));
+          return structuredClone(entry);
+        },
+      );
     },
   };
   const outbox = {
     failNext: false,
     failDeliveryNext: false,
-    async enqueue(entry) {
+    async enqueue(entry, session) {
+      requireTransactionSession(session, 'supportOutbox.enqueue');
       if (this.failNext) {
         this.failNext = false;
         const error = new Error('outbox persistence unavailable');
         error.errorCode = 'OUTBOX_WRITE_FAILED';
         throw error;
       }
-      state.outbox.push({
-        ...structuredClone(entry),
-        status: 'Pending',
-        attempts: 0,
-      });
+      return transactionalMutation(
+        state,
+        session,
+        'supportOutbox.enqueue.persist',
+        ['outbox'],
+        () => {
+          state.outbox.push({
+            ...structuredClone(entry),
+            status: 'Pending',
+            attempts: 0,
+          });
+          return structuredClone(state.outbox.at(-1));
+        },
+        false,
+      );
     },
     async deliverNext() {
       const event = state.outbox.find((item) => item.status === 'Pending');
@@ -592,7 +1086,8 @@ function buildSupportFixture({ now = '2026-07-24T12:00:00.000Z' } = {}) {
   };
   const transactionManager = transactionManagerFor(state);
   const assignmentCoordinator = {
-    async coordinate({ userId }) {
+    async coordinate({ userId, session }) {
+      requireTransactionSession(session, 'assignmentCoordinator.coordinate');
       return state.users.find(
         (item) => item.id === String(userId) && item.role === 'Staff' && item.status === 'Active',
       ) || null;
@@ -748,13 +1243,178 @@ function atomicScenario(
   command,
 ) {
   const method = requiredMethod(fixture.service, methodName);
+  const aggregateType = aggregate
+    ? (Object.prototype.hasOwnProperty.call(aggregate, 'assigneeId')
+      ? 'SupportRequest'
+      : 'Review')
+    : (methodName === 'createRequest' ? 'SupportRequest' : 'Review');
+  const aggregateScopeId = aggregate?.id
+    || (methodName === 'createReview' ? positionalArgs[1] : positionalArgs[0]?.id);
+  const historyCollection = Object.keys(delta).find((key) => /History$/.test(key)) || null;
   return {
     fixture,
     baseVersion: aggregate?.version ?? 0,
+    actor: positionalArgs[0],
+    aggregateType,
+    aggregateScopeId,
+    historyCollection,
+    methodName,
+    command: structuredClone(command),
     eventType,
     expectedDelta: oneCommandDelta(delta),
     invoke: (key) => runMutation(method, positionalArgs, command, key),
   };
+}
+
+function assertAtomicWrites(scenario, first, key, countsBefore) {
+  const state = scenario.fixture.state;
+  const actorId = String(scenario.actor.id || scenario.actor);
+  const aggregateId = String(first.id || scenario.aggregateScopeId);
+  const version = Number(first.version);
+  const timestamp = new Date(scenario.fixture.clock.now());
+  const expectedAudit = {
+    actorId,
+    action: scenario.eventType,
+    targetEntity: scenario.aggregateType,
+    targetId: aggregateId,
+    aggregateType: scenario.aggregateType,
+    aggregateId,
+    version,
+    occurredAt: timestamp,
+    idempotencyKey: key,
+    metadata: {},
+  };
+  assert.deepEqual(
+    state.audits.slice(countsBefore.audits),
+    [expectedAudit],
+    `${scenario.aggregateType}/${scenario.methodName} exact audit write`,
+  );
+  const expectedOutbox = {
+    eventType: scenario.eventType,
+    aggregateType: scenario.aggregateType,
+    aggregateId,
+    version,
+    occurredAt: timestamp,
+    idempotencyKey: key,
+    payload: { aggregateId, version },
+    status: 'Pending',
+    attempts: 0,
+  };
+  assert.deepEqual(
+    state.outbox.slice(countsBefore.outbox),
+    [expectedOutbox],
+    `${scenario.aggregateType}/${scenario.methodName} exact outbox write`,
+  );
+  const expectedCommand = {
+    actorId,
+    aggregateId: String(scenario.aggregateScopeId),
+    aggregateType: scenario.aggregateType,
+    createdAt: timestamp,
+    currentResultId: aggregateId,
+    currentResultVersion: version,
+    fingerprint: commandFingerprint({
+      actorId,
+      aggregateId: scenario.aggregateScopeId,
+      aggregateType: scenario.aggregateType,
+      operation: scenario.methodName,
+      command: scenario.command,
+    }),
+    idempotencyKey: key,
+    operation: scenario.methodName,
+    result: first,
+  };
+  assert.deepEqual(
+    state.commands.slice(countsBefore.commands),
+    [expectedCommand],
+    `${scenario.aggregateType}/${scenario.methodName} exact command write`,
+  );
+  if (scenario.historyCollection) {
+    const history = state[scenario.historyCollection].slice(
+      countsBefore[scenario.historyCollection],
+    );
+    const expectedHistory = history[0];
+    assert.ok(expectedHistory, `${scenario.historyCollection} must append exactly one row`);
+    assert.equal(history.length, 1);
+    const historyKeys = {
+      contentHistory: ['reviewId', 'actorId', 'version', 'rating', 'content', 'createdAt'],
+      publicationHistory: [
+        'reviewId',
+        'actorId',
+        'version',
+        'beforeStatus',
+        'afterStatus',
+        'createdAt',
+      ],
+      moderationHistory: [
+        'reviewId',
+        'actorId',
+        'version',
+        'beforeStatus',
+        'afterStatus',
+        'reason',
+        'createdAt',
+      ],
+      assignmentHistory: [
+        'ticketId',
+        'actorId',
+        'version',
+        'beforeAssigneeId',
+        'afterAssigneeId',
+        'reason',
+        'createdAt',
+      ],
+      priorityHistory: [
+        'ticketId',
+        'actorId',
+        'version',
+        'beforePriority',
+        'afterPriority',
+        'reason',
+        'createdAt',
+      ],
+      resolutionHistory: [
+        'ticketId',
+        'actorId',
+        'version',
+        'transition',
+        'reopenDeadline',
+        'createdAt',
+      ],
+    };
+    assertExactKeys(
+      expectedHistory,
+      historyKeys[scenario.historyCollection],
+      `${scenario.historyCollection} exact write`,
+    );
+    assert.equal(
+      expectedHistory.reviewId || expectedHistory.ticketId,
+      aggregateId,
+    );
+    assert.equal(expectedHistory.actorId, actorId);
+    assert.equal(expectedHistory.version, version);
+    assert.deepEqual(expectedHistory.createdAt, timestamp);
+  }
+  if (scenario.expectedDelta.messages) {
+    const messages = state.messages.slice(countsBefore.messages);
+    assert.equal(messages.length, 1, 'exactly one SupportMessage must append');
+    const message = messages[0];
+    assertExactKeys(
+      message,
+      ['id', 'ticketId', 'actorId', 'actorRole', 'content', 'commandId', 'createdAt'],
+      `${scenario.methodName} exact message write`,
+    );
+    assert.equal(message.ticketId, aggregateId);
+    assert.equal(message.actorId, actorId);
+    assert.equal(message.actorRole, scenario.actor.role || 'Customer');
+    assert.equal(
+      message.content,
+      scenario.command.initialMessage
+        || scenario.command.message
+        || scenario.command.finalMessage,
+    );
+    assert.equal(message.commandId, key);
+    assert.deepEqual(message.createdAt, timestamp);
+  }
 }
 
 async function prepareReviewAtomicScenario(family) {
@@ -920,6 +1580,37 @@ describe('SL-008 Review behavioral acceptance', () => {
     assert.equal(fixture.state.contentHistory.length, 1);
     assert.equal(fixture.state.audits.length, 1);
     assert.equal(fixture.state.outbox.length, 1);
+    const createCommandRecord = fixture.state.commands[0];
+    assertExactKeys(createCommandRecord, [
+      'actorId',
+      'aggregateId',
+      'aggregateType',
+      'createdAt',
+      'currentResultId',
+      'currentResultVersion',
+      'fingerprint',
+      'idempotencyKey',
+      'operation',
+      'result',
+    ], 'Review create command');
+    assert.equal(createCommandRecord.actorId, actors.customer.id);
+    assert.equal(createCommandRecord.aggregateId, 'product-1');
+    assert.equal(createCommandRecord.aggregateType, 'Review');
+    assert.equal(createCommandRecord.operation, 'createReview');
+    assert.equal(createCommandRecord.idempotencyKey, 'review-create-0001');
+    assert.equal(createCommandRecord.currentResultId, first.id);
+    assert.equal(createCommandRecord.currentResultVersion, first.version);
+    assert.deepEqual(createCommandRecord.result, first);
+    assert.equal(
+      createCommandRecord.fingerprint,
+      commandFingerprint({
+        actorId: actors.customer.id,
+        aggregateId: 'product-1',
+        aggregateType: 'Review',
+        operation: 'createReview',
+        command,
+      }),
+    );
     assert.equal(fixture.state.outbox[0].eventType, 'REVIEW_CREATED');
   });
 
@@ -1089,7 +1780,7 @@ describe('SL-008 Review behavioral acceptance', () => {
           ),
           'REVIEW_VALIDATION_FAILED',
         );
-        assert.deepEqual(snapshotEffects(fixture.state), {
+        assert.deepEqual(snapshotEffectCounts(fixture.state), {
           reviews: 0,
           tickets: 0,
           messages: 0,
@@ -1129,10 +1820,14 @@ describe('SL-008 Review behavioral acceptance', () => {
         'REVIEW_NOT_ELIGIBLE',
       );
       assert.equal(error.statusCode, 404);
-      assert.equal(error.data?.orderId, undefined);
-      assert.equal(error.data?.orderDetailId, undefined);
-      assert.equal(error.data?.productId, undefined);
-      assert.equal(error.data?.customerId, undefined);
+      assertPrivateErrorEnvelope(
+        error,
+        fixtureIdentifiers(fixture.state, [
+          testCase.productId,
+          testCase.orderDetailId,
+          testCase.actor.id,
+        ]),
+      );
       assert.deepEqual(snapshotEffects(fixture.state), before);
     }
   });
@@ -1147,18 +1842,20 @@ describe('SL-008 Review behavioral acceptance', () => {
       reviewCommand(),
       'review-create-0001',
     );
-    await fixture.repository.insertReview({
-      id: 'review-unicode-name',
-      customerId: 'customer-3',
-      productId: 'product-1',
-      orderDetailId: 'detail-011',
-      rating: 4,
-      content: 'Unicode one-token display name',
-      publicationStatus: 'Published',
-      moderationStatus: 'Allowed',
-      createdAt: new Date('2026-07-23T12:00:00.000Z'),
-      updatedAt: new Date('2026-07-23T12:00:00.000Z'),
-    });
+    await fixture.transactionManager.withTransaction(
+      (session) => fixture.repository.insertReview({
+        id: 'review-unicode-name',
+        customerId: 'customer-3',
+        productId: 'product-1',
+        orderDetailId: 'detail-011',
+        rating: 4,
+        content: 'Unicode one-token display name',
+        publicationStatus: 'Published',
+        moderationStatus: 'Allowed',
+        createdAt: new Date('2026-07-23T12:00:00.000Z'),
+        updatedAt: new Date('2026-07-23T12:00:00.000Z'),
+      }, session),
+    );
 
     const result = await listPublic('product-1', { page: 1, pageSize: 20 });
 
@@ -1599,6 +2296,96 @@ describe('SL-008 Review behavioral acceptance', () => {
     assert.equal(distinctKeyFixture.state.audits.length, 1);
     assert.equal(distinctKeyFixture.state.outbox.length, 1);
 
+    const payloadConflictFixture = buildReviewFixture();
+    const payloadConflictCreate = requiredMethod(payloadConflictFixture.service, 'createReview');
+    const payloadConflictKey = 'review-conflict-payload-0001';
+    await runMutation(
+      payloadConflictCreate,
+      [actors.customer, 'product-1'],
+      reviewCommand(),
+      payloadConflictKey,
+    );
+    const payloadBefore = snapshotEffects(payloadConflictFixture.state);
+    const payloadConflict = await expectDomainError(
+      () => runMutation(
+        payloadConflictCreate,
+        [actors.customer, 'product-1'],
+        reviewCommand({ rating: 4, content: 'Different payload' }),
+        payloadConflictKey,
+      ),
+      'IDEMPOTENCY_KEY_REUSED',
+    );
+    assert.equal(payloadConflict.statusCode, 409);
+    assertPrivateErrorEnvelope(
+      payloadConflict,
+      fixtureIdentifiers(payloadConflictFixture.state, [actors.customer.id, 'product-1']),
+    );
+    assert.deepEqual(snapshotEffects(payloadConflictFixture.state), payloadBefore);
+
+    const operationConflictFixture = buildReviewFixture();
+    const operationCreate = requiredMethod(operationConflictFixture.service, 'createReview');
+    const operationKey = 'review-conflict-operation-0001';
+    const operationReview = await runMutation(
+      operationCreate,
+      [actors.customer, 'product-1'],
+      reviewCommand(),
+      operationKey,
+    );
+    const operationBefore = snapshotEffects(operationConflictFixture.state);
+    const operationConflict = await expectDomainError(
+      () => runMutation(
+        requiredMethod(operationConflictFixture.service, 'setPublication'),
+        [actors.customer, operationReview.id],
+        {
+          publicationStatus: 'Withdrawn',
+          expectedVersion: operationReview.version,
+        },
+        operationKey,
+      ),
+      'IDEMPOTENCY_KEY_REUSED',
+    );
+    assert.equal(operationConflict.statusCode, 409);
+    assert.deepEqual(snapshotEffects(operationConflictFixture.state), operationBefore);
+
+    const aggregateConflictFixture = buildReviewFixture();
+    aggregateConflictFixture.state.products.push({
+      id: 'product-2',
+      categoryId: 'category-1',
+      status: 'Active',
+    });
+    aggregateConflictFixture.state.orders.push({
+      id: 'order-second',
+      customerId: actors.customer.id,
+      deliveredAt: new Date('2026-07-23T08:00:00.000Z'),
+      status: 'Delivered',
+    });
+    aggregateConflictFixture.state.orderDetails.push({
+      id: 'detail-second',
+      orderId: 'order-second',
+      productId: 'product-2',
+      sku: 'SKU-2',
+    });
+    const aggregateCreate = requiredMethod(aggregateConflictFixture.service, 'createReview');
+    const aggregateKey = 'review-conflict-aggregate-0001';
+    await runMutation(
+      aggregateCreate,
+      [actors.customer, 'product-1'],
+      reviewCommand(),
+      aggregateKey,
+    );
+    const aggregateBefore = snapshotEffects(aggregateConflictFixture.state);
+    const aggregateConflict = await expectDomainError(
+      () => runMutation(
+        aggregateCreate,
+        [actors.customer, 'product-2'],
+        reviewCommand({ orderDetailId: 'detail-second' }),
+        aggregateKey,
+      ),
+      'IDEMPOTENCY_KEY_REUSED',
+    );
+    assert.equal(aggregateConflict.statusCode, 409);
+    assert.deepEqual(snapshotEffects(aggregateConflictFixture.state), aggregateBefore);
+
     for (const [index, invalid] of [
       { command: {}, key: 'short' },
       { command: {}, key: 'x'.repeat(129) },
@@ -1793,7 +2580,10 @@ describe('SL-008 Support behavioral acceptance', () => {
         'SUPPORT_REFERENCE_NOT_FOUND',
       );
       assert.equal(error.statusCode, 404);
-      assert.equal(error.data?.customerId, undefined);
+      assertPrivateErrorEnvelope(
+        error,
+        fixtureIdentifiers(fixture.state, [orderId, actors.customer.id]),
+      );
       assert.deepEqual(snapshotEffects(fixture.state), before);
     }
   });
@@ -1808,7 +2598,7 @@ describe('SL-008 Support behavioral acceptance', () => {
       const fixture = buildSupportFixture();
       const createRequest = requiredMethod(fixture.service, 'createRequest');
       const before = snapshotEffects(fixture.state);
-      await expectDomainError(
+      const error = await expectDomainError(
         () => runMutation(
           createRequest,
           [actors.customer],
@@ -1820,6 +2610,14 @@ describe('SL-008 Support behavioral acceptance', () => {
           `support-product-denied-${index}-0001`,
         ),
         'SUPPORT_REFERENCE_NOT_FOUND',
+      );
+      assertPrivateErrorEnvelope(
+        error,
+        fixtureIdentifiers(fixture.state, [
+          references.productId,
+          references.orderId,
+          actors.customer.id,
+        ]),
       );
       assert.deepEqual(snapshotEffects(fixture.state), before);
     }
@@ -1852,7 +2650,7 @@ describe('SL-008 Support behavioral acceptance', () => {
         const invalidFixture = buildSupportFixture();
         const createRequest = requiredMethod(invalidFixture.service, 'createRequest');
         const before = snapshotEffects(invalidFixture.state);
-        await expectDomainError(
+        const error = await expectDomainError(
           () => runMutation(
             createRequest,
             [actors.customer],
@@ -1860,6 +2658,14 @@ describe('SL-008 Support behavioral acceptance', () => {
             `support-${type.toLowerCase()}-invalid-${index}-0001`,
           ),
           'SUPPORT_REFERENCE_NOT_FOUND',
+        );
+        assertPrivateErrorEnvelope(
+          error,
+          fixtureIdentifiers(invalidFixture.state, [
+            references.orderId,
+            references.productId,
+            actors.customer.id,
+          ]),
         );
         assert.deepEqual(snapshotEffects(invalidFixture.state), before);
       }
@@ -2942,6 +3748,8 @@ describe('SL-008 Support behavioral acceptance', () => {
 
     const own = await listOwn(actors.customer, { page: 1, pageSize: 20 });
     const foreignOwn = await listOwn(actors.foreignCustomer, { page: 1, pageSize: 20 });
+    assertExactPage(own, SUPPORT_LIST_ITEM_KEYS, 'Customer own Support list');
+    assertExactPage(foreignOwn, SUPPORT_LIST_ITEM_KEYS, 'Foreign Customer own Support list');
     assert.equal(own.total, 1);
     assert.equal(foreignOwn.total, 1);
     assert.equal(foreignOwn.items[0].id, foreignTicket.id);
@@ -2959,6 +3767,7 @@ describe('SL-008 Support behavioral acceptance', () => {
       page: 1,
       pageSize: 20,
     });
+    assertExactPage(staff, SUPPORT_LIST_ITEM_KEYS, 'Staff operational Support list');
     assert.equal(staff.total, 1);
     assert.equal(staff.pageSize, 20);
     assert.equal(JSON.stringify(staff).includes('The delivered package needs support.'), false);
@@ -2973,6 +3782,8 @@ describe('SL-008 Support behavioral acceptance', () => {
       ownTicket.id,
       { page: 1, pageSize: 20 },
     );
+    assertExactSupportDetail(ownerDetail, 'Customer Support detail');
+    assertExactSupportDetail(staffDetail, 'Staff Support detail');
     assert.equal(ownerDetail.id, ownTicket.id);
     assert.equal(staffDetail.id, ownTicket.id);
     assert.ok(Array.isArray(ownerDetail.messages.items));
@@ -3025,6 +3836,120 @@ describe('SL-008 Support behavioral acceptance', () => {
   });
 
   it('AT-174 table-drives grouped rollback and same-key replay across every SL-008 mutation family', async () => {
+    await assertMongoTransactionAdapter(
+      require('../services/review.service'),
+      'Review',
+    );
+    await assertMongoTransactionAdapter(
+      require('../services/support.service'),
+      'Support',
+    );
+
+    const probeState = {
+      transactions: 0,
+      boundWrites: [],
+      unboundWrites: [],
+    };
+    const probeManager = transactionManagerFor(probeState);
+    await assert.rejects(
+      () => probeManager.withTransaction(async (session) => {
+        transactionalMutation(
+          probeState,
+          session,
+          'probe.boundWrite',
+          ['boundWrites'],
+          () => probeState.boundWrites.push('inside'),
+        );
+        probeState.unboundWrites.push('outside');
+        throw new Error('probe rollback');
+      }),
+      /probe rollback/,
+    );
+    assert.deepEqual(probeState.boundWrites, []);
+    assert.deepEqual(
+      probeState.unboundWrites,
+      ['outside'],
+      'unbound writes must not be rescued by a global fake snapshot',
+    );
+
+    const supportPayloadFixture = buildSupportFixture();
+    const supportPayloadCreate = requiredMethod(supportPayloadFixture.service, 'createRequest');
+    const supportPayloadKey = 'support-conflict-payload-0001';
+    await runMutation(
+      supportPayloadCreate,
+      [actors.customer],
+      supportCreate(),
+      supportPayloadKey,
+    );
+    const supportPayloadBefore = snapshotEffects(supportPayloadFixture.state);
+    const supportPayloadConflict = await expectDomainError(
+      () => runMutation(
+        supportPayloadCreate,
+        [actors.customer],
+        supportCreate({ subject: 'Different support payload' }),
+        supportPayloadKey,
+      ),
+      'IDEMPOTENCY_KEY_REUSED',
+    );
+    assert.equal(supportPayloadConflict.statusCode, 409);
+    assert.deepEqual(snapshotEffects(supportPayloadFixture.state), supportPayloadBefore);
+
+    const supportOperationFixture = buildSupportFixture();
+    const supportOperationCreate = requiredMethod(
+      supportOperationFixture.service,
+      'createRequest',
+    );
+    const supportOperationKey = 'support-conflict-operation-0001';
+    const supportOperationTicket = await runMutation(
+      supportOperationCreate,
+      [actors.customer],
+      supportCreate(),
+      supportOperationKey,
+    );
+    const supportOperationBefore = snapshotEffects(supportOperationFixture.state);
+    const supportOperationConflict = await expectDomainError(
+      () => runMutation(
+        requiredMethod(supportOperationFixture.service, 'appendMessage'),
+        [actors.customer, supportOperationTicket.id],
+        { message: 'Operation conflict', expectedVersion: supportOperationTicket.version },
+        supportOperationKey,
+      ),
+      'IDEMPOTENCY_KEY_REUSED',
+    );
+    assert.equal(supportOperationConflict.statusCode, 409);
+    assert.deepEqual(snapshotEffects(supportOperationFixture.state), supportOperationBefore);
+
+    const supportAggregateFixture = buildSupportFixture();
+    const supportFirstTicket = await createSupportTicket(
+      supportAggregateFixture,
+      {},
+      'support-conflict-aggregate-setup-a',
+    );
+    const supportSecondTicket = await createSupportTicket(
+      supportAggregateFixture,
+      { type: 'Other', orderId: undefined },
+      'support-conflict-aggregate-setup-b',
+    );
+    const supportAggregateKey = 'support-conflict-aggregate-0001';
+    await runMutation(
+      requiredMethod(supportAggregateFixture.service, 'appendMessage'),
+      [actors.customer, supportFirstTicket.id],
+      { message: 'First aggregate command', expectedVersion: supportFirstTicket.version },
+      supportAggregateKey,
+    );
+    const supportAggregateBefore = snapshotEffects(supportAggregateFixture.state);
+    const supportAggregateConflict = await expectDomainError(
+      () => runMutation(
+        requiredMethod(supportAggregateFixture.service, 'appendMessage'),
+        [actors.customer, supportSecondTicket.id],
+        { message: 'Second aggregate command', expectedVersion: supportSecondTicket.version },
+        supportAggregateKey,
+      ),
+      'IDEMPOTENCY_KEY_REUSED',
+    );
+    assert.equal(supportAggregateConflict.statusCode, 409);
+    assert.deepEqual(snapshotEffects(supportAggregateFixture.state), supportAggregateBefore);
+
     const matrix = [
       ...['create', 'update', 'publication', 'moderation'].map((family) => ({
         scope: 'review',
@@ -3053,7 +3978,8 @@ describe('SL-008 Support behavioral acceptance', () => {
       const scenario = await row.prepare();
       const { fixture } = scenario;
       const key = `atomic-${row.scope}-${row.family}-0001`;
-      const effectsBefore = snapshotEffects(fixture.state);
+      const effectsBefore = snapshotEffectCounts(fixture.state);
+      const exactBefore = snapshotEffects(fixture.state);
       const groupedWritesBefore = snapshotGroupedWrites(fixture.state);
       const foreignBefore = structuredClone(fixture.state.foreignDomains || null);
       const eventCountBefore = fixture.state.outbox.filter(
@@ -3065,15 +3991,35 @@ describe('SL-008 Support behavioral acceptance', () => {
         () => scenario.invoke(key),
         'OUTBOX_WRITE_FAILED',
       );
+      const rolledBackSession = fixture.transactionManager.sessions.at(-1);
+      assert.equal(rolledBackSession.status, 'RolledBack');
+      assert.ok(rolledBackSession.writes.length >= 1);
+      assert.equal(
+        new Set(rolledBackSession.writes.map((entry) => entry.sessionId)).size,
+        1,
+      );
       assert.deepEqual(
         snapshotGroupedWrites(fixture.state),
         groupedWritesBefore,
         `${row.scope}/${row.family} must exactly roll back aggregate/history/message/audit/outbox/command`,
       );
+      assert.deepEqual(
+        snapshotEffects(fixture.state),
+        exactBefore,
+        `${row.scope}/${row.family} must exactly roll back every relevant reference and counter`,
+      );
       assertForeignMutationGatewaysUnused(fixture);
 
       const first = await scenario.invoke(key);
-      const effectsAfterFirst = snapshotEffects(fixture.state);
+      const committedSession = fixture.transactionManager.sessions.at(-1);
+      assert.equal(committedSession.status, 'Committed');
+      assert.ok(committedSession.writes.length >= 3);
+      assert.equal(
+        new Set(committedSession.writes.map((entry) => entry.sessionId)).size,
+        1,
+      );
+      const effectsAfterFirst = snapshotEffectCounts(fixture.state);
+      const exactAfterFirst = snapshotEffects(fixture.state);
       const groupedWritesAfterFirst = snapshotGroupedWrites(fixture.state);
       const replay = await scenario.invoke(key);
       assert.deepEqual(replay, first, `${row.scope}/${row.family} replay result`);
@@ -3084,9 +4030,20 @@ describe('SL-008 Support behavioral acceptance', () => {
         `${row.scope}/${row.family} replay must not alter grouped state`,
       );
       assert.deepEqual(
+        snapshotEffects(fixture.state),
+        exactAfterFirst,
+        `${row.scope}/${row.family} replay must not alter any relevant state`,
+      );
+      assert.deepEqual(
         effectsDelta(effectsBefore, effectsAfterFirst),
         scenario.expectedDelta,
         `${row.scope}/${row.family} exact single grouped-write delta`,
+      );
+      assertAtomicWrites(
+        scenario,
+        first,
+        key,
+        effectsBefore,
       );
       assert.equal(
         fixture.state.outbox.filter(
@@ -3123,7 +4080,7 @@ describe('SL-008 Support behavioral acceptance', () => {
         ),
         'COMMAND_VALIDATION_FAILED',
       );
-      assert.deepEqual(snapshotEffects(fixture.state), oneCommandDelta({
+      assert.deepEqual(snapshotEffectCounts(fixture.state), oneCommandDelta({
         commands: 0,
         audits: 0,
         outbox: 0,

@@ -223,5 +223,22 @@ Representative expected failures:
 - legacy Customer Support still renders a raw `orderId` input and legacy Staff
   Support has no claim/current-assignee/priority/transfer/recovery UI.
 
+The acceptance fakes now use deep, allowlisted state snapshots for every
+no-effect and replay assertion. Transaction-bound writers require and record
+the same session, while an adapter assertion keeps the default Mongo
+`startSession`/`withTransaction`/`endSession` seam explicit. Command lookups
+are scoped by actor, operation, aggregate and payload fingerprint; conflicting
+reuse is required to return a private, exact no-effect envelope. Support
+list/detail/message/history projections and audit/outbox/history/event writes
+are checked against exact key sets so internal fixture identifiers and message
+text cannot leak.
+
+Client mutation checks render the real component module through a dependency-
+free Node/Vite SSR harness with mocked actor/service state. Repeated same-tick
+events must issue one call, controls must remain disabled until a deferred
+promise settles (including rejection), and disallowed actors must not receive a
+control. Missing components, handlers or controls therefore remain intentional
+RED contract failures.
+
 All test modules load and execute. Failures are assertions for missing SL-008
-behavior/interface, not syntax, missing-module, or test-fixture setup failures.
+behavior/interface, not syntax, harness runtime, or test-fixture setup failures.
