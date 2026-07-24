@@ -149,10 +149,14 @@ export default function ProductReviewPanel({ productId }) {
     }
   }
 
+  const hasOwnReview = ownReviews.some(
+    (review) => String(review.productId || '') === String(productId),
+  );
+
   return (
     <div className="product-review-panel mt-4">
       <PublicReviewList productId={productId} />
-      {user?.role !== 'Customer' ? null : (
+      {user?.role !== 'Customer' ? null : hasOwnReview ? null : (
         <section className="surface mt-4" aria-labelledby="write-review-heading">
           <h3 id="write-review-heading">Viết đánh giá</h3>
           {error && <div className="alert alert-danger" role="alert">{error}</div>}
@@ -250,14 +254,15 @@ export default function ProductReviewPanel({ productId }) {
                   <button type="submit" className="btn btn-outline-success btn-sm" data-sl008-action="updateReview" onClick={submitUpdate} disabled={Boolean(pending[`updateReview:${review.id}`])}>Cập nhật</button>
                 </form>
                 <div className="d-flex gap-2 mt-2">
-                  {review.publicationStatus === 'Published' && null}
-                  <button type="button" className="btn btn-outline-secondary btn-sm" data-review-id={review.id} data-sl008-action="setPublication:Withdrawn" onClick={withdrawReview} disabled={Boolean(pending['setPublication:Withdrawn'])}>
-                    Rút publication
-                  </button>
-                  {review.publicationStatus === 'Withdrawn' && null}
-                  <button type="button" className="btn btn-outline-secondary btn-sm" data-review-id={review.id} data-sl008-action="setPublication:Published" onClick={republishReview} disabled={Boolean(pending['setPublication:Published'])}>
-                    Đăng lại publication
-                  </button>
+                  {review.publicationStatus === 'Published' ? (
+                    <button type="button" className="btn btn-outline-secondary btn-sm" data-review-id={review.id} data-sl008-action="setPublication:Withdrawn" onClick={withdrawReview} disabled={Boolean(pending['setPublication:Withdrawn'])}>
+                      Rút publication
+                    </button>
+                  ) : (
+                    <button type="button" className="btn btn-outline-secondary btn-sm" data-review-id={review.id} data-sl008-action="setPublication:Published" onClick={republishReview} disabled={Boolean(pending['setPublication:Published'])}>
+                      Đăng lại publication
+                    </button>
+                  )}
                 </div>
               </article>
             );

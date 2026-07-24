@@ -105,8 +105,8 @@ export function createReviewService({ baseUrl = DEFAULT_BASE_URL, fetcher } = {}
       return { items, total: items.length };
     },
 
-    async listModeration({ page, pageSize } = {}) {
-      const query = buildQuery({ page, pageSize });
+    async listModeration({ page, pageSize, productId, publicationStatus, moderationStatus } = {}) {
+      const query = buildQuery({ page, pageSize, productId, publicationStatus, moderationStatus });
       return request(`/staff/reviews${query ? `?${query}` : ''}`);
     },
 

@@ -46,4 +46,25 @@ describe('client review service', () => {
 
     assert.deepEqual(result.map((order) => order.id), ['order-1']);
   });
+
+  it('lists staff moderation with product and independent state filters', async () => {
+    const service = createReviewService({
+      baseUrl: 'http://api.test/api',
+      fetcher: async (url) => {
+        assert.equal(
+          url,
+          'http://api.test/api/staff/reviews?page=1&pageSize=20&productId=product-1&publicationStatus=Published&moderationStatus=Allowed',
+        );
+        return { ok: true, json: async () => ({ success: true, data: { items: [] } }) };
+      },
+    });
+
+    await service.listModeration({
+      page: 1,
+      pageSize: 20,
+      productId: 'product-1',
+      publicationStatus: 'Published',
+      moderationStatus: 'Allowed',
+    });
+  });
 });

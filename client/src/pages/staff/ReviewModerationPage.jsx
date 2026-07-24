@@ -12,6 +12,7 @@ export default function ReviewModerationPage() {
   const [reviewPage, setReviewPage] = useState({ page: 1, pageSize: 20, totalPages: 1, total: 0 });
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
+  const [filters, setFilters] = useState({ productId: '', publicationStatus: '', moderationStatus: '' });
   const [decisions, setDecisions] = useState({});
   const [pending, setPending] = useState({});
   const [error, setError] = useState('');
@@ -19,7 +20,13 @@ export default function ReviewModerationPage() {
 
   async function loadModeration() {
     try {
-      const result = await reviewService.listModeration({ page, pageSize });
+      const result = await reviewService.listModeration({
+        page,
+        pageSize,
+        productId: filters.productId,
+        publicationStatus: filters.publicationStatus,
+        moderationStatus: filters.moderationStatus,
+      });
       setReviews(result?.items || []);
       setReviewPage(result || {});
     } catch (err) {
@@ -29,7 +36,7 @@ export default function ReviewModerationPage() {
 
   useEffect(() => {
     loadModeration();
-  }, [page, pageSize]);
+  }, [page, pageSize, filters.productId, filters.publicationStatus, filters.moderationStatus]);
 
   async function submitModeration(event, review) {
     event.preventDefault();
@@ -71,6 +78,43 @@ export default function ReviewModerationPage() {
         <span className="text-secondary">{Number(reviewPage.total || reviews.length)} đánh giá</span>
       </div>
       {error && <div className="alert alert-danger" role="alert">{error}</div>}
+      <form className="row g-2 mb-3" aria-label="Bộ lọc kiểm duyệt">
+        <div className="col-md-4">
+          <label htmlFor="moderationProductId">Mã sản phẩm</label>
+          <input
+            id="moderationProductId"
+            name="productId"
+            value={filters.productId}
+            onChange={(event) => { setFilters((value) => ({ ...value, productId: event.target.value })); setPage(1); }}
+          />
+        </div>
+        <div className="col-md-4">
+          <label htmlFor="moderationPublicationStatus">Publication</label>
+          <select
+            id="moderationPublicationStatus"
+            name="publicationStatus"
+            value={filters.publicationStatus}
+            onChange={(event) => { setFilters((value) => ({ ...value, publicationStatus: event.target.value })); setPage(1); }}
+          >
+            <option value="">Tất cả publication</option>
+            <option value="Published">Published</option>
+            <option value="Withdrawn">Withdrawn</option>
+          </select>
+        </div>
+        <div className="col-md-4">
+          <label htmlFor="moderationState">Moderation</label>
+          <select
+            id="moderationState"
+            name="moderationStatus"
+            value={filters.moderationStatus}
+            onChange={(event) => { setFilters((value) => ({ ...value, moderationStatus: event.target.value })); setPage(1); }}
+          >
+            <option value="">Tất cả quyết định</option>
+            <option value="Allowed">Allowed</option>
+            <option value="HiddenByStaff">HiddenByStaff</option>
+          </select>
+        </div>
+      </form>
       <section className="surface" aria-live="polite">
         {reviews.map((review) => {
           const decision = decisions[review.id] || {
@@ -92,8 +136,8 @@ export default function ReviewModerationPage() {
                   value={decision.moderationStatus}
                   onChange={(event) => setDecisions((value) => ({ ...value, [review.id]: { ...decision, moderationStatus: event.target.value } }))}
                 >
-                  <option value="Allowed">Allowed</option>
-                  <option value="HiddenByStaff">HiddenByStaff</option>
+                  {review.moderationStatus !== 'Allowed' && <option value="Allowed">Allowed</option>}
+                  {review.moderationStatus !== 'HiddenByStaff' && <option value="HiddenByStaff">HiddenByStaff</option>}
                 </select>
                 <label htmlFor={`reason-${review.id}`}>Reason</label>
                 <textarea
