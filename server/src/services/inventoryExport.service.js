@@ -404,6 +404,13 @@ function createInventoryExportService({
         if (!updatedCycle) {
           throw new ApiError(409, 'Stock export fulfillment cycle is missing', [], 'EXPORT_CYCLE_MISSING');
         }
+        await auditLogger.log({
+          userId,
+          action: 'INVENTORY_EXPORT_COMPLETED',
+          targetEntity: 'StockExportRequest',
+          targetId: String(id),
+          description: `Completed exact stock export for order ${order.orderCode}`,
+        }, session);
         return { completed, order, details, inventories };
       });
     } catch (error) {
@@ -417,13 +424,6 @@ function createInventoryExportService({
       throw error;
     }
 
-    await auditLogger.log({
-      userId,
-      action: 'INVENTORY_EXPORT_COMPLETED',
-      targetEntity: 'StockExportRequest',
-      targetId: String(id),
-      description: `Completed exact stock export for order ${committed.order.orderCode}`,
-    });
     for (const inventory of committed.inventories) {
       await lowStockLifecycle?.evaluate(inventory, { eventKey: `stock-export:${id}` });
     }

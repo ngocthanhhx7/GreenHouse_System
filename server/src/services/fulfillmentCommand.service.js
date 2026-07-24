@@ -29,6 +29,10 @@ const ACTIVE_DELIVERY_EVENT_TYPES = new Set([
 ]);
 const ACTIVE_SHIPMENT_STATUSES = new Set(['HandedOff', 'AttemptFailed']);
 
+function isDuplicateKey(error) {
+  return Number(error?.code) === 11000 || error?.codeName === 'DuplicateKey';
+}
+
 function addDays(value, numberOfDays) {
   return new Date(value.getTime() + numberOfDays * 24 * 60 * 60 * 1000);
 }
@@ -117,7 +121,9 @@ function createFulfillmentCommandService({
     const existing = await repository.findPackingByCommandKey(commandKey);
     if (existing) return { packingRecord: existing, idempotentReplay: true };
 
-    const result = await transactionManager.withTransaction(async (session) => {
+    let result;
+    try {
+      result = await transactionManager.withTransaction(async (session) => {
       await assignmentCoordinator?.coordinate?.({
         userId: staffId,
         expectedRole: 'Staff',
@@ -161,6 +167,13 @@ function createFulfillmentCommandService({
           ? input.evidenceReferences.map((entry) => requiredText(entry, 'evidenceReference'))
           : [],
       }, session);
+      await auditLogger?.log?.({
+        userId: staffId,
+        action: 'ORDER_PACKING_RECORDED',
+        targetEntity: 'Order',
+        targetId: String(orderId),
+        description: `Recorded ${packingRecord.status} packing checklist`,
+      }, session);
       if (!checklist.exact) return { packingRecord, order, idempotentReplay: false };
       let updatedOrder = order;
       if (!isResend) {
@@ -171,16 +184,16 @@ function createFulfillmentCommandService({
         if (!updatedOrder) throw new ApiError(409, 'Order changed while packing');
       }
       await repository.updateCycle(cycle._id, { status: 'Packed' }, session);
-      return { packingRecord, order: updatedOrder, idempotentReplay: false };
-    });
+        return { packingRecord, order: updatedOrder, idempotentReplay: false };
+      });
+    } catch (error) {
+      if (isDuplicateKey(error)) {
+        const winner = await repository.findPackingByCommandKey(commandKey);
+        if (winner) return { packingRecord: winner, idempotentReplay: true };
+      }
+      throw error;
+    }
 
-    await auditLogger?.log?.({
-      userId: staffId,
-      action: 'ORDER_PACKING_RECORDED',
-      targetEntity: 'Order',
-      targetId: String(orderId),
-      description: `Recorded ${result.packingRecord.status} packing checklist`,
-    });
     return result;
   }
 
@@ -189,7 +202,9 @@ function createFulfillmentCommandService({
     const existing = await repository.findShipmentByCommandKey(handoff.commandKey);
     if (existing) return { shipment: existing, idempotentReplay: true };
 
-    const result = await transactionManager.withTransaction(async (session) => {
+    let result;
+    try {
+      result = await transactionManager.withTransaction(async (session) => {
       await assignmentCoordinator?.coordinate?.({
         userId: staffId,
         expectedRole: 'Staff',
@@ -277,16 +292,23 @@ function createFulfillmentCommandService({
         eventType: 'ORDER_SHIPPED',
         payload: { orderId: String(order._id), shipmentId: String(shipment._id) },
       }, session);
-      return { shipment, event, order: updatedOrder, idempotentReplay: false };
-    });
+      await auditLogger?.log?.({
+        userId: staffId,
+        action: 'ORDER_HANDED_TO_CARRIER',
+        targetEntity: 'Order',
+        targetId: String(orderId),
+        description: `Recorded Carrier handoff ${handoff.trackingReference}`,
+      }, session);
+        return { shipment, event, order: updatedOrder, idempotentReplay: false };
+      });
+    } catch (error) {
+      if (isDuplicateKey(error)) {
+        const winner = await repository.findShipmentByCommandKey(handoff.commandKey);
+        if (winner) return { shipment: winner, idempotentReplay: true };
+      }
+      throw error;
+    }
 
-    await auditLogger?.log?.({
-      userId: staffId,
-      action: 'ORDER_HANDED_TO_CARRIER',
-      targetEntity: 'Order',
-      targetId: String(orderId),
-      description: `Recorded Carrier handoff ${handoff.trackingReference}`,
-    });
     return result;
   }
 
@@ -321,7 +343,8 @@ function createFulfillmentCommandService({
       throw new ApiError(400, 'COD amounts are established only by attributable collection evidence');
     }
 
-    return transactionManager.withTransaction(async (session) => {
+    try {
+      return await transactionManager.withTransaction(async (session) => {
       const shipment = await repository.findShipmentById(shipmentId, session);
       if (!shipment) throw new ApiError(404, 'Shipment not found');
       const order = await repository.findOrderById(shipment.orderId, session);
@@ -341,8 +364,14 @@ function createFulfillmentCommandService({
         );
       }
       if (['DISPUTED', 'CORRECTION'].includes(eventType)) {
-        if (!input.replacesEventId || !await repository.findEventById(input.replacesEventId, session)) {
+        const replaced = input.replacesEventId
+          ? await repository.findEventById(input.replacesEventId, session)
+          : null;
+        if (!replaced) {
           throw new ApiError(400, `${eventType} requires an existing replacesEventId`);
+        }
+        if (!sameId(replaced.shipmentId, shipment._id) || !sameId(replaced.orderId, order._id)) {
+          throw new ApiError(409, `${eventType} may replace evidence only from the same Shipment`);
         }
       }
       const event = await repository.createShipmentEvent({
@@ -522,6 +551,13 @@ function createFulfillmentCommandService({
           }, session);
         }
       }
+      await auditLogger?.log?.({
+        userId: actor.actorId,
+        action: 'SHIPMENT_EVENT_RECORDED',
+        targetEntity: 'Shipment',
+        targetId: String(shipment._id),
+        description: `Recorded attributable ${eventType} shipment event`,
+      }, session);
       return {
         event,
         shipment: updatedShipment,
@@ -529,7 +565,17 @@ function createFulfillmentCommandService({
         incident,
         idempotentReplay: false,
       };
-    });
+      });
+    } catch (error) {
+      if (isDuplicateKey(error)) {
+        const winner = await repository.findEventByKey(eventKey);
+        if (winner) {
+          const incident = await repository.findIncidentBySourceEvent(winner._id);
+          return { event: winner, incident, idempotentReplay: true };
+        }
+      }
+      throw error;
+    }
   }
 
   async function addDestinationVersion(actorContext, orderId, input = {}) {
@@ -549,7 +595,8 @@ function createFulfillmentCommandService({
       'customerConfirmationReference',
     );
 
-    return transactionManager.withTransaction(async (session) => {
+    try {
+      return await transactionManager.withTransaction(async (session) => {
       const order = await repository.findOrderById(orderId, session);
       if (!order) throw new ApiError(404, 'Order not found');
       if (actor.actorType === 'Customer' && !sameId(order.customerId, actor.actorId)) {
@@ -603,8 +650,24 @@ function createFulfillmentCommandService({
           reason: 'Carrier accepted destination version',
         }, session);
       }
+      await auditLogger?.log?.({
+        userId: actor.actorId,
+        action: 'SHIPMENT_DESTINATION_VERSION_RECORDED',
+        targetEntity: 'Order',
+        targetId: String(order._id),
+        description: shipment
+          ? 'Recorded Carrier-accepted destination version'
+          : 'Recorded Customer-confirmed destination version',
+      }, session);
       return { destination, idempotentReplay: false };
-    });
+      });
+    } catch (error) {
+      if (isDuplicateKey(error)) {
+        const winner = await repository.findDestinationByKey(versionKey);
+        if (winner) return { destination: winner, idempotentReplay: true };
+      }
+      throw error;
+    }
   }
 
   return {

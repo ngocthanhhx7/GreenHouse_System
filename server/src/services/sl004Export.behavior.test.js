@@ -68,7 +68,9 @@ function createHarness({
       },
     ],
     transactions: [],
+    audits: [],
   };
+  const auditControl = { failNext: false };
 
   function restore(snapshot) {
     for (const key of Object.keys(state)) {
@@ -190,12 +192,20 @@ function createHarness({
   const service = createInventoryService({
     repository,
     transactionManager,
-    auditLogger: { async log() {} },
+    auditLogger: {
+      async log(entry) {
+        if (auditControl.failNext) {
+          auditControl.failNext = false;
+          throw new Error('injected export audit write failure');
+        }
+        state.audits.push(structuredClone(entry));
+      },
+    },
     eventPublisher: null,
     lowStockLifecycle: { async evaluate() {} },
     assignmentCoordinator: { async coordinate() {} },
   });
-  return { service, state };
+  return { service, state, auditControl };
 }
 
 describe('SL-004 exact stock export behavior', () => {
@@ -306,5 +316,32 @@ describe('SL-004 exact stock export behavior', () => {
     });
     assert.equal(replay.idempotentReplay, true);
     assert.equal(state.transactions.length, 2);
+  });
+
+  it('P1 rolls back Completed export stock and movements when its in-transaction Audit write fails, and does not audit a replay twice', async () => {
+    const failed = createHarness();
+    failed.auditControl.failNext = true;
+    await assert.rejects(
+      failed.service.processStockExport('warehouse-1', 'export-1', {
+        idempotencyKey: 'export-audit-rollback',
+      }),
+      /injected export audit write failure/,
+    );
+    assert.equal(failed.state.request.status, 'Failed');
+    assert.equal(failed.state.cycle.status, 'AwaitingExport');
+    assert.deepEqual(
+      failed.state.inventories.map((entry) => [entry.sellableQuantity, entry.reservedQuantity]),
+      [[10, 2], [5, 1]],
+    );
+    assert.deepEqual(failed.state.reservations.map((entry) => entry.status), ['Reserved', 'Reserved']);
+    assert.equal(failed.state.transactions.length, 0);
+    assert.equal(failed.state.audits.length, 0);
+
+    const replay = createHarness();
+    const input = { idempotencyKey: 'export-audit-replay' };
+    await replay.service.processStockExport('warehouse-1', 'export-1', input);
+    const replayed = await replay.service.processStockExport('warehouse-1', 'export-1', input);
+    assert.equal(replayed.idempotentReplay, true);
+    assert.equal(replay.state.audits.length, 1);
   });
 });

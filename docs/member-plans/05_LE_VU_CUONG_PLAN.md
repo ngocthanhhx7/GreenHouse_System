@@ -371,7 +371,7 @@ primary SL-004 fulfillment implementation.
 - The SL-005 Inventory authority and four-dimension vocabulary remain intact.
 
 Seam evidence is included in focused server `72/72`, focused client `17/17`,
-full server `743/743`, full client `190/190`, and `npm run build` PASS.
+full server `747/747`, full client `190/190`, and `npm run build` PASS.
 Migration contract evidence is `6/6`; disposable replica-set double runs
 verified the legacy export's attached Initial cycle, zero business writes on
 run two, and preservation of a post-migration Resend request. No target

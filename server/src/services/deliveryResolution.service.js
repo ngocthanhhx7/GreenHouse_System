@@ -8,6 +8,10 @@ const {
   sameId,
 } = require('./fulfillmentValidation');
 
+function isDuplicateKey(error) {
+  return Number(error?.code) === 11000 || error?.codeName === 'DuplicateKey';
+}
+
 function validateReceiptItems(details, rawItems) {
   if (!Array.isArray(rawItems) || rawItems.length !== details.length) {
     throw new ApiError(400, 'Returned receipt must classify every order line exactly once');
@@ -57,7 +61,9 @@ function createDeliveryResolutionService({
     const receivedAt = requiredDate(input.receivedAt, 'receivedAt');
     const evidenceReference = requiredText(input.evidenceReference, 'evidenceReference');
 
-    const result = await transactionManager.withTransaction(async (session) => {
+    let result;
+    try {
+      result = await transactionManager.withTransaction(async (session) => {
       await assignmentCoordinator?.coordinate?.({
         userId: warehouseId,
         expectedRole: 'WarehouseManager',
@@ -155,15 +161,22 @@ function createDeliveryResolutionService({
           session,
         );
       }
+      await auditLogger?.log?.({
+        userId: warehouseId,
+        action: 'RETURNED_DELIVERY_RECEIVED',
+        targetEntity: 'Shipment',
+        targetId: String(shipmentId),
+        description: 'Recorded complete Warehouse returned-parcel classification',
+      }, session);
       return { receipt, idempotentReplay: false };
-    });
-    await auditLogger?.log?.({
-      userId: warehouseId,
-      action: 'RETURNED_DELIVERY_RECEIVED',
-      targetEntity: 'Shipment',
-      targetId: String(shipmentId),
-      description: 'Recorded complete Warehouse returned-parcel classification',
-    });
+      });
+    } catch (error) {
+      if (isDuplicateKey(error)) {
+        const winner = await repository.findReceiptByKey(receiptKey);
+        if (winner) return { receipt: winner, idempotentReplay: true };
+      }
+      throw error;
+    }
     return result;
   }
 
@@ -221,6 +234,13 @@ function createDeliveryResolutionService({
           choiceCommandKey: commandKey,
           status: choice === 'Wait' ? 'WaitingForStock' : 'TerminalRequested',
         }, session);
+        await auditLogger?.log?.({
+          userId: customerId,
+          action: 'DELIVERY_INCIDENT_CHOICE_RECORDED',
+          targetEntity: 'DeliveryIncident',
+          targetId: String(incident._id),
+          description: 'Customer selected terminal delivery resolution',
+        }, session);
         return { incident: updated, cycle: null, idempotentReplay: false };
       }
 
@@ -256,6 +276,13 @@ function createDeliveryResolutionService({
           waitCommandKey: commandKey,
           chosenBy: customerId,
           status: 'WaitingForStock',
+        }, session);
+        await auditLogger?.log?.({
+          userId: customerId,
+          action: 'DELIVERY_INCIDENT_CHOICE_RECORDED',
+          targetEntity: 'DeliveryIncident',
+          targetId: String(incident._id),
+          description: 'Customer selected to wait for exact resend stock',
         }, session);
         return { incident: updated, cycle: null, idempotentReplay: false };
       }
@@ -316,6 +343,13 @@ function createDeliveryResolutionService({
         choiceCommandKey: commandKey,
         resendCycleId: cycle._id,
         status: 'ResendCreated',
+      }, session);
+      await auditLogger?.log?.({
+        userId: customerId,
+        action: 'DELIVERY_INCIDENT_CHOICE_RECORDED',
+        targetEntity: 'DeliveryIncident',
+        targetId: String(incident._id),
+        description: 'Customer selected same-Order resend',
       }, session);
       return { incident: updated, cycle, idempotentReplay: false };
     });
@@ -456,6 +490,13 @@ function createDeliveryResolutionService({
           refundObligationKey: refund?.obligationKey || null,
         },
       }, session);
+      await auditLogger?.log?.({
+        userId: staffId,
+        action: 'DELIVERY_FAILURE_RESOLVED',
+        targetEntity: 'Order',
+        targetId: String(orderId),
+        description: 'Resolved irrecoverable or returned original delivery',
+      }, session);
       return {
         order: updatedOrder,
         incident: updatedIncident,
@@ -465,13 +506,6 @@ function createDeliveryResolutionService({
       };
     });
 
-    await auditLogger?.log?.({
-      userId: staffId,
-      action: 'DELIVERY_FAILURE_RESOLVED',
-      targetEntity: 'Order',
-      targetId: String(orderId),
-      description: 'Resolved irrecoverable or returned original delivery',
-    });
     return result;
   }
 

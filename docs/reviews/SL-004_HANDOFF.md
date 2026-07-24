@@ -48,7 +48,7 @@
 focused server SL-004/integration: 72/72
 focused client SL-004/Warehouse: 17/17
 migration contract: 6/6 (included in full server)
-full server: 743/743, 127 suites
+full server: 747/747, 127 suites
 full client: 190/190, 53 suites
 client production build: PASS via npm run build (152 modules)
 git diff --check: clean apart from configured CRLF conversion notices

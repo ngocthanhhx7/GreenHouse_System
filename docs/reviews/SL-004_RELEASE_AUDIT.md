@@ -30,6 +30,10 @@
 | Mongoose stripped immutable cycle fields during legacy backfill | Migration uses the native collection update inside the transaction; disposable raw-document verification proves `cycleId` and `requestKind` persist. |
 | Cross-slice best-seller seam could exclude successful ONLINE sales | SL-004 emits immutable CompletedSaleAt consumed by SL-006; no SL-006 source file changed. |
 | Legacy demo seed still wrote the retired `StockExportRequested` Order state | The pending-export demo Order now remains `Confirmed`; the separate export request continues to carry its `Pending` state. |
+| Protected fulfillment mutations committed before Audit could fail, and shipment events had no attributable Audit | Packing, handoff, shipment events, returned receipt, destination versions, incident choices, and terminal resolution now write privacy-safe AuditLog records in the owning transaction; an Audit failure rolls back every domain/outbox write. |
+| Exact stock export could commit Completed stock/movement state before its Audit write failed | `INVENTORY_EXPORT_COMPLETED` is now in the same success transaction; an Audit failure rolls back exact stock/movements/Completed and leaves the request retryably Failed. |
+| Same-key commands could lose an insert race with `E11000` instead of receiving their existing outcome | Packing, handoff, shipment event, returned receipt, and destination version commands refetch the exact winner and return an idempotent replay. |
+| Correction/dispute could reference an event from another Shipment | Replacement evidence must now belong to the same Shipment and Order. |
 
 ## Actor and trust-boundary audit
 
@@ -44,11 +48,11 @@
 
 | Gate | Result |
 |---|---|
-| Focused SL-004 server/integration | `72/72` |
+| Focused SL-004 server/integration | `73/73`, including Audit rollback, duplicate-key replay, and same-Shipment correction/dispute guards |
 | Focused SL-004 client/Warehouse | `17/17` |
 | Migration contract | `6/6` |
 | Independent P1 focused group | RED `22/28` to GREEN `28/28` |
-| Full server | `743/743`, 127 suites |
+| Full server | `747/747`, 127 suites |
 | Full client | `190/190`, 53 suites |
 | Production build | PASS via `npm run build` (`152` modules) |
 | Diff whitespace | Clean; only configured LF-to-CRLF conversion notices |

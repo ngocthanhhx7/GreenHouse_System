@@ -256,7 +256,7 @@ editable-refund descriptions earlier in this plan.
   CompletedSaleAt for the ranking seam.
 
 Local closure evidence: focused server `72/72`, focused client `17/17`,
-migration contract `6/6`, full server `743/743`, full client `190/190`, and
+migration contract `6/6`, full server `747/747`, full client `190/190`, and
 `npm run build` PASS. The immutable-field migration fix also passed disposable
 replica-set double runs with raw cycle attachment verified, including a
 post-migration Resend request that remained unchanged on the repeat run.

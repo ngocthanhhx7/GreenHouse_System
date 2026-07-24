@@ -94,7 +94,29 @@ function createHarness({ paymentMethod = 'ONLINE', paymentStatus = 'Paid' } = {}
       createdAt: new Date('2026-07-01T00:00:00.000Z'),
     }],
     outbox: [],
+    audits: [],
   };
+  const auditControl = { failNext: false };
+  const raceControl = {
+    packing: false,
+    shipment: false,
+    event: false,
+    receipt: false,
+    destination: false,
+  };
+  const raceWinners = {
+    packing: null,
+    shipment: null,
+    event: null,
+    receipt: null,
+    destination: null,
+  };
+
+  function duplicateKeyError() {
+    const error = new Error('E11000 duplicate key');
+    error.code = 11000;
+    return error;
+  }
 
   function makeId(prefix, entries) {
     return `${prefix}-${entries.length + 1}`;
@@ -124,12 +146,18 @@ function createHarness({ paymentMethod = 'ONLINE', paymentStatus = 'Paid' } = {}
       return state.exports.find((entry) => entry.cycleId === cycleId && entry.status === 'Completed') || null;
     },
     async findPackingByCommandKey(commandKey) {
-      return state.packingRecords.find((entry) => entry.commandKey === commandKey) || null;
+      return state.packingRecords.find((entry) => entry.commandKey === commandKey)
+        || (raceWinners.packing?.commandKey === commandKey ? raceWinners.packing : null);
     },
     async findCompletedPackingByCycle(cycleId) {
       return state.packingRecords.find((entry) => entry.cycleId === cycleId && entry.status === 'Completed') || null;
     },
     async createPackingRecord(data) {
+      if (raceControl.packing) {
+        raceControl.packing = false;
+        raceWinners.packing = { _id: 'race-packing', ...data };
+        throw duplicateKeyError();
+      }
       const record = { _id: makeId('packing', state.packingRecords), ...data };
       state.packingRecords.push(record);
       return record;
@@ -140,18 +168,25 @@ function createHarness({ paymentMethod = 'ONLINE', paymentStatus = 'Paid' } = {}
       return state.order;
     },
     async findDestinationByKey(versionKey) {
-      return state.destinations.find((entry) => entry.versionKey === versionKey) || null;
+      return state.destinations.find((entry) => entry.versionKey === versionKey)
+        || (raceWinners.destination?.versionKey === versionKey ? raceWinners.destination : null);
     },
     async listDestinationVersions(cycleId) {
       return state.destinations.filter((entry) => entry.cycleId === cycleId);
     },
     async createDestinationVersion(data) {
+      if (raceControl.destination) {
+        raceControl.destination = false;
+        raceWinners.destination = { _id: 'race-destination', ...data };
+        throw duplicateKeyError();
+      }
       const version = { _id: makeId('destination', state.destinations), ...data };
       state.destinations.push(version);
       return version;
     },
     async findShipmentByCommandKey(commandKey) {
-      return state.shipments.find((entry) => entry.commandKey === commandKey) || null;
+      return state.shipments.find((entry) => entry.commandKey === commandKey)
+        || (raceWinners.shipment?.commandKey === commandKey ? raceWinners.shipment : null);
     },
     async findShipmentById(id) {
       return state.shipments.find((entry) => entry._id === id) || null;
@@ -166,6 +201,11 @@ function createHarness({ paymentMethod = 'ONLINE', paymentStatus = 'Paid' } = {}
       );
     },
     async createShipment(data) {
+      if (raceControl.shipment) {
+        raceControl.shipment = false;
+        raceWinners.shipment = { _id: 'race-shipment', status: 'HandedOff', ...data };
+        throw duplicateKeyError();
+      }
       const shipment = { _id: makeId('shipment', state.shipments), status: 'HandedOff', ...data };
       state.shipments.push(shipment);
       return shipment;
@@ -177,7 +217,8 @@ function createHarness({ paymentMethod = 'ONLINE', paymentStatus = 'Paid' } = {}
       return shipment;
     },
     async findEventByKey(eventKey) {
-      return state.events.find((entry) => entry.eventKey === eventKey) || null;
+      return state.events.find((entry) => entry.eventKey === eventKey)
+        || (raceWinners.event?.eventKey === eventKey ? raceWinners.event : null);
     },
     async findEventById(id) {
       return state.events.find((entry) => entry._id === id) || null;
@@ -186,6 +227,11 @@ function createHarness({ paymentMethod = 'ONLINE', paymentStatus = 'Paid' } = {}
       return state.events.filter((entry) => entry.shipmentId === shipmentId);
     },
     async createShipmentEvent(data) {
+      if (raceControl.event) {
+        raceControl.event = false;
+        raceWinners.event = { _id: 'race-event', ...data };
+        throw duplicateKeyError();
+      }
       const event = { _id: makeId('event', state.events), ...data };
       state.events.push(event);
       return event;
@@ -253,12 +299,18 @@ function createHarness({ paymentMethod = 'ONLINE', paymentStatus = 'Paid' } = {}
       return incident;
     },
     async findReceiptByKey(receiptKey) {
-      return state.receipts.find((entry) => entry.receiptKey === receiptKey) || null;
+      return state.receipts.find((entry) => entry.receiptKey === receiptKey)
+        || (raceWinners.receipt?.receiptKey === receiptKey ? raceWinners.receipt : null);
     },
     async findReceiptByShipment(shipmentId) {
       return state.receipts.find((entry) => entry.shipmentId === shipmentId) || null;
     },
     async createReturnedReceipt(data) {
+      if (raceControl.receipt) {
+        raceControl.receipt = false;
+        raceWinners.receipt = { _id: 'race-receipt', ...data };
+        throw duplicateKeyError();
+      }
       const receipt = { _id: makeId('receipt', state.receipts), ...data };
       state.receipts.push(receipt);
       return receipt;
@@ -344,7 +396,15 @@ function createHarness({ paymentMethod = 'ONLINE', paymentStatus = 'Paid' } = {}
   const service = createFulfillmentService({
     repository,
     transactionManager,
-    auditLogger: { async log() {} },
+    auditLogger: {
+      async log(entry) {
+        if (auditControl.failNext) {
+          auditControl.failNext = false;
+          throw new Error('injected audit write failure');
+        }
+        state.audits.push(structuredClone(entry));
+      },
+    },
     assignmentCoordinator: { async coordinate() {} },
     clock: () => new Date('2026-07-24T08:00:00.000Z'),
   });
@@ -371,7 +431,7 @@ function createHarness({ paymentMethod = 'ONLINE', paymentStatus = 'Paid' } = {}
     });
   }
 
-  return { service, state, packExact, handoff };
+  return { service, state, packExact, handoff, auditControl, raceControl, raceWinners };
 }
 
 describe('SL-004 packing, shipment and delivery behavior', () => {
@@ -1146,5 +1206,281 @@ describe('SL-004 packing, shipment and delivery behavior', () => {
       /requires a Shipped order/i,
     );
     assert.equal(stale.state.refunds.length, 0);
+  });
+
+  it('P1 rolls back each protected fulfillment command when its attributable Audit write fails and never audits a replay twice', async () => {
+    const packing = createHarness();
+    packing.auditControl.failNext = true;
+    await assert.rejects(
+      packing.packExact('packing-audit-rollback'),
+      /injected audit write failure/,
+    );
+    assert.equal(packing.state.packingRecords.length, 0);
+    assert.equal(packing.state.order.orderStatus, 'Confirmed');
+    assert.equal(packing.state.audits.length, 0);
+
+    const handoff = createHarness();
+    await handoff.packExact('handoff-audit-prerequisite');
+    const handoffAuditCount = handoff.state.audits.length;
+    handoff.auditControl.failNext = true;
+    await assert.rejects(
+      handoff.service.recordHandoff('staff-1', 'order-1', {
+        idempotencyKey: 'handoff-audit-rollback',
+        carrierName: 'External Green Carrier',
+        trackingReference: 'TRACK-AUDIT-HANDOFF',
+        handedOffAt: '2026-07-24T09:00:00.000Z',
+        evidenceReference: 'handoff-audit-proof',
+      }),
+      /injected audit write failure/,
+    );
+    assert.equal(handoff.state.shipments.length, 0);
+    assert.equal(handoff.state.events.length, 0);
+    assert.equal(handoff.state.outbox.length, 0);
+    assert.equal(handoff.state.order.orderStatus, 'Packed');
+    assert.equal(handoff.state.audits.length, handoffAuditCount);
+
+    const receipt = createHarness();
+    const receiptShipment = await receipt.handoff('receipt-audit-handoff');
+    await receipt.service.recordShipmentEvent(
+      { actorType: 'Staff', actorId: 'staff-1' },
+      receiptShipment.shipment._id,
+      {
+        eventKey: 'receipt-audit-returned-event',
+        eventType: 'RETURNED_TO_SHOP',
+        source: 'STAFF_EVIDENCE',
+        occurredAt: '2026-07-25T10:00:00.000Z',
+        evidenceReference: 'receipt-audit-returned-proof',
+      },
+    );
+    const receiptInventory = structuredClone(receipt.state.inventories);
+    const receiptAuditCount = receipt.state.audits.length;
+    receipt.auditControl.failNext = true;
+    await assert.rejects(
+      receipt.service.recordReturnedReceipt('warehouse-1', receiptShipment.shipment._id, {
+        idempotencyKey: 'receipt-audit-rollback',
+        receivedAt: '2026-07-25T12:00:00.000Z',
+        evidenceReference: 'receipt-audit-proof',
+        items: [
+          { orderDetailId: 'detail-1', receivedQuantity: 2, sellableQuantity: 1, damagedQuantity: 1 },
+          { orderDetailId: 'detail-2', receivedQuantity: 1, sellableQuantity: 1, damagedQuantity: 0 },
+        ],
+      }),
+      /injected audit write failure/,
+    );
+    assert.equal(receipt.state.receipts.length, 0);
+    assert.equal(receipt.state.inventoryTransactions.length, 0);
+    assert.deepEqual(receipt.state.inventories, receiptInventory);
+    assert.equal(receipt.state.audits.length, receiptAuditCount);
+
+    const shipmentEvent = createHarness();
+    const eventShipment = await shipmentEvent.handoff('event-audit-handoff');
+    const eventAuditCount = shipmentEvent.state.audits.length;
+    shipmentEvent.auditControl.failNext = true;
+    await assert.rejects(
+      shipmentEvent.service.recordShipmentEvent(
+        { actorType: 'Staff', actorId: 'staff-1' },
+        eventShipment.shipment._id,
+        {
+          eventKey: 'event-audit-rollback',
+          eventType: 'ATTEMPT_FAILED',
+          source: 'STAFF_EVIDENCE',
+          occurredAt: '2026-07-25T10:00:00.000Z',
+          evidenceReference: 'event-audit-proof',
+        },
+      ),
+      /injected audit write failure/,
+    );
+    assert.equal(shipmentEvent.state.events.length, 1);
+    assert.equal(shipmentEvent.state.shipments[0].status, 'HandedOff');
+    assert.equal(shipmentEvent.state.outbox.length, 1);
+    assert.equal(shipmentEvent.state.audits.length, eventAuditCount);
+
+    const choice = createHarness();
+    const choiceShipment = await choice.handoff('choice-audit-handoff');
+    const lost = await choice.service.recordShipmentEvent(
+      { actorType: 'Staff', actorId: 'staff-1' },
+      choiceShipment.shipment._id,
+      {
+        eventKey: 'choice-audit-lost',
+        eventType: 'LOST',
+        source: 'STAFF_EVIDENCE',
+        occurredAt: '2026-07-25T10:00:00.000Z',
+        evidenceReference: 'choice-audit-proof',
+        irrecoverable: true,
+      },
+    );
+    const choiceAuditCount = choice.state.audits.length;
+    choice.auditControl.failNext = true;
+    await assert.rejects(
+      choice.service.chooseIncidentResolution('customer-1', 'order-1', lost.incident._id, {
+        idempotencyKey: 'choice-audit-rollback',
+        choice: 'TerminalRefund',
+      }),
+      /injected audit write failure/,
+    );
+    assert.equal(choice.state.incidents[0].status, 'AwaitingCustomerChoice');
+    assert.equal(choice.state.incidents[0].customerChoice || '', '');
+    assert.equal(choice.state.audits.length, choiceAuditCount);
+
+    const terminal = createHarness();
+    const terminalShipment = await terminal.handoff('terminal-audit-handoff');
+    const terminalIncident = await terminal.service.recordShipmentEvent(
+      { actorType: 'Staff', actorId: 'staff-1' },
+      terminalShipment.shipment._id,
+      {
+        eventKey: 'terminal-audit-lost',
+        eventType: 'LOST',
+        source: 'STAFF_EVIDENCE',
+        occurredAt: '2026-07-25T10:00:00.000Z',
+        evidenceReference: 'terminal-audit-proof',
+        irrecoverable: true,
+      },
+    );
+    await terminal.service.chooseIncidentResolution('customer-1', 'order-1', terminalIncident.incident._id, {
+      idempotencyKey: 'terminal-audit-choice',
+      choice: 'TerminalRefund',
+    });
+    const terminalAuditCount = terminal.state.audits.length;
+    terminal.auditControl.failNext = true;
+    await assert.rejects(
+      terminal.service.resolveDeliveryFailure('staff-1', 'order-1', {
+        idempotencyKey: 'terminal-audit-rollback',
+        incidentId: terminalIncident.incident._id,
+      }),
+      /injected audit write failure/,
+    );
+    assert.equal(terminal.state.order.orderStatus, 'Shipped');
+    assert.equal(terminal.state.refunds.length, 0);
+    assert.equal(terminal.state.refundRequests.length, 0);
+    assert.equal(terminal.state.outbox.length, 1);
+    assert.equal(terminal.state.audits.length, terminalAuditCount);
+
+    const replay = createHarness();
+    const first = await replay.packExact('packing-audit-replay');
+    const replayed = await replay.packExact('packing-audit-replay');
+    assert.equal(replayed.idempotentReplay, true);
+    assert.equal(replayed.packingRecord._id, first.packingRecord._id);
+    assert.equal(replay.state.audits.length, 1);
+  });
+
+  it('P1 returns the winning exact result when a same-key command loses a duplicate-key race', async () => {
+    const packing = createHarness();
+    packing.raceControl.packing = true;
+    const packed = await packing.packExact('packing-duplicate-race');
+    assert.equal(packed.idempotentReplay, true);
+    assert.equal(packed.packingRecord._id, 'race-packing');
+    assert.equal(packing.state.packingRecords.length, 0);
+
+    const handoff = createHarness();
+    await handoff.packExact('handoff-race-prerequisite');
+    handoff.raceControl.shipment = true;
+    const handedOff = await handoff.service.recordHandoff('staff-1', 'order-1', {
+      idempotencyKey: 'handoff-duplicate-race',
+      carrierName: 'External Green Carrier',
+      trackingReference: 'TRACK-DUP-HANDOFF',
+      handedOffAt: '2026-07-24T09:00:00.000Z',
+      evidenceReference: 'handoff-duplicate-proof',
+    });
+    assert.equal(handedOff.idempotentReplay, true);
+    assert.equal(handedOff.shipment._id, 'race-shipment');
+    assert.equal(handoff.state.shipments.length, 0);
+
+    const shipmentEvent = createHarness();
+    const eventShipment = await shipmentEvent.handoff('event-race-handoff');
+    shipmentEvent.raceControl.event = true;
+    const event = await shipmentEvent.service.recordShipmentEvent(
+      { actorType: 'Staff', actorId: 'staff-1' },
+      eventShipment.shipment._id,
+      {
+        eventKey: 'event-duplicate-race',
+        eventType: 'ATTEMPT_FAILED',
+        source: 'STAFF_EVIDENCE',
+        occurredAt: '2026-07-25T10:00:00.000Z',
+        evidenceReference: 'event-duplicate-proof',
+      },
+    );
+    assert.equal(event.idempotentReplay, true);
+    assert.equal(event.event._id, 'race-event');
+    assert.equal(shipmentEvent.state.events.length, 1);
+
+    const receipt = createHarness();
+    const receiptShipment = await receipt.handoff('receipt-race-handoff');
+    await receipt.service.recordShipmentEvent(
+      { actorType: 'Staff', actorId: 'staff-1' },
+      receiptShipment.shipment._id,
+      {
+        eventKey: 'receipt-race-returned',
+        eventType: 'RETURNED_TO_SHOP',
+        source: 'STAFF_EVIDENCE',
+        occurredAt: '2026-07-25T10:00:00.000Z',
+        evidenceReference: 'receipt-race-returned-proof',
+      },
+    );
+    receipt.raceControl.receipt = true;
+    const received = await receipt.service.recordReturnedReceipt('warehouse-1', receiptShipment.shipment._id, {
+      idempotencyKey: 'receipt-duplicate-race',
+      receivedAt: '2026-07-25T12:00:00.000Z',
+      evidenceReference: 'receipt-duplicate-proof',
+      items: [
+        { orderDetailId: 'detail-1', receivedQuantity: 2, sellableQuantity: 1, damagedQuantity: 1 },
+        { orderDetailId: 'detail-2', receivedQuantity: 1, sellableQuantity: 1, damagedQuantity: 0 },
+      ],
+    });
+    assert.equal(received.idempotentReplay, true);
+    assert.equal(received.receipt._id, 'race-receipt');
+    assert.equal(receipt.state.receipts.length, 0);
+    assert.equal(receipt.state.inventoryTransactions.length, 0);
+
+    const destination = createHarness();
+    destination.raceControl.destination = true;
+    const version = await destination.service.addDestinationVersion(
+      { actorType: 'Staff', actorId: 'staff-1' },
+      'order-1',
+      {
+        idempotencyKey: 'destination-duplicate-race',
+        receiverName: 'Green Customer',
+        receiverPhone: '0901234567',
+        shippingAddress: '2 Green Street',
+        customerConfirmationReference: 'destination-duplicate-proof',
+      },
+    );
+    assert.equal(version.idempotentReplay, true);
+    assert.equal(version.destination._id, 'race-destination');
+    assert.equal(destination.state.destinations.length, 0);
+  });
+
+  it('P2 rejects a correction or dispute that replaces evidence from another Shipment', async () => {
+    const { service, state, handoff } = createHarness();
+    const { shipment } = await handoff('replaces-event-handoff');
+    state.events.push({
+      _id: 'foreign-event',
+      eventKey: 'foreign-event-key',
+      orderId: 'other-order',
+      cycleId: 'other-cycle',
+      shipmentId: 'other-shipment',
+      eventType: 'DELIVERED',
+      source: 'CARRIER',
+      occurredAt: new Date('2026-07-20T00:00:00.000Z'),
+      evidenceReference: 'foreign-proof',
+    });
+
+    for (const eventType of ['CORRECTION', 'DISPUTED']) {
+      await assert.rejects(
+        service.recordShipmentEvent(
+          { actorType: 'Staff', actorId: 'staff-1' },
+          shipment._id,
+          {
+            eventKey: `foreign-replaces-${eventType.toLowerCase()}`,
+            eventType,
+            source: 'STAFF_EVIDENCE',
+            occurredAt: '2026-07-25T10:00:00.000Z',
+            evidenceReference: 'local-correction-proof',
+            replacesEventId: 'foreign-event',
+          },
+        ),
+        /same Shipment/i,
+      );
+    }
+    assert.equal(state.events.filter((event) => event.shipmentId === shipment._id).length, 1);
   });
 });
