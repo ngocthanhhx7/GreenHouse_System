@@ -67,4 +67,19 @@ describe('client review service', () => {
       moderationStatus: 'Allowed',
     });
   });
+
+  it('scopes own reviews by product while preserving paging', async () => {
+    const service = createReviewService({
+      baseUrl: 'http://api.test/api',
+      fetcher: async (url) => {
+        assert.equal(
+          url,
+          'http://api.test/api/customer/reviews?page=2&pageSize=20&productId=product%2F1',
+        );
+        return { ok: true, json: async () => ({ success: true, data: { items: [] } }) };
+      },
+    });
+
+    await service.listOwn({ page: 2, pageSize: 20, productId: 'product/1' });
+  });
 });

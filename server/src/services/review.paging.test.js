@@ -68,4 +68,28 @@ describe('Review bounded persistence reads', () => {
       },
     ]);
   });
+
+  it('passes a validated product filter to Customer own Review paging', async () => {
+    const calls = [];
+    const repository = {
+      async queryReviews(filter, options) {
+        calls.push({ filter, options });
+        return { items: [], total: 0 };
+      },
+      async summarizeReviewHistories() {
+        return {};
+      },
+    };
+    const service = createReviewService({ repository });
+
+    await service.listOwn(
+      { id: 'customer-1', role: 'Customer', status: 'Active' },
+      { page: 2, pageSize: 20, productId: 'product-1' },
+    );
+
+    assert.deepEqual(calls, [{
+      filter: { customerId: 'customer-1', productId: 'product-1' },
+      options: { skip: 20, limit: 20 },
+    }]);
+  });
 });

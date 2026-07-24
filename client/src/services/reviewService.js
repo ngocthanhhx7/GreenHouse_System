@@ -63,8 +63,8 @@ export function createReviewService({ baseUrl = DEFAULT_BASE_URL, fetcher } = {}
       return request(`/products/${encodedProductId}/reviews${query ? `?${query}` : ''}`);
     },
 
-    async listOwn({ page, pageSize } = {}) {
-      const query = buildQuery({ page, pageSize });
+    async listOwn({ page, pageSize, productId } = {}) {
+      const query = buildQuery({ page, pageSize, productId });
       return request(`/customer/reviews${query ? `?${query}` : ''}`);
     },
 

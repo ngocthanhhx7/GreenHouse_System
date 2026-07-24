@@ -566,10 +566,18 @@ function createReviewService(options = {}) {
   async function listOwn(actor, filters = {}) {
     requireCustomer(actor);
     const paging = parsePaging(filters);
+    if (
+      filters.productId !== undefined
+      && (typeof filters.productId !== 'string' || !filters.productId.trim())
+    ) {
+      throw reviewError(400, 'REVIEW_FILTER_INVALID', 'Review filter is invalid');
+    }
+    const reviewFilter = { customerId: actorId(actor) };
+    if (filters.productId !== undefined) reviewFilter.productId = filters.productId;
     let query;
     try {
       query = await repository.queryReviews(
-        { customerId: actorId(actor) },
+        reviewFilter,
         {
           skip: (paging.page - 1) * paging.pageSize,
           limit: paging.pageSize,

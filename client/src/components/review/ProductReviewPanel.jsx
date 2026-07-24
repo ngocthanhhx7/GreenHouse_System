@@ -38,7 +38,7 @@ export default function ProductReviewPanel({ productId }) {
     if (user?.role !== 'Customer') return undefined;
     Promise.all([
       reviewService.listEligibility(productId),
-      reviewService.listOwn({ page: 1, pageSize: 20 }),
+      reviewService.listOwn({ page: 1, pageSize: 20, productId }),
     ]).then(([eligibility, own]) => {
       if (!current) return;
       const items = eligibility?.items || eligibility?.eligibleOrderDetails || [];
@@ -77,7 +77,7 @@ export default function ProductReviewPanel({ productId }) {
         expectedVersion: 0,
       }, { idempotencyKey: makeKey('review-create') });
       setReviewForm({ orderDetailId: '', rating: 5, content: '' });
-      const own = await reviewService.listOwn({ page: 1, pageSize: 20 });
+      const own = await reviewService.listOwn({ page: 1, pageSize: 20, productId });
       setOwnReviews(own?.items || []);
     } catch (err) {
       setError(errorText(err));
@@ -89,8 +89,7 @@ export default function ProductReviewPanel({ productId }) {
 
   async function submitUpdate(event, review) {
     event.preventDefault();
-    review = review || ownReviews.find((item) => item.id === event.currentTarget?.dataset?.reviewId) || ownReviews[0];
-    if (!review) return;
+    if (!review?.id) return;
     const action = `updateReview:${review.id}`;
     if (!begin(action)) return;
     const form = editForms[review.id] || { rating: review.rating, content: review.content || '' };
@@ -112,8 +111,7 @@ export default function ProductReviewPanel({ productId }) {
   }
 
   async function withdrawReview(review) {
-    review = review?.id ? review : ownReviews.find((item) => item.id === review?.currentTarget?.dataset?.reviewId) || ownReviews[0];
-    if (!review) return;
+    if (!review?.id) return;
     const action = 'setPublication:Withdrawn';
     if (!begin(action)) return;
     setError('');
@@ -131,8 +129,7 @@ export default function ProductReviewPanel({ productId }) {
   }
 
   async function republishReview(review) {
-    review = review?.id ? review : ownReviews.find((item) => item.id === review?.currentTarget?.dataset?.reviewId) || ownReviews[0];
-    if (!review) return;
+    if (!review?.id) return;
     const action = 'setPublication:Published';
     if (!begin(action)) return;
     setError('');
@@ -222,8 +219,6 @@ export default function ProductReviewPanel({ productId }) {
             const edit = editForms[review.id] || { rating: review.rating, content: review.content || '' };
             return (
               <article className="border-bottom py-3" key={review.id}>
-                {review.publicationStatus === 'Published' && <button type="button" className="visually-hidden" onClick={withdrawReview}>withdraw</button>}
-                {review.publicationStatus === 'Withdrawn' && <button type="button" className="visually-hidden" onClick={republishReview}>republish</button>}
                 <div className="d-flex justify-content-between">
                   <strong>{review.rating}/5</strong>
                   <span className="small">Phiên bản {review.version ?? 0}</span>
@@ -235,7 +230,7 @@ export default function ProductReviewPanel({ productId }) {
                 <p className="small text-secondary">
                   Lịch sử: {review.historySummary?.contentEntries ?? 0} nội dung, {review.historySummary?.publicationEntries ?? 0} publication, {review.historySummary?.moderationEntries ?? 0} moderation
                 </p>
-                <form data-review-id={review.id} onSubmit={submitUpdate}>
+                <form data-review-id={review.id} onSubmit={(event) => submitUpdate(event, review)}>
                   <label className="visually-hidden" htmlFor={`edit-rating-${review.id}`}>Điểm đánh giá</label>
                   <select
                     id={`edit-rating-${review.id}`}
@@ -251,15 +246,15 @@ export default function ProductReviewPanel({ productId }) {
                     value={edit.content}
                     onChange={(event) => setEditForms((value) => ({ ...value, [review.id]: { ...edit, content: event.target.value.slice(0, 1000) } }))}
                   />
-                  <button type="submit" className="btn btn-outline-success btn-sm" data-sl008-action="updateReview" onClick={submitUpdate} disabled={Boolean(pending[`updateReview:${review.id}`])}>Cập nhật</button>
+                  <button type="submit" className="btn btn-outline-success btn-sm" data-sl008-action="updateReview" onClick={(event) => submitUpdate(event, review)} disabled={Boolean(pending[`updateReview:${review.id}`])}>Cập nhật</button>
                 </form>
                 <div className="d-flex gap-2 mt-2">
                   {review.publicationStatus === 'Published' ? (
-                    <button type="button" className="btn btn-outline-secondary btn-sm" data-review-id={review.id} data-sl008-action="setPublication:Withdrawn" onClick={withdrawReview} disabled={Boolean(pending['setPublication:Withdrawn'])}>
+                    <button type="button" className="btn btn-outline-secondary btn-sm" data-review-id={review.id} data-sl008-action="setPublication:Withdrawn" onClick={() => withdrawReview(review)} disabled={Boolean(pending['setPublication:Withdrawn'])}>
                       Rút publication
                     </button>
                   ) : (
-                    <button type="button" className="btn btn-outline-secondary btn-sm" data-review-id={review.id} data-sl008-action="setPublication:Published" onClick={republishReview} disabled={Boolean(pending['setPublication:Published'])}>
+                    <button type="button" className="btn btn-outline-secondary btn-sm" data-review-id={review.id} data-sl008-action="setPublication:Published" onClick={() => republishReview(review)} disabled={Boolean(pending['setPublication:Published'])}>
                       Đăng lại publication
                     </button>
                   )}
