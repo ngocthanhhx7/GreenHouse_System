@@ -207,7 +207,7 @@ Exact commands executed after this rework:
 ```text
 server> node --test src/acceptance/sl008.acceptance.test.js
 tests 36; pass 0; fail 36
-(25 AT tests plus nine explicit AT-154 boundary subtests)
+(27 top-level tests plus nine explicit AT-154 boundary subtests)
 
 client> node --test src/acceptance/sl008UiContract.test.js
 tests 39; pass 0; fail 39

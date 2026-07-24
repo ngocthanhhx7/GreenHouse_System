@@ -17,6 +17,57 @@ function clientSource(relativePath) {
     .replace(/^\s*\/\/.*$/gm, '');
 }
 
+function customerReviewRouteComponent(appSource, readSource = clientSource) {
+  const route = /<Route\b(?=[\s\S]{0,240}\bpath=["']reviews["'])[\s\S]{0,1000}?<RoleRoute\b[^>]*allowedRoles=\{\[['"]Customer['"]\]\}[^>]*>[\s\S]{0,300}?<(\w+)\s*\/>[\s\S]{0,300}?<\/RoleRoute>[\s\S]{0,120}?\/>/.exec(
+    appSource,
+  );
+  assert.ok(
+    route,
+    'expected /reviews to render one Customer-protected component',
+  );
+  const componentName = route[1];
+  const imported = new RegExp(
+    `import\\s+${componentName}\\s+from\\s+['"]([^'"]+)['"]`,
+  ).exec(appSource);
+  assert.ok(imported, `${componentName} must be a real default import in App.jsx`);
+  const componentPath = imported[1].replace(/^\.\//, '');
+  const componentSource = readSource(componentPath);
+  assert.ok(componentSource, `${componentName} route component source must exist`);
+  return { componentName, componentPath, componentSource };
+}
+
+function assertCustomerReviewManagementRoute(appSource, readSource = clientSource) {
+  const route = customerReviewRouteComponent(appSource, readSource);
+  const loadOwn = boundHandler(route.componentSource, 'reviewService', 'listOwn');
+  for (const field of ['page', 'pageSize']) {
+    assert.match(loadOwn.body, new RegExp(`\\b${field}\\b`));
+  }
+
+  const ownReview = renderedMap(
+    route.componentSource,
+    ['ownReviews', 'customerReviews'],
+  );
+  for (const field of [
+    'rating',
+    'content',
+    'publicationStatus',
+    'moderationStatus',
+    'version',
+    'historySummary',
+  ]) {
+    assert.match(ownReview, new RegExp(`review\\.${field}\\b`));
+  }
+  assert.doesNotMatch(
+    ownReview,
+    /customerId|orderId|orderDetailId|email|phone|address/,
+  );
+  assert.match(
+    route.componentSource,
+    /(?:ownReviewPage|reviewPage)[\s\S]{0,1400}(?:totalPages|pageSize)[\s\S]{0,1400}(?:onClick|onChange)/,
+  );
+  return route;
+}
+
 function assertImportedAndMounted(parent, component, importPath, requiredProp) {
   assert.match(
     parent,
@@ -376,37 +427,26 @@ describe('SL-008 Review UI integration contract', () => {
   });
 
   it('AT-173 wires Customer own Review management to its protected safe paged read', async () => {
-    const panel = clientSource('components/review/ProductReviewPanel.jsx');
-    const loadOwn = boundHandler(panel, 'reviewService', 'listOwn');
-    assert.match(
-      panel,
-      new RegExp(
-        `role\\s*===?\\s*['"]Customer['"][\\s\\S]{0,1600}${loadOwn.name}\\s*\\(`,
+    const dummyApp = `
+      import DummyReviewsPage from './pages/customer/DummyReviewsPage.jsx';
+      <Route
+        path="reviews"
+        element={
+          <RoleRoute allowedRoles={['Customer']}>
+            <DummyReviewsPage />
+          </RoleRoute>
+        }
+      />
+    `;
+    assert.throws(
+      () => assertCustomerReviewManagementRoute(
+        dummyApp,
+        () => 'export default function DummyReviewsPage() { return <div>dummy</div>; }',
       ),
+      /expected one bounded async handler invoking reviewService\.listOwn\(\)/,
     );
-    for (const field of ['page', 'pageSize']) {
-      assert.match(loadOwn.body, new RegExp(`\\b${field}\\b`));
-    }
-
-    const ownReview = renderedMap(panel, ['ownReviews', 'customerReviews']);
-    for (const field of [
-      'rating',
-      'content',
-      'publicationStatus',
-      'moderationStatus',
-      'version',
-      'historySummary',
-    ]) {
-      assert.match(ownReview, new RegExp(`review\\.${field}\\b`));
-    }
-    assert.doesNotMatch(
-      ownReview,
-      /customerId|orderId|orderDetailId|email|phone|address/,
-    );
-    assert.match(
-      panel,
-      /(?:ownReviewPage|reviewPage)[\s\S]{0,1400}(?:totalPages|pageSize)[\s\S]{0,1400}(?:onClick|onChange)/,
-    );
+    const app = clientSource('App.jsx');
+    assertCustomerReviewManagementRoute(app);
 
     const { service, requests } = createRequestCapture(createReviewService);
     assert.equal(typeof service.listOwn, 'function');
@@ -1015,10 +1055,7 @@ describe('SL-008 direct-navigation RBAC and privacy contract', () => {
       app,
       /path="support"[\s\S]{0,400}allowedRoles=\{\[['"]Customer['"]\]\}/,
     );
-    assert.match(
-      app,
-      /path="(?:customer\/)?reviews"[\s\S]{0,400}allowedRoles=\{\[['"]Customer['"]\]\}/,
-    );
+    customerReviewRouteComponent(app);
     assert.match(
       app,
       /path="staff\/support-requests"[\s\S]{0,400}allowedRoles=\{\[['"]Staff['"]\]\}/,

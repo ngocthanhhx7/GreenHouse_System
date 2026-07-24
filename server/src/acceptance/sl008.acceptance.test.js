@@ -1,6 +1,5 @@
 const assert = require('node:assert/strict');
-const { readFileSync } = require('node:fs');
-const path = require('node:path');
+const http = require('node:http');
 const { describe, it } = require('node:test');
 
 const { createReviewService } = require('../services/review.service');
@@ -17,10 +16,89 @@ const actors = {
   warehouse: { id: 'warehouse-1', role: 'WarehouseManager' },
 };
 
-function serverSource(relativePath) {
-  return readFileSync(path.join(__dirname, '..', relativePath), 'utf8')
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/^\s*\/\/.*$/gm, '');
+function requestJson(server, { role, path }) {
+  return new Promise((resolve, reject) => {
+    const headers = role ? { Cookie: `gh_session=${encodeURIComponent(role)}` } : {};
+    const request = http.request(
+      {
+        method: 'GET',
+        host: '127.0.0.1',
+        port: server.address().port,
+        path,
+        headers,
+      },
+      (response) => {
+        let text = '';
+        response.setEncoding('utf8');
+        response.on('data', (chunk) => {
+          text += chunk;
+        });
+        response.on('end', () => {
+          try {
+            resolve({ statusCode: response.statusCode, body: JSON.parse(text) });
+          } catch (error) {
+            reject(error);
+          }
+        });
+      },
+    );
+    request.on('error', reject);
+    request.end();
+  });
+}
+
+async function withReviewHttpServer(listOwn, work) {
+  const serviceModule = require('../services/review.service');
+  const service = serviceModule.reviewService;
+  const sessionModule = require('../services/session.service');
+  const sessionService = sessionModule.sessionService;
+  const hadListOwn = Object.prototype.hasOwnProperty.call(service, 'listOwn');
+  const originalListOwn = service.listOwn;
+  const originalAuthenticate = sessionService.authenticate;
+  const appPath = require.resolve('../app');
+  const routePath = require.resolve('../routes/review.routes');
+  const controllerPath = require.resolve('../controller/review.controller');
+  service.listOwn = listOwn;
+  sessionService.authenticate = async (selector) => {
+    const actor = Object.values(actors).find(
+      (candidate) => candidate.role === selector,
+    );
+    if (!actor) {
+      const error = new Error('invalid test session');
+      error.statusCode = 401;
+      error.errorCode = 'SESSION_INVALID';
+      throw error;
+    }
+    return {
+      user: structuredClone(actor),
+      session: { id: `session-${actor.id}`, csrfSecret: 'test-csrf-secret' },
+    };
+  };
+  delete require.cache[appPath];
+  delete require.cache[routePath];
+  delete require.cache[controllerPath];
+
+  let server;
+  try {
+    const { createApp } = require('../app');
+    const app = createApp({ rateLimit: false });
+    server = await new Promise((resolve) => {
+      const instance = app.listen(0, () => resolve(instance));
+    });
+    return await work(server);
+  } finally {
+    if (server) {
+      await new Promise((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+    if (hadListOwn) service.listOwn = originalListOwn;
+    else delete service.listOwn;
+    sessionService.authenticate = originalAuthenticate;
+    delete require.cache[appPath];
+    delete require.cache[routePath];
+    delete require.cache[controllerPath];
+  }
 }
 
 function requiredMethod(service, name) {
@@ -2663,17 +2741,79 @@ describe('SL-008 Support behavioral acceptance', () => {
   });
 
   it('AT-173 protects Review management and returns role-safe Support list/detail projections privately', async () => {
-    const app = serverSource('app.js');
-    const reviewRoutes = serverSource('routes/review.routes.js');
-    const reviewController = serverSource('controller/review.controller.js');
-    assert.match(app, /app\.use\(\s*['"]\/api['"]\s*,\s*reviewRoutes\s*\)/);
-    assert.match(
-      reviewRoutes,
-      /router\.get\(\s*['"]\/customer\/reviews['"]\s*,\s*authenticate\s*,\s*authorizeRoles\(\s*['"]Customer['"]\s*\)\s*,\s*reviewController\.listOwnReviews\s*\)/,
-    );
-    assert.match(
-      reviewController,
-      /async function listOwnReviews\s*\([^)]*\)\s*\{[\s\S]{0,1200}reviewService\.listOwn\(\s*req\.user\s*,\s*\{[\s\S]{0,400}page\s*:\s*req\.query\.page[\s\S]{0,400}pageSize\s*:\s*req\.query\.pageSize/,
+    const httpCalls = [];
+    const safePage = {
+      items: [{
+        id: 'review-http-own-1',
+        productId: 'product-1',
+        rating: 5,
+        content: 'Safe own Review projection',
+        publicationStatus: 'Published',
+        moderationStatus: 'Allowed',
+        version: 2,
+        historySummary: {
+          contentEntries: 1,
+          publicationEntries: 0,
+          moderationEntries: 0,
+        },
+        createdAt: '2026-07-24T12:00:00.000Z',
+        updatedAt: '2026-07-24T12:00:00.000Z',
+      }],
+      total: 21,
+      page: 2,
+      pageSize: 20,
+      totalPages: 2,
+    };
+    await withReviewHttpServer(
+      async (actor, filters) => {
+        httpCalls.push({ actor: structuredClone(actor), filters: structuredClone(filters) });
+        return structuredClone(safePage);
+      },
+      async (server) => {
+        const customerResponse = await requestJson(server, {
+          role: 'Customer',
+          path: '/api/customer/reviews?page=2&pageSize=20',
+        });
+        assert.equal(customerResponse.statusCode, 200);
+        assert.equal(customerResponse.body.success, true);
+        assert.deepEqual(customerResponse.body.data, safePage);
+        assert.deepEqual(Object.keys(customerResponse.body.data.items[0]).sort(), [
+          'content',
+          'createdAt',
+          'historySummary',
+          'id',
+          'moderationStatus',
+          'productId',
+          'publicationStatus',
+          'rating',
+          'updatedAt',
+          'version',
+        ]);
+        assert.doesNotMatch(
+          JSON.stringify(customerResponse.body.data),
+          /customerId|orderId|orderDetailId|email|phone|address/,
+        );
+        assert.equal(httpCalls.length, 1);
+        assert.deepEqual(httpCalls[0].actor, actors.customer);
+        assert.deepEqual(Object.keys(httpCalls[0].filters).sort(), ['page', 'pageSize']);
+        assert.equal(String(httpCalls[0].filters.page), '2');
+        assert.equal(String(httpCalls[0].filters.pageSize), '20');
+
+        const anonymousResponse = await requestJson(server, {
+          path: '/api/customer/reviews?page=2&pageSize=20',
+        });
+        assert.equal(anonymousResponse.statusCode, 401);
+        assert.equal(anonymousResponse.body.errorCode, 'SESSION_MISSING');
+        for (const role of ['Staff', 'Admin', 'WarehouseManager']) {
+          const denied = await requestJson(server, {
+            role,
+            path: '/api/customer/reviews?page=2&pageSize=20',
+          });
+          assert.equal(denied.statusCode, 403, `${role} Customer Review HTTP denial`);
+          assert.equal(denied.body.errorCode, 'ROLE_FORBIDDEN');
+        }
+        assert.equal(httpCalls.length, 1);
+      },
     );
 
     const reviewFixture = buildReviewFixture();
