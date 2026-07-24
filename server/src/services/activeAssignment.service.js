@@ -119,11 +119,35 @@ function createCurrentSliceAssignmentAdapters({
     createMongoAssignmentAdapter({
       sliceId: 'SL-008_SUPPORT',
       model: SupportRequestModel,
-      actorFilter: (userId) => ({ handledBy: userId }),
+      actorFilter: (userId) => ({
+        $or: [{ assigneeId: userId }, { handledBy: userId }],
+      }),
       activeStatuses: ['New', 'Open', 'InProgress'],
       entity: 'SupportRequest',
     }),
   ];
+}
+
+function createSupportRecoveryHandler({
+  getSupportService = () => require('./support.service').supportService,
+} = {}) {
+  return {
+    sliceId: 'SL-008_SUPPORT',
+    async recoverDisabledAccount(input, session = null) {
+      return getSupportService().clearDisabledAssignee(
+        input.userId,
+        {},
+        {
+          idempotencyKey: `sl007-support-clear-${String(input.idempotencyKey || input.userId)}`,
+          mongoSession: session,
+        },
+      );
+    },
+  };
+}
+
+function createCurrentSliceRecoveryHandlers(options = {}) {
+  return [createSupportRecoveryHandler(options)];
 }
 
 function createModelEventSink() {
@@ -149,6 +173,7 @@ function createModelEventSink() {
 
 function createActiveAssignmentService({
   adapters = createCurrentSliceAssignmentAdapters(),
+  recoveryHandlers = [],
   eventSink = createModelEventSink(),
 } = {}) {
   async function inspect(userId, session = null) {
@@ -185,6 +210,15 @@ function createActiveAssignmentService({
     ) {
       const activeAssignments = await inspect(userId, mongoSession);
       const assignmentCheckUnavailable = adapters.length === 0;
+      const input = { userId, idempotencyKey, reason };
+      const recoveries = [];
+      for (const handler of recoveryHandlers) {
+        const recovery = await handler.recoverDisabledAccount(input, mongoSession);
+        recoveries.push({
+          sliceId: handler.sliceId,
+          recovered: Boolean(recovery),
+        });
+      }
       const event = {
         eventType: 'ACCOUNT_DISABLED',
         idempotencyKey: `ACCOUNT_DISABLED:${String(idempotencyKey || userId)}`,
@@ -195,7 +229,7 @@ function createActiveAssignmentService({
         impersonationAllowed: false,
       };
       await eventSink.emit(event, mongoSession);
-      return { activeAssignments, assignmentCheckUnavailable };
+      return { activeAssignments, assignmentCheckUnavailable, recoveries };
     },
   };
 }
@@ -203,7 +237,11 @@ function createActiveAssignmentService({
 module.exports = {
   createActiveAssignmentService,
   createCurrentSliceAssignmentAdapters,
+  createCurrentSliceRecoveryHandlers,
   createMongoAssignmentAdapter,
   createModelEventSink,
-  activeAssignmentService: createActiveAssignmentService(),
+  createSupportRecoveryHandler,
+  activeAssignmentService: createActiveAssignmentService({
+    recoveryHandlers: createCurrentSliceRecoveryHandlers(),
+  }),
 };

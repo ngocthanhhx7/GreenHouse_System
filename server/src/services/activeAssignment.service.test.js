@@ -4,6 +4,7 @@ const { describe, it } = require('node:test');
 const {
   createActiveAssignmentService,
   createCurrentSliceAssignmentAdapters,
+  createSupportRecoveryHandler,
 } = require('./activeAssignment.service');
 
 describe('active assignment seam', () => {
@@ -124,6 +125,77 @@ describe('active assignment seam', () => {
       reason: 'Employment ended',
     });
     assert.equal(emitted.size, 1);
+  });
+
+  it('runs the SL-008 disabled-assignee recovery in the disable transaction before emitting', async () => {
+    const sequence = [];
+    const session = { id: 'account-disable-tx' };
+    const service = createActiveAssignmentService({
+      adapters: [
+        { sliceId: 'SL-008_SUPPORT', async hasActiveAssignment() { return true; } },
+      ],
+      recoveryHandlers: [{
+        sliceId: 'SL-008_SUPPORT',
+        async recoverDisabledAccount(input, activeSession) {
+          sequence.push({ kind: 'recover', input, session: activeSession });
+          return { id: 'safe-ticket-result' };
+        },
+      }],
+      eventSink: {
+        async emit(_event, activeSession) {
+          sequence.push({ kind: 'emit', session: activeSession });
+        },
+      },
+    });
+
+    const result = await service.handleDisabledAccount({
+      userId: 'staff-1',
+      idempotencyKey: 'disable-staff-1',
+      reason: 'Employment ended',
+    }, session);
+
+    assert.deepEqual(sequence, [
+      {
+        kind: 'recover',
+        input: {
+          userId: 'staff-1',
+          idempotencyKey: 'disable-staff-1',
+          reason: 'Employment ended',
+        },
+        session,
+      },
+      { kind: 'emit', session },
+    ]);
+    assert.deepEqual(result.recoveries, [{ sliceId: 'SL-008_SUPPORT', recovered: true }]);
+  });
+
+  it('wires the production SL-008 recovery to the same Mongo session and stable command key', async () => {
+    const calls = [];
+    const session = { id: 'disable-transaction' };
+    const handler = createSupportRecoveryHandler({
+      getSupportService: () => ({
+        async clearDisabledAssignee(userId, command, options) {
+          calls.push({ userId, command, options });
+          return { id: 'ticket-1' };
+        },
+      }),
+    });
+
+    const result = await handler.recoverDisabledAccount({
+      userId: 'staff-1',
+      idempotencyKey: 'disable-1',
+      reason: 'Employment ended',
+    }, session);
+
+    assert.deepEqual(result, { id: 'ticket-1' });
+    assert.deepEqual(calls, [{
+      userId: 'staff-1',
+      command: {},
+      options: {
+        idempotencyKey: 'sl007-support-clear-disable-1',
+        mongoSession: session,
+      },
+    }]);
   });
 
   it('AT-149 keeps disable immediate and marks the durable handoff when assignment adapters are unavailable', async () => {
