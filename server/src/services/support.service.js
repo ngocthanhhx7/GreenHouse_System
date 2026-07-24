@@ -335,8 +335,11 @@ function createSupportService({
     }, session);
   }
 
-  async function mutate({ actor, aggregateId, operation, command, options, create = false, eventType, work }) {
-    const envelope = validateEnvelope(command, options, { create });
+  async function mutate({ actor, aggregateId, operation, command, options, create = false, eventType, work, expectedVersionOverride }) {
+    const envelopeCommand = expectedVersionOverride === undefined
+      ? command
+      : { ...command, expectedVersion: expectedVersionOverride };
+    const envelope = validateEnvelope(envelopeCommand, options, { create });
     const commandAggregateId = String(aggregateId);
     const actorValue = idOf(actor);
     const fingerprint = commandFingerprint({
@@ -654,17 +657,32 @@ function createSupportService({
   async function clearDisabledAssignee(userId, command = {}, options = {}) {
     const actor = typeof userId === 'object' ? userId : { id: String(userId), role: 'System', status: 'Active' };
     const rawId = idOf(userId);
+    // Recovery is invoked by the SL-007 disable transaction and may be replayed
+    // after the assignment has already been cleared. Resolve the durable command
+    // before looking up currently assigned tickets so the exact prior result wins.
+    if (options?.idempotencyKey && repository.findCommand) {
+      const prior = await repository.findCommand({
+        actorId: rawId,
+        aggregateType: 'SupportRequest',
+        aggregateId: rawId,
+        operation: 'clearDisabledAssignee',
+        idempotencyKey: String(options.idempotencyKey).trim(),
+        fingerprint: '0'.repeat(64),
+      });
+      if (prior) return clone(prior.result);
+    }
     const tickets = await listTickets({ assigneeId: rawId });
     const ticket = tickets.find((item) => (item.assigneeId ?? item.handledBy) === rawId)
       || (await listTickets({ handledBy: rawId })).find((item) => (item.assigneeId ?? item.handledBy) === rawId);
     if (!ticket) return null;
     return mutate({
       actor,
-      aggregateId: rawId,
+      aggregateId: ticketId(ticket),
       operation: 'clearDisabledAssignee',
-      command: { expectedVersion: Number(ticket.version || 1), ...command },
+      command,
       options,
       eventType: 'ASSIGNEE_CLEARED',
+      expectedVersionOverride: Number(ticket.version || 1),
       work: async ({ session, expectedVersion }) => {
         const current = await getCurrentOrConflict(ticketId(ticket), expectedVersion, session);
         if ((current.assigneeId ?? current.handledBy) !== rawId) return { result: current };
