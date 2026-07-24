@@ -366,6 +366,22 @@ auditLogSchema.index({ targetType: 1, timestamp: -1, _id: -1 });
 auditLogSchema.index({ targetId: 1, timestamp: -1, _id: -1 });
 auditLogSchema.index({ outcome: 1, timestamp: -1, _id: -1 });
 auditLogSchema.index(
+  { userId: 1, timestamp: -1, _id: -1 },
+  {
+    name: 'audit_legacy_user_cursor',
+    partialFilterExpression: { userId: { $type: 'objectId' } },
+  }
+);
+auditLogSchema.index(
+  { targetEntity: 1, timestamp: -1, _id: -1 },
+  {
+    name: 'audit_legacy_target_cursor',
+    partialFilterExpression: {
+      targetEntity: { $type: 'string', $gt: '' },
+    },
+  }
+);
+auditLogSchema.index(
   { eventId: 1 },
   {
     unique: true,

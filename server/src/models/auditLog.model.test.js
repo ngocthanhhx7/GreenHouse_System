@@ -79,7 +79,8 @@ describe('SL-009 AuditLog model contract', () => {
   });
 
   it('AT-189 has indexes for stable cursor ordering and supported filters', () => {
-    const indexes = AuditLog.schema.indexes().map(([fields]) => JSON.stringify(fields));
+    const schemaIndexes = AuditLog.schema.indexes();
+    const indexes = schemaIndexes.map(([fields]) => JSON.stringify(fields));
     assert.ok(indexes.includes(JSON.stringify({ timestamp: -1, _id: -1 })));
     assert.ok(indexes.includes(JSON.stringify({ actorType: 1, actorId: 1, timestamp: -1, _id: -1 })));
     assert.ok(indexes.includes(JSON.stringify({ actorType: 1, timestamp: -1, _id: -1 })));
@@ -90,6 +91,21 @@ describe('SL-009 AuditLog model contract', () => {
     assert.ok(indexes.includes(JSON.stringify({ targetType: 1, timestamp: -1, _id: -1 })));
     assert.ok(indexes.includes(JSON.stringify({ targetId: 1, timestamp: -1, _id: -1 })));
     assert.ok(indexes.includes(JSON.stringify({ outcome: 1, timestamp: -1, _id: -1 })));
+    assert.ok(schemaIndexes.some(([fields, options]) => (
+      JSON.stringify(fields) === JSON.stringify({ userId: 1, timestamp: -1, _id: -1 })
+      && options.name === 'audit_legacy_user_cursor'
+      && options.partialFilterExpression?.userId?.$type === 'objectId'
+    )));
+    assert.ok(schemaIndexes.some(([fields, options]) => (
+      JSON.stringify(fields) === JSON.stringify({
+        targetEntity: 1,
+        timestamp: -1,
+        _id: -1,
+      })
+      && options.name === 'audit_legacy_target_cursor'
+      && options.partialFilterExpression?.targetEntity?.$type === 'string'
+      && options.partialFilterExpression?.targetEntity?.$gt === ''
+    )));
   });
 
   it('re-sanitizes nested safe facts after assignment and before validation', async () => {

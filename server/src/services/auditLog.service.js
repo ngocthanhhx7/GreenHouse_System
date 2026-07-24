@@ -11,6 +11,31 @@ const ACTOR_ROLES = new Set(['Customer', 'Staff', 'WarehouseManager', 'Admin']);
 const OUTCOMES = new Set(['Success', 'Denied', 'Failed']);
 const SAFE_NAME = /^[A-Za-z][A-Za-z0-9_.:-]{0,159}$/;
 const SAFE_ACTOR_ID = /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,199}$/;
+const AUDIT_LIST_PROJECTION = Object.freeze({
+  _id: 1,
+  auditId: 1,
+  actorType: 1,
+  actorId: 1,
+  actorRole: 1,
+  source: 1,
+  action: 1,
+  targetType: 1,
+  targetId: 1,
+  outcome: 1,
+  correlationId: 1,
+  businessEventId: 1,
+  reasonCode: 1,
+  reason: 1,
+  previousState: 1,
+  newState: 1,
+  stateVersion: 1,
+  safeFacts: 1,
+  timestamp: 1,
+  userId: 1,
+  eventId: 1,
+  targetEntity: 1,
+  description: 1,
+});
 
 function fieldError(field, message) {
   return { field, message };
@@ -70,7 +95,8 @@ function decodeCursor(value) {
     const parsed = JSON.parse(Buffer.from(String(value), 'base64url').toString('utf8'));
     const timestamp = new Date(parsed.timestamp);
     if (
-      !mongoose.isValidObjectId(parsed.id)
+      typeof parsed.id !== 'string'
+      || !mongoose.isObjectIdOrHexString(parsed.id)
       || Number.isNaN(timestamp.getTime())
       || Object.keys(parsed).sort().join(',') !== 'id,timestamp'
     ) {
@@ -241,7 +267,7 @@ function createModelRepository(model = AuditLog) {
         else query.$or = cursorPredicate.$or;
       }
       if (predicates.length) query.$and = predicates;
-      const documents = await model.find(query)
+      const documents = await model.find(query, AUDIT_LIST_PROJECTION)
         .sort({ timestamp: -1, _id: -1 })
         .limit(filters.limit + 1)
         .lean();

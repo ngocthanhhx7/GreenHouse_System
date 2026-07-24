@@ -199,8 +199,6 @@ function createAdminAccountService({
   auditLogger = createAuditLogger(),
   transactionManager = createTransactionManager(),
 } = {}) {
-  const completedCommands = new Map();
-
   function commandKey(idempotencyKey) {
     if (!idempotencyKey) {
       throw new ApiError(400, 'Thiếu mã idempotency.', [], 'IDEMPOTENCY_REQUIRED');
@@ -245,25 +243,13 @@ function createAdminAccountService({
   function idempotencyReplayUnavailable() {
     return new ApiError(
       409,
-      'KhÃ´ng thá»ƒ phá»¥c há»“i káº¿t quáº£ lá»‡nh quáº£n trá»‹ trÆ°á»›c Ä‘Ã³.',
+      'Không thể phục hồi kết quả lệnh quản trị trước đó.',
       [],
       'IDEMPOTENCY_REPLAY_UNAVAILABLE',
     );
   }
 
-  function remember(identity, result) {
-    completedCommands.set(identity.eventId, {
-      fingerprint: identity.fingerprint,
-      result,
-    });
-  }
-
   async function findReplay(identity, session = null) {
-    const cached = completedCommands.get(identity.eventId);
-    if (cached) {
-      if (cached.fingerprint !== identity.fingerprint) throw idempotencyConflict();
-      return { alreadyProcessed: true, ...cached.result };
-    }
     if (!repository.findAuditByEventId) return null;
     const audit = await repository.findAuditByEventId(identity.eventId, session);
     if (!audit) return null;
@@ -278,7 +264,6 @@ function createAdminAccountService({
     }
     const result = extractAdminCommandResult(audit);
     if (!result) throw idempotencyReplayUnavailable();
-    remember(identity, result);
     return { alreadyProcessed: true, ...result };
   }
 
@@ -297,7 +282,6 @@ function createAdminAccountService({
       if (committedReplay) return committedReplay;
       throw error;
     }
-    if (!result.alreadyProcessed) remember(identity, result);
     return result;
   }
 

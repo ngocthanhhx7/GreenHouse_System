@@ -3,6 +3,8 @@ const SENSITIVE_ASSIGNMENT = /(?:password|passcode|hash|token|otp|session|cookie
 const BEARER_CREDENTIAL = /(?:^|[\s:={[(])bearer\s+[^\s,;}\])]+/iu;
 const SENSITIVE_PAYLOAD = /(?:raw\s*callback|callback\s*(?:body|payload)|review\s*(?:body|content)|support\s*(?:body|message)|full\s*evidence\s*body)/i;
 const SENSITIVE_FACT_TEXT = /(?:password|passcode|hash|token|otp|session|cookie|authorization|credential|accountnumber|accountholder|card|phone|address|secret)/i;
+const EMAIL_ADDRESS = /(?:^|[^\p{L}\p{N}])[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,63}(?=$|[^\p{L}\p{N}])/iu;
+const PHONE_NUMBER = /(?:^|[^\p{L}\p{N}])(?:\+(?:\d[\s.-]?){7,14}\d|0(?:\d[\s.-]?){8}\d)(?!\d)/u;
 
 const CONTAINER_KEYS = new Set(['metadata', 'next', 'previous']);
 const NUMBER_KEYS = new Set([
@@ -63,6 +65,8 @@ function normalizeAuditReason(value) {
     SENSITIVE_ASSIGNMENT.test(normalized)
     || BEARER_CREDENTIAL.test(normalized)
     || SENSITIVE_PAYLOAD.test(normalized)
+    || EMAIL_ADDRESS.test(normalized)
+    || PHONE_NUMBER.test(normalized)
   ) {
     return '[REDACTED]';
   }

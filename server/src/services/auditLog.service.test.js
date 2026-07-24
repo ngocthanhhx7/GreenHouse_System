@@ -215,6 +215,32 @@ describe('SL-009 audit log service', () => {
     assert.equal(queried, false);
   });
 
+  it('rejects a numeric cursor id as a typed filter error before querying', async () => {
+    let queried = false;
+    const numericCursor = Buffer.from(JSON.stringify({
+      timestamp: '2026-07-01T02:00:00.000Z',
+      id: 6,
+    })).toString('base64url');
+    const service = createAuditLogService({
+      repository: {
+        async list() {
+          queried = true;
+          return { items: [], nextCursor: null };
+        },
+      },
+    });
+
+    await assert.rejects(
+      () => service.listAuditLogs({ cursor: numericCursor }),
+      (error) => {
+        assert.equal(error.errorCode, 'AUDIT_FILTER_INVALID');
+        assert.deepEqual(error.errors.map((item) => item.field), ['cursor']);
+        return true;
+      }
+    );
+    assert.equal(queried, false);
+  });
+
   it('AT-184 supports a bounded external actor identity filter', async () => {
     let received;
     const service = createAuditLogService({
@@ -260,6 +286,64 @@ describe('SL-009 audit log service', () => {
       actorType: 'Carrier',
       actorId: 'carrier:ghn',
     });
+  });
+
+  it('loads audit list rows through an inclusive safe projection only', async () => {
+    let projection;
+    const fakeModel = {
+      find(_query, receivedProjection) {
+        projection = receivedProjection;
+        return {
+          sort() {
+            return {
+              limit() {
+                return { lean: async () => [] };
+              },
+            };
+          },
+        };
+      },
+    };
+
+    await createModelRepository(fakeModel).list({ limit: 20 });
+
+    assert.deepEqual(projection, {
+      _id: 1,
+      auditId: 1,
+      actorType: 1,
+      actorId: 1,
+      actorRole: 1,
+      source: 1,
+      action: 1,
+      targetType: 1,
+      targetId: 1,
+      outcome: 1,
+      correlationId: 1,
+      businessEventId: 1,
+      reasonCode: 1,
+      reason: 1,
+      previousState: 1,
+      newState: 1,
+      stateVersion: 1,
+      safeFacts: 1,
+      timestamp: 1,
+      userId: 1,
+      eventId: 1,
+      targetEntity: 1,
+      description: 1,
+    });
+    for (const forbidden of [
+      'before',
+      'after',
+      'metadata',
+      'ip',
+      'userAgent',
+      'payload',
+      'replayBinding',
+      'commandResult',
+    ]) {
+      assert.equal(projection[forbidden], undefined, forbidden);
+    }
   });
 
   it('AT-189 rejects an inverted date range with a range-specific field error', async () => {

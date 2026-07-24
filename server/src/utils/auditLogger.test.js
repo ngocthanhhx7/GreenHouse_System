@@ -214,4 +214,18 @@ describe('audit logger transaction contract', () => {
     assert.equal(normalized.reason, '[REDACTED]');
     assert.equal(normalized.description, '[REDACTED]');
   });
+
+  it('redacts unlabelled email and Vietnamese or international phone contact details', () => {
+    for (const unsafeReason of [
+      'Contact customer@example.com / 0901234567',
+      'Liên hệ +84 901 234 567 để xác nhận',
+      'Escalate via +1-415-555-2671',
+    ]) {
+      assert.equal(normalizeAuditReason(unsafeReason), '[REDACTED]', unsafeReason);
+    }
+    assert.equal(
+      normalizeAuditReason('Đã phê duyệt theo chính sách vận hành'),
+      'Đã phê duyệt theo chính sách vận hành'
+    );
+  });
 });

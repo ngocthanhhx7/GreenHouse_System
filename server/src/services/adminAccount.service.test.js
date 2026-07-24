@@ -291,6 +291,60 @@ describe('Admin account governance', () => {
     );
   });
 
+  it('isolates durable replay evidence from mutations to an earlier response', async () => {
+    const state = createState();
+    state.assignmentService.handleDisabledAccount = async () => ({
+      activeAssignments: [],
+      assignmentCheckUnavailable: false,
+      recoveries: [{ sliceId: 'SL-008_SUPPORT', recovered: true }],
+    });
+    const service = createAdminAccountService(state);
+    const command = {
+      actorUserId: 'admin-1',
+      targetUserId: 'customer-1',
+      nextStatus: 'Disabled',
+      reason: 'Mutation isolation',
+      expectedVersion: 3,
+      idempotencyKey: 'mutation-isolation',
+    };
+    const first = await service.changeStatus(command);
+    first.user.status = 'Active';
+    first.user.fullName = 'Mutated Caller Copy';
+    first.handoff.recoveries[0].recovered = false;
+
+    const replay = await service.changeStatus(command);
+
+    assert.equal(replay.alreadyProcessed, true);
+    assert.equal(replay.user.status, 'Disabled');
+    assert.equal(replay.user.fullName, 'Customer');
+    assert.equal(replay.handoff.recoveries[0].recovered, true);
+    assert.notEqual(replay.user, first.user);
+    assert.notEqual(replay.handoff, first.handoff);
+  });
+
+  it('returns a correctly encoded message when stable replay evidence is unavailable', async () => {
+    const state = createState();
+    const command = {
+      actorUserId: 'admin-1',
+      targetUserId: 'customer-1',
+      nextStatus: 'Disabled',
+      reason: 'Unavailable replay',
+      expectedVersion: 3,
+      idempotencyKey: 'unavailable-replay',
+    };
+    await createAdminAccountService(state).changeStatus(command);
+    delete state.audits[0].commandResult;
+    delete state.audits[0].after;
+
+    await assert.rejects(
+      () => createAdminAccountService(state).changeStatus(command),
+      (error) => (
+        error.errorCode === 'IDEMPOTENCY_REPLAY_UNAVAILABLE'
+        && error.message === 'Không thể phục hồi kết quả lệnh quản trị trước đó.'
+      )
+    );
+  });
+
   it('does not replay the same raw key onto a different command target', async () => {
     const state = createState();
     const service = createAdminAccountService(state);
