@@ -10,14 +10,14 @@ const router = express.Router();
 router.post(
   '/admin/uploads/products',
   authenticate,
-  authorizeRoles('Admin', 'Staff'),
+  authorizeRoles('Admin'),
   uploadProductImages,
   uploadController.uploadProductImages
 );
 router.delete(
   '/admin/uploads/products',
   authenticate,
-  authorizeRoles('Admin', 'Staff'),
+  authorizeRoles('Admin'),
   uploadController.deleteProductImage
 );
 router.post('/return-refunds/evidence', authenticate, authorizeRoles('Customer'), uploadReturnEvidence, uploadController.uploadReturnEvidence);

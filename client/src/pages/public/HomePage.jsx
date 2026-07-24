@@ -5,29 +5,18 @@ import { useGSAP } from '@gsap/react';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
 
 import { productService } from '../../services/productService.js';
+import { categoryService } from '../../services/categoryService.js';
 import { resolveMediaUrl } from '../../services/apiClient.js';
 import { formatCurrency } from '../../utils/formatters.js';
 import { getHomeProductDisplay } from './homeProductDisplay.js';
 
 gsap.registerPlugin(useGSAP, ScrollTrigger);
 
-const categories = [
-  {
-    title: 'Nồi chảo cao cấp',
-    image: '/assets/background/cookware.png',
-  },
-  {
-    title: 'Dụng cụ sơ chế',
-    image: '/assets/background/kitchen_tools.png',
-  },
-  {
-    title: 'Bàn ăn & phục vụ',
-    image: '/assets/background/tableware.png',
-  },
-  {
-    title: 'Lưu trữ thông minh',
-    image: '/assets/background/smart_storage.png',
-  },
+const categoryImages = [
+  '/assets/background/cookware.png',
+  '/assets/background/kitchen_tools.png',
+  '/assets/background/tableware.png',
+  '/assets/background/smart_storage.png',
 ];
 
 const trustItems = [
@@ -164,21 +153,30 @@ export default function HomePage() {
   const pageRef = useRef(null);
   const navigate = useNavigate();
   const [keyword, setKeyword] = useState('');
+  const [categories, setCategories] = useState([]);
   const [featuredProducts, setFeaturedProducts] = useState([]);
+  const [sectionLabel, setSectionLabel] = useState('Bán chạy');
   const [productsLoading, setProductsLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
 
     async function loadFeaturedProducts() {
-      try {
-        const result = await productService.listProducts({ limit: 8 });
-        if (!cancelled) setFeaturedProducts(result.items || result || []);
-      } catch {
-        if (!cancelled) setFeaturedProducts([]);
-      } finally {
-        if (!cancelled) setProductsLoading(false);
+      const [categoryResult, rankingResult] = await Promise.allSettled([
+        categoryService.listCategories(),
+        productService.listBestSellers({ limit: 6 }),
+      ]);
+      if (cancelled) return;
+      if (categoryResult.status === 'fulfilled') {
+        setCategories(categoryResult.value || []);
       }
+      if (rankingResult.status === 'fulfilled') {
+        setFeaturedProducts(rankingResult.value.items || []);
+        setSectionLabel(rankingResult.value.label || 'Bán chạy');
+      } else {
+        setFeaturedProducts([]);
+      }
+      setProductsLoading(false);
     }
 
     loadFeaturedProducts();
@@ -274,18 +272,22 @@ export default function HomePage() {
           <h2>Chọn nhanh theo nhu cầu căn bếp</h2>
         </div>
         <div className="premium-category-grid home-reveal">
-          {categories.map((category) => (
-            <Link className="premium-category-card" to="/products" key={category.title}>
-              <img src={category.image} alt={category.title} loading="lazy" />
-              <strong>{category.title}</strong>
+          {categories.slice(0, 4).map((category, index) => (
+            <Link
+              className="premium-category-card"
+              to={`/products?categoryId=${category.id}`}
+              key={category.id}
+            >
+              <img src={categoryImages[index % categoryImages.length]} alt={category.name} loading="lazy" />
+              <strong>{category.name}</strong>
             </Link>
           ))}
         </div>
       </section>
 
       <section className="premium-section">
-        <div className="premium-heading home-reveal">
-          <h2>Lựa chọn được quan tâm trong tuần</h2>
+        <div className="premium-heading home-reveal" aria-label="Lựa chọn được quan tâm trong tuần">
+          <h2>{sectionLabel}</h2>
         </div>
 
         {productsLoading && (

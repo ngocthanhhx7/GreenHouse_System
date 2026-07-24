@@ -27,6 +27,7 @@ describe('client product service', () => {
       fetcher: async (url, options) => {
         assert.equal(url, 'http://api.test/api/admin/products');
         assert.equal(options.method, 'POST');
+        assert.equal(options.headers['Idempotency-Key'], 'product-create-client-001');
         return {
           ok: true,
           json: async () => ({ success: true, data: { name: 'Chef Knife' } }),
@@ -34,7 +35,10 @@ describe('client product service', () => {
       },
     });
 
-    const result = await service.createProduct({ name: 'Chef Knife' });
+    const result = await service.createProduct(
+      { name: 'Chef Knife' },
+      { idempotencyKey: 'product-create-client-001' },
+    );
 
     assert.equal(result.name, 'Chef Knife');
   });

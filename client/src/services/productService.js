@@ -1,9 +1,14 @@
-import { DEFAULT_BASE_URL, apiRequest, getCsrfToken } from './apiClient.js';
+import {
+  DEFAULT_BASE_URL,
+  apiRequest,
+  createApiError,
+  getCsrfToken,
+} from './apiClient.js';
 
 async function parseResponse(response) {
   const payload = await response.json();
   if (!response.ok || payload.success === false) {
-    throw new Error(payload.message || 'Product request failed');
+    throw createApiError(payload, 'Product request failed');
   }
   return payload.data;
 }
@@ -30,14 +35,21 @@ export function createProductService({ baseUrl = DEFAULT_BASE_URL, fetcher = fet
     async getProduct(id) {
       return parseResponse(await fetcher(`${baseUrl}/products/${id}`));
     },
+    async listBestSellers({ limit = 6 } = {}) {
+      return parseResponse(await fetcher(
+        `${baseUrl}/products/best-sellers${buildQuery({ limit })}`
+      ));
+    },
     async listAdminProducts() {
       return apiRequest('/admin/products');
     },
-    async createProduct(input) {
+    async createProduct(input, { idempotencyKey } = {}) {
+      const commandKey = String(idempotencyKey || '').trim();
+      if (!commandKey) throw new Error('Product creation Idempotency-Key is required');
       return parseResponse(
         await fetcher(`${baseUrl}/admin/products`, {
           method: 'POST',
-          headers: authHeaders(),
+          headers: { ...authHeaders(), 'Idempotency-Key': commandKey },
           body: JSON.stringify(input),
           credentials: 'include',
         })
@@ -65,13 +77,19 @@ export function createProductService({ baseUrl = DEFAULT_BASE_URL, fetcher = fet
         credentials: 'include',
       }));
     },
-    async deleteImage(url) {
+    async deleteMedia(asset) {
       return parseResponse(await fetcher(`${baseUrl}/admin/uploads/products`, {
         method: 'DELETE',
         headers: authHeaders(),
-        body: JSON.stringify({ url }),
+        body: JSON.stringify({
+          assetId: asset?.assetId || asset?.uploadId,
+          url: asset?.url,
+        }),
         credentials: 'include',
       }));
+    },
+    async deleteImage(value) {
+      return this.deleteMedia({ url: value });
     },
   };
 }

@@ -6,6 +6,7 @@ const { mkdir, mkdtemp, rm, writeFile } = require('node:fs/promises');
 const { describe, it, before, after } = require('node:test');
 
 const { createApp } = require('../app');
+const ApiError = require('../utils/apiError');
 
 function request(server, options, body = '') {
   return new Promise((resolve, reject) => {
@@ -56,18 +57,22 @@ describe('app security defaults', () => {
     assert.equal(denied.res.headers['access-control-allow-origin'], undefined);
   });
 
-  it('serves public product media but never exposes return evidence through /uploads', async () => {
+  it('does not statically expose Product media or return evidence through /uploads', async () => {
     const uploadsRoot = await mkdtemp(path.join(os.tmpdir(), 'greenhome-static-'));
     const filename = '11111111-1111-4111-8111-111111111111.jpg';
     await mkdir(path.join(uploadsRoot, 'products'), { recursive: true });
     await mkdir(path.join(uploadsRoot, 'return-evidence'), { recursive: true });
     await writeFile(path.join(uploadsRoot, 'products', filename), Buffer.from([0xff, 0xd8, 0xff]));
     await writeFile(path.join(uploadsRoot, 'return-evidence', filename), Buffer.from([0xff, 0xd8, 0xff]));
-    const mediaServer = createApp({ rateLimit: false, uploadsRoot }).listen(0);
+    const mediaServer = createApp({
+      rateLimit: false,
+      uploadsRoot,
+      productImageHandler: (_req, _res, next) => next(new ApiError(404, 'Product media not found')),
+    }).listen(0);
     try {
       const product = await requestRaw(mediaServer, { method: 'GET', path: `/uploads/products/${filename}` });
       const evidence = await requestRaw(mediaServer, { method: 'GET', path: `/uploads/return-evidence/${filename}` });
-      assert.equal(product.res.statusCode, 200);
+      assert.equal(product.res.statusCode, 404);
       assert.equal(evidence.res.statusCode, 404);
     } finally {
       await new Promise((resolve, reject) => mediaServer.close((error) => error ? reject(error) : resolve()));

@@ -31,6 +31,15 @@ export default function ProductFilter({ filters, categories, onChange, onSubmit 
         value={filters.maxPrice}
         onChange={(event) => onChange({ ...filters, maxPrice: event.target.value })}
       />
+      <select
+        className="form-select"
+        value={filters.availability}
+        onChange={(event) => onChange({ ...filters, availability: event.target.value })}
+      >
+        <option value="">Mọi trạng thái hàng</option>
+        <option value="InStock">Còn hàng</option>
+        <option value="OutOfStock">Hết hàng</option>
+      </select>
       <button className="btn btn-success" type="submit">
         Lọc sản phẩm
       </button>

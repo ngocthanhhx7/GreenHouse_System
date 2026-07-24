@@ -226,3 +226,13 @@ Chung phụ trách **Product Media integration**, không còn ownership Homepage
 - Preview, progress, retry, MIME/size error và sắp xếp ảnh.
 - Chọn ảnh đầu tiên làm featured image, xóa ảnh không dùng và cập nhật `imageUrls`.
 - Tích hợp upload contract do Thành cung cấp; không tự sửa Notification, Avatar hoặc Header/Footer.
+
+## Implementation Evidence — 2026-07-24 (SL-006)
+
+- Hoàn thành contract Product/Category/Product Media, public catalog/search/filter/detail và Best Seller; Product không giữ hoặc sửa số lượng tồn, và Home chỉ nhận data integration theo ownership addendum.
+- Admin Product create dùng `Idempotency-Key` bắt buộc, scope theo Admin đăng nhập, canonical fingerprint và ProductCommand bền vững. Product/Inventory/media/audit/result snapshot commit trong cùng transaction; retry sau lost response trả đúng kết quả đã commit, còn tái dùng key với request khác trả `IDEMPOTENCY_KEY_REUSED`. Client giữ nguyên key qua lỗi mơ hồ và chỉ đổi key sau success/reset.
+- Phối hợp contract Cart/checkout của Nguyễn Quang Huy: Cart owner-only, không reserve stock, command idempotent + versioned, reconcile giá/publication/availability và checkout kiểm tra đúng Cart/line/`priceVersion`.
+- Bằng chứng test cục bộ: server acceptance `27/27`, client UI acceptance `12/12`, focused server `118/118` (14 suites), focused client `47/47` (11 suites), full server `726/726` (123 suites), full client `190/190` (52 suites); production build exit code `0`.
+- Migration `server/src/scripts/migrateSl006CatalogCart.js` có test `5/5`, preflight trước mutation, xóa vật lý legacy `Product.stockQuantity`, không copy stock sang Product, tạo/verify đủ 7 model index set (gồm ProductCommand) và không invent command legacy. Disposable `rs0` rehearsal độc lập ghi nhận data apply `businessWrites=5`; hai lần chạy final sau hardening đều `businessWrites=0`, `indexes=7`.
+- Chi tiết traceability/handoff/audit: `docs/reviews/SL-006_G3_TRACEABILITY.md`, `docs/reviews/SL-006_HANDOFF.md`, `docs/reviews/SL-006_RELEASE_AUDIT.md`.
+- Trạng thái: implementation và local verification hoàn tất, đang chờ independent re-review. Chưa claim merge, production deployment, production migration hoặc target-environment actor walkthrough.

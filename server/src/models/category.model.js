@@ -1,13 +1,17 @@
 const mongoose = require('mongoose');
+const {
+  collapseWhitespace,
+  normalizeCategoryIdentity,
+} = require('../utils/catalogNormalization');
 
 const categorySchema = new mongoose.Schema(
   {
     name: {
       type: String,
       required: true,
-      trim: true,
-      unique: true,
+      set: collapseWhitespace,
     },
+    normalizedName: { type: String, required: true },
     description: {
       type: String,
       default: '',
@@ -16,12 +20,19 @@ const categorySchema = new mongoose.Schema(
     status: {
       type: String,
       enum: ['Active', 'Inactive'],
-      default: 'Active',
+      required: true,
     },
   },
   { timestamps: true }
 );
 
-categorySchema.index({ status: 1 });
+categorySchema.index({ normalizedName: 1 }, { unique: true, name: 'category_normalized_name_unique' });
+categorySchema.index({ status: 1, name: 1, _id: 1 });
+
+categorySchema.pre('validate', function normalizeCategory(next) {
+  this.name = collapseWhitespace(this.name);
+  this.normalizedName = normalizeCategoryIdentity(this.name);
+  next();
+});
 
 module.exports = mongoose.model('Category', categorySchema);

@@ -19,4 +19,12 @@ describe('admin product media management contract', () => {
     assert.match(mediaSource, /Đặt làm ảnh chính/);
     assert.match(mediaSource, /Xóa ảnh/);
   });
+
+  it('retains one Product creation command key across ambiguous failures and rotates it on draft reset', () => {
+    assert.match(pageSource, /useRef/);
+    assert.match(pageSource, /productCreateCommandKey/);
+    assert.match(pageSource, /idempotencyKey:\s*productCreateCommandKey\.current/);
+    assert.match(pageSource, /productCreateCommandKey\.current\s*=\s*createProductCommandKey\(\)/);
+    assert.doesNotMatch(pageSource, /catch\s*\([^)]*\)\s*\{[^}]*productCreateCommandKey\.current\s*=/s);
+  });
 });

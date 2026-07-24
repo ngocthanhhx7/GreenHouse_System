@@ -7,6 +7,18 @@ const MAX_IMAGES = 5;
 const MAX_SIZE = 5 * 1024 * 1024;
 const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
+function normalizeAsset(value, index) {
+  if (typeof value === 'string') {
+    return {
+      assetId: `attached-${index}`,
+      url: value,
+      status: 'Attached',
+      expiresAt: null,
+    };
+  }
+  return value;
+}
+
 export default function ProductMediaManager({ images, onChange, onRemoved, onUploaded }) {
   const inputRef = useRef(null);
   const [uploading, setUploading] = useState(false);
@@ -29,9 +41,9 @@ export default function ProductMediaManager({ images, onChange, onRemoved, onUpl
     setUploading(true);
     try {
       const result = await productService.uploadImages(files);
-      const uploadedUrls = (result.items || []).map((item) => item.url);
-      onUploaded?.(uploadedUrls);
-      onChange([...images, ...uploadedUrls]);
+      const temporaryAssets = (result.items || []).map((item, index) => normalizeAsset(item, index));
+      onUploaded?.(temporaryAssets);
+      onChange([...images, ...temporaryAssets]);
     } catch (requestError) {
       setError(requestError.message);
     } finally {
@@ -54,7 +66,7 @@ export default function ProductMediaManager({ images, onChange, onRemoved, onUpl
   }
 
   function removeImage(index) {
-    const removed = images[index];
+    const removed = normalizeAsset(images[index], index);
     onChange(images.filter((_, currentIndex) => currentIndex !== index));
     onRemoved?.(removed);
   }
@@ -85,12 +97,19 @@ export default function ProductMediaManager({ images, onChange, onRemoved, onUpl
       {error && <div className="text-danger small mt-2" role="alert">{error}</div>}
       {images.length > 0 && (
         <div className="product-media-grid">
-          {images.map((url, index) => (
-            <article className="product-media-item" key={`${url}-${index}`}>
+          {images.map((value, index) => {
+            const asset = normalizeAsset(value, index);
+            return (
+            <article className="product-media-item" key={`${asset.assetId}-${index}`}>
               <div className="product-media-preview">
-                <img src={resolveMediaUrl(url)} alt={`Ảnh sản phẩm ${index + 1}`} />
+                <img src={resolveMediaUrl(asset.url)} alt={`Ảnh sản phẩm ${index + 1}`} />
                 {index === 0 && <span>Ảnh chính</span>}
               </div>
+              {asset.status === 'Temporary' && (
+                <small>
+                  Tạm thời đến {new Date(asset.expiresAt).toLocaleString('vi-VN')}
+                </small>
+              )}
               <div className="product-media-actions">
                 <button type="button" disabled={index === 0} onClick={() => moveImage(index, -1)} aria-label="Chuyển ảnh sang trái">Trái</button>
                 <button type="button" disabled={index === images.length - 1} onClick={() => moveImage(index, 1)} aria-label="Chuyển ảnh sang phải">Phải</button>
@@ -98,7 +117,8 @@ export default function ProductMediaManager({ images, onChange, onRemoved, onUpl
                 <button className="danger" type="button" onClick={() => removeImage(index)}>Xóa ảnh</button>
               </div>
             </article>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

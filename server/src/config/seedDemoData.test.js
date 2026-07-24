@@ -4,6 +4,7 @@ const path = require('node:path');
 const { describe, it } = require('node:test');
 
 const packageJson = require('../../package.json');
+const { DEMO_IMAGE_MANIFEST } = require('../demo-data/demoImageManifest');
 const {
   DEMO_AUDIT_SPECS,
   DEMO_CATEGORIES,
@@ -37,7 +38,9 @@ describe('demo data seed config', () => {
   it('includes catalog and staff order demo records', () => {
     assert.ok(DEMO_CATEGORIES.length >= 4);
     assert.ok(DEMO_PRODUCTS.length >= 8);
-    assert.ok(DEMO_PRODUCTS.every((product) => product.stockQuantity > 0));
+    assert.ok(DEMO_PRODUCTS.every((product) => product.initialInventoryQuantity > 0));
+    assert.ok(DEMO_PRODUCTS.every((product) => !Object.hasOwn(product, 'stockQuantity')));
+    assert.ok(DEMO_PRODUCTS.every((product) => !Object.hasOwn(product, 'imageUrls')));
     assert.equal(new Set(DEMO_PRODUCTS.map((product) => product.sku)).size, DEMO_PRODUCTS.length);
     assert.ok(DEMO_PRODUCTS.every((product) => product.price >= 50000));
     assert.ok(DEMO_PRODUCTS.every((product) => DEMO_CATEGORIES.some((category) => category.name === product.categoryName)));
@@ -60,6 +63,11 @@ describe('demo data seed config', () => {
     assert.ok(DEMO_SETTING_SPECS.some((setting) => setting.key === 'lowStockDefaultThreshold'));
     const scriptSource = readFileSync(path.join(__dirname, 'seedDemoData.js'), 'utf8');
     assert.doesNotMatch(scriptSource, /requestSpec\.requestCode/);
+    assert.match(scriptSource, /DEMO_IMAGE_MANIFEST/);
+    assert.doesNotMatch(scriptSource, /images\.unsplash\.com/);
+    assert.doesNotMatch(scriptSource, /stockQuantity:\s*product\.stockQuantity/);
+    assert.match(scriptSource, /sellableQuantity\s*=\s*Number\(productSpec\.initialInventoryQuantity/);
+    assert.ok(DEMO_PRODUCTS.every((product) => DEMO_IMAGE_MANIFEST.some((image) => image.sku === product.sku)));
     assert.match(scriptSource, /let inventory = await Inventory\.findOne/);
     assert.match(scriptSource, /await inventory\.save\(\)/);
   });

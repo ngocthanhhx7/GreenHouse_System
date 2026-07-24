@@ -1,9 +1,31 @@
 const ApiError = require('../utils/apiError');
 const Category = require('../models/category.model');
+const Product = require('../models/product.model');
 const { logAudit } = require('../utils/auditLogger');
+const {
+  collapseWhitespace,
+  normalizeCategoryIdentity,
+} = require('../utils/catalogNormalization');
 
-function normalizeStatus(status) {
-  return status || 'Active';
+function normalizeStatus(status, { required = false } = {}) {
+  const normalized = String(status || '').trim();
+  if (required && !normalized) {
+    throw new ApiError(
+      400,
+      'Category status is required',
+      [{ field: 'status', message: 'Select Active or Inactive' }],
+      'CATEGORY_STATUS_REQUIRED',
+    );
+  }
+  if (!['Active', 'Inactive'].includes(normalized)) {
+    throw new ApiError(
+      400,
+      'Category status is invalid',
+      [{ field: 'status', message: 'Status must be Active or Inactive' }],
+      'CATEGORY_STATUS_INVALID',
+    );
+  }
+  return normalized;
 }
 
 function toPlainCategory(category) {
@@ -22,8 +44,8 @@ function createModelCategoryRepository() {
     async list() {
       return Category.find({}).sort({ name: 1 }).lean();
     },
-    async findByName(name) {
-      return Category.findOne({ name: new RegExp(`^${name}$`, 'i') }).lean();
+    async findByNormalizedName(normalizedName) {
+      return Category.findOne({ normalizedName }).lean();
     },
     async findById(id) {
       return Category.findById(id).lean();
@@ -37,10 +59,41 @@ function createModelCategoryRepository() {
   };
 }
 
+function createModelProductRepository() {
+  return {
+    async listActiveByCategory(categoryId) {
+      return Product.find({ categoryId, status: 'Active' }).select('_id name sku').sort({ _id: 1 }).lean();
+    },
+  };
+}
+
 function createCategoryService({
   categoryRepository = createModelCategoryRepository(),
+  productRepository = createModelProductRepository(),
   auditLogger = { log: logAudit },
 } = {}) {
+  async function findDuplicate(name, excludeId = null) {
+    const normalizedName = normalizeCategoryIdentity(name);
+    let existing;
+    if (categoryRepository.findByNormalizedName) {
+      existing = await categoryRepository.findByNormalizedName(normalizedName);
+    } else {
+      const categories = categoryRepository.list ? await categoryRepository.list() : [];
+      existing = categories.find(
+        (category) => normalizeCategoryIdentity(category.name) === normalizedName,
+      ) || null;
+    }
+    if (existing && String(existing._id) !== String(excludeId || '')) {
+      throw new ApiError(
+        409,
+        'Category name already exists',
+        [{ field: 'name', message: 'Category name conflicts after Unicode, case, and whitespace normalization' }],
+        'CATEGORY_NAME_CONFLICT',
+      );
+    }
+    return normalizedName;
+  }
+
   return {
     async listPublicCategories() {
       const categories = await categoryRepository.list();
@@ -53,17 +106,30 @@ function createCategoryService({
     },
 
     async createCategory(input, actor = {}) {
-      const name = String(input.name || '').trim();
+      const name = collapseWhitespace(input.name);
       if (!name) throw new ApiError(400, 'Category name is required');
+      const status = normalizeStatus(input.status, { required: true });
+      const normalizedName = await findDuplicate(name);
 
-      const existing = await categoryRepository.findByName(name);
-      if (existing) throw new ApiError(400, 'Category name already exists');
-
-      const category = await categoryRepository.create({
-        name,
-        description: String(input.description || '').trim(),
-        status: normalizeStatus(input.status),
-      });
+      let category;
+      try {
+        category = await categoryRepository.create({
+          name,
+          normalizedName,
+          description: collapseWhitespace(input.description),
+          status,
+        });
+      } catch (error) {
+        if (error?.code === 11000) {
+          throw new ApiError(
+            409,
+            'Category name already exists',
+            [{ field: 'name', message: 'Category name already exists' }],
+            'CATEGORY_NAME_CONFLICT',
+          );
+        }
+        throw error;
+      }
 
       await auditLogger.log({
         userId: actor.id,
@@ -77,12 +143,64 @@ function createCategoryService({
     },
 
     async updateCategory(id, input, actor = {}) {
-      const data = {};
-      if (input.name !== undefined) data.name = String(input.name).trim();
-      if (input.description !== undefined) data.description = String(input.description).trim();
-      if (input.status !== undefined) data.status = input.status;
+      const existing = categoryRepository.findById
+        ? await categoryRepository.findById(id)
+        : null;
+      if (!existing) throw new ApiError(404, 'Category not found');
 
-      const category = await categoryRepository.updateById(id, data);
+      const data = {};
+      if (input.name !== undefined) {
+        data.name = collapseWhitespace(input.name);
+        if (!data.name) {
+          throw new ApiError(
+            400,
+            'Category name is required',
+            [{ field: 'name', message: 'Category name is required' }],
+            'CATEGORY_NAME_REQUIRED',
+          );
+        }
+        data.normalizedName = await findDuplicate(data.name, id);
+      }
+      if (input.description !== undefined) data.description = collapseWhitespace(input.description);
+      if (input.status !== undefined) {
+        data.status = normalizeStatus(input.status);
+        if (existing.status === 'Active' && data.status === 'Inactive') {
+          const activeProducts = productRepository?.listActiveByCategory
+            ? await productRepository.listActiveByCategory(id)
+            : [];
+          if (activeProducts.length) {
+            throw new ApiError(
+              409,
+              'Category cannot be deactivated while Active Products reference it',
+              [{ field: 'status', message: 'Reassign or deactivate every Active Product first' }],
+              'CATEGORY_ACTIVE_PRODUCTS',
+              {
+                activeProductIds: activeProducts.map((product) => String(product._id)),
+                activeProducts: activeProducts.map((product) => ({
+                  id: String(product._id),
+                  name: product.name || '',
+                  sku: product.sku || '',
+                })),
+              },
+            );
+          }
+        }
+      }
+
+      let category;
+      try {
+        category = await categoryRepository.updateById(id, data);
+      } catch (error) {
+        if (error?.code === 11000) {
+          throw new ApiError(
+            409,
+            'Category name already exists',
+            [{ field: 'name', message: 'Category name already exists' }],
+            'CATEGORY_NAME_CONFLICT',
+          );
+        }
+        throw error;
+      }
       if (!category) throw new ApiError(404, 'Category not found');
 
       await auditLogger.log({
