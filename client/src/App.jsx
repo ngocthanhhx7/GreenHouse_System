@@ -34,6 +34,7 @@ import ReturnRefundPage from './pages/customer/ReturnRefundPage.jsx';
 import ExchangeListPage from './pages/customer/ExchangeListPage.jsx';
 import CustomerExchangeDetailPage from './pages/customer/ExchangeDetailPage.jsx';
 import SupportPage from './pages/customer/SupportPage.jsx';
+import ReviewManagementPage from './pages/customer/ReviewManagementPage.jsx';
 import StaffDashboardPage from './pages/staff/StaffDashboardPage.jsx';
 import StaffOrderQueuePage from './pages/staff/StaffOrderQueuePage.jsx';
 import StaffOrderDetailPage from './pages/staff/StaffOrderDetailPage.jsx';
@@ -45,6 +46,7 @@ import StaffExchangeDetailPage from './pages/staff/ExchangeDetailPage.jsx';
 import SupportQueuePage from './pages/staff/SupportQueuePage.jsx';
 import SupportDetailPage from './pages/staff/SupportDetailPage.jsx';
 import StaffDamageReportsPage from './pages/staff/DamageReportsPage.jsx';
+import ReviewModerationPage from './pages/staff/ReviewModerationPage.jsx';
 import WarehouseDashboardPage from './pages/warehouse/WarehouseDashboardPage.jsx';
 import InventoryListPage from './pages/warehouse/InventoryListPage.jsx';
 import LowStockPage from './pages/warehouse/LowStockPage.jsx';
@@ -97,6 +99,14 @@ export default function App() {
           </ProtectedRoute>
         }
       >
+        <Route
+          path="reviews"
+          element={
+            <RoleRoute allowedRoles={['Customer']}>
+              <ReviewManagementPage />
+            </RoleRoute>
+          }
+        />
         <Route
           path="cart"
           element={
@@ -272,6 +282,14 @@ export default function App() {
           element={
             <RoleRoute allowedRoles={['Staff']}>
               <StaffDamageReportsPage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="staff/reviews"
+          element={
+            <RoleRoute allowedRoles={['Staff']}>
+              <ReviewModerationPage />
             </RoleRoute>
           }
         />

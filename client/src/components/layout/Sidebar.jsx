@@ -11,6 +11,7 @@ const ROLE_LINKS = {
     { to: '/return-refunds', label: 'Đổi trả / hoàn tiền' },
     { to: '/exchanges', label: 'Yêu cầu đổi hàng' },
     { to: '/support', label: 'Hỗ trợ' },
+    { to: '/reviews', label: 'Đánh giá của tôi' },
   ],
   Staff: [
     { to: '/staff', label: 'Tổng quan xử lý đơn' },
@@ -19,6 +20,7 @@ const ROLE_LINKS = {
     { to: '/staff/exchanges', label: 'Đổi hàng' },
     { to: '/staff/support-requests', label: 'Yêu cầu hỗ trợ' },
     { to: '/staff/damage-reports', label: 'Báo hàng hư hỏng' },
+    { to: '/staff/reviews', label: 'Kiểm duyệt đánh giá' },
   ],
   WarehouseManager: [
     { to: '/warehouse', label: 'Tổng quan kho' },
