@@ -36,7 +36,16 @@ describe('SL-006 Catalog/Cart migration', () => {
         name: 'Nồi Chảo',
         normalizedName: 'nồi chảo',
         status: 'Active',
+        catalogVersion: 0,
       },
+    );
+    assert.equal(
+      normalizeLegacyCategory({
+        name: 'Đồ gỗ',
+        status: 'Inactive',
+        catalogVersion: 7,
+      }).catalogVersion,
+      7,
     );
     const product = normalizeLegacyProduct({
       name: 'Nồi Việt',

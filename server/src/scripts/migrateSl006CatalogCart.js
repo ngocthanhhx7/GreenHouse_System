@@ -35,6 +35,10 @@ function normalizeLegacyCategory(category) {
     status: ['Active', 'Inactive'].includes(category.status)
       ? category.status
       : 'Inactive',
+    catalogVersion: Number.isSafeInteger(Number(category.catalogVersion))
+      && Number(category.catalogVersion) >= 0
+      ? Number(category.catalogVersion)
+      : 0,
   };
 }
 

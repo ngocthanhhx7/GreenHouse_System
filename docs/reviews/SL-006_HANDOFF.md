@@ -16,7 +16,11 @@
 - Product keeps canonical current/former SKU identities, explicit price versions and append-only price history. Stock remains solely owned by SL-005 Inventory.
 - Activation reruns complete Product, media, Category and exactly-one-Inventory guards; deactivation preserves historical references. No Product or Category hard-delete interface was added.
 - Managed Product media is Admin-owned, type/size/count constrained, attachable only through managed URLs and protected from Staff/Warehouse/Customer mutation.
-- Category identity is Unicode-normalized and duplicate-safe; an Active Category cannot be deactivated while an Active Product references it.
+- Category identity is Unicode-normalized and duplicate-safe; an Active Category
+  cannot be deactivated while an Active Product references it. Product
+  activation/reassignment and Category deactivation share a sessioned,
+  versioned Category write, preventing stale concurrent commands from violating
+  the publication invariant.
 - Public catalog exposes only Active Product + Active Category records, supports bounded search/filter/sort/pagination, hides raw Inventory quantities and returns derived `InStock`/`OutOfStock`.
 - Best Seller uses the exact 30-calendar-day Asia/Ho_Chi_Minh window over `completedSaleAt`, includes only current Delivered + Paid non-returned sales and public Products, ranks by quantity/revenue/SKU, and falls back to `Sản phẩm mới`.
 - Customer Cart is owner-only, read-only on `GET`, non-reserving, versioned and command-idempotent. Reconciliation returns current Product/Category/price/media/availability plus independent issue codes without silently accepting a new price.
@@ -76,7 +80,7 @@ From `server`:
 npm run migrate:sl006
 ```
 
-The migration preflights duplicate Category identity, current/former Product SKU identity, active Cart ownership, Cart/Product lines and the exactly-one-Inventory invariant before mutation. It backfills normalized Category/Product search data, dedicated price/SKU evidence, managed media records, Cart versions and legacy line price versions; it never copies stock to Product and conservatively inactivates a legacy Product whose publication guards cannot be proved. It then creates/verifies the declared Product, Category, media, Cart, CartItem, CartCommand and ProductCommand indexes. It intentionally creates no ProductCommand records for legacy Products.
+The migration preflights duplicate Category identity, current/former Product SKU identity, active Cart ownership, Cart/Product lines and the exactly-one-Inventory invariant before mutation. It backfills normalized Category identity and `catalogVersion`, Product search data, dedicated price/SKU evidence, managed media records, Cart versions and legacy line price versions; it never copies stock to Product and conservatively inactivates a legacy Product whose publication guards cannot be proved. It then creates/verifies the declared Product, Category, media, Cart, CartItem, CartCommand and ProductCommand indexes. It intentionally creates no ProductCommand records for legacy Products.
 
 The focused migration test is `5/5` green, including physical removal of the strict-schema-unknown legacy `stockQuantity`, preflight-before-mutation, the seven-model index contract and a second run with zero business-data writes.
 
@@ -104,9 +108,9 @@ client SL-006 UI acceptance: 12/12
 focused server matrix: 118/118, 14 suites
 focused client matrix: 47/47, 11 suites
 migration: 5/5
-full server: 790/790, 132 suites
+full server: 792/792, 133 suites
 full client: 206/206, 55 suites
-client production build: PASS (151 modules)
+client production build: PASS (153 modules)
 git diff --check: clean except Windows LF/CRLF notices
 ```
 

@@ -72,7 +72,7 @@ and filtered catalog links/components.
 | BR-060 / BD-064 | Product `skuAliases`, immutable `skuHistory`; InventoryTransaction/OrderDetail are unit-use evidence | `product.model.js`, `product.service.js`, migration | AT-103 | SKU may be blank; no former-SKU non-reuse or reason; no unit guard |
 | BR-061 / BD-065 | Product `priceVersion`, append-only `priceHistory`; OrderDetail snapshots immutable | `product.model.js`, `product.service.js`, `cart.service.js`, `order.service.js`, migration | AT-104, AT-120, AT-123 | `updatedAt` substitutes for price version; Cart read overwrites stored comparison price |
 | BR-062 / BD-066 | ProductMediaAsset owner/status/expiry; filesystem remains opaque managed storage | `productMediaAsset.model.js`, `productMedia.service.js`, upload route/controller/service, cleanup worker, Product Admin UI | AT-105 plus `client/src/acceptance/sl006UiContract.test.js` | Staff may mutate Product media; upload has no owner-bound temporary/expiry/attachment record |
-| BR-063 / BD-067 | Category `normalizedName`; Product active-reference guard | `category.model.js`, `category.service.js`, Category Admin UI, migration | AT-106, AT-107 | Default status and raw case regex; no update duplicate or deactivation guard |
+| BR-063 / BD-067 | Category `normalizedName` + `catalogVersion`; Product activation/reassignment and Category deactivation use sessioned shared-Category writes | `category.model.js`, `category.service.js`, `product.service.js`, `productPersistence.js`, `catalogLifecycleRace.test.js`, Category Admin UI, migration | AT-106, AT-107 plus deterministic post-claim race regression | Default status and raw case regex; no update duplicate, deactivation guard, or concurrency boundary |
 | BR-064 / BD-068 | Inventory only; public projection is `availabilityStatus`; Cart-only safe maximum | `product.service.js`, `cart.service.js`, Product card/detail/list UI | AT-108, AT-109 | Public DTO exposes quantity as `stockQuantity` |
 | BR-065 / BD-069 | Product normalized search value plus compound publication/filter indexes | `catalogQuery.js`, `product.model.js`, `product.service.js`, Product filter/list UI, migration | AT-110..112 | Full in-memory filtering; no availability/page/pageSize/field errors; no Vietnamese normalization |
 | BR-066 + CR BR-119 | Order `completedSaleAt`; OrderDetail snapshot revenue; current Order/Product/Category state; Return is Order `Returned` | `bestSeller.service.js`, Product controller/route/service, Home data integration | AT-113, AT-114, CR AT-218, AT-219 | Home reads newest general list; no qualifying/ranking projection |
@@ -115,10 +115,9 @@ not invent command records for legacy Products.
 - Focused GREEN: server `118/118` across 14 suites/files; client `47/47`
   across 11 suites; migration `5/5`; SL-006 server acceptance `27/27`; client
   UI acceptance `12/12`.
-- Full regression after rebasing onto merged SL-004: server `790/790` across
-  132 suites and client `206/206` across 55 suites
-  across 52 suites, with zero failures.
-- Build: installed Vite entry point completed with exit code `0`, 151 modules
+- Full regression after race hardening: server `792/792` across 133 suites and
+  client `206/206` across 55 suites, with zero failures.
+- Build: installed Vite entry point completed with exit code `0`, 153 modules
   transformed; only the existing greater-than-500-kB chunk warning remains.
 - Disposable replica-set migration evidence: the original data-normalization
   apply wrote `5` business records. After ProductCommand hardening, two

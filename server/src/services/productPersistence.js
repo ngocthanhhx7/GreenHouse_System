@@ -66,11 +66,13 @@ function createModelProductRepository() {
       if (session) query.session(session);
       return query.lean();
     },
-    async findBySkuAlias(sku, excludeId) {
-      return Product.findOne({
+    async findBySkuAlias(sku, excludeId, session) {
+      const query = Product.findOne({
         _id: { $ne: excludeId },
         $or: [{ sku }, { skuAliases: sku }],
-      }).select('_id sku').lean();
+      }).select('_id sku');
+      if (session) query.session(session);
+      return query.lean();
     },
     async updateById(id, data, session) {
       const query = Product.findByIdAndUpdate(
@@ -115,9 +117,27 @@ function createModelProductCommandRepository() {
 }
 
 function createModelCategoryRepository() {
+  function versionFilter(expectedVersion) {
+    const version = Number(expectedVersion || 0);
+    return version === 0
+      ? { $or: [{ catalogVersion: 0 }, { catalogVersion: { $exists: false } }] }
+      : { catalogVersion: version };
+  }
+
   return {
-    async findById(id) {
-      return Category.findById(id).lean();
+    async findById(id, session) {
+      const query = Category.findById(id);
+      if (session) query.session(session);
+      return query.lean();
+    },
+    async claimActiveByVersion(id, expectedVersion, session) {
+      const query = Category.findOneAndUpdate(
+        { _id: id, status: 'Active', ...versionFilter(expectedVersion) },
+        { $inc: { catalogVersion: 1 } },
+        { new: true, runValidators: true },
+      );
+      if (session) query.session(session);
+      return query.lean();
     },
   };
 }

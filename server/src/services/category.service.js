@@ -1,6 +1,7 @@
 const ApiError = require('../utils/apiError');
 const Category = require('../models/category.model');
 const Product = require('../models/product.model');
+const { createModelTransactionManager } = require('./productPersistence');
 const { logAudit } = require('../utils/auditLogger');
 const {
   collapseWhitespace,
@@ -40,29 +41,56 @@ function toPlainCategory(category) {
 }
 
 function createModelCategoryRepository() {
+  function versionFilter(expectedVersion) {
+    const version = Number(expectedVersion || 0);
+    return version === 0
+      ? { $or: [{ catalogVersion: 0 }, { catalogVersion: { $exists: false } }] }
+      : { catalogVersion: version };
+  }
+
   return {
-    async list() {
-      return Category.find({}).sort({ name: 1 }).lean();
+    isModelRepository: true,
+    async list(session) {
+      const query = Category.find({}).sort({ name: 1 });
+      if (session) query.session(session);
+      return query.lean();
     },
-    async findByNormalizedName(normalizedName) {
-      return Category.findOne({ normalizedName }).lean();
+    async findByNormalizedName(normalizedName, session) {
+      const query = Category.findOne({ normalizedName });
+      if (session) query.session(session);
+      return query.lean();
     },
-    async findById(id) {
-      return Category.findById(id).lean();
+    async findById(id, session) {
+      const query = Category.findById(id);
+      if (session) query.session(session);
+      return query.lean();
     },
     async create(data) {
       return Category.create(data);
     },
-    async updateById(id, data) {
-      return Category.findByIdAndUpdate(id, data, { new: true, runValidators: true }).lean();
+    async updateById(id, data, session) {
+      const query = Category.findByIdAndUpdate(id, data, { new: true, runValidators: true });
+      if (session) query.session(session);
+      return query.lean();
+    },
+    async deactivateIfUnchangedAndEmpty(id, data, expectedVersion, session) {
+      const query = Category.findOneAndUpdate(
+        { _id: id, status: 'Active', ...versionFilter(expectedVersion) },
+        { $set: data, $inc: { catalogVersion: 1 } },
+        { new: true, runValidators: true },
+      );
+      if (session) query.session(session);
+      return query.lean();
     },
   };
 }
 
 function createModelProductRepository() {
   return {
-    async listActiveByCategory(categoryId) {
-      return Product.find({ categoryId, status: 'Active' }).select('_id name sku').sort({ _id: 1 }).lean();
+    async listActiveByCategory(categoryId, session) {
+      const query = Product.find({ categoryId, status: 'Active' }).select('_id name sku').sort({ _id: 1 });
+      if (session) query.session(session);
+      return query.lean();
     },
   };
 }
@@ -71,14 +99,42 @@ function createCategoryService({
   categoryRepository = createModelCategoryRepository(),
   productRepository = createModelProductRepository(),
   auditLogger = { log: logAudit },
+  transactionManager = null,
 } = {}) {
-  async function findDuplicate(name, excludeId = null) {
+  if (!transactionManager && categoryRepository?.isModelRepository) {
+    transactionManager = createModelTransactionManager();
+  }
+
+  async function listActiveProducts(categoryId, session = null) {
+    return productRepository?.listActiveByCategory
+      ? productRepository.listActiveByCategory(categoryId, session)
+      : [];
+  }
+
+  function activeProductsConflict(activeProducts) {
+    return new ApiError(
+      409,
+      'Category cannot be deactivated while Active Products reference it',
+      [{ field: 'status', message: 'Reassign or deactivate every Active Product first' }],
+      'CATEGORY_ACTIVE_PRODUCTS',
+      {
+        activeProductIds: activeProducts.map((product) => String(product._id)),
+        activeProducts: activeProducts.map((product) => ({
+          id: String(product._id),
+          name: product.name || '',
+          sku: product.sku || '',
+        })),
+      },
+    );
+  }
+
+  async function findDuplicate(name, excludeId = null, session = null) {
     const normalizedName = normalizeCategoryIdentity(name);
     let existing;
     if (categoryRepository.findByNormalizedName) {
-      existing = await categoryRepository.findByNormalizedName(normalizedName);
+      existing = await categoryRepository.findByNormalizedName(normalizedName, session);
     } else {
-      const categories = categoryRepository.list ? await categoryRepository.list() : [];
+      const categories = categoryRepository.list ? await categoryRepository.list(session) : [];
       existing = categories.find(
         (category) => normalizeCategoryIdentity(category.name) === normalizedName,
       ) || null;
@@ -143,8 +199,9 @@ function createCategoryService({
     },
 
     async updateCategory(id, input, actor = {}) {
+      const work = async (session) => {
       const existing = categoryRepository.findById
-        ? await categoryRepository.findById(id)
+        ? await categoryRepository.findById(id, session)
         : null;
       if (!existing) throw new ApiError(404, 'Category not found');
 
@@ -159,37 +216,42 @@ function createCategoryService({
             'CATEGORY_NAME_REQUIRED',
           );
         }
-        data.normalizedName = await findDuplicate(data.name, id);
+        data.normalizedName = await findDuplicate(data.name, id, session);
       }
       if (input.description !== undefined) data.description = collapseWhitespace(input.description);
       if (input.status !== undefined) {
         data.status = normalizeStatus(input.status);
         if (existing.status === 'Active' && data.status === 'Inactive') {
-          const activeProducts = productRepository?.listActiveByCategory
-            ? await productRepository.listActiveByCategory(id)
-            : [];
+          const activeProducts = await listActiveProducts(id, session);
           if (activeProducts.length) {
-            throw new ApiError(
-              409,
-              'Category cannot be deactivated while Active Products reference it',
-              [{ field: 'status', message: 'Reassign or deactivate every Active Product first' }],
-              'CATEGORY_ACTIVE_PRODUCTS',
-              {
-                activeProductIds: activeProducts.map((product) => String(product._id)),
-                activeProducts: activeProducts.map((product) => ({
-                  id: String(product._id),
-                  name: product.name || '',
-                  sku: product.sku || '',
-                })),
-              },
-            );
+            throw activeProductsConflict(activeProducts);
           }
         }
       }
 
       let category;
       try {
-        category = await categoryRepository.updateById(id, data);
+        const deactivating = existing.status === 'Active' && data.status === 'Inactive';
+        if (deactivating && categoryRepository.deactivateIfUnchangedAndEmpty) {
+          category = await categoryRepository.deactivateIfUnchangedAndEmpty(
+            id,
+            data,
+            existing.catalogVersion,
+            session,
+          );
+          if (!category) {
+            const activeProducts = await listActiveProducts(id, session);
+            if (activeProducts.length) throw activeProductsConflict(activeProducts);
+            throw new ApiError(
+              409,
+              'Category lifecycle changed concurrently; retry the command',
+              [{ field: 'status', message: 'Category lifecycle changed concurrently' }],
+              'CATEGORY_LIFECYCLE_CONFLICT',
+            );
+          }
+        } else {
+          category = await categoryRepository.updateById(id, data, session);
+        }
       } catch (error) {
         if (error?.code === 11000) {
           throw new ApiError(
@@ -209,9 +271,14 @@ function createCategoryService({
         targetEntity: 'Category',
         targetId: String(id),
         description: `Category updated: ${category.name}`,
-      });
+      }, session);
 
       return toPlainCategory(category);
+      };
+
+      return transactionManager
+        ? transactionManager.withTransaction(work)
+        : work(null);
     },
   };
 }

@@ -20,6 +20,7 @@
 | Checkout used generic Product `updatedAt` as price acceptance | Current lines use dedicated `priceVersion`; `updatedAt` remains only a legacy fallback when that field is absent; metadata-only edits no longer cause false `PRICE_CHANGED` |
 | Product media trusted arbitrary paths or broad actors | Managed asset ownership/status/expiry, MIME/size/count rules, Admin-only upload/delete and attachment validation close the custody boundary |
 | Category duplicates/deactivation could break publication | Unicode-normalized identity is unique; Active → Inactive is blocked while an Active Product references the Category |
+| Concurrent Product activation and Category deactivation could both pass stale pre-checks | Both lifecycle commands now run in sessioned transactions and write the same versioned Category. Mongo serializes/retries the conflict; the loser receives a typed `409`, so Active Product → Inactive Category cannot commit |
 | Public catalog could expose inactive identities or raw stock | Public queries require Active Product + Category, expose derived availability only, and return 404 for inactive detail |
 | Catalog search/filter/pagination was unbounded or in-memory | Normalized Vietnamese search plus validated bounded filters, deterministic sorting and Product-ID tie break are server-side |
 | Best Seller was only presence-tested and could rank invalid facts | Behavioral tests enforce the exact Vietnam 30-day window, inclusive boundaries, Delivered + Paid rules, COD collection timing, exclusions and quantity/revenue/SKU ordering |
@@ -94,9 +95,9 @@ No exact initial client UI RED count was retained. The final client acceptance c
 - Focused server matrix: `118/118`, 14 suites/files.
 - Focused client matrix: `47/47`, 11 suites.
 - Migration tests: `5/5`.
-- Full server regression after rebasing onto merged SL-004: `790/790`, 132 suites, zero failures.
+- Full server regression after race hardening: `792/792`, 133 suites, zero failures.
 - Full client regression after rebasing onto merged SL-004: `206/206`, 55 suites, zero failures.
-- Client production build: exit code `0`, 151 modules transformed; only the existing greater-than-500-kB chunk warning remains.
+- Client production build: exit code `0`, 153 modules transformed; only the existing greater-than-500-kB chunk warning remains.
 - Build command used: `node node_modules/vite/bin/vite.js build`. The junctioned shared dependency tree lacks `node_modules/.bin/vite`, so `npm run build` cannot resolve that shim in this worktree even though the installed Vite entry point builds the same source successfully.
 - `git diff --check`: clean apart from Windows line-ending conversion notices.
 - Server application module load passed.
@@ -104,7 +105,10 @@ No exact initial client UI RED count was retained. The final client acceptance c
 ## Migration audit
 
 - Command: run `npm run migrate:sl006` from `server`.
-- Automated evidence proves Category/Product normalization without stock copying, physical removal of legacy Product `stockQuantity`, conservative inactivation when publication cannot be proved, conflict preflight before mutation and a zero-business-write second run.
+- Automated evidence proves Category/Product normalization (including repeat-safe
+  `catalogVersion` backfill) without stock copying, physical removal of legacy
+  Product `stockQuantity`, conservative inactivation when publication cannot be
+  proved, conflict preflight before mutation and a zero-business-write second run.
 - The script verifies/creates Product, Category, ProductMediaAsset, Cart, CartItem, CartCommand and ProductCommand indexes after business-data backfill. It does not invent legacy ProductCommand records.
 - Independent disposable `rs0` fixture `greenhome_sl006_verify_fixed_20260723220721396` recorded the original catalog/cart data apply as `categories=1`, `products=1`, `media=1`, `carts=2`, `businessWrites=5`, `indexes=6`. After ProductCommand hardening, two consecutive final-script runs each recorded all business writes `0` and `indexes=7`.
 - Raw fixture inspection confirmed `stockQuantity` physically absent, normalized Category/SKU/unit, an Active Product with `priceVersion` and search text, Cart `version=0`, CartItem `priceVersion`, exactly one media record, `productCommandCount=0`, and the scoped unique `product_command_admin_key_unique` index.

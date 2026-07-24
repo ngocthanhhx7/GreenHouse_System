@@ -177,8 +177,8 @@ function createProductService({
     localCreateCommands.set(`${command.adminId}:${command.idempotencyKey}`, record);
   }
 
-  async function ensureActiveCategory(categoryId) {
-    const category = await categoryRepository.findById(categoryId);
+  async function ensureActiveCategory(categoryId, session = null) {
+    const category = await categoryRepository.findById(categoryId, session);
     if (!category) {
       throw new ApiError(
         400,
@@ -208,7 +208,7 @@ function createProductService({
     ));
   }
 
-  async function assertActivationGuards(product, effective = {}) {
+  async function assertActivationGuards(product, effective = {}, session = null) {
     const merged = { ...product, ...effective };
     const errors = [];
     if (!collapseWhitespace(merged.name)) errors.push({ field: 'name', message: 'Name is required' });
@@ -226,14 +226,14 @@ function createProductService({
       errors.push({ field: 'imageUrls', message: 'One to five managed images are required' });
     }
     try {
-      await ensureActiveCategory(getCategoryId(merged.categoryId));
+      await ensureActiveCategory(getCategoryId(merged.categoryId), session);
     } catch {
       errors.push({ field: 'categoryId', message: 'An Active Category is required' });
     }
     if (inventoryRepository) {
       const count = inventoryRepository.countByProductId
-        ? await inventoryRepository.countByProductId(product._id)
-        : (await inventoryRepository.findByProductId(product._id) ? 1 : 0);
+        ? await inventoryRepository.countByProductId(product._id, session)
+        : (await inventoryRepository.findByProductId(product._id, session) ? 1 : 0);
       if (count !== 1) {
         errors.push({ field: 'inventory', message: 'Exactly one Inventory is required' });
       }
@@ -382,8 +382,9 @@ function createProductService({
   }
 
   async function updateProduct(id, input, actor = {}) {
+    const work = async (session) => {
     assertNoProductStockInput(input);
-    const existing = await productRepository.findById(id);
+    const existing = await productRepository.findById(id, session);
     if (!existing) throw new ApiError(404, 'Product not found', [], 'PRODUCT_NOT_FOUND');
     const data = {};
     for (const field of ['name', 'description', 'unit']) {
@@ -398,7 +399,7 @@ function createProductService({
       );
     }
     if (input.categoryId !== undefined) {
-      await ensureActiveCategory(input.categoryId);
+      await ensureActiveCategory(input.categoryId, session);
       data.categoryId = input.categoryId;
     }
     if (input.currency !== undefined) data.currency = normalizeCurrency(input.currency);
@@ -409,6 +410,7 @@ function createProductService({
           data.imageUrls,
           actor.id,
           existing._id,
+          session,
         );
       }
     }
@@ -435,7 +437,7 @@ function createProductService({
         );
       }
       if (productRepository.findBySkuAlias) {
-        const conflict = await productRepository.findBySkuAlias(requestedSku, id);
+        const conflict = await productRepository.findBySkuAlias(requestedSku, id, session);
         if (conflict) {
           throw new ApiError(
             409,
@@ -519,23 +521,49 @@ function createProductService({
             data.imageUrls || existing.imageUrls,
             actor.id,
             existing._id,
+            session,
           );
         }
-        await assertActivationGuards(existing, data);
+        await assertActivationGuards(existing, data, session);
       }
       data.status = status;
+    }
+
+    const effectiveStatus = data.status || existing.status;
+    const categoryChanged = input.categoryId !== undefined
+      && String(input.categoryId) !== String(getCategoryId(existing.categoryId));
+    const requiresCategoryClaim = effectiveStatus === 'Active'
+      && (existing.status !== 'Active' || categoryChanged);
+    if (requiresCategoryClaim && categoryRepository.claimActiveByVersion) {
+      const activeCategory = await ensureActiveCategory(
+        getCategoryId(data.categoryId || existing.categoryId),
+        session,
+      );
+      const claimedCategory = await categoryRepository.claimActiveByVersion(
+        activeCategory._id,
+        activeCategory.catalogVersion,
+        session,
+      );
+      if (!claimedCategory) {
+        throw new ApiError(
+          409,
+          'Product activation guards changed concurrently',
+          [{ field: 'categoryId', message: 'An Active Category is required' }],
+          'PRODUCT_ACTIVATION_GUARDS_FAILED',
+        );
+      }
     }
 
     data.searchTextNormalized = buildProductSearchText({ ...existing, ...data });
     let product;
     try {
-      product = await productRepository.updateById(id, data);
+      product = await productRepository.updateById(id, data, session);
     } catch (error) {
       rethrowProductRepositoryError(error);
     }
     if (!product) throw new ApiError(404, 'Product not found', [], 'PRODUCT_NOT_FOUND');
     if (data.imageUrls && mediaRepository?.attach) {
-      await mediaRepository.attach(data.imageUrls, actor.id, product._id);
+      await mediaRepository.attach(data.imageUrls, actor.id, product._id, session);
     }
 
     await auditLogger.log({
@@ -548,12 +576,17 @@ function createProductService({
       description: `Product updated: ${product.name}`,
       before: { sku: existing.sku, price: existing.price, status: existing.status },
       after: { sku: product.sku, price: product.price, status: product.status },
-    });
+    }, session);
 
     const inventory = inventoryRepository?.findByProductId
-      ? await inventoryRepository.findByProductId(product._id)
+      ? await inventoryRepository.findByProductId(product._id, session)
       : null;
     return toAdminProduct(product, inventory);
+    };
+
+    return transactionManager
+      ? transactionManager.withTransaction(work)
+      : work(null);
   }
 
   return {

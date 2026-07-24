@@ -22,6 +22,9 @@ const categorySchema = new mongoose.Schema(
       enum: ['Active', 'Inactive'],
       required: true,
     },
+    // Every lifecycle transition claims a new version so Product activation and
+    // Category deactivation cannot both commit from the same observation.
+    catalogVersion: { type: Number, required: true, default: 0, min: 0 },
   },
   { timestamps: true }
 );
