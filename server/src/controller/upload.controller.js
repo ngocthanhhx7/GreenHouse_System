@@ -7,11 +7,21 @@ const { returnEvidenceClaim } = require('../utils/returnEvidenceClaim');
 const { sendSuccess } = require('../utils/apiResponse');
 
 async function uploadProductImages(req, res, next) {
+  let items = [];
   try {
     if (!req.files || !req.files.length) throw new ApiError(400, 'At least one product image is required');
-    const items = await uploadService.storeImages(req.files, 'products');
-    return sendSuccess(res, { items }, 'Product images uploaded', 201);
+    items = await uploadService.storeImages(req.files, 'products');
+    const temporaryAssets = await productMediaService.registerTemporaryUploads(
+      items,
+      req.user.id,
+    );
+    return sendSuccess(res, { items: temporaryAssets }, 'Temporary Product images uploaded', 201);
   } catch (error) {
+    if (items.length) {
+      await Promise.all(items.map(
+        (item) => uploadService.removeManagedFile(item.url).catch(() => {}),
+      ));
+    }
     return next(error);
   }
 }
@@ -68,6 +78,30 @@ async function getReturnEvidence(req, res, next) {
   }
 }
 
+async function getProductImage(req, res, next) {
+  try {
+    const url = `/uploads/products/${String(req.params.filename || '')}`;
+    const mediaService = req.productMediaService || productMediaService;
+    const mediaUploadService = req.uploadService || uploadService;
+    const asset = await mediaService.authorizeRead(url, req.user || null);
+    const managed = mediaUploadService.resolveManagedFile(url, 'products');
+    res.set({
+      'Cache-Control': asset.status === 'Temporary' ? 'private, no-store' : 'public, max-age=86400',
+      'Content-Type': managed.mimeType,
+      'Content-Disposition': `inline; filename="${req.params.filename}"`,
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Security-Policy': "default-src 'none'; sandbox",
+    });
+    return res.sendFile(managed.path, (error) => {
+      if (!error) return;
+      if (!res.headersSent) return next(new ApiError(404, 'Product media not found'));
+      return next(error);
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 async function deleteAvatar(req, res, next) {
   try {
     const result = await profileService.removeAvatar(req.user.id);
@@ -80,7 +114,11 @@ async function deleteAvatar(req, res, next) {
 
 async function deleteProductImage(req, res, next) {
   try {
-    return sendSuccess(res, await productMediaService.deleteUnusedImage(req.body.url), 'Product image deleted');
+    return sendSuccess(
+      res,
+      await productMediaService.deleteUnusedImage(req.body.url, req.user.id),
+      'Product image deleted',
+    );
   } catch (error) {
     return next(error);
   }
@@ -91,6 +129,7 @@ module.exports = {
   uploadAvatar,
   uploadReturnEvidence,
   getReturnEvidence,
+  getProductImage,
   deleteAvatar,
   deleteProductImage,
 };

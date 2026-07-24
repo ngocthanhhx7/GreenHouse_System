@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
 import useAuth from '../../hooks/useAuth.js';
 import { useCart } from '../../contexts/CartContext.jsx';
 import { cartService } from '../../services/cartService.js';
+import { createCartCommandRetryStore } from '../../services/cartCommandRetry.js';
 import { resolveMediaUrl } from '../../services/apiClient.js';
 import { orderService } from '../../services/orderService.js';
 import { productService } from '../../services/productService.js';
@@ -23,6 +24,7 @@ export default function ProductDetailPage() {
   const [message, setMessage] = useState('');
   const [activeImageIndex, setActiveImageIndex] = useState(0);
   const [imageError, setImageError] = useState(false);
+  const cartCommandRetries = useRef(createCartCommandRetryStore());
 
   useEffect(() => {
     productService.getProduct(id).then(setProduct).catch((err) => setError(err.message));
@@ -73,12 +75,24 @@ export default function ProductDetailPage() {
 
   const productImages = product.imageUrls || [];
   const activeImage = resolveMediaUrl(productImages[activeImageIndex]);
+  const isOutOfStock = product.availabilityStatus === 'OutOfStock';
 
   async function addToCart() {
     setError('');
     setMessage('');
     try {
-      await runCartMutation(() => cartService.addItem({ productId: product.id || product._id, quantity: 1 }));
+      await runCartMutation((currentCart) => {
+        const command = cartCommandRetries.current.acquire(`add:${product.id || product._id}`, {
+          productId: product.id || product._id,
+          quantity: 1,
+          expectedVersion: Number(currentCart.version || 0),
+        });
+        return cartService.addItem(command.facts, { idempotencyKey: command.idempotencyKey })
+          .then((result) => {
+            cartCommandRetries.current.confirm(`add:${product.id || product._id}`, command);
+            return result;
+          });
+      });
       setMessage('Đã thêm sản phẩm vào giỏ hàng.');
     } catch (err) {
       setError(err.message);
@@ -118,12 +132,14 @@ export default function ProductDetailPage() {
           <p className="product-sku">{formatProductSku(product.sku)}</p>
           <p>{product.description || 'Sản phẩm đang được GreenHome cập nhật mô tả chi tiết.'}</p>
           <strong className="price">{formatProductCurrency(product)}</strong>
-          <p className="stock-note">Tồn kho: {Number(product.stockQuantity || 0)} {product.unit || 'sản phẩm'}</p>
+          <p className={`stock-note ${isOutOfStock ? 'text-danger' : 'text-success'}`}>
+            {isOutOfStock ? 'Hết hàng' : 'Còn hàng'}
+          </p>
           {message && <div className="alert alert-success mt-3">{message}</div>}
           <div className="mt-4">
             {user?.role === 'Customer' ? (
-              <button className="btn btn-success me-2" type="button" onClick={addToCart}>
-                Thêm vào giỏ hàng
+              <button className="btn btn-success me-2" type="button" onClick={addToCart} disabled={isOutOfStock}>
+                {isOutOfStock ? 'Tạm hết hàng' : 'Thêm vào giỏ hàng'}
               </button>
             ) : (
               <Link className="btn btn-success me-2" to="/login">

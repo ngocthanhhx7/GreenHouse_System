@@ -367,3 +367,24 @@ Fresh evidence:
 - Traceability và handoff được commit tại `docs/reviews/SL-003_G3_TRACEABILITY.md`
   và `docs/reviews/SL-003_HANDOFF.md`; không đưa folder local-only
   `docs/superpowers` hoặc `ui-prompts` vào commit.
+
+## SL-006 Cart/Checkout Collaboration Addendum 2026-07-24
+
+Nguyễn Quang Huy owns the Cart and Checkout boundary consumed by Phạm Thành
+Chung's SL-006 Product/Category/Catalog implementation.
+
+- Cart remains Customer-owned, keeps no Inventory reservation, and applies
+  idempotent versioned add/update/remove commands.
+- Every cart line retains the exact Product price version shown to the
+  Customer. Checkout rejects stale Cart version, line identity, price, price
+  version, inactive publication, and unavailable Inventory instead of silently
+  changing the order.
+- The client retains one idempotency key and an immutable snapshot of the
+  command facts through an ambiguous network failure. It rotates the key only
+  after a confirmed outcome or when the requested facts change.
+- Product Card and Product Detail consume the same retry coordinator; Cart Page
+  quantity/remove actions use the same rule.
+
+Post-race-hardening evidence on the merged SL-004 `main` is server `792/792`
+across 133 suites, client `206/206` across 55 suites, and production build PASS
+with `153` modules and only the existing large-chunk warning.

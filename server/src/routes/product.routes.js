@@ -6,6 +6,7 @@ const { authorizeRoles } = require('../middlewares/authorize.middleware');
 const router = express.Router();
 
 router.get('/products', productController.listPublic);
+router.get('/products/best-sellers', productController.listBestSellers);
 router.get('/products/:id', productController.getPublicById);
 router.get('/admin/products', authenticate, authorizeRoles('Admin'), productController.listAdmin);
 router.post('/admin/products', authenticate, authorizeRoles('Admin'), productController.create);

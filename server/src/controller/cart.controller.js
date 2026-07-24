@@ -11,7 +11,15 @@ async function getCart(req, res, next) {
 
 async function addItem(req, res, next) {
   try {
-    return sendSuccess(res, await cartService.addItem(req.user.id, req.body), 'Cart item added', 201);
+    return sendSuccess(
+      res,
+      await cartService.addItem(req.user.id, {
+        ...req.body,
+        idempotencyKey: req.get('Idempotency-Key') || req.body.idempotencyKey,
+      }),
+      'Cart item added',
+      201,
+    );
   } catch (error) {
     return next(error);
   }
@@ -19,7 +27,14 @@ async function addItem(req, res, next) {
 
 async function updateItem(req, res, next) {
   try {
-    return sendSuccess(res, await cartService.updateItem(req.user.id, req.params.id, req.body), 'Cart item updated');
+    return sendSuccess(
+      res,
+      await cartService.updateItem(req.user.id, req.params.id, {
+        ...req.body,
+        idempotencyKey: req.get('Idempotency-Key') || req.body.idempotencyKey,
+      }),
+      'Cart item updated',
+    );
   } catch (error) {
     return next(error);
   }
@@ -27,7 +42,14 @@ async function updateItem(req, res, next) {
 
 async function removeItem(req, res, next) {
   try {
-    return sendSuccess(res, await cartService.removeItem(req.user.id, req.params.id), 'Cart item removed');
+    return sendSuccess(
+      res,
+      await cartService.removeItem(req.user.id, req.params.id, {
+        ...req.body,
+        idempotencyKey: req.get('Idempotency-Key') || req.body.idempotencyKey,
+      }),
+      'Cart item removed',
+    );
   } catch (error) {
     return next(error);
   }

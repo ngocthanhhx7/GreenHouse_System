@@ -17,6 +17,17 @@ async function getPublicById(req, res, next) {
   }
 }
 
+async function listBestSellers(req, res, next) {
+  try {
+    return sendSuccess(
+      res,
+      await productService.listBestSellers({ limit: req.query.limit }),
+    );
+  } catch (error) {
+    return next(error);
+  }
+}
+
 async function listAdmin(req, res, next) {
   try {
     return sendSuccess(res, await productService.listAdminProducts());
@@ -27,7 +38,14 @@ async function listAdmin(req, res, next) {
 
 async function create(req, res, next) {
   try {
-    return sendSuccess(res, await productService.createProduct(req.body, req.user), 'Product created', 201);
+    return sendSuccess(
+      res,
+      await productService.createProduct(req.body, req.user, {
+        idempotencyKey: req.get('Idempotency-Key'),
+      }),
+      'Product created',
+      201,
+    );
   } catch (error) {
     return next(error);
   }
@@ -51,6 +69,7 @@ async function updateStatus(req, res, next) {
 
 module.exports = {
   listPublic,
+  listBestSellers,
   getPublicById,
   listAdmin,
   create,

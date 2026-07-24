@@ -1,195 +1,309 @@
+const crypto = require('node:crypto');
+
 const ApiError = require('../utils/apiError');
-const Product = require('../models/product.model');
-const Inventory = require('../models/inventory.model');
-const Cart = require('../models/cart.model');
-const CartItem = require('../models/cartItem.model');
+const {
+  availableQuantityOf,
+  categoryIsActive,
+  emptyCartProjection,
+  inventoryHealthOf,
+  reconcileCartProjection,
+} = require('./cartProjection');
+const {
+  createModelCartRepository,
+  createModelProductRepository,
+  createModelTransactionManager,
+} = require('./cartPersistence');
 
-function toCartResponse(cart, items) {
-  const mappedItems = items.map((item) => ({
-    id: String(item._id),
-    productId: String(item.productId && item.productId._id ? item.productId._id : item.productId),
-    productName: item.productName,
-    quantity: item.quantity,
-    unitPrice: item.unitPrice,
-    priceVersion: item.priceVersion ? new Date(item.priceVersion).toISOString() : '',
-    subtotal: item.quantity * item.unitPrice,
-  }));
-  return {
-    id: String(cart._id),
-    customerId: String(cart.customerId),
-    status: cart.status,
-    items: mappedItems,
-    totalAmount: mappedItems.reduce((sum, item) => sum + item.subtotal, 0),
+function normalizeCommandInput(input = {}, commandType, itemId = '') {
+  const idempotencyKey = String(input.idempotencyKey || '').trim();
+  if (!/^[A-Za-z0-9._:-]{8,128}$/.test(idempotencyKey)) {
+    throw new ApiError(
+      400,
+      'A valid Idempotency-Key is required for Cart commands',
+      [{ field: 'idempotencyKey', message: 'Use 8-128 safe characters' }],
+      idempotencyKey ? 'CART_IDEMPOTENCY_KEY_INVALID' : 'CART_IDEMPOTENCY_KEY_REQUIRED',
+    );
+  }
+  const expectedVersion = Number(input.expectedVersion);
+  if (!Number.isInteger(expectedVersion) || expectedVersion < 0) {
+    throw new ApiError(
+      400,
+      'Expected Cart version is required',
+      [{ field: 'expectedVersion', message: 'Expected version must be a non-negative integer' }],
+      'CART_EXPECTED_VERSION_INVALID',
+    );
+  }
+  const normalized = {
+    commandType,
+    idempotencyKey,
+    expectedVersion,
+    itemId: String(itemId || ''),
+    productId: String(input.productId || ''),
   };
+  if (commandType !== 'RemoveItem') {
+    const quantity = Number(input.quantity);
+    if (!Number.isInteger(quantity) || quantity <= 0) {
+      throw new ApiError(
+        400,
+        'Quantity must be a positive integer',
+        [{ field: 'quantity', message: 'Enter a positive whole number' }],
+        'CART_QUANTITY_INVALID',
+      );
+    }
+    normalized.quantity = quantity;
+  }
+  normalized.requestHash = crypto
+    .createHash('sha256')
+    .update(JSON.stringify({
+      commandType,
+      expectedVersion,
+      itemId: normalized.itemId,
+      productId: normalized.productId,
+      quantity: normalized.quantity,
+    }))
+    .digest('hex');
+  return normalized;
 }
 
-function createModelProductRepository() {
+function copyResult(result, commandStatus) {
   return {
-    async findSellableById(id) {
-      const [product, inventory] = await Promise.all([
-        Product.findOne({ _id: id, status: 'Active' }).lean(),
-        Inventory.findOne({ productId: id }).lean(),
-      ]);
-      if (!product || !inventory) return null;
-      return {
-        ...product,
-        availableQuantity: inventory.inventoryHealth === 'ReconciliationRequired'
-          ? 0
-          : Math.max(
-            0,
-            Number(inventory.sellableQuantity ?? inventory.stockQuantity ?? 0)
-              - Number(inventory.reservedQuantity || 0),
-          ),
-      };
-    },
-  };
-}
-
-function createModelCartRepository() {
-  return {
-    async findActiveByCustomer(customerId) {
-      return Cart.findOne({ customerId, status: 'Active' }).lean();
-    },
-    async createCart(customerId) {
-      return Cart.create({ customerId, status: 'Active' });
-    },
-    async findItem(cartId, productId) {
-      return CartItem.findOne({ cartId, productId }).lean();
-    },
-    async addItem(data) {
-      return CartItem.create(data);
-    },
-    async updateItem(id, data) {
-      return CartItem.findByIdAndUpdate(id, data, { new: true, runValidators: true }).lean();
-    },
-    async removeItem(id) {
-      return CartItem.findByIdAndDelete(id).lean();
-    },
-    async listItems(cartId) {
-      return CartItem.find({ cartId }).lean();
-    },
+    ...JSON.parse(JSON.stringify(result)),
+    commandStatus,
   };
 }
 
 function createCartService({
   productRepository = createModelProductRepository(),
   cartRepository = createModelCartRepository(),
+  transactionManager = null,
 } = {}) {
-  async function getOrCreateCart(customerId) {
-    const existing = await cartRepository.findActiveByCustomer(customerId);
-    if (existing) return existing;
+  if (!transactionManager && cartRepository?.isModelRepository) {
+    transactionManager = createModelTransactionManager();
+  }
+  const localCommands = new Map();
+
+  async function findCurrentProduct(productId, session) {
+    if (productRepository.findCurrentById) {
+      return productRepository.findCurrentById(productId, session);
+    }
+    if (productRepository.findSellableById) {
+      return productRepository.findSellableById(productId, session);
+    }
+    return null;
+  }
+
+  async function projectCart(cart, session) {
+    if (!cart) return emptyCartProjection();
+    const items = await cartRepository.listItems(cart._id, session);
+    const productsById = new Map();
+    await Promise.all(items.map(async (item) => {
+      const product = await findCurrentProduct(item.productId, session);
+      productsById.set(String(item.productId), product);
+    }));
+    return reconcileCartProjection(cart, items, productsById);
+  }
+
+  async function findExistingCommand(customerId, command, session) {
+    const local = localCommands.get(`${customerId}:${command.idempotencyKey}`);
+    const existing = local || (
+      cartRepository.findCommand
+        ? await cartRepository.findCommand(customerId, command.idempotencyKey, session)
+        : null
+    );
+    if (!existing) return null;
+    if (
+      existing.commandType !== command.commandType
+      || existing.requestHash !== command.requestHash
+    ) {
+      throw new ApiError(
+        409,
+        'Cart Idempotency-Key was already used with different command facts',
+        [{ field: 'idempotencyKey', message: 'Use a new key for a different Cart command' }],
+        'CART_IDEMPOTENCY_KEY_REUSED',
+      );
+    }
+    return copyResult(existing.resultSnapshot, 'AlreadyProcessed');
+  }
+
+  async function throwVersionConflict(cart, session) {
+    throw new ApiError(
+      409,
+      'Cart changed before this command',
+      [{ field: 'expectedVersion', message: 'Refresh the Cart and retry intentionally' }],
+      'CART_VERSION_CONFLICT',
+      { cart: await projectCart(cart, session) },
+    );
+  }
+
+  async function assertVersion(cart, expectedVersion, session) {
+    if (!cart && expectedVersion === 0) return;
+    if (cart && Number(cart.version || 0) === expectedVersion) return;
+    await throwVersionConflict(cart, session);
+  }
+
+  function assertProductEligible(product) {
+    if (!product || product.status !== 'Active' || !categoryIsActive(product)) {
+      throw new ApiError(
+        409,
+        'Product or Category is no longer available',
+        [{ field: 'productId', message: 'Choose a currently public Product' }],
+        'CART_PRODUCT_UNAVAILABLE',
+      );
+    }
+    if (inventoryHealthOf(product) !== 'Normal') {
+      throw new ApiError(
+        409,
+        'Product Inventory is being reconciled',
+        [{ field: 'productId', message: 'Try again after Inventory reconciliation' }],
+        'CART_INVENTORY_RECONCILIATION',
+      );
+    }
+  }
+
+  function assertQuantityAvailable(product, quantity) {
+    const maximum = availableQuantityOf(product);
+    if (quantity > maximum) {
+      throw new ApiError(
+        409,
+        'Requested quantity exceeds current availability',
+        [{ field: 'quantity', message: `Reduce quantity to ${maximum} or less` }],
+        'CART_QUANTITY_EXCEEDS_AVAILABLE',
+        { maxOrderableQuantity: maximum },
+      );
+    }
+  }
+
+  async function incrementVersion(cart, expectedVersion, session) {
+    if (cartRepository.incrementVersion) {
+      const updated = await cartRepository.incrementVersion(
+        cart._id,
+        expectedVersion,
+        session,
+      );
+      if (!updated) {
+        const current = await cartRepository.findActiveByCustomer(cart.customerId, session);
+        await throwVersionConflict(current, session);
+      }
+      return updated;
+    }
+    cart.version = expectedVersion + 1;
+    return cart;
+  }
+
+  async function persistCommand(customerId, command, cart, result, session) {
+    const record = {
+      customerId,
+      idempotencyKey: command.idempotencyKey,
+      commandType: command.commandType,
+      requestHash: command.requestHash,
+      cartId: cart._id,
+      resultingVersion: result.version,
+      resultSnapshot: result,
+    };
+    if (cartRepository.createCommand) {
+      await cartRepository.createCommand(record, session);
+    } else {
+      localCommands.set(`${customerId}:${command.idempotencyKey}`, record);
+    }
+  }
+
+  async function execute(customerId, command, session) {
+    const replay = await findExistingCommand(customerId, command, session);
+    if (replay) return replay;
+
+    let cart = await cartRepository.findActiveByCustomer(customerId, session);
+    if (command.commandType === 'AddItem') {
+      const product = await findCurrentProduct(command.productId, session);
+      assertProductEligible(product);
+      await assertVersion(cart, command.expectedVersion, session);
+      if (!cart) {
+        assertQuantityAvailable(product, command.quantity);
+        cart = await cartRepository.createCart(customerId, session);
+      }
+      const existing = await cartRepository.findItem(
+        cart._id,
+        command.productId,
+        session,
+      );
+      const nextQuantity = Number(existing?.quantity || 0) + command.quantity;
+      assertQuantityAvailable(product, nextQuantity);
+      if (existing) {
+        await cartRepository.updateItem(existing._id, {
+          quantity: nextQuantity,
+        }, session);
+      } else {
+        await cartRepository.addItem({
+          cartId: cart._id,
+          productId: command.productId,
+          productName: product.name,
+          quantity: nextQuantity,
+          unitPrice: Number(product.price),
+          priceVersion: product.priceVersion || product.updatedAt,
+        }, session);
+      }
+    } else {
+      await assertVersion(cart, command.expectedVersion, session);
+      if (!cart) {
+        throw new ApiError(404, 'Cart item not found', [], 'CART_ITEM_NOT_FOUND');
+      }
+      const items = await cartRepository.listItems(cart._id, session);
+      const item = items.find((entry) => String(entry._id) === command.itemId);
+      if (!item) {
+        throw new ApiError(404, 'Cart item not found', [], 'CART_ITEM_NOT_FOUND');
+      }
+      if (command.commandType === 'UpdateItem') {
+        const product = await findCurrentProduct(item.productId, session);
+        assertProductEligible(product);
+        assertQuantityAvailable(product, command.quantity);
+        await cartRepository.updateItem(item._id, { quantity: command.quantity }, session);
+      } else {
+        await cartRepository.removeItem(item._id, session);
+      }
+    }
+
+    cart = await incrementVersion(cart, command.expectedVersion, session);
+    const result = {
+      ...await projectCart(cart, session),
+      commandStatus: 'Applied',
+    };
+    await persistCommand(customerId, command, cart, result, session);
+    return result;
+  }
+
+  async function runCommand(customerId, input, commandType, itemId = '') {
+    const command = normalizeCommandInput(input, commandType, itemId);
+    const replay = await findExistingCommand(customerId, command);
+    if (replay) return replay;
     try {
-      return await cartRepository.createCart(customerId);
+      return transactionManager
+        ? await transactionManager.withTransaction(
+          (session) => execute(customerId, command, session),
+        )
+        : await execute(customerId, command, null);
     } catch (error) {
-      // The partial unique index is the final concurrency guard for active carts.
-      if (error && error.code === 11000) {
-        const concurrentCart = await cartRepository.findActiveByCustomer(customerId);
-        if (concurrentCart) return concurrentCart;
+      if (error?.code === 11000) {
+        const duplicate = await findExistingCommand(customerId, command);
+        if (duplicate) return duplicate;
+        const current = await cartRepository.findActiveByCustomer(customerId);
+        if (current) await throwVersionConflict(current, null);
       }
       throw error;
     }
   }
 
-  async function assertQuantity(product, quantity) {
-    if (!Number.isInteger(Number(quantity)) || Number(quantity) <= 0) {
-      throw new ApiError(400, 'Quantity must be a positive integer');
-    }
-    if (product.availableQuantity !== undefined && Number(quantity) > Number(product.availableQuantity)) {
-      throw new ApiError(400, 'Requested quantity exceeds available stock');
-    }
-  }
-
-  async function refreshPriceEvidence(items) {
-    const refreshed = [];
-    for (const item of items) {
-      const product = await productRepository.findSellableById(item.productId);
-      if (!product) {
-        refreshed.push(item);
-        continue;
-      }
-      const priceVersion = product.updatedAt ? new Date(product.updatedAt) : null;
-      const currentVersion = item.priceVersion ? new Date(item.priceVersion).toISOString() : '';
-      const nextVersion = priceVersion ? priceVersion.toISOString() : '';
-      const priceChanged = Number(item.unitPrice) !== Number(product.price);
-      const nameChanged = item.productName !== product.name;
-      const versionChanged = currentVersion !== nextVersion;
-      if (priceChanged || nameChanged || versionChanged) {
-        const updated = await cartRepository.updateItem(item._id, {
-          productName: product.name,
-          unitPrice: product.price,
-          priceVersion,
-        });
-        refreshed.push(updated);
-      } else {
-        refreshed.push(item);
-      }
-    }
-    return refreshed;
-  }
-
   return {
     async getCart(customerId) {
-      const cart = await getOrCreateCart(customerId);
-      const items = await refreshPriceEvidence(await cartRepository.listItems(cart._id));
-      return toCartResponse(cart, items);
+      const cart = await cartRepository.findActiveByCustomer(customerId);
+      return projectCart(cart, null);
     },
-
     async addItem(customerId, input) {
-      const quantity = Number(input.quantity);
-      const product = await productRepository.findSellableById(input.productId);
-      if (!product) throw new ApiError(404, 'Product not found or inactive');
-      await assertQuantity(product, quantity);
-
-      const cart = await getOrCreateCart(customerId);
-      const existing = await cartRepository.findItem(cart._id, input.productId);
-      if (existing) {
-        const nextQuantity = Number(existing.quantity) + quantity;
-        await assertQuantity(product, nextQuantity);
-        await cartRepository.updateItem(existing._id, {
-          quantity: nextQuantity,
-          unitPrice: product.price,
-          productName: product.name,
-          priceVersion: product.updatedAt,
-        });
-      } else {
-        await cartRepository.addItem({
-          cartId: cart._id,
-          productId: input.productId,
-          productName: product.name,
-          quantity,
-          unitPrice: product.price,
-          priceVersion: product.updatedAt,
-        });
-      }
-
-      const items = await cartRepository.listItems(cart._id);
-      return toCartResponse(cart, items);
+      return runCommand(customerId, input, 'AddItem');
     },
-
     async updateItem(customerId, itemId, input) {
-      const cart = await getOrCreateCart(customerId);
-      const items = await cartRepository.listItems(cart._id);
-      const item = items.find((entry) => String(entry._id) === String(itemId));
-      if (!item) throw new ApiError(404, 'Cart item not found');
-      const product = await productRepository.findSellableById(item.productId);
-      if (!product) throw new ApiError(404, 'Product not found or inactive');
-      await assertQuantity(product, Number(input.quantity));
-      await cartRepository.updateItem(itemId, {
-        quantity: Number(input.quantity),
-        unitPrice: product.price,
-        productName: product.name,
-        priceVersion: product.updatedAt,
-      });
-      return toCartResponse(cart, await cartRepository.listItems(cart._id));
+      return runCommand(customerId, input, 'UpdateItem', itemId);
     },
-
-    async removeItem(customerId, itemId) {
-      const cart = await getOrCreateCart(customerId);
-      const items = await cartRepository.listItems(cart._id);
-      const item = items.find((entry) => String(entry._id) === String(itemId));
-      if (!item) throw new ApiError(404, 'Cart item not found');
-      await cartRepository.removeItem(itemId);
-      return toCartResponse(cart, await cartRepository.listItems(cart._id));
+    async removeItem(customerId, itemId, input = {}) {
+      return runCommand(customerId, input, 'RemoveItem', itemId);
     },
   };
 }
@@ -197,4 +311,5 @@ function createCartService({
 module.exports = {
   createCartService,
   cartService: createCartService(),
+  normalizeCommandInput,
 };

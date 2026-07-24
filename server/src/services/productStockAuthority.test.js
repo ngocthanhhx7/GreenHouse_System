@@ -9,7 +9,7 @@ describe('Inventory-only Product quantity authority', () => {
     assert.equal(Product.schema.path('stockQuantity'), undefined);
   });
 
-  it('derives public catalog quantity from Inventory', async () => {
+  it('derives only public availability from Inventory without exposing a raw quantity', async () => {
     const product = {
       _id: 'product-1',
       name: 'Inventory-backed product',
@@ -48,7 +48,13 @@ describe('Inventory-only Product quantity authority', () => {
       auditLogger: { async log() {} },
     });
 
-    assert.equal((await service.listPublicProducts()).items[0].stockQuantity, 5);
-    assert.equal((await service.getPublicProductById('product-1')).stockQuantity, 5);
+    const listItem = (await service.listPublicProducts()).items[0];
+    const detail = await service.getPublicProductById('product-1');
+    assert.equal(listItem.availabilityStatus, 'InStock');
+    assert.equal(detail.availabilityStatus, 'InStock');
+    assert.equal(listItem.stockQuantity, undefined);
+    assert.equal(detail.stockQuantity, undefined);
+    assert.equal(listItem.availableQuantity, undefined);
+    assert.equal(detail.inventoryHealth, undefined);
   });
 });

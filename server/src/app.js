@@ -25,6 +25,7 @@ const contactRoutes = require('./routes/contact.routes');
 const codRoutes = require('./routes/cod.routes');
 const exchangeRoutes = require('./routes/exchange.routes');
 const fulfillmentRoutes = require('./routes/fulfillment.routes');
+const uploadController = require('./controller/upload.controller');
 const path = require('node:path');
 const { notFound, errorHandler } = require('./middlewares/error.middleware');
 const { requestId } = require('./middlewares/requestId.middleware');
@@ -37,6 +38,7 @@ function createApp({
   rateLimit = true,
   authRateLimitMax = 20,
   uploadsRoot = path.resolve(__dirname, '../uploads'),
+  productImageHandler = uploadController.getProductImage,
 } = {}) {
   const app = express();
 
@@ -74,7 +76,7 @@ function createApp({
       res.setHeader('Cache-Control', 'public, max-age=86400');
     },
   };
-  app.use('/uploads/products', express.static(path.join(uploadsRoot, 'products'), publicMediaOptions));
+  app.get('/uploads/products/:filename', loadSession, productImageHandler);
   app.use('/uploads/avatars', express.static(path.join(uploadsRoot, 'avatars'), publicMediaOptions));
 
   app.get('/api/health', (req, res) => {

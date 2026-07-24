@@ -127,8 +127,8 @@ function normalizeExpectedItems(expectedItems) {
     if (!Number.isInteger(quantity) || quantity <= 0) {
       errors.push({ field: `${fieldPrefix}.quantity`, message: 'Quantity must be a positive integer' });
     }
-    if (!Number.isFinite(unitPrice) || unitPrice < 0) {
-      errors.push({ field: `${fieldPrefix}.unitPrice`, message: 'Displayed price must be a non-negative number' });
+    if (!Number.isInteger(unitPrice) || unitPrice <= 0) {
+      errors.push({ field: `${fieldPrefix}.unitPrice`, message: 'Displayed price must be a positive integer VND amount' });
     }
     if (!priceVersion) errors.push({ field: `${fieldPrefix}.priceVersion`, message: 'Displayed price version is required' });
 
@@ -141,8 +141,29 @@ function normalizeExpectedItems(expectedItems) {
   return normalized.sort((left, right) => left.productId.localeCompare(right.productId));
 }
 
+function normalizeCartAcceptance(input = {}) {
+  const cartId = String(input.cartId || '').trim();
+  const cartVersion = Number(input.cartVersion);
+  const errors = [];
+  if (!cartId) errors.push({ field: 'cartId', message: 'Displayed Cart identity is required' });
+  if (!Number.isInteger(cartVersion) || cartVersion < 1) {
+    errors.push({ field: 'cartVersion', message: 'Displayed Cart version must be a positive integer' });
+  }
+  if (errors.length) {
+    throw new ApiError(
+      400,
+      'Checkout Cart acceptance is invalid',
+      errors,
+      'CHECKOUT_CART_ACCEPTANCE_INVALID',
+    );
+  }
+  return { cartId, cartVersion };
+}
+
 function hashCheckoutRequest({
   customerId,
+  cartId,
+  cartVersion,
   paymentMethod,
   savedAddressId,
   deliveryAddress,
@@ -162,6 +183,8 @@ function hashCheckoutRequest({
   const canonicalPayload = {
     command: 'PLACE_ORDER',
     customerId: String(customerId),
+    cartId: String(cartId),
+    cartVersion: Number(cartVersion),
     paymentMethod,
     addressSource,
     customerNote: String(customerNote || '').trim(),
@@ -199,14 +222,21 @@ function createModelCartRepository() {
     async listItems(cartId, session) {
       return withOptionalSession(CartItem.find({ cartId }), session).lean();
     },
-    async clearExactCart(cartId, session) {
+    async findActiveByIdAndCustomer(cartId, customerId, session) {
+      return withOptionalSession(
+        Cart.findOne({ _id: cartId, customerId, status: 'Active' }),
+        session,
+      ).lean();
+    },
+    async clearExactCart(cartId, cartVersion, session) {
       const updatedCart = await withOptionalSession(
-        Cart.findOneAndUpdate({ _id: cartId, status: 'Active' }, { status: 'CheckedOut' }, { new: true, runValidators: true }),
+        Cart.findOneAndUpdate(
+          { _id: cartId, status: 'Active', version: Number(cartVersion) },
+          { status: 'CheckedOut' },
+          { new: true, runValidators: true },
+        ),
         session
       ).lean();
-      if (updatedCart) {
-        await withOptionalSession(CartItem.deleteMany({ cartId }), session);
-      }
       return updatedCart;
     },
   };
@@ -215,7 +245,11 @@ function createModelCartRepository() {
 function createModelProductRepository() {
   return {
     async findSellableById(id, session) {
-      return withOptionalSession(Product.findOne({ _id: id, status: 'Active' }), session).lean();
+      const product = await withOptionalSession(
+        Product.findOne({ _id: id, status: 'Active' }).populate('categoryId'),
+        session,
+      ).lean();
+      return product?.categoryId?.status === 'Active' ? product : null;
     },
   };
 }
@@ -618,7 +652,10 @@ function createOrderService({
           'PRICE_CHANGED'
         );
       }
-      const currentPriceVersion = product.updatedAt ? new Date(product.updatedAt).toISOString() : '';
+      const priceVersionSource = product.priceVersion || product.updatedAt;
+      const currentPriceVersion = priceVersionSource
+        ? new Date(priceVersionSource).toISOString()
+        : '';
       if (currentPriceVersion && expected.priceVersion !== currentPriceVersion) {
         throw new ApiError(
           409,
@@ -680,6 +717,7 @@ function createOrderService({
     drainPostCommitWork,
     async placeOrder(customerId, input = {}) {
       const idempotencyKey = normalizeIdempotencyKey(input);
+      const { cartId, cartVersion } = normalizeCartAcceptance(input);
       const paymentMethod = input.paymentMethod || 'COD';
       if (!['COD', 'ONLINE'].includes(paymentMethod)) throw new ApiError(400, 'Invalid payment method');
 
@@ -708,6 +746,8 @@ function createOrderService({
         expectedItems = normalizeExpectedItems(input.expectedItems);
         const preliminaryCheckoutHash = hashCheckoutRequest({
           customerId,
+          cartId,
+          cartVersion,
           paymentMethod,
           savedAddressId,
           deliveryAddress: {},
@@ -743,6 +783,8 @@ function createOrderService({
       if (!expectedItems) expectedItems = normalizeExpectedItems(input.expectedItems);
       const checkoutRequestHash = hashCheckoutRequest({
         customerId,
+        cartId,
+        cartVersion,
         paymentMethod,
         savedAddressId,
         deliveryAddress: deliverySnapshot,
@@ -777,8 +819,26 @@ function createOrderService({
             return { order: alreadyCompleted, lines: details, replay: true };
           }
 
-          const cart = await cartRepository.findActiveByCustomer(customerId, session);
-          if (!cart) throw new ApiError(400, 'Cart must have at least one item before checkout');
+          const cart = cartRepository.findActiveByIdAndCustomer
+            ? await cartRepository.findActiveByIdAndCustomer(cartId, customerId, session)
+            : await cartRepository.findActiveByCustomer(customerId, session);
+          if (
+            !cart
+            || String(cart._id) !== cartId
+            || Number(cart.version || 0) !== cartVersion
+          ) {
+            throw new ApiError(
+              409,
+              'Cart contents changed before checkout',
+              [{ field: 'cartVersion', message: 'Refresh the Cart before checkout' }],
+              'CART_CHANGED',
+              {
+                currentCart: cart
+                  ? { id: String(cart._id), version: Number(cart.version || 0) }
+                  : null,
+              },
+            );
+          }
           const cartItems = await cartRepository.listItems(cart._id, session);
           if (!cartItems.length) throw new ApiError(400, 'Cart must have at least one item before checkout');
 
@@ -794,6 +854,7 @@ function createOrderService({
               totalAmount,
               codExpectedAmount: paymentMethod === 'COD' ? totalAmount : null,
               subtotal: totalAmount,
+              shippingFee: 0,
               paymentMethod,
               paymentStatus: initialPaymentStatus,
               orderStatus: 'Pending',
@@ -838,7 +899,9 @@ function createOrderService({
               paymentStatus: 'Unpaid',
             }, session);
           }
-          const clearedCart = await cartRepository.clearExactCart(cart._id, session);
+          const clearedCart = cartRepository.clearExactCart.length >= 3
+            ? await cartRepository.clearExactCart(cartId, cartVersion, session)
+            : await cartRepository.clearExactCart(cartId, session);
           if (!clearedCart) throw new ApiError(409, 'Cart was changed during checkout. Please retry with a new key.');
           return { order, lines, inventories, replay: false };
         });

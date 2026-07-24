@@ -1,6 +1,8 @@
 require('dotenv').config();
 
 const mongoose = require('mongoose');
+const path = require('node:path');
+const { copyFile, mkdir, stat } = require('node:fs/promises');
 const { connectDatabase } = require('./database');
 const { seedRoles } = require('./seedRoles');
 const { hashPassword } = require('../utils/password');
@@ -8,6 +10,7 @@ const Role = require('../models/role.model');
 const User = require('../models/user.model');
 const Category = require('../models/category.model');
 const Product = require('../models/product.model');
+const ProductMediaAsset = require('../models/productMediaAsset.model');
 const Inventory = require('../models/inventory.model');
 const Order = require('../models/order.model');
 const OrderDetail = require('../models/orderDetail.model');
@@ -20,6 +23,7 @@ const SystemSetting = require('../models/systemSetting.model');
 const Notification = require('../models/notification.model');
 const AuditLog = require('../models/auditLog.model');
 const UserAddress = require('../models/userAddress.model');
+const { DEMO_IMAGE_MANIFEST } = require('../demo-data/demoImageManifest');
 
 const DEMO_PASSWORD = 'GreenHome@123';
 
@@ -88,9 +92,8 @@ const DEMO_PRODUCTS = [
     sku: 'GH-NC-001',
     categoryName: 'Nồi chảo',
     description: 'Chảo phủ gốm chống dính, truyền nhiệt đều, phù hợp cho bữa cơm gia đình hằng ngày.',
-    imageUrls: ['https://images.unsplash.com/photo-1556911220-bff31c812dba?auto=format&fit=crop&w=900&q=80'],
     price: 649000,
-    stockQuantity: 25,
+    initialInventoryQuantity: 25,
     unit: 'cái',
   },
   {
@@ -99,9 +102,8 @@ const DEMO_PRODUCTS = [
     sku: 'GH-NC-002',
     categoryName: 'Nồi chảo',
     description: 'Nồi inox bền chắc với đáy truyền nhiệt tốt, dùng cho món canh, hầm và nước sốt.',
-    imageUrls: ['https://images.unsplash.com/photo-1556911220-bff31c812dba?auto=format&fit=crop&w=900&q=80'],
     price: 899000,
-    stockQuantity: 18,
+    initialInventoryQuantity: 18,
     unit: 'cái',
   },
   {
@@ -110,9 +112,8 @@ const DEMO_PRODUCTS = [
     sku: 'GH-BA-001',
     categoryName: 'Bàn ăn và phục vụ',
     description: 'Bộ bốn đĩa gốm thanh lịch, dễ phối bàn ăn và phù hợp sử dụng hằng ngày.',
-    imageUrls: ['https://images.unsplash.com/photo-1603199506016-b9a594b593c0?auto=format&fit=crop&w=900&q=80'],
     price: 459000,
-    stockQuantity: 40,
+    initialInventoryQuantity: 40,
     unit: 'bộ',
   },
   {
@@ -121,9 +122,8 @@ const DEMO_PRODUCTS = [
     sku: 'GH-LT-001',
     categoryName: 'Lưu trữ thông minh',
     description: 'Hũ thủy tinh kín khí giúp bảo quản ngũ cốc, gia vị và thực phẩm khô gọn gàng.',
-    imageUrls: ['https://images.unsplash.com/photo-1610701596007-11502861dcfa?auto=format&fit=crop&w=900&q=80'],
     price: 149000,
-    stockQuantity: 80,
+    initialInventoryQuantity: 80,
     unit: 'hũ',
   },
   {
@@ -132,9 +132,8 @@ const DEMO_PRODUCTS = [
     sku: 'GH-SC-001',
     categoryName: 'Dụng cụ sơ chế',
     description: 'Thớt tre chắc chắn với rãnh hứng nước, bề mặt rộng và dễ vệ sinh.',
-    imageUrls: ['https://images.unsplash.com/photo-1593618998160-e34014e67546?auto=format&fit=crop&w=900&q=80'],
     price: 289000,
-    stockQuantity: 35,
+    initialInventoryQuantity: 35,
     unit: 'cái',
   },
   {
@@ -143,9 +142,8 @@ const DEMO_PRODUCTS = [
     sku: 'GH-SC-002',
     categoryName: 'Dụng cụ sơ chế',
     description: 'Dao bếp inox cân bằng tốt, lưỡi sắc bền, hỗ trợ thái cắt thực phẩm chính xác.',
-    imageUrls: ['https://images.unsplash.com/photo-1593618998160-e34014e67546?auto=format&fit=crop&w=900&q=80'],
     price: 759000,
-    stockQuantity: 22,
+    initialInventoryQuantity: 22,
     unit: 'cái',
   },
   {
@@ -154,9 +152,8 @@ const DEMO_PRODUCTS = [
     sku: 'GH-VS-001',
     categoryName: 'Vệ sinh nhà bếp',
     description: 'Nước rửa chén nguồn gốc thực vật, làm sạch dầu mỡ và dịu nhẹ khi sử dụng.',
-    imageUrls: ['https://images.unsplash.com/photo-1585421514738-01798e348b17?auto=format&fit=crop&w=900&q=80'],
     price: 89000,
-    stockQuantity: 120,
+    initialInventoryQuantity: 120,
     unit: 'chai',
   },
   {
@@ -165,12 +162,19 @@ const DEMO_PRODUCTS = [
     sku: 'GH-LT-002',
     categoryName: 'Lưu trữ thông minh',
     description: 'Bộ hộp không chứa BPA, thiết kế xếp chồng tiết kiệm diện tích và tiện chuẩn bị bữa ăn.',
-    imageUrls: ['https://images.unsplash.com/photo-1610701596007-11502861dcfa?auto=format&fit=crop&w=900&q=80'],
     price: 329000,
-    stockQuantity: 30,
+    initialInventoryQuantity: 30,
     unit: 'bộ',
   },
 ];
+
+const DEMO_IMAGE_BY_SKU = new Map(DEMO_IMAGE_MANIFEST.map((image) => [image.sku, image]));
+
+function getManagedImage(productSpec) {
+  const image = DEMO_IMAGE_BY_SKU.get(productSpec.sku);
+  if (!image) throw new Error(`Missing managed demo image for SKU: ${productSpec.sku}`);
+  return image;
+}
 
 const DEMO_ORDER_SPECS = [
   {
@@ -386,6 +390,7 @@ async function upsertCategories() {
 async function upsertProducts(categoryMap) {
   const products = {};
   for (const product of DEMO_PRODUCTS) {
+    const image = getManagedImage(product);
     const saved = await Product.findOneAndUpdate(
       { $or: [{ sku: product.sku }, { name: { $in: [product.name, product.legacyName] } }] },
       {
@@ -393,9 +398,8 @@ async function upsertProducts(categoryMap) {
           name: product.name,
           sku: product.sku,
           description: product.description,
-          imageUrls: product.imageUrls,
+          imageUrls: [image.destination],
           price: product.price,
-          stockQuantity: product.stockQuantity,
           unit: product.unit,
           categoryId: categoryMap[product.categoryName]._id,
           status: 'Active',
@@ -408,12 +412,44 @@ async function upsertProducts(categoryMap) {
   return products;
 }
 
+async function materializeProductMedia(productMap) {
+  for (const productSpec of DEMO_PRODUCTS) {
+    const product = productMap[productSpec.name];
+    const image = getManagedImage(productSpec);
+    const sourcePath = path.resolve(__dirname, '../../..', image.source);
+    const destinationPath = path.resolve(__dirname, '../../uploads/products', path.basename(image.destination));
+    await mkdir(path.dirname(destinationPath), { recursive: true });
+    await copyFile(sourcePath, destinationPath);
+    const sourceStats = await stat(sourcePath);
+
+    await ProductMediaAsset.findOneAndUpdate(
+      { url: image.destination },
+      {
+        $set: {
+          status: 'Attached',
+          productId: product._id,
+          expiresAt: null,
+          attachedAt: new Date(),
+        },
+        $setOnInsert: {
+          url: image.destination,
+          originalName: path.basename(image.source),
+          mimeType: 'image/webp',
+          size: sourceStats.size,
+        },
+      },
+      { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true },
+    );
+  }
+}
+
 async function upsertInventories(productMap) {
   const inventories = {};
-  for (const product of Object.values(productMap)) {
+  for (const productSpec of DEMO_PRODUCTS) {
+    const product = productMap[productSpec.name];
     let inventory = await Inventory.findOne({ productId: product._id });
     if (!inventory) inventory = new Inventory({ productId: product._id });
-    inventory.stockQuantity = Number(product.stockQuantity || 0);
+    inventory.sellableQuantity = Number(productSpec.initialInventoryQuantity || 0);
     inventory.reservedQuantity = 0;
     inventory.damagedQuantity = 0;
     inventory.lowStockThreshold = 5;
@@ -706,6 +742,7 @@ async function seedDemoData() {
   const userAddresses = await upsertUserAddresses(userMap);
   const categoryMap = await upsertCategories();
   const productMap = await upsertProducts(categoryMap);
+  await materializeProductMedia(productMap);
   const inventoryMap = await upsertInventories(productMap);
   const orders = await upsertDemoOrders(userMap, productMap);
   const orderMap = Object.fromEntries(orders.map((order) => [order.orderCode, order]));

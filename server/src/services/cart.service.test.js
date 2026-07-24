@@ -10,11 +10,20 @@ function createProductRepository() {
       name: 'Green Pan',
       price: 25,
       status: 'Active',
-      stockQuantity: 5,
-      availableQuantity: 5,
+      categoryId: { _id: 'cat-1', status: 'Active' },
+      inventoryHealth: 'Normal',
+      sellableQuantity: 5,
       updatedAt: new Date('2026-07-23T00:00:00.000Z'),
     },
-    { _id: 'p2', name: 'Hidden Plate', price: 10, status: 'Inactive', stockQuantity: 5, availableQuantity: 5 },
+    {
+      _id: 'p2',
+      name: 'Hidden Plate',
+      price: 10,
+      status: 'Inactive',
+      categoryId: { _id: 'cat-1', status: 'Active' },
+      inventoryHealth: 'Normal',
+      sellableQuantity: 5,
+    },
   ];
   return {
     async findSellableById(id) {
@@ -34,7 +43,12 @@ function createCartRepository() {
       return carts.find((cart) => cart.customerId === customerId && cart.status === 'Active') || null;
     },
     async createCart(customerId) {
-      const cart = { _id: `cart-${carts.length + 1}`, customerId, status: 'Active' };
+      const cart = {
+        _id: `cart-${carts.length + 1}`,
+        customerId,
+        status: 'Active',
+        version: 0,
+      };
       carts.push(cart);
       return cart;
     },
@@ -75,7 +89,12 @@ describe('cart service', () => {
   });
 
   it('adds an active product to customer cart and calculates totals', async () => {
-    const result = await cartService.addItem('customer-1', { productId: 'p1', quantity: 2 });
+    const result = await cartService.addItem('customer-1', {
+      productId: 'p1',
+      quantity: 2,
+      expectedVersion: 0,
+      idempotencyKey: 'cart-add-001',
+    });
 
     assert.equal(result.items.length, 1);
     assert.equal(result.items[0].productName, 'Green Pan');
@@ -108,18 +127,33 @@ describe('cart service', () => {
   });
 
   it('merges quantity when the same product is added twice', async () => {
-    await cartService.addItem('customer-1', { productId: 'p1', quantity: 2 });
-    const result = await cartService.addItem('customer-1', { productId: 'p1', quantity: 1 });
+    await cartService.addItem('customer-1', {
+      productId: 'p1',
+      quantity: 2,
+      expectedVersion: 0,
+      idempotencyKey: 'cart-merge-001',
+    });
+    const result = await cartService.addItem('customer-1', {
+      productId: 'p1',
+      quantity: 1,
+      expectedVersion: 1,
+      idempotencyKey: 'cart-merge-002',
+    });
 
     assert.equal(result.items.length, 1);
     assert.equal(result.items[0].quantity, 3);
     assert.equal(result.totalAmount, 75);
   });
 
-  it('rejects quantity greater than stock', async () => {
+  it('rejects quantity greater than current availability', async () => {
     await assert.rejects(
-      () => cartService.addItem('customer-1', { productId: 'p1', quantity: 6 }),
-      /exceeds available stock/
+      () => cartService.addItem('customer-1', {
+        productId: 'p1',
+        quantity: 6,
+        expectedVersion: 0,
+        idempotencyKey: 'cart-too-many-001',
+      }),
+      /exceeds current availability/
     );
   });
 
@@ -147,12 +181,15 @@ describe('cart service', () => {
     });
 
     await assert.rejects(
-      () => cartService.removeItem('customer-1', otherItem._id),
+      () => cartService.removeItem('customer-1', otherItem._id, {
+        expectedVersion: 0,
+        idempotencyKey: 'cart-remove-001',
+      }),
       /Cart item not found/
     );
   });
 
-  it('reuses the cart created by a concurrent request after an active-cart unique conflict', async () => {
+  it('returns the current cart after an active-cart unique conflict', async () => {
     const cartRepository = createCartRepository();
     const originalCreate = cartRepository.createCart.bind(cartRepository);
     let firstCreate = true;
@@ -168,8 +205,19 @@ describe('cart service', () => {
     };
     cartService = createCartService({ productRepository: createProductRepository(), cartRepository });
 
-    const result = await cartService.getCart('customer-1');
-    assert.equal(result.id, 'cart-1');
+    await assert.rejects(
+      () => cartService.addItem('customer-1', {
+        productId: 'p1',
+        quantity: 1,
+        expectedVersion: 0,
+        idempotencyKey: 'cart-concurrent-001',
+      }),
+      (error) => {
+        assert.equal(error.errorCode, 'CART_VERSION_CONFLICT');
+        assert.equal(error.data.cart.id, 'cart-1');
+        return true;
+      },
+    );
     assert.equal(cartRepository.carts.length, 1);
   });
 });

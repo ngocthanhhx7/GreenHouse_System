@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 
 import useAuth from '../../hooks/useAuth.js';
 import { useCart } from '../../contexts/CartContext.jsx';
 import { cartService } from '../../services/cartService.js';
+import { createCartCommandRetryStore } from '../../services/cartCommandRetry.js';
 import { resolveMediaUrl } from '../../services/apiClient.js';
 import { formatCurrency } from '../../utils/formatters.js';
 
@@ -15,7 +16,9 @@ export default function ProductCard({ product }) {
   const [added, setAdded] = useState(false);
   const [error, setError] = useState('');
   const [imageError, setImageError] = useState(false);
+  const cartCommandRetries = useRef(createCartCommandRetryStore());
   const imageUrl = resolveMediaUrl(product.imageUrls?.[0]);
+  const isOutOfStock = product.availabilityStatus === 'OutOfStock';
 
   useEffect(() => setImageError(false), [imageUrl]);
 
@@ -33,11 +36,23 @@ export default function ProductCard({ product }) {
       setTimeout(() => setError(''), 2500);
       return;
     }
+    if (isOutOfStock) return;
 
     setLoading(true);
     setError('');
     try {
-      await runCartMutation(() => cartService.addItem({ productId: product.id || product._id, quantity: 1 }));
+      await runCartMutation((currentCart) => {
+        const command = cartCommandRetries.current.acquire(`add:${product.id || product._id}`, {
+          productId: product.id || product._id,
+          quantity: 1,
+          expectedVersion: Number(currentCart.version || 0),
+        });
+        return cartService.addItem(command.facts, { idempotencyKey: command.idempotencyKey })
+          .then((result) => {
+            cartCommandRetries.current.confirm(`add:${product.id || product._id}`, command);
+            return result;
+          });
+      });
       setAdded(true);
       setTimeout(() => setAdded(false), 2000);
     } catch (err) {
@@ -59,13 +74,15 @@ export default function ProductCard({ product }) {
         <button
           className={`quick-add-btn ${added ? 'added' : ''}`}
           onClick={handleQuickAdd}
-          disabled={loading}
+          disabled={loading || isOutOfStock}
           aria-label="Thêm nhanh vào giỏ hàng"
         >
           {loading ? (
             <span className="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
           ) : added ? (
             'Đã thêm'
+          ) : isOutOfStock ? (
+            'Hết hàng'
           ) : (
             '+ Thêm'
           )}
@@ -74,6 +91,9 @@ export default function ProductCard({ product }) {
       <div className="product-body">
         <h3 className="product-title">{product.name}</h3>
         <p className="product-category">{product.category?.name || 'Sản phẩm nhà bếp'}</p>
+        <span className={`availability-badge ${isOutOfStock ? 'out' : 'in'}`}>
+          {isOutOfStock ? 'Hết hàng' : 'Còn hàng'}
+        </span>
         <div className="product-footer">
           <strong className="product-price">{formatCurrency(product.price)}</strong>
           <Link className="btn-detail-link" to={`/products/${product.id || product._id}`}>
