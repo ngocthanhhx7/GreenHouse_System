@@ -104,8 +104,8 @@ client SL-006 UI acceptance: 12/12
 focused server matrix: 118/118, 14 suites
 focused client matrix: 47/47, 11 suites
 migration: 5/5
-full server: 726/726, 123 suites
-full client: 190/190, 52 suites
+full server: 790/790, 132 suites
+full client: 206/206, 55 suites
 client production build: PASS (151 modules)
 git diff --check: clean except Windows LF/CRLF notices
 ```

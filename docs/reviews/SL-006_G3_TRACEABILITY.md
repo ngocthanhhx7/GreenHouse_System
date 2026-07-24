@@ -115,7 +115,8 @@ not invent command records for legacy Products.
 - Focused GREEN: server `118/118` across 14 suites/files; client `47/47`
   across 11 suites; migration `5/5`; SL-006 server acceptance `27/27`; client
   UI acceptance `12/12`.
-- Full regression: server `726/726` across 123 suites and client `190/190`
+- Full regression after rebasing onto merged SL-004: server `790/790` across
+  132 suites and client `206/206` across 55 suites
   across 52 suites, with zero failures.
 - Build: installed Vite entry point completed with exit code `0`, 151 modules
   transformed; only the existing greater-than-500-kB chunk warning remains.

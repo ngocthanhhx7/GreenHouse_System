@@ -94,8 +94,8 @@ No exact initial client UI RED count was retained. The final client acceptance c
 - Focused server matrix: `118/118`, 14 suites/files.
 - Focused client matrix: `47/47`, 11 suites.
 - Migration tests: `5/5`.
-- Full server regression: `726/726`, 123 suites, zero failures.
-- Full client regression: `190/190`, 52 suites, zero failures.
+- Full server regression after rebasing onto merged SL-004: `790/790`, 132 suites, zero failures.
+- Full client regression after rebasing onto merged SL-004: `206/206`, 55 suites, zero failures.
 - Client production build: exit code `0`, 151 modules transformed; only the existing greater-than-500-kB chunk warning remains.
 - Build command used: `node node_modules/vite/bin/vite.js build`. The junctioned shared dependency tree lacks `node_modules/.bin/vite`, so `npm run build` cannot resolve that shim in this worktree even though the installed Vite entry point builds the same source successfully.
 - `git diff --check`: clean apart from Windows line-ending conversion notices.
