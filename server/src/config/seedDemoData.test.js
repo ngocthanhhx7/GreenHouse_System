@@ -43,7 +43,16 @@ describe('demo data seed config', () => {
     assert.ok(DEMO_PRODUCTS.every((product) => DEMO_CATEGORIES.some((category) => category.name === product.categoryName)));
     assert.ok(DEMO_ORDER_SPECS.some((order) => order.orderStatus === 'Pending'));
     assert.ok(DEMO_ORDER_SPECS.some((order) => order.orderStatus === 'Confirmed'));
-    assert.ok(DEMO_ORDER_SPECS.some((order) => order.orderStatus === 'StockExportRequested'));
+    assert.ok(
+      DEMO_ORDER_SPECS.every((order) => order.orderStatus !== 'StockExportRequested'),
+      'SL-004 removed StockExportRequested from the persisted Order lifecycle',
+    );
+    const pendingExportOrder = DEMO_ORDER_SPECS.find((order) => order.stockExportStatus === 'Pending');
+    assert.equal(
+      pendingExportOrder?.orderStatus,
+      'Confirmed',
+      'a Pending export remains a separate fulfillment fact while the Order is Confirmed',
+    );
     assert.ok(DEMO_ORDER_SPECS.some((order) => order.orderStatus === 'Delivered'));
     assert.ok(DEMO_RETURN_REFUND_SPECS.some((request) => request.orderCode === 'GH-DEMO-1004'));
     assert.ok(DEMO_SUPPORT_SPECS.some((request) => request.orderCode === 'GH-DEMO-1004'));

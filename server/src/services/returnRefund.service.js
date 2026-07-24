@@ -658,6 +658,8 @@ function createReturnRefundService({
     const completedAt = new Date(clock());
     const isCancellationRefund = loaded.request.status === 'ReadyForRefund'
       && loaded.order.orderStatus === 'Cancelled';
+    const isFailedDeliveryRefund = refund.obligationType === 'FAILED_DELIVERY';
+    const preservesOrderLifecycle = isCancellationRefund || isFailedDeliveryRefund;
     const updatedRefund = await repository.updateRefundPending(refund._id, {
       status: 'Refunded',
       payoutStatus: 'Succeeded',
@@ -691,13 +693,13 @@ function createReturnRefundService({
     const updatedOrder = await repository.updateOrder(
       loaded.order._id,
       {
-        ...(isCancellationRefund ? {} : { orderStatus: 'Returned' }),
+        ...(preservesOrderLifecycle ? {} : { orderStatus: 'Returned' }),
         moneyObligationsSettled,
       },
       session
     );
     if (!updatedOrder) throw new ApiError(409, 'Order changed while payout was being completed');
-    if (!isCancellationRefund && repository.releaseOrderLock) {
+    if (!preservesOrderLifecycle && repository.releaseOrderLock) {
       const closedLock = await repository.releaseOrderLock(
         loaded.order._id,
         loaded.request._id,

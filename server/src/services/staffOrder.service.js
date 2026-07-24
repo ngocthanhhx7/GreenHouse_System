@@ -10,15 +10,14 @@ const PaymentAttempt = require('../models/paymentAttempt.model');
 const RefundPending = require('../models/refundPending.model');
 const ReturnRefundRequest = require('../models/returnRefundRequest.model');
 const OrderReservation = require('../models/orderReservation.model');
+const FulfillmentCycle = require('../models/fulfillmentCycle.model');
 const Invoice = require('../models/invoice.model');
 const { logAudit } = require('../utils/auditLogger');
-const { canTransitionOrderStatus, getAllowedOrderStatusTransitions } = require('../utils/orderStateMachine');
 const {
   assignmentCoordinator: defaultAssignmentCoordinator,
 } = require('./assignmentCoordination.service');
 
-const INVOICE_ELIGIBLE_STATUSES = new Set(['Confirmed', 'StockExportRequested', 'Packed', 'Shipped', 'Delivered']);
-const RETURN_WINDOW_MS = 5 * 24 * 60 * 60 * 1000;
+const INVOICE_ELIGIBLE_STATUSES = new Set(['Confirmed', 'Packed', 'Shipped', 'Delivered', 'DeliveryFailed']);
 
 function withOptionalSession(query, session) {
   return session ? query.session(session) : query;
@@ -87,7 +86,7 @@ function toOrderSummary(order) {
 }
 
 function toOrderDetail(order, details = []) {
-  return { ...toOrderSummary(order), allowedNextStatuses: getAllowedOrderStatusTransitions(order.orderStatus), details };
+  return { ...toOrderSummary(order), details };
 }
 
 function toStockExportRequest(request) {
@@ -170,7 +169,7 @@ function createModelOrderRepository() {
     },
     async findOpenStockExportRequest(orderId, session) {
       return withOptionalSession(
-        StockExportRequest.findOne({ orderId, status: { $in: ['Pending', 'Approved', 'Processing'] } }),
+        StockExportRequest.findOne({ orderId, status: { $in: ['Pending', 'Processing', 'Failed'] } }),
         session
       ).lean();
     },
@@ -184,8 +183,18 @@ function createModelOrderRepository() {
     async findCompletedStockExportRequest(orderId, session) {
       return withOptionalSession(StockExportRequest.findOne({
         orderId,
-        $or: [{ status: 'Exported' }, { exportedAt: { $ne: null } }],
+        status: 'Completed',
       }), session).lean();
+    },
+    async findInitialFulfillmentCycle(orderId, session) {
+      return withOptionalSession(
+        FulfillmentCycle.findOne({ orderId, cycleNumber: 1, cycleType: 'Initial' }),
+        session,
+      ).lean();
+    },
+    async createFulfillmentCycle(data, session) {
+      const [cycle] = await FulfillmentCycle.create([data], session ? { session } : undefined);
+      return cycle.toObject();
     },
     async createStockExportRequest(data, session) {
       if (!session) return StockExportRequest.create(data);
@@ -399,8 +408,24 @@ function createStaffOrderService({
           : null;
         let stockExportRequest = existingRequest;
         if (!stockExportRequest) {
+          let cycle = orderRepository.findInitialFulfillmentCycle
+            ? await orderRepository.findInitialFulfillmentCycle(orderId, session)
+            : null;
+          if (!cycle) {
+            cycle = await orderRepository.createFulfillmentCycle({
+              cycleKey: `fulfillment:${String(orderId)}:1`,
+              orderId,
+              cycleNumber: 1,
+              cycleType: 'Initial',
+              status: 'AwaitingExport',
+              commandKey: idempotencyKey || `confirm:${String(orderId)}`,
+              createdBy: staffId,
+            }, session);
+          }
           stockExportRequest = await orderRepository.createStockExportRequest({
             orderId,
+            cycleId: cycle._id,
+            requestKind: 'Initial',
             requestedBy: staffId,
             status: 'Pending',
             note,
@@ -416,58 +441,6 @@ function createStaffOrderService({
         stockExportRequest: result.stockExportRequest ? toStockExportRequest(result.stockExportRequest) : null,
         idempotentReplay: Boolean(result.idempotentReplay),
       };
-    },
-
-    async requestStockExport(staffId, orderId, input = {}) {
-      const result = await transactionManager.withTransaction(async (session) => {
-        await assignmentCoordinator.coordinate({
-          userId: staffId,
-          expectedRole: 'Staff',
-          session,
-        });
-        const order = await getOrderOrThrow(orderId, session);
-        const existing = await orderRepository.findOpenStockExportRequest(orderId, session);
-        if (existing) throw new ApiError(409, 'Stock export request already exists');
-        if (order.orderStatus !== 'Confirmed') throw new ApiError(409, 'Only Confirmed orders can request stock export');
-        const updated = orderRepository.claimStockExportOrder
-          ? await orderRepository.claimStockExportOrder(orderId, { orderStatus: 'StockExportRequested' }, session)
-          : await orderRepository.updateOrder(orderId, { orderStatus: 'StockExportRequested' }, session);
-        if (!updated) throw new ApiError(409, 'Order changed while requesting stock export');
-        const request = await orderRepository.createStockExportRequest({
-          orderId,
-          requestedBy: staffId,
-          status: 'Pending',
-          note: String(input.note || '').trim(),
-        }, session);
-        return { order: updated, request };
-      });
-      const updated = result.order;
-      const request = result.request;
-      await writeAudit(staffId, 'STAFF_STOCK_EXPORT_REQUEST', updated, `Staff requested stock export for ${updated.orderCode}`);
-      return { order: toOrderSummary(updated), stockExportRequest: toStockExportRequest(request) };
-    },
-
-    async updateStatus(staffId, orderId, input = {}) {
-      const order = await getOrderOrThrow(orderId);
-      const nextStatus = input.nextStatus;
-      if (nextStatus === 'StockExportRequested') {
-        throw new ApiError(409, 'Use the stock export request action before entering StockExportRequested');
-      }
-      if (!canTransitionOrderStatus(order.orderStatus, nextStatus)) throw new ApiError(409, 'Invalid order status transition');
-      const transitionAt = new Date();
-      const timestamps = nextStatus === 'Shipped' ? { shippedAt: transitionAt } : nextStatus === 'Delivered' ? {
-        deliveredAt: transitionAt,
-        returnDeadlineAt: new Date(transitionAt.getTime() + RETURN_WINDOW_MS),
-        exchangeDeadlineAt: new Date(transitionAt.getTime() + RETURN_WINDOW_MS),
-        ...(order.paymentMethod === 'COD' ? {
-          codExpectedAmount: Number(order.codExpectedAmount ?? order.totalAmount),
-          codDiscrepancyStatus: order.paymentStatus === 'Paid' ? 'Resolved' : 'Open',
-          ...(order.paymentStatus === 'Paid' ? {} : { codDiscrepancyOpenedAt: transitionAt }),
-        } : {}),
-      } : {};
-      const updated = await orderRepository.updateOrder(orderId, { orderStatus: nextStatus, ...timestamps });
-      await writeAudit(staffId, 'STAFF_ORDER_STATUS_UPDATE', updated, `Staff updated order ${updated.orderCode} to ${nextStatus}`);
-      return toOrderDetail(updated, await orderRepository.listOrderDetails(orderId));
     },
 
     async cancelOrder(staffId, orderId, input = {}) {

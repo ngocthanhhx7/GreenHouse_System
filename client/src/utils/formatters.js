@@ -24,7 +24,6 @@ export function translateOrderStatus(status) {
   const labels = {
     Pending: 'Chờ xác nhận',
     Confirmed: 'Đã xác nhận',
-    StockExportRequested: 'Đang yêu cầu xuất kho',
     Packed: 'Đã đóng gói',
     Shipped: 'Đang giao',
     Delivered: 'Đã giao',

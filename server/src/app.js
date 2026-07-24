@@ -24,6 +24,7 @@ const uploadRoutes = require('./routes/upload.routes');
 const contactRoutes = require('./routes/contact.routes');
 const codRoutes = require('./routes/cod.routes');
 const exchangeRoutes = require('./routes/exchange.routes');
+const fulfillmentRoutes = require('./routes/fulfillment.routes');
 const path = require('node:path');
 const { notFound, errorHandler } = require('./middlewares/error.middleware');
 const { requestId } = require('./middlewares/requestId.middleware');
@@ -94,6 +95,7 @@ function createApp({
   app.use('/api', replenishmentRoutes);
   app.use('/api', returnRefundRoutes);
   app.use('/api', exchangeRoutes);
+  app.use('/api', fulfillmentRoutes);
   app.use('/api', supportRoutes);
   app.use('/api', reviewRoutes);
   app.use('/api', reportRoutes);

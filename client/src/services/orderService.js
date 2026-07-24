@@ -42,6 +42,31 @@ export function createOrderService({ baseUrl = DEFAULT_BASE_URL, fetcher = fetch
     async getOrder(id) {
       return apiRequest(`/orders/${id}`);
     },
+    async getFulfillment(id) {
+      return parseResponse(await fetcher(`${baseUrl}/orders/${id}/fulfillment`, {
+        method: 'GET',
+        headers: authHeaders(),
+        credentials: 'include',
+      }));
+    },
+    async requestDestinationCorrection(id, input = {}) {
+      const { idempotencyKey = createCheckoutIdempotencyKey(), ...payload } = input;
+      return parseResponse(await fetcher(`${baseUrl}/orders/${id}/destination-corrections`, {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Idempotency-Key': idempotencyKey },
+        body: JSON.stringify(payload),
+        credentials: 'include',
+      }));
+    },
+    async chooseDeliveryIncident(id, incidentId, input = {}) {
+      const { idempotencyKey = createCheckoutIdempotencyKey(), ...payload } = input;
+      return parseResponse(await fetcher(`${baseUrl}/orders/${id}/delivery-incidents/${incidentId}/choice`, {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Idempotency-Key': idempotencyKey },
+        body: JSON.stringify(payload),
+        credentials: 'include',
+      }));
+    },
     async cancelOrder(id, {
       cancelReason = '',
       idempotencyKey = createCheckoutIdempotencyKey(),

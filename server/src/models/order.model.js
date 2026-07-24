@@ -115,7 +115,7 @@ const orderSchema = new mongoose.Schema(
     },
     orderStatus: {
       type: String,
-      enum: ['Pending', 'Confirmed', 'StockExportRequested', 'Packed', 'Shipped', 'Delivered', 'Cancelled', 'Returned'],
+      enum: ['Pending', 'Confirmed', 'Packed', 'Shipped', 'Delivered', 'DeliveryFailed', 'Cancelled', 'Returned'],
       default: 'Pending',
     },
     shippingAddress: {
@@ -165,6 +165,12 @@ const orderSchema = new mongoose.Schema(
     },
     returnDeadlineAt: { type: Date, default: null },
     exchangeDeadlineAt: { type: Date, default: null },
+    deliveryResolutionCommandKey: {
+      type: String,
+      default: '',
+      trim: true,
+      maxlength: 160,
+    },
   },
   { timestamps: true }
 );

@@ -5,15 +5,16 @@ const { canTransitionOrderStatus, getAllowedOrderStatusTransitions } = require('
 
 describe('order state machine', () => {
   it('allows staff operation statuses in the expected order', () => {
-    assert.equal(canTransitionOrderStatus('Confirmed', 'StockExportRequested'), true);
-    assert.equal(canTransitionOrderStatus('StockExportRequested', 'Packed'), false);
+    assert.equal(canTransitionOrderStatus('Pending', 'Confirmed'), true);
+    assert.equal(canTransitionOrderStatus('Confirmed', 'Packed'), true);
     assert.equal(canTransitionOrderStatus('Packed', 'Shipped'), true);
     assert.equal(canTransitionOrderStatus('Shipped', 'Delivered'), true);
+    assert.equal(canTransitionOrderStatus('Shipped', 'DeliveryFailed'), true);
   });
 
   it('rejects skipped staff order transitions', () => {
     assert.equal(canTransitionOrderStatus('Confirmed', 'Shipped'), false);
-    assert.deepEqual(getAllowedOrderStatusTransitions('Confirmed'), ['StockExportRequested']);
-    assert.deepEqual(getAllowedOrderStatusTransitions('StockExportRequested'), []);
+    assert.deepEqual(getAllowedOrderStatusTransitions('Confirmed'), ['Packed']);
+    assert.deepEqual(getAllowedOrderStatusTransitions('DeliveryFailed'), []);
   });
 });

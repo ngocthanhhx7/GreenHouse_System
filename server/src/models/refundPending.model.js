@@ -10,7 +10,7 @@ const refundPendingSchema = new mongoose.Schema(
     amount: { type: Number, required: true, min: 0 },
     obligationType: {
       type: String,
-      enum: ['PAYMENT_REVERSAL', 'NORMAL_RETURN', 'COD_RECOVERY', 'EXCESS_PAYMENT', 'LEGACY'],
+      enum: ['PAYMENT_REVERSAL', 'NORMAL_RETURN', 'COD_RECOVERY', 'EXCESS_PAYMENT', 'FAILED_DELIVERY', 'LEGACY'],
       default: 'PAYMENT_REVERSAL',
     },
     obligationKey: { type: String, default: '', trim: true, maxlength: 200 },
