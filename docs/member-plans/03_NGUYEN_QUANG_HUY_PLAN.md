@@ -385,6 +385,6 @@ Chung's SL-006 Product/Category/Catalog implementation.
 - Product Card and Product Detail consume the same retry coordinator; Cart Page
   quantity/remove actions use the same rule.
 
-Pre-integration evidence is server `729/729`, client `193/193`, and production
-build PASS with only the existing large-chunk warning. Final counts must be
-refreshed after rebasing SL-006 onto the merged SL-004 `main`.
+Post-rebase evidence on the merged SL-004 `main` is server `790/790`, client
+`206/206`, and production build PASS with `153` modules and only the existing
+large-chunk warning.
