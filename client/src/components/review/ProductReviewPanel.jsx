@@ -253,11 +253,11 @@ export default function ProductReviewPanel({ productId }) {
                     <button type="button" className="btn btn-outline-secondary btn-sm" data-review-id={review.id} data-sl008-action="setPublication:Withdrawn" onClick={() => withdrawReview(review)} disabled={Boolean(pending['setPublication:Withdrawn'])}>
                       Rút publication
                     </button>
-                  ) : (
+                  ) : review.publicationStatus === 'Withdrawn' ? (
                     <button type="button" className="btn btn-outline-secondary btn-sm" data-review-id={review.id} data-sl008-action="setPublication:Published" onClick={() => republishReview(review)} disabled={Boolean(pending['setPublication:Published'])}>
                       Đăng lại publication
                     </button>
-                  )}
+                  ) : null}
                 </div>
               </article>
             );
