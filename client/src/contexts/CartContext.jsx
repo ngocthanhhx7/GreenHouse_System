@@ -4,7 +4,15 @@ import useAuth from '../hooks/useAuth.js';
 import { cartService } from '../services/cartService.js';
 import { createCartRequestCoordinator } from './cartRequestCoordinator.js';
 
-const EMPTY_CART = { items: [], totalAmount: 0 };
+const EMPTY_CART = {
+  id: null,
+  version: 0,
+  items: [],
+  subtotal: 0,
+  shippingFee: 0,
+  totalAmount: 0,
+  canCheckout: false,
+};
 const CartContext = createContext(null);
 
 export function CartProvider({ children }) {
@@ -12,9 +20,15 @@ export function CartProvider({ children }) {
   const customerId = user?.id || user?._id;
   const customerIdentity = user?.role === 'Customer' ? customerId || user.email || 'customer' : null;
   const [cart, setCart] = useState(EMPTY_CART);
+  const cartRef = useRef(EMPTY_CART);
   const coordinatorRef = useRef(null);
   if (!coordinatorRef.current) {
-    coordinatorRef.current = createCartRequestCoordinator({ onCommit: setCart });
+    coordinatorRef.current = createCartRequestCoordinator({
+      onCommit(nextCart) {
+        cartRef.current = nextCart;
+        setCart(nextCart);
+      },
+    });
   }
 
   const resetCart = useCallback(() => {
@@ -22,7 +36,7 @@ export function CartProvider({ children }) {
   }, []);
 
   const runCartMutation = useCallback(async (operation) => {
-    const result = await coordinatorRef.current.run(operation);
+    const result = await coordinatorRef.current.run(() => operation(cartRef.current));
     return result.data;
   }, []);
 

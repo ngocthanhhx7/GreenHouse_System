@@ -29,7 +29,7 @@ const cartItemSchema = new mongoose.Schema(
     unitPrice: {
       type: Number,
       required: true,
-      min: 0,
+      min: 1,
     },
     priceVersion: {
       type: Date,

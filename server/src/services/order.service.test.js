@@ -15,6 +15,8 @@ function checkoutInput(overrides = {}) {
       addressLine: '12 Nguyễn Trãi',
       ...deliveryAddress,
     },
+    cartId: 'cart-1',
+    cartVersion: 1,
     paymentMethod: 'COD',
     expectedItems: [
       { productId: 'p1', quantity: 2, unitPrice: 25, priceVersion: '2026-07-23T00:00:00.000Z' },
@@ -24,7 +26,12 @@ function checkoutInput(overrides = {}) {
 }
 
 function createCartRepository() {
-  const carts = [{ _id: 'cart-1', customerId: 'customer-1', status: 'Active' }];
+  const carts = [{
+    _id: 'cart-1',
+    customerId: 'customer-1',
+    status: 'Active',
+    version: 1,
+  }];
   const items = [
     { _id: 'item-1', cartId: 'cart-1', productId: 'p1', productName: 'Green Pan', quantity: 2, unitPrice: 25 },
   ];
@@ -44,15 +51,12 @@ function createCartRepository() {
     async clearExactCart(cartId) {
       const cart = carts.find((entry) => entry._id === cartId);
       cart.status = 'CheckedOut';
-      for (let index = items.length - 1; index >= 0; index -= 1) {
-        if (items[index].cartId === cartId) items.splice(index, 1);
-      }
       return cart;
     },
   };
 }
 
-function createProductRepository() {
+function createProductRepository(overrides = {}) {
   return {
     async findSellableById(id) {
       if (id !== 'p1') return null;
@@ -66,6 +70,7 @@ function createProductRepository() {
         status: 'Active',
         stockQuantity: 5,
         updatedAt: new Date('2026-07-23T00:00:00.000Z'),
+        ...overrides,
       };
     },
   };
@@ -295,7 +300,7 @@ describe('order service', () => {
     assert.equal(orderRepository.reservations.length, 1);
     assert.equal(orderRepository.reservations[0].reservationKey, `ORDER:${result.id}:detail-1`);
     assert.equal(orderRepository.reservations[0].status, 'Reserved');
-    assert.equal(cartRepository.items.length, 0);
+    assert.equal(cartRepository.items.length, 1);
     assert.equal(auditLogger.entries[0].action, 'ORDER_CREATE');
   });
 
@@ -350,6 +355,68 @@ describe('order service', () => {
     assert.equal(inventoryRepository.reservedQuantity, 0);
   });
 
+  it('accepts the dedicated priceVersion after an ordinary metadata edit changes updatedAt', async () => {
+    const dedicatedPriceVersion = new Date('2026-07-22T00:00:00.000Z');
+    orderService = createOrderService({
+      transactionManager: { async withTransaction(work) { return work({ id: 'test-session' }); } },
+      cartRepository,
+      productRepository: createProductRepository({
+        priceVersion: dedicatedPriceVersion,
+        updatedAt: new Date('2026-07-24T00:00:00.000Z'),
+      }),
+      inventoryRepository,
+      orderRepository,
+      addressRepository: createAddressRepository(),
+      auditLogger,
+    });
+
+    const result = await orderService.placeOrder('customer-1', checkoutInput({
+      idempotencyKey: 'checkout-metadata-edit-001',
+      expectedItems: [{
+        productId: 'p1',
+        quantity: 2,
+        unitPrice: 25,
+        priceVersion: dedicatedPriceVersion.toISOString(),
+      }],
+    }));
+
+    assert.equal(
+      result.details[0].priceVersionSnapshot,
+      dedicatedPriceVersion.toISOString(),
+    );
+    assert.equal(inventoryRepository.reservedQuantity, 2);
+  });
+
+  it('rejects a real dedicated priceVersion mismatch even when updatedAt matches the display', async () => {
+    const displayedVersion = new Date('2026-07-22T00:00:00.000Z');
+    orderService = createOrderService({
+      transactionManager: { async withTransaction(work) { return work({ id: 'test-session' }); } },
+      cartRepository,
+      productRepository: createProductRepository({
+        priceVersion: new Date('2026-07-23T00:00:00.000Z'),
+        updatedAt: displayedVersion,
+      }),
+      inventoryRepository,
+      orderRepository,
+      addressRepository: createAddressRepository(),
+      auditLogger,
+    });
+
+    await assert.rejects(
+      () => orderService.placeOrder('customer-1', checkoutInput({
+        idempotencyKey: 'checkout-real-price-change-001',
+        expectedItems: [{
+          productId: 'p1',
+          quantity: 2,
+          unitPrice: 25,
+          priceVersion: displayedVersion.toISOString(),
+        }],
+      })),
+      (error) => error.errorCode === 'PRICE_CHANGED',
+    );
+    assert.equal(inventoryRepository.reservedQuantity, 0);
+  });
+
   it('enqueues one idempotent ORDER_CREATED email after checkout commits', async () => {
     const result = await orderService.placeOrder('customer-1', checkoutInput({ idempotencyKey: 'checkout-email-001' }));
     const replay = await orderService.placeOrder('customer-1', checkoutInput({ idempotencyKey: 'checkout-email-001' }));
@@ -385,7 +452,12 @@ describe('order service', () => {
       transactionManager: { async withTransaction(work) { return work({ id: 'test-session' }); } },
       cartRepository: {
         async findActiveByCustomer() {
-          return { _id: 'empty-cart', customerId: 'customer-1', status: 'Active' };
+          return {
+            _id: 'empty-cart',
+            customerId: 'customer-1',
+            status: 'Active',
+            version: 1,
+          };
         },
         async listItems() {
           return [];
@@ -398,7 +470,10 @@ describe('order service', () => {
     });
 
     await assert.rejects(
-      () => orderService.placeOrder('customer-1', checkoutInput({ idempotencyKey: 'empty-001' })),
+      () => orderService.placeOrder('customer-1', checkoutInput({
+        cartId: 'empty-cart',
+        idempotencyKey: 'empty-001',
+      })),
       /Cart must have at least one item/
     );
   });
@@ -658,8 +733,8 @@ describe('order service', () => {
     try {
       const cartRepository = {
         carts: [
-          { _id: 'cart-1', customerId: 'customer-1', status: 'Active' },
-          { _id: 'cart-2', customerId: 'customer-2', status: 'Active' },
+          { _id: 'cart-1', customerId: 'customer-1', status: 'Active', version: 1 },
+          { _id: 'cart-2', customerId: 'customer-2', status: 'Active', version: 1 },
         ],
         items: [
           { _id: 'item-1', cartId: 'cart-1', productId: 'p1', productName: 'Green Pan', quantity: 1, unitPrice: 25 },
@@ -695,6 +770,7 @@ describe('order service', () => {
         expectedItems: [{ productId: 'p1', quantity: 1, unitPrice: 25, priceVersion: '2026-07-23T00:00:00.000Z' }],
       }));
       const second = await orderService.placeOrder('customer-2', checkoutInput({
+        cartId: 'cart-2',
         deliveryAddress: { province: 'Đà Nẵng', district: 'Hải Châu', ward: 'Hòa Cường', addressLine: '12 Bạch Đằng' },
         idempotencyKey: 'unique-002',
         expectedItems: [{ productId: 'p1', quantity: 1, unitPrice: 25, priceVersion: '2026-07-23T00:00:00.000Z' }],
@@ -744,7 +820,12 @@ describe('order service', () => {
     await orderService.placeOrder('customer-1', checkoutInput({ idempotencyKey: 'retry-source-001' }));
 
     await assert.rejects(
-      () => orderService.placeOrder('customer-1', { paymentMethod: 'COD', idempotencyKey: 'retry-source-001' }),
+      () => orderService.placeOrder('customer-1', {
+        cartId: 'cart-1',
+        cartVersion: 1,
+        paymentMethod: 'COD',
+        idempotencyKey: 'retry-source-001',
+      }),
       (error) => {
         assert.equal(error.statusCode, 400);
         assert.equal(error.errorCode, 'CHECKOUT_ADDRESS_SOURCE_INVALID');
@@ -844,6 +925,8 @@ describe('order service', () => {
 
   it('resolves an owned savedAddressId on the server and stores an immutable snapshot', async () => {
     const result = await orderService.placeOrder('customer-1', {
+      cartId: 'cart-1',
+      cartVersion: 1,
       savedAddressId: 'address-owned',
       paymentMethod: 'COD',
       idempotencyKey: 'saved-address-001',
@@ -867,6 +950,8 @@ describe('order service', () => {
       auditLogger,
     });
     const input = {
+      cartId: 'cart-1',
+      cartVersion: 1,
       savedAddressId: 'address-owned',
       paymentMethod: 'COD',
       idempotencyKey: 'saved-address-replay-001',
@@ -881,7 +966,12 @@ describe('order service', () => {
 
   it('requires exactly one supported checkout address source with typed field errors', async () => {
     await assert.rejects(
-      () => orderService.placeOrder('customer-1', { paymentMethod: 'COD', idempotencyKey: 'address-source-none-001' }),
+      () => orderService.placeOrder('customer-1', {
+        cartId: 'cart-1',
+        cartVersion: 1,
+        paymentMethod: 'COD',
+        idempotencyKey: 'address-source-none-001',
+      }),
       (error) => {
         assert.equal(error.statusCode, 400);
         assert.equal(error.errorCode, 'CHECKOUT_ADDRESS_SOURCE_INVALID');
@@ -905,6 +995,8 @@ describe('order service', () => {
   it('rejects a savedAddressId that is not owned by the customer before reserving stock', async () => {
     await assert.rejects(
       () => orderService.placeOrder('customer-1', {
+        cartId: 'cart-1',
+        cartVersion: 1,
         savedAddressId: 'address-foreign',
         paymentMethod: 'COD',
         idempotencyKey: 'saved-address-foreign-001',
@@ -920,6 +1012,8 @@ describe('order service', () => {
 
   it('validates and snapshots a structured one-time deliveryAddress', async () => {
     const result = await orderService.placeOrder('customer-1', {
+      cartId: 'cart-1',
+      cartVersion: 1,
       deliveryAddress: {
         receiverName: 'Khách hàng Một lần',
         phoneNumber: '0900000001',
@@ -941,6 +1035,8 @@ describe('order service', () => {
   it('returns distinct validation details for oversized administrative address fields', async () => {
     await assert.rejects(
       () => orderService.placeOrder('customer-1', {
+        cartId: 'cart-1',
+        cartVersion: 1,
         deliveryAddress: {
           receiverName: 'Khách hàng Demo',
           phoneNumber: '0900000001',

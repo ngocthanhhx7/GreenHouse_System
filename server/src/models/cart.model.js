@@ -12,6 +12,15 @@ const cartSchema = new mongoose.Schema(
       enum: ['Active', 'CheckedOut'],
       default: 'Active',
     },
+    version: {
+      type: Number,
+      min: 0,
+      default: 0,
+      validate: {
+        validator: Number.isInteger,
+        message: 'Cart version must be a non-negative integer',
+      },
+    },
   },
   { timestamps: true }
 );

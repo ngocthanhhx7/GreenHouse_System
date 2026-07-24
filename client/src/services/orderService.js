@@ -6,6 +6,7 @@ async function parseResponse(response) {
     const error = new Error(payload.message || 'Order request failed');
     error.errorCode = payload.errorCode;
     error.errors = payload.errors || [];
+    error.data = payload.data ?? null;
     throw error;
   }
   return payload.data;

@@ -11,6 +11,13 @@ const EMPTY_ADDRESS = {
   label: 'Địa chỉ mới', receiverName: '', phoneNumber: '', province: '', district: '', ward: '', addressLine: '', isDefault: false,
 };
 
+const CHECKOUT_ISSUES = {
+  PriceChanged: 'Giá sản phẩm đã thay đổi.',
+  Unavailable: 'Sản phẩm hoặc danh mục không còn được bán.',
+  InsufficientStock: 'Số lượng đã chọn không còn đủ.',
+  InventoryReconciliation: 'Tồn kho đang được đối soát.',
+};
+
 export function formatShippingAddress(address) {
   return [address.addressLine, address.ward, address.district, address.province]
     .map((part) => String(part || '').trim())
@@ -33,7 +40,15 @@ function toFieldErrors(errors) {
 export default function CheckoutPage() {
   const navigate = useNavigate();
   const { resetCart } = useCart();
-  const [cart, setCart] = useState({ items: [], totalAmount: 0 });
+  const [cart, setCart] = useState({
+    id: null,
+    version: 0,
+    items: [],
+    subtotal: 0,
+    shippingFee: 0,
+    totalAmount: 0,
+    canCheckout: false,
+  });
   const [addresses, setAddresses] = useState([]);
   const [selectedAddressId, setSelectedAddressId] = useState('');
   const [addressMode, setAddressMode] = useState('new');
@@ -121,6 +136,8 @@ export default function CheckoutPage() {
 
       const order = await orderService.placeOrder({
         ...checkoutAddressPayload,
+        cartId: cart.id,
+        cartVersion: cart.version,
         customerNote,
         paymentMethod,
         expectedItems: cart.items.map((item) => ({
@@ -136,6 +153,7 @@ export default function CheckoutPage() {
       const nextFieldErrors = toFieldErrors(requestError.errors);
       setFieldErrors(nextFieldErrors);
       setError(Object.keys(nextFieldErrors).length ? '' : requestError.message);
+      if (requestError.data?.cart) setCart(requestError.data.cart);
     } finally {
       setSubmitting(false);
     }
@@ -156,6 +174,11 @@ export default function CheckoutPage() {
 
       {error && <div className="alert alert-danger" role="alert">{error}</div>}
       {fieldErrors.checkoutPrice && <div className="alert alert-warning" role="alert">{fieldErrors.checkoutPrice}</div>}
+      {!cart.canCheckout && cart.items.length > 0 && (
+        <div className="alert alert-warning" role="alert">
+          Giỏ hàng đã thay đổi hoặc có sản phẩm chưa thể mua. Vui lòng quay lại giỏ hàng để xử lý.
+        </div>
+      )}
 
       <form className="checkout-grid checkout-form-v2" onSubmit={handleSubmit}>
         <div className="checkout-main-column">
@@ -202,12 +225,27 @@ export default function CheckoutPage() {
 
         <aside className="summary-box checkout-summary">
           <h2>Đơn hàng của bạn</h2>
-          <div className="checkout-summary-items">{cart.items.map((item) => <div className="summary-line" key={item.id}><span>{item.productName}<small>Số lượng: {item.quantity}</small></span><strong>{formatCurrency(item.subtotal)}</strong></div>)}</div>
-          <div className="summary-line"><span>Tạm tính</span><strong>{formatCurrency(cart.totalAmount)}</strong></div>
-          <div className="summary-line"><span>Phí vận chuyển</span><strong>Miễn phí</strong></div>
+          <div className="checkout-summary-items">
+            {cart.items.map((item) => (
+              <div className="summary-line" key={item.id}>
+                <span>
+                  {item.productName}
+                  <small>Số lượng: {item.quantity}</small>
+                  {(item.issues || []).map((issue) => (
+                    <small className="field-error" key={issue.code}>
+                      {CHECKOUT_ISSUES[issue.code] || issue.message}
+                    </small>
+                  ))}
+                </span>
+                <strong>{formatCurrency(item.subtotal)}</strong>
+              </div>
+            ))}
+          </div>
+          <div className="summary-line"><span>Tạm tính</span><strong>{formatCurrency(cart.subtotal)}</strong></div>
+          <div className="summary-line"><span>Phí vận chuyển: 0 ₫</span><strong>{formatCurrency(cart.shippingFee)}</strong></div>
           <div className="summary-total"><span>Tổng thanh toán</span><strong>{formatCurrency(cart.totalAmount)}</strong></div>
           {!cart.items.length && <p className="checkout-empty-cart">Giỏ hàng của bạn đang trống.</p>}
-          <button className="btn btn-success checkout-submit" type="submit" disabled={!cart.items.length || submitting}>{submitting ? 'Đang tạo đơn...' : 'Đặt hàng'}</button>
+          <button className="btn btn-success checkout-submit" type="submit" disabled={!cart.canCheckout || submitting}>{submitting ? 'Đang tạo đơn...' : 'Đặt hàng'}</button>
           <small className="checkout-confirm-note">Bằng việc đặt hàng, bạn xác nhận thông tin nhận hàng là chính xác.</small>
         </aside>
       </form>

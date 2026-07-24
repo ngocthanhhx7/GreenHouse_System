@@ -1,13 +1,23 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import { cartService } from '../../services/cartService.js';
+import { createCartCommandRetryStore } from '../../services/cartCommandRetry.js';
 import { useCart } from '../../contexts/CartContext.jsx';
 import { formatCurrency } from '../../utils/formatters.js';
+
+const ISSUE_LABELS = {
+  PriceChanged: 'Giá đã thay đổi; vui lòng kiểm tra giá hiện tại.',
+  Unavailable: 'Sản phẩm hoặc danh mục không còn được bán.',
+  InsufficientStock: 'Số lượng đang chọn vượt quá mức có thể mua.',
+  InventoryReconciliation: 'Tồn kho đang được đối soát; vui lòng thử lại sau.',
+};
 
 export default function CartPage() {
   const { cart, refreshCart, runCartMutation } = useCart();
   const [error, setError] = useState('');
+  const [pendingItemId, setPendingItemId] = useState('');
+  const cartCommandRetries = useRef(createCartCommandRetryStore());
 
   async function loadCart() {
     setError('');
@@ -23,18 +33,49 @@ export default function CartPage() {
   }, []);
 
   async function updateQuantity(item, quantity) {
+    setPendingItemId(item.id);
+    setError('');
     try {
-      await runCartMutation(() => cartService.updateItem(item.id, { quantity: Number(quantity) }));
+      await runCartMutation((currentCart) => {
+        const operation = `update:${item.id}`;
+        const command = cartCommandRetries.current.acquire(operation, {
+          quantity: Number(quantity),
+          expectedVersion: Number(currentCart.version || 0),
+        });
+        return cartService.updateItem(item.id, command.facts, { idempotencyKey: command.idempotencyKey })
+          .then((result) => {
+            cartCommandRetries.current.confirm(operation, command);
+            return result;
+          });
+      });
     } catch (err) {
       setError(err.message);
+      if (err.errorCode === 'CART_VERSION_CONFLICT') await refreshCart().catch(() => {});
+    } finally {
+      setPendingItemId('');
     }
   }
 
   async function removeItem(item) {
+    setPendingItemId(item.id);
+    setError('');
     try {
-      await runCartMutation(() => cartService.removeItem(item.id));
+      await runCartMutation((currentCart) => {
+        const operation = `remove:${item.id}`;
+        const command = cartCommandRetries.current.acquire(operation, {
+          expectedVersion: Number(currentCart.version || 0),
+        });
+        return cartService.removeItem(item.id, command.facts, { idempotencyKey: command.idempotencyKey })
+          .then((result) => {
+            cartCommandRetries.current.confirm(operation, command);
+            return result;
+          });
+      });
     } catch (err) {
       setError(err.message);
+      if (err.errorCode === 'CART_VERSION_CONFLICT') await refreshCart().catch(() => {});
+    } finally {
+      setPendingItemId('');
     }
   }
 
@@ -68,21 +109,47 @@ export default function CartPage() {
                 </tr>
               </thead>
               <tbody>
-                {cart.items.map((item) => (
-                  <tr key={item.id}>
+                {cart.items.map((item) => {
+                  const pending = pendingItemId === item.id;
+                  return (
+                  <tr key={item.id} className={item.issues?.length ? 'cart-line-with-issues' : ''}>
                     <td>{item.productName}</td>
                     <td>
-                      <input className="form-control quantity-input" type="number" min="1" value={item.quantity} onChange={(event) => updateQuantity(item, event.target.value)} />
+                      <input
+                        className="form-control quantity-input"
+                        type="number"
+                        min="1"
+                        max={item.maxOrderableQuantity}
+                        value={item.quantity}
+                        disabled={pending}
+                        onChange={(event) => updateQuantity(item, event.target.value)}
+                      />
+                      {(item.issues || []).map((issue) => (
+                        <small className="field-error d-block" key={issue.code}>
+                          {ISSUE_LABELS[issue.code] || issue.message}
+                          {issue.code === 'InsufficientStock' && item.maxOrderableQuantity !== undefined
+                            ? ` Tối đa ${item.maxOrderableQuantity}.`
+                            : ''}
+                        </small>
+                      ))}
                     </td>
-                    <td>{formatCurrency(item.unitPrice)}</td>
-                    <td>{formatCurrency(item.subtotal)}</td>
                     <td>
-                      <button className="btn btn-outline-danger btn-sm" type="button" onClick={() => removeItem(item)}>
-                        Xóa
+                      {item.priceChanged && (
+                        <del className="d-block text-secondary">
+                          {formatCurrency(item.previousPrice ?? item.previousUnitPrice)}
+                        </del>
+                      )}
+                      {formatCurrency(item.unitPrice)}
+                    </td>
+                    <td>{formatCurrency(item.unitPrice * item.quantity || item.subtotal)}</td>
+                    <td>
+                      <button className="btn btn-outline-danger btn-sm" type="button" disabled={pending} onClick={() => removeItem(item)}>
+                        {pending ? 'Đang xử lý...' : 'Xóa'}
                       </button>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -90,19 +157,25 @@ export default function CartPage() {
             <h2>Tóm tắt đơn hàng</h2>
             <div className="summary-line">
               <span>Tạm tính</span>
-              <strong>{formatCurrency(cart.totalAmount)}</strong>
+              <strong>{formatCurrency(cart.subtotal)}</strong>
             </div>
             <div className="summary-line">
               <span>Phí vận chuyển</span>
-              <strong>Tính khi thanh toán</strong>
+              <strong>{formatCurrency(cart.shippingFee)}</strong>
             </div>
             <div className="summary-total">
               <span>Tổng dự kiến</span>
               <strong>{formatCurrency(cart.totalAmount)}</strong>
             </div>
-            <Link className="btn btn-success w-100" to="/checkout">
-              Tiến hành thanh toán
-            </Link>
+            {cart.canCheckout ? (
+              <Link className="btn btn-success w-100" to="/checkout">
+                Tiến hành thanh toán
+              </Link>
+            ) : (
+              <button className="btn btn-success w-100" type="button" disabled>
+                Xử lý các vấn đề trước khi thanh toán
+              </button>
+            )}
           </aside>
         </div>
       )}
