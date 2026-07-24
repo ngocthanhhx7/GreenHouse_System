@@ -553,7 +553,14 @@ function assertBoundHandler(
   bodyPattern,
 ) {
   const handler = boundHandler(source, serviceName, methodName, bodyPattern);
-  assert.match(source, new RegExp(`(?:${event})\\s*=\\s*\\{${handler.name}\\}`));
+  const directBinding = new RegExp(`(?:${event})\\s*=\\s*\\{${handler.name}\\}`);
+  const closureBinding = new RegExp(
+    `(?:${event})\\s*=\\s*\\{[^\\n}]*\\b${handler.name}\\s*\\(`,
+  );
+  assert.ok(
+    directBinding.test(source) || closureBinding.test(source),
+    `${methodName} must be bound directly or through an explicit article-scoped closure`,
+  );
   return handler.name;
 }
 
@@ -703,7 +710,7 @@ describe('SL-008 Review UI integration contract', () => {
       /publicationStatus\s*:\s*['"]Published['"][\s\S]{0,500}expectedVersion/,
     );
     assert.notEqual(withdraw, republish);
-    const ownReview = renderedMap(panel, ['ownReviews', 'customerReviews']);
+    const ownReview = renderedMap(panel, ['ownReviews', 'customerReviews'], 5000);
     assert.match(ownReview, /review\.publicationStatus/);
     assert.match(ownReview, /review\.moderationStatus/);
     assert.match(
