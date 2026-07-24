@@ -2,6 +2,7 @@ const { randomUUID } = require('node:crypto');
 const mongoose = require('mongoose');
 
 const { normalizeAuditReason, serializeAuditFacts } = require('../utils/auditSerializer');
+const { serializeAdminCommandResult } = require('../utils/auditReplay');
 
 const immutableString = {
   type: String,
@@ -26,6 +27,101 @@ const replayBindingSchema = new mongoose.Schema(
     _id: false,
     strict: 'throw',
   }
+);
+
+const assignmentDetailSchema = new mongoose.Schema(
+  {
+    entity: { ...immutableString, required: true, maxlength: 120 },
+    activeStatuses: [{
+      type: String,
+      trim: true,
+      maxlength: 120,
+      immutable: true,
+    }],
+  },
+  { _id: false, strict: 'throw' }
+);
+
+const activeAssignmentSchema = new mongoose.Schema(
+  {
+    sliceId: { ...immutableString, required: true, maxlength: 80 },
+    detail: { type: assignmentDetailSchema, default: undefined, immutable: true },
+  },
+  { _id: false, strict: 'throw' }
+);
+
+const recoverySchema = new mongoose.Schema(
+  {
+    sliceId: { ...immutableString, required: true, maxlength: 80 },
+    recovered: { type: Boolean, required: true, immutable: true },
+  },
+  { _id: false, strict: 'throw' }
+);
+
+const adminHandoffSchema = new mongoose.Schema(
+  {
+    activeAssignments: {
+      type: [activeAssignmentSchema],
+      default: () => [],
+      immutable: true,
+    },
+    assignmentCheckUnavailable: {
+      type: Boolean,
+      required: true,
+      default: false,
+      immutable: true,
+    },
+    recoveries: {
+      type: [recoverySchema],
+      default: () => [],
+      immutable: true,
+    },
+  },
+  { _id: false, strict: 'throw' }
+);
+
+const adminResultUserSchema = new mongoose.Schema(
+  {
+    id: { ...immutableString, required: true, maxlength: 200 },
+    fullName: { ...immutableString, required: true, maxlength: 120 },
+    email: { ...immutableString, required: true, maxlength: 254 },
+    role: {
+      ...immutableString,
+      required: true,
+      enum: ['Customer', 'Staff', 'WarehouseManager'],
+    },
+    status: {
+      ...immutableString,
+      required: true,
+      enum: ['Active', 'Disabled'],
+    },
+    createdAt: { type: Date, default: null, immutable: true },
+    lastLoginAt: { type: Date, default: null, immutable: true },
+    version: { type: Number, required: true, min: 0, immutable: true },
+  },
+  { _id: false, strict: 'throw' }
+);
+
+const adminCommandResultSchema = new mongoose.Schema(
+  {
+    user: {
+      type: adminResultUserSchema,
+      required: true,
+      immutable: true,
+    },
+    revokedSessions: {
+      type: Number,
+      required: true,
+      min: 0,
+      immutable: true,
+    },
+    handoff: {
+      type: adminHandoffSchema,
+      default: undefined,
+      immutable: true,
+    },
+  },
+  { _id: false, strict: 'throw' }
 );
 
 const auditLogSchema = new mongoose.Schema(
@@ -136,6 +232,12 @@ const auditLogSchema = new mongoose.Schema(
       select: false,
       immutable: true,
     },
+    commandResult: {
+      type: adminCommandResultSchema,
+      default: undefined,
+      select: false,
+      immutable: true,
+    },
     timestamp: {
       type: Date,
       required: true,
@@ -198,6 +300,8 @@ auditLogSchema.virtual('after').set(function setLegacyAfter(value) {
   if (/^[a-f0-9]{64}$/i.test(String(value?.commandFingerprint || ''))) {
     mergeReplayBinding(this, { commandFingerprint: String(value.commandFingerprint) });
   }
+  const commandResult = serializeAdminCommandResult(value?.result);
+  if (commandResult) this.commandResult = commandResult;
   this.newState = String(value?.state || value?.status || value?.role || '');
   if (Number.isInteger(Number(value?.version))) this.stateVersion = Number(value.version);
 });
@@ -226,6 +330,11 @@ auditLogSchema.pre('validate', function adaptLegacyFields(next) {
   this.reason = normalizeAuditReason(this.reason || this.description);
   this.description = normalizeAuditReason(this.reason || this.description);
   this.safeFacts = serializeAuditFacts(this.safeFacts);
+  if (this.commandResult) {
+    this.commandResult = serializeAdminCommandResult(
+      this.commandResult.toObject?.() || this.commandResult
+    );
+  }
   if (!String(this.targetId || '').trim()) this.targetId = 'unknown';
   if (!this.businessEventId && this.eventId) this.businessEventId = this.eventId;
   if (!this.eventId && this.businessEventId) this.eventId = this.businessEventId;
@@ -238,6 +347,11 @@ auditLogSchema.pre('save', function sanitizeImmediatelyBeforePersistence(next) {
   this.reason = normalizeAuditReason(this.reason || this.description);
   this.description = this.reason;
   this.safeFacts = serializeAuditFacts(this.safeFacts);
+  if (this.commandResult) {
+    this.commandResult = serializeAdminCommandResult(
+      this.commandResult.toObject?.() || this.commandResult
+    );
+  }
   next();
 });
 

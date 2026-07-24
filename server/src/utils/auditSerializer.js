@@ -1,5 +1,6 @@
 const BLOCKED_KEY = /(?:password|hash|token|otp|session|cookie|address|phone|refund.*destination|destination.*refund|accountnumber|accountholder|raw|callback|payload|review|support|message|content|secret|authorization|credential|card)/i;
-const SENSITIVE_ASSIGNMENT = /(?:password|passcode|hash|token|otp|session|cookie|authorization|credential|account\s*(?:number|holder)|card|phone|address|refund\s*destination|secret)\s*[:=]\s*\S+/i;
+const SENSITIVE_ASSIGNMENT = /(?:password|passcode|hash|token|otp|session|cookie|authorization|credential|account\s*(?:number|holder)|card|phone|address|refund\s*destination|secret)\s*(?::\s*|=\s*|\s+)(?:bearer\s+)?[^\s,;}\])]+/iu;
+const BEARER_CREDENTIAL = /(?:^|[\s:={[(])bearer\s+[^\s,;}\])]+/iu;
 const SENSITIVE_PAYLOAD = /(?:raw\s*callback|callback\s*(?:body|payload)|review\s*(?:body|content)|support\s*(?:body|message)|full\s*evidence\s*body)/i;
 const SENSITIVE_FACT_TEXT = /(?:password|passcode|hash|token|otp|session|cookie|authorization|credential|accountnumber|accountholder|card|phone|address|secret)/i;
 
@@ -58,7 +59,11 @@ function normalizeWhitespace(value) {
 function normalizeAuditReason(value) {
   const normalized = normalizeWhitespace(value);
   if (!normalized) return '';
-  if (SENSITIVE_ASSIGNMENT.test(normalized) || SENSITIVE_PAYLOAD.test(normalized)) {
+  if (
+    SENSITIVE_ASSIGNMENT.test(normalized)
+    || BEARER_CREDENTIAL.test(normalized)
+    || SENSITIVE_PAYLOAD.test(normalized)
+  ) {
     return '[REDACTED]';
   }
   return normalized.slice(0, 500);

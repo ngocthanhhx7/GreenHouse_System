@@ -4,6 +4,10 @@ const ApiError = require('../utils/apiError');
 const User = require('../models/user.model');
 const Role = require('../models/role.model');
 const AuditLog = require('../models/auditLog.model');
+const {
+  extractAdminCommandResult,
+  extractAuditReplayBinding,
+} = require('../utils/auditReplay');
 const { sessionService: defaultSessionService } = require('./session.service');
 const { activeAssignmentService: defaultAssignmentService } = require('./activeAssignment.service');
 const { internalInvitationService: defaultInvitationService } = require('./internalInvitation.service');
@@ -49,7 +53,29 @@ function createModelRepository() {
       return (session ? query.session(session) : query).lean();
     },
     async findAuditByEventId(eventId, session) {
-      const query = AuditLog.findOne({ eventId }).select('+replayBinding');
+      const query = AuditLog.findOne({ eventId }).select({
+        userId: 1,
+        action: 1,
+        targetId: 1,
+        replayBinding: 1,
+        commandResult: 1,
+        'after.commandFingerprint': 1,
+        'after.result.user.id': 1,
+        'after.result.user.fullName': 1,
+        'after.result.user.email': 1,
+        'after.result.user.role': 1,
+        'after.result.user.status': 1,
+        'after.result.user.createdAt': 1,
+        'after.result.user.lastLoginAt': 1,
+        'after.result.user.version': 1,
+        'after.result.revokedSessions': 1,
+        'after.result.handoff.activeAssignments.sliceId': 1,
+        'after.result.handoff.activeAssignments.detail.entity': 1,
+        'after.result.handoff.activeAssignments.detail.activeStatuses': 1,
+        'after.result.handoff.assignmentCheckUnavailable': 1,
+        'after.result.handoff.recoveries.sliceId': 1,
+        'after.result.handoff.recoveries.recovered': 1,
+      });
       return (session ? query.session(session) : query).lean();
     },
     async search({ query = '', roleName, status, page = 1, pageSize = 25 } = {}) {
@@ -216,6 +242,15 @@ function createAdminAccountService({
     );
   }
 
+  function idempotencyReplayUnavailable() {
+    return new ApiError(
+      409,
+      'KhÃ´ng thá»ƒ phá»¥c há»“i káº¿t quáº£ lá»‡nh quáº£n trá»‹ trÆ°á»›c Ä‘Ã³.',
+      [],
+      'IDEMPOTENCY_REPLAY_UNAVAILABLE',
+    );
+  }
+
   function remember(identity, result) {
     completedCommands.set(identity.eventId, {
       fingerprint: identity.fingerprint,
@@ -232,7 +267,7 @@ function createAdminAccountService({
     if (!repository.findAuditByEventId) return null;
     const audit = await repository.findAuditByEventId(identity.eventId, session);
     if (!audit) return null;
-    const storedFingerprint = audit.replayBinding?.commandFingerprint;
+    const storedFingerprint = extractAuditReplayBinding(audit).commandFingerprint;
     if (
       String(audit.userId) !== identity.actorUserId
       || String(audit.targetId) !== identity.targetUserId
@@ -241,12 +276,8 @@ function createAdminAccountService({
     ) {
       throw idempotencyConflict();
     }
-    const current = await repository.findById(identity.targetUserId, session);
-    if (!current) throw idempotencyConflict();
-    const result = {
-      user: minimumAccount(current),
-      revokedSessions: 0,
-    };
+    const result = extractAdminCommandResult(audit);
+    if (!result) throw idempotencyReplayUnavailable();
     remember(identity, result);
     return { alreadyProcessed: true, ...result };
   }

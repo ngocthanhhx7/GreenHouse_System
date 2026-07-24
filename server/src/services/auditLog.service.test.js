@@ -142,6 +142,37 @@ describe('SL-009 audit log service', () => {
     assert.equal(JSON.stringify(item).includes('full support content'), false);
   });
 
+  it('redacts whitespace and Bearer secrets from persisted legacy descriptions', async () => {
+    const service = createAuditLogService({
+      repository: {
+        async list() {
+          return {
+            items: [
+              canonicalLog({
+                _id: '507f1f77bcf86cd799439091',
+                auditId: undefined,
+                reason: undefined,
+                description: 'Nested { PaSsWoRd abc123 }',
+              }),
+              canonicalLog({
+                _id: '507f1f77bcf86cd799439092',
+                auditId: undefined,
+                reason: undefined,
+                description: 'Authorization: Bearer legacy-secret',
+              }),
+            ],
+            nextCursor: null,
+          };
+        },
+      },
+    });
+
+    const { items } = await service.listAuditLogs();
+    assert.deepEqual(items.map((item) => item.reason), ['[REDACTED]', '[REDACTED]']);
+    assert.equal(JSON.stringify(items).includes('abc123'), false);
+    assert.equal(JSON.stringify(items).includes('legacy-secret'), false);
+  });
+
   it('AT-189 reports distinct Vietnamese field errors without querying', async () => {
     let queried = false;
     const service = createAuditLogService({

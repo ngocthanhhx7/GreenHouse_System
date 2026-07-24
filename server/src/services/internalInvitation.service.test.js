@@ -232,6 +232,50 @@ describe('internal invitations', () => {
     assert.equal(state.outbox.length, 1);
   });
 
+  it('replays actual legacy invitation rows from exact before/after binding keys', async () => {
+    const state = createState();
+    const options = {
+      repository: state.repository,
+      tokenGenerator: () => 'invite-token',
+      tokenSecret: 'invitation-test-secret',
+      transactionManager: createRollbackTransactionManager(state),
+    };
+    const createCommand = {
+      email: 'legacy-invite@example.com',
+      roleName: 'Staff',
+      idempotencyKey: 'legacy-create',
+      actorUserId: 'admin-1',
+      reason: 'Legacy create',
+    };
+    const first = await createInternalInvitationService(options).createInvitation(createCommand);
+    const createAudit = state.audits.find(
+      (entry) => entry.action === 'INTERNAL_INVITATION_CREATED'
+    );
+    delete createAudit.replayBinding;
+
+    const createReplay = await createInternalInvitationService(options)
+      .createInvitation(createCommand);
+    assert.equal(createReplay.replay, true);
+    assert.equal(createReplay.invitation.id, first.invitation.id);
+
+    const resendCommand = {
+      invitationId: first.invitation.id,
+      idempotencyKey: 'legacy-resend',
+      actorUserId: 'admin-1',
+    };
+    const resent = await createInternalInvitationService(options)
+      .resendInvitation(resendCommand);
+    const resendAudit = state.audits.find(
+      (entry) => entry.action === 'INTERNAL_INVITATION_RESENT'
+    );
+    delete resendAudit.replayBinding;
+
+    const resendReplay = await createInternalInvitationService(options)
+      .resendInvitation(resendCommand);
+    assert.equal(resendReplay.replay, true);
+    assert.equal(resendReplay.invitation.id, resent.invitation.id);
+  });
+
   it('durably binds invitation revocation idempotency to actor target and reason', async () => {
     const state = createState();
     const options = {

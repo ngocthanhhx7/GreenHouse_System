@@ -152,12 +152,91 @@ describe('SL-009 AuditLog model contract', () => {
       action: 'AUTH_LOGIN_FAILURE',
       targetEntity: 'User',
       targetId: '',
-      description: 'password=do-not-store',
+      description: 'PaSsWoRd abc123',
     });
 
     await document.validate();
     assert.equal(document.targetId, 'unknown');
     assert.equal(document.reason, '[REDACTED]');
     assert.equal(document.description, '[REDACTED]');
+  });
+
+  it('persists a private typed Admin command result without retaining a raw after snapshot', async () => {
+    const document = new AuditLog({
+      userId: '507f1f77bcf86cd799439011',
+      action: 'ACCOUNT_STATUS_DISABLED',
+      eventId: 'account:disable:typed-result',
+      targetEntity: 'User',
+      targetId: '507f1f77bcf86cd799439012',
+      description: 'Security policy',
+      after: {
+        commandFingerprint: 'b'.repeat(64),
+        result: {
+          user: {
+            id: '507f1f77bcf86cd799439012',
+            fullName: 'Original Name',
+            email: 'original@example.com',
+            role: 'Customer',
+            status: 'Disabled',
+            createdAt: new Date('2026-01-01T00:00:00.000Z'),
+            lastLoginAt: new Date('2026-07-01T00:00:00.000Z'),
+            version: 4,
+            passwordHash: 'must-not-survive',
+          },
+          revokedSessions: 2,
+          handoff: {
+            activeAssignments: [{
+              sliceId: 'SL-008_SUPPORT',
+              detail: {
+                entity: 'SupportRequest',
+                activeStatuses: ['InProgress'],
+                rawContent: 'must-not-survive',
+              },
+            }],
+            assignmentCheckUnavailable: false,
+            recoveries: [{ sliceId: 'SL-008_SUPPORT', recovered: true }],
+            reason: 'must-not-survive',
+          },
+        },
+      },
+    });
+
+    await document.validate();
+    const persisted = document.toObject({ virtuals: false });
+    const reloaded = new AuditLog(persisted);
+    await reloaded.validate();
+
+    assert.equal(AuditLog.schema.path('commandResult').options.select, false);
+    assert.equal(AuditLog.schema.path('commandResult').options.immutable, true);
+    assert.deepEqual(
+      reloaded.commandResult?.toObject?.() || reloaded.commandResult,
+      {
+        user: {
+          id: '507f1f77bcf86cd799439012',
+          fullName: 'Original Name',
+          email: 'original@example.com',
+          role: 'Customer',
+          status: 'Disabled',
+          createdAt: new Date('2026-01-01T00:00:00.000Z'),
+          lastLoginAt: new Date('2026-07-01T00:00:00.000Z'),
+          version: 4,
+        },
+        revokedSessions: 2,
+        handoff: {
+          activeAssignments: [{
+            sliceId: 'SL-008_SUPPORT',
+            detail: {
+              entity: 'SupportRequest',
+              activeStatuses: ['InProgress'],
+            },
+          }],
+          assignmentCheckUnavailable: false,
+          recoveries: [{ sliceId: 'SL-008_SUPPORT', recovered: true }],
+        },
+      }
+    );
+    assert.equal(AuditLog.schema.path('after'), undefined);
+    assert.equal(JSON.stringify(persisted).includes('passwordHash'), false);
+    assert.equal(JSON.stringify(persisted).includes('must-not-survive'), false);
   });
 });

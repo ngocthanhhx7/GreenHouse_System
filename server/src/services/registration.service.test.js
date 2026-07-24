@@ -403,6 +403,38 @@ describe('verified Customer registration', () => {
     assert.equal(state.outbox.filter((item) => item.eventType === 'ACCOUNT_REGISTRATION_COMPLETED').length, 1);
   });
 
+  it('replays an actual legacy registration row with only after.commandFingerprint', async () => {
+    const state = createRepositories();
+    const options = {
+      repository: state.repository,
+      otpGenerator: () => '123456',
+      otpSecret: 'registration-test-secret',
+      transactionManager: createRollbackTransactionManager(state),
+    };
+    const firstService = createRegistrationService(options);
+    await firstService.requestRegistrationChallenge({
+      email: 'legacy-registration@example.com',
+      idempotencyKey: 'legacy-request',
+    });
+    const command = {
+      email: 'legacy-registration@example.com',
+      otp: '123456',
+      fullName: 'Legacy Customer',
+      phoneNumber: '0912345678',
+      password: 'Matkhau123',
+      confirmPassword: 'Matkhau123',
+      idempotencyKey: 'legacy-complete',
+    };
+    const first = await firstService.completeRegistration(command);
+    delete state.audit[0].replayBinding;
+
+    const replay = await createRegistrationService(options).completeRegistration(command);
+
+    assert.equal(replay.replay, true);
+    assert.equal(replay.user.id, first.user.id);
+    assert.equal(state.audit.length, 1);
+  });
+
   it('rejects reuse of a completion idempotency key for different registration data', async () => {
     const state = createRepositories();
     const service = createRegistrationService({

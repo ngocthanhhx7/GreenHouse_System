@@ -8,6 +8,7 @@ const AuditLog = require('../models/auditLog.model');
 const EmailOutbox = require('../models/emailOutbox.model');
 const { hashPassword } = require('../utils/password');
 const { validatePasswordPolicy } = require('../utils/passwordPolicy');
+const { extractAuditReplayBinding } = require('../utils/auditReplay');
 
 const INVITATION_TTL_MS = 24 * 60 * 60 * 1000;
 const INVITED_ROLES = new Set(['Staff', 'WarehouseManager']);
@@ -96,7 +97,14 @@ function createModelRepository() {
       return (session ? query.session(session) : query).lean();
     },
     async findAuditByEventId(eventId, session) {
-      const query = AuditLog.findOne({ eventId }).select('+replayBinding');
+      const query = AuditLog.findOne({ eventId }).select({
+        action: 1,
+        targetEntity: 1,
+        targetId: 1,
+        replayBinding: 1,
+        'after.commandFingerprint': 1,
+        'before.invitationId': 1,
+      });
       return (session ? query.session(session) : query).lean();
     },
     async create(data, session) {
@@ -264,7 +272,7 @@ function createInternalInvitationService({
     if (
       audit.action !== action
       || audit.targetEntity !== (action === 'AUTH_INVITATION_ACCEPTED' ? 'User' : 'InternalInvitation')
-      || audit.replayBinding?.commandFingerprint !== commandFingerprint
+      || extractAuditReplayBinding(audit).commandFingerprint !== commandFingerprint
     ) {
       throw idempotencyKeyReused();
     }
@@ -363,7 +371,7 @@ function createInternalInvitationService({
 
     if (
       audit.action !== 'INTERNAL_INVITATION_RESENT'
-      || String(audit.replayBinding?.priorTargetId || '') !== String(invitationId)
+      || String(extractAuditReplayBinding(audit).priorTargetId || '') !== String(invitationId)
     ) {
       throw idempotencyKeyReused();
     }

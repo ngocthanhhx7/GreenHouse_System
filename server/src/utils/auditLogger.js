@@ -2,6 +2,7 @@ const { randomUUID } = require('node:crypto');
 
 const AuditLog = require('../models/auditLog.model');
 const { normalizeAuditReason, serializeAuditFacts } = require('./auditSerializer');
+const { serializeAdminCommandResult } = require('./auditReplay');
 const SAFE_REPLAY_ID = /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,199}$/;
 
 function text(value, fallback = '') {
@@ -58,6 +59,9 @@ function normalizeAuditEntry(entry = {}) {
     ...(/^[a-f0-9]{64}$/i.test(commandFingerprint) ? { commandFingerprint } : {}),
     ...(SAFE_REPLAY_ID.test(priorTargetId) ? { priorTargetId } : {}),
   };
+  const commandResult = serializeAdminCommandResult(
+    entry.commandResult || entry.after?.result
+  );
 
   return {
     auditId: entry.auditId,
@@ -78,6 +82,7 @@ function normalizeAuditEntry(entry = {}) {
     stateVersion: Number.isInteger(stateVersion) && stateVersion >= 0 ? stateVersion : null,
     safeFacts,
     ...(Object.keys(replayBinding).length ? { replayBinding } : {}),
+    ...(commandResult ? { commandResult } : {}),
     timestamp: entry.timestamp || entry.occurredAt,
 
     // Compatibility projections for existing idempotency checks and cleanup scripts.

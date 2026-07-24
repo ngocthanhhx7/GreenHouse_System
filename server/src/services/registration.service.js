@@ -8,6 +8,7 @@ const AuditLog = require('../models/auditLog.model');
 const EmailOutbox = require('../models/emailOutbox.model');
 const { hashPassword } = require('../utils/password');
 const { validatePasswordPolicy } = require('../utils/passwordPolicy');
+const { extractAuditReplayBinding } = require('../utils/auditReplay');
 
 const OTP_TTL_MS = 10 * 60 * 1000;
 const OTP_COOLDOWN_MS = 60 * 1000;
@@ -99,7 +100,13 @@ function createModelRepository() {
       return (session ? query.session(session) : query).lean();
     },
     async findAuditByEventId(eventId, session) {
-      const query = AuditLog.findOne({ eventId }).select('+replayBinding');
+      const query = AuditLog.findOne({ eventId }).select({
+        action: 1,
+        targetEntity: 1,
+        targetId: 1,
+        replayBinding: 1,
+        'after.commandFingerprint': 1,
+      });
       return (session ? query.session(session) : query).lean();
     },
     async findLatest(email, session) {
@@ -370,7 +377,7 @@ function createRegistrationService({
         if (
           audit.action !== 'AUTH_REGISTER_VERIFIED'
           || audit.targetEntity !== 'User'
-          || audit.replayBinding?.commandFingerprint !== completionFingerprint
+          || extractAuditReplayBinding(audit).commandFingerprint !== completionFingerprint
         ) {
           throw new ApiError(
             409,

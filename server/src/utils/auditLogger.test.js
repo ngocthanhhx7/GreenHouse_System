@@ -187,4 +187,31 @@ describe('audit logger transaction contract', () => {
     assert.equal(normalized.description, '[REDACTED]');
     assert.equal(normalized.targetId, 'unknown');
   });
+
+  it('redacts mixed-case whitespace, delimiter, Bearer and nested credential forms', () => {
+    for (const unsafeReason of [
+      'oTp 123456',
+      'PASSWORD abc123',
+      'passcode:246810',
+      'token=opaque-value',
+      'Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.payload.signature',
+      'Bearer eyJhbGciOiJIUzI1NiJ9.payload.signature',
+      'Bearer <token>',
+      'Nested failure { password abc123 }',
+    ]) {
+      assert.equal(normalizeAuditReason(unsafeReason), '[REDACTED]', unsafeReason);
+    }
+
+    assert.equal(
+      normalizeAuditReason('  Đã   phê duyệt theo chính sách bảo mật  '),
+      'Đã phê duyệt theo chính sách bảo mật'
+    );
+    const normalized = normalizeAuditEntry({
+      action: 'LEGACY_FAILURE',
+      targetEntity: 'User',
+      description: 'Authorization Bearer secret-value',
+    });
+    assert.equal(normalized.reason, '[REDACTED]');
+    assert.equal(normalized.description, '[REDACTED]');
+  });
 });
