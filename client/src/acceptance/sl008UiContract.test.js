@@ -28,19 +28,99 @@ function assertImportedAndMounted(parent, component, importPath, requiredProp) {
   );
 }
 
-function assertBoundHandler(source, serviceName, methodName, event = 'onClick|onSubmit') {
-  const functionPattern = new RegExp(
-    `async\\s+function\\s+(\\w+)\\s*\\([^)]*\\)\\s*\\{[\\s\\S]{0,1800}?`
-      + `${serviceName}\\.${methodName}\\s*\\(`,
+function closingBrace(source, openingBrace) {
+  let depth = 0;
+  let quote = null;
+  let escaped = false;
+  for (let index = openingBrace; index < source.length; index += 1) {
+    const character = source[index];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (character === '\\') escaped = true;
+      else if (character === quote) quote = null;
+      continue;
+    }
+    if (character === '"' || character === "'" || character === '`') {
+      quote = character;
+      continue;
+    }
+    if (character === '{') depth += 1;
+    if (character === '}') {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return -1;
+}
+
+function asyncHandlerBodies(source) {
+  const declaration = /async\s+function\s+(\w+)\s*\([^)]*\)\s*\{|(?:const|let)\s+(\w+)\s*=\s*async\s*(?:\([^)]*\)|\w+)\s*=>\s*\{/g;
+  const handlers = [];
+  for (const match of source.matchAll(declaration)) {
+    const openingBrace = match.index + match[0].lastIndexOf('{');
+    const end = closingBrace(source, openingBrace);
+    assert.notEqual(end, -1, `unbalanced handler ${match[1] || match[2]}`);
+    handlers.push({
+      name: match[1] || match[2],
+      body: source.slice(openingBrace + 1, end),
+      start: match.index,
+      end,
+    });
+  }
+  return handlers;
+}
+
+function boundHandler(source, serviceName, methodName, bodyPattern) {
+  const serviceCall = new RegExp(`${serviceName}\\.${methodName}\\s*\\(`);
+  const match = asyncHandlerBodies(source).find(
+    (handler) => serviceCall.test(handler.body)
+      && (!bodyPattern || bodyPattern.test(handler.body)),
   );
-  const arrowPattern = new RegExp(
-    `(?:const|let)\\s+(\\w+)\\s*=\\s*async\\s*\\([^)]*\\)\\s*=>\\s*\\{`
-      + `[\\s\\S]{0,1800}?${serviceName}\\.${methodName}\\s*\\(`,
+  assert.ok(
+    match,
+    `expected one bounded async handler invoking ${serviceName}.${methodName}()`
+      + (bodyPattern ? ' with the required payload' : ''),
   );
-  const match = source.match(functionPattern) || source.match(arrowPattern);
-  assert.ok(match, `expected a handler that invokes ${serviceName}.${methodName}()`);
-  assert.match(source, new RegExp(`(?:${event})=\\{${match[1]}\\}`));
-  return match[1];
+  return match;
+}
+
+function assertBoundHandler(
+  source,
+  serviceName,
+  methodName,
+  event = 'onClick|onSubmit',
+  bodyPattern,
+) {
+  const handler = boundHandler(source, serviceName, methodName, bodyPattern);
+  assert.match(source, new RegExp(`(?:${event})\\s*=\\s*\\{${handler.name}\\}`));
+  return handler.name;
+}
+
+function assertGuardedHandler(source, handlerName, guardPattern, distance = 2400) {
+  const event = new RegExp(`(?:onClick|onSubmit)\\s*=\\s*\\{${handlerName}\\}`).exec(source);
+  assert.ok(event, `expected a rendered control bound to ${handlerName}`);
+  const nearbyControl = source.slice(Math.max(0, event.index - distance), event.index + event[0].length);
+  assert.match(nearbyControl, guardPattern);
+}
+
+function renderedMap(source, collectionName, distance = 2400) {
+  const candidates = Array.isArray(collectionName) ? collectionName : [collectionName];
+  const mapCall = candidates
+    .map((candidate) => ({
+      candidate,
+      match: new RegExp(`${candidate}\\.map\\s*\\(`).exec(source),
+    }))
+    .find((candidate) => candidate.match);
+  assert.ok(mapCall, `expected ${candidates.join(' or ')}.map() in rendered JSX`);
+  return source.slice(mapCall.match.index, mapCall.match.index + distance);
+}
+
+function fieldElement(source, fieldName) {
+  const element = new RegExp(
+    `<(?:input|textarea|select)\\b(?=[^>]*(?:name|id)=["']${fieldName}["'])[^>]*>`,
+  ).exec(source);
+  assert.ok(element, `expected rendered ${fieldName} control`);
+  return element[0];
 }
 
 function createRequestCapture(factory) {
@@ -100,13 +180,22 @@ describe('SL-008 Review UI integration contract', () => {
       '../../components/review/ProductReviewPanel.jsx',
       'productId',
     );
-    assert.match(panel, /eligible(?:Order)?Details|reviewEligibility/);
-    assert.match(panel, /<select\b[^>]*(?:orderDetail|eligibility)/i);
+    assert.match(panel, /reviewService\.(?:listEligibility|listEligibleOrderDetails)\s*\(/);
+    assert.match(
+      panel,
+      /<select\b[^>]*(?:name|id)=["']orderDetailId["'][\s\S]{0,1200}(?:eligibleOrderDetails|reviewEligibility)\.map\s*\(/i,
+    );
     assert.doesNotMatch(
       panel,
       /<input\b[^>]*(?:name|id)=["'][^"']*(?:orderId|orderDetailId|ObjectId)/i,
     );
-    assertBoundHandler(panel, 'reviewService', 'createReview', 'onSubmit');
+    assertBoundHandler(
+      panel,
+      'reviewService',
+      'createReview',
+      'onSubmit',
+      /orderDetailId[\s\S]{0,500}rating[\s\S]{0,500}content[\s\S]{0,500}expectedVersion/,
+    );
   });
 
   it('AT-154 binds integer rating controls and optional normalized text to a live 0/1000 counter', () => {
@@ -114,19 +203,27 @@ describe('SL-008 Review UI integration contract', () => {
 
     assert.match(panel, /\[1,\s*2,\s*3,\s*4,\s*5\]|min=["']1["'][^>]*max=["']5["']/);
     assert.match(panel, /maxLength=\{?1000\}?/);
-    assert.match(panel, /\{[^}]*content\.length[^}]*\}\s*\/\s*1000/);
+    assert.match(
+      panel,
+      /<textarea\b[^>]*(?:name|id)=["']content["'][^>]*maxLength=\{?1000\}?[\s\S]{0,500}\{[^}]*content\.length[^}]*\}\s*\/\s*1000/,
+    );
     assert.doesNotMatch(panel, /<textarea\b[^>]*required/);
   });
 
   it('AT-156 renders only the public-safe masked/verified Review projection', () => {
     const list = clientSource('components/review/PublicReviewList.jsx');
+    const itemRender = renderedMap(list, 'reviews');
 
-    assert.match(list, /displayName/);
-    assert.match(list, /verifiedPurchase/);
-    assert.match(list, /rating/);
-    assert.match(list, /content/);
-    assert.match(list, /createdAt/);
-    assert.match(list, /updatedAt/);
+    for (const field of [
+      'displayName',
+      'verifiedPurchase',
+      'rating',
+      'content',
+      'createdAt',
+      'updatedAt',
+    ]) {
+      assert.match(itemRender, new RegExp(`review\\.${field}\\b`));
+    }
     assert.doesNotMatch(
       list,
       /customerId|orderId|orderDetailId|email|phone|moderationReason|staffId/,
@@ -137,30 +234,58 @@ describe('SL-008 Review UI integration contract', () => {
     const panel = clientSource('components/review/ProductReviewPanel.jsx');
     const moderation = clientSource('pages/staff/ReviewModerationPage.jsx');
 
-    assertBoundHandler(panel, 'reviewService', 'setPublication');
-    assert.match(panel, /Published/);
-    assert.match(panel, /Withdrawn/);
-    assertBoundHandler(moderation, 'reviewService', 'moderate', 'onSubmit');
-    assert.match(moderation, /Allowed/);
-    assert.match(moderation, /HiddenByStaff/);
-    assert.match(moderation, /reason/);
+    const withdraw = assertBoundHandler(
+      panel,
+      'reviewService',
+      'setPublication',
+      'onClick|onSubmit',
+      /publicationStatus\s*:\s*['"]Withdrawn['"][\s\S]{0,500}expectedVersion/,
+    );
+    const republish = assertBoundHandler(
+      panel,
+      'reviewService',
+      'setPublication',
+      'onClick|onSubmit',
+      /publicationStatus\s*:\s*['"]Published['"][\s\S]{0,500}expectedVersion/,
+    );
+    assert.notEqual(withdraw, republish);
+    const moderationHandler = assertBoundHandler(
+      moderation,
+      'reviewService',
+      'moderate',
+      'onSubmit',
+      /moderationStatus[\s\S]{0,500}reason[\s\S]{0,500}expectedVersion/,
+    );
+    assertGuardedHandler(
+      moderation,
+      moderationHandler,
+      /moderationStatus|HiddenByStaff|Allowed/,
+    );
   });
 
   it('AT-158 binds Customer edit, exposes no delete, and gives Staff no content-edit handler', () => {
     const panel = clientSource('components/review/ProductReviewPanel.jsx');
     const moderation = clientSource('pages/staff/ReviewModerationPage.jsx');
 
-    assertBoundHandler(panel, 'reviewService', 'updateReview', 'onSubmit');
+    assertBoundHandler(
+      panel,
+      'reviewService',
+      'updateReview',
+      'onSubmit',
+      /rating[\s\S]{0,500}content[\s\S]{0,500}expectedVersion/,
+    );
     assert.doesNotMatch(panel, /deleteReview|removeReview/);
     assert.doesNotMatch(moderation, /updateReview|deleteReview|setPublication/);
   });
 
   it('AT-159 renders server aggregate/paging and sends public Review page parameters', async () => {
     const list = clientSource('components/review/PublicReviewList.jsx');
-    assert.match(list, /averageRating/);
-    assert.match(list, /totalPages/);
+    assert.match(list, /averageRating\.toFixed\(1\)/);
+    assert.match(
+      list,
+      /(?:page|currentPage)[\s\S]{0,1200}totalPages[\s\S]{0,1200}(?:onClick|onChange)/,
+    );
     assert.match(list, /pageSize/);
-    assert.match(list, /toFixed\(1\)/);
 
     const { service, requests } = createRequestCapture(createReviewService);
     assert.equal(typeof service.listPublic, 'function');
@@ -260,72 +385,172 @@ describe('SL-008 Customer Support UI integration contract', () => {
   it('AT-161 binds all seven Support types to type-dependent authorized selectors', () => {
     const page = clientSource('pages/customer/SupportPage.jsx');
 
-    for (const type of [
-      'Order',
-      'Payment',
-      'ReturnRefund',
-      'Exchange',
-      'Product',
-      'Account',
-      'Other',
-    ]) {
-      assert.match(page, new RegExp(`['"]${type}['"]`));
-    }
-    assert.match(page, /type.*(?:orderOptions|ownedOrders)|(?:orderOptions|ownedOrders).*type/s);
-    assert.match(page, /type.*(?:productOptions|activeProducts)|(?:productOptions|activeProducts).*type/s);
+    assert.match(
+      page,
+      /(?:SUPPORT_TYPES|supportTypes)\s*=\s*\[[^\]]*['"]Order['"][^\]]*['"]Payment['"][^\]]*['"]ReturnRefund['"][^\]]*['"]Exchange['"][^\]]*['"]Product['"][^\]]*['"]Account['"][^\]]*['"]Other['"][^\]]*\]/,
+    );
+    assert.match(
+      page,
+      /<select\b[^>]*(?:name|id)=["']type["'][\s\S]{0,1000}(?:SUPPORT_TYPES|supportTypes)\.map\s*\(/,
+    );
+    assert.match(page, /supportService\.(?:listEligibleOrders|listOwnedOrders)\s*\(/);
+    assert.match(page, /supportService\.(?:listActiveProducts|listProductsForSupport)\s*\(/);
+    assert.match(
+      page,
+      /<select\b[^>]*(?:name|id)=["']orderId["'][\s\S]{0,1200}(?:eligibleOrders|ownedOrders|orderOptions)\.map\s*\(/,
+    );
+    assert.match(
+      page,
+      /<select\b[^>]*(?:name|id)=["']productId["'][\s\S]{0,1200}(?:activeProducts|productOptions)\.map\s*\(/,
+    );
+    assert.match(
+      page,
+      /(?:requiresOrder|ORDER_REQUIRED_TYPES\.includes\([^)]*type\))[\s\S]{0,1600}<select\b[^>]*(?:name|id)=["']orderId["'][^>]*required/,
+    );
+    assert.match(
+      page,
+      /(?:requiresProduct|(?:form|draft)\.type\s*===\s*['"]Product['"])[\s\S]{0,1600}<select\b[^>]*(?:name|id)=["']productId["'][^>]*required/,
+    );
     assert.doesNotMatch(
       page,
       /<input\b[^>]*(?:name|id)=["'][^"']*(?:orderId|productId|ObjectId)/i,
     );
+    const create = boundHandler(page, 'supportService', 'createRequest');
+    assert.match(page, new RegExp(`onSubmit\\s*=\\s*\\{${create.name}\\}`));
+    for (const field of [
+      'type',
+      'subject',
+      'initialMessage',
+      'orderId',
+      'productId',
+      'expectedVersion',
+    ]) {
+      assert.match(create.body, new RegExp(`\\b${field}\\b`));
+    }
+    assert.match(
+      page,
+      /(?:name|id)=["']subject["'][^>]*maxLength=\{?120\}?[\s\S]{0,500}\{[^}]*subject\.length[^}]*\}\s*\/\s*120/,
+    );
+    assert.match(
+      page,
+      /(?:name|id)=["']initialMessage["'][^>]*maxLength=\{?2000\}?[\s\S]{0,500}\{[^}]*initialMessage\.length[^}]*\}\s*\/\s*2000/,
+    );
+    assert.match(page, /privacy|do not include|sensitive|personal information/i);
+    assert.doesNotMatch(
+      page,
+      /(?:name|id)=["'][^"']*(?:priority|attachment)[^"']*["']|<input\b[^>]*type=["']file["']/i,
+    );
   });
 
-  it('AT-162/163/164 shows field errors for denied references and does not render foreign identifiers', () => {
+  it('AT-162 requires an authorized Order selector and renders private Order field errors', () => {
     const page = clientSource('pages/customer/SupportPage.jsx');
 
-    assert.match(page, /fieldErrors/);
-    assert.match(page, /orderId|order/);
-    assert.match(page, /productId|product/);
+    assert.match(page, /fieldErrors\.orderId|fieldErrors\[['"]orderId['"]\]/);
+    assert.match(
+      page,
+      /(?:Order|Payment|ReturnRefund|Exchange)[\s\S]{0,1800}(?:requiresOrder|ORDER_REQUIRED_TYPES)/,
+    );
     assert.doesNotMatch(page, /customerId|ObjectId|email|phone/);
   });
 
-  it('AT-165 renders immutable paged messages and binds appendMessage', () => {
+  it('AT-163 requires an Active Product selector and renders private Product field errors', () => {
     const page = clientSource('pages/customer/SupportPage.jsx');
 
-    assert.match(page, /messages/);
-    assert.match(page, /totalPages/);
-    assert.match(page, /pageSize/);
-    assert.doesNotMatch(page, /editMessage|deleteMessage|removeMessage/);
-    assertBoundHandler(page, 'supportService', 'appendMessage', 'onSubmit');
+    assert.match(page, /fieldErrors\.productId|fieldErrors\[['"]productId['"]\]/);
+    assert.match(
+      page,
+      /(?:requiresProduct|(?:form|draft)\.type\s*===\s*['"]Product['"])[\s\S]{0,1800}(?:activeProducts|productOptions)/,
+    );
+    assert.match(page, /productId[\s\S]{0,1200}orderId|orderId[\s\S]{0,1200}productId/);
+    assert.doesNotMatch(page, /customerId|ObjectId|email|phone/);
   });
 
-  it('AT-166 conditionally lets the owner message only New/InProgress tickets', () => {
+  it('AT-164 keeps Account/Other Order/Product refs optional while using the same authorized selectors', () => {
     const page = clientSource('pages/customer/SupportPage.jsx');
 
     assert.match(
       page,
-      /(?:\[['"]New['"],\s*['"]InProgress['"]\]\.includes\([^)]*status\)|(?:ticket|request)\.status\s*===\s*['"]New['"][\s\S]{0,300}(?:ticket|request)\.status\s*===\s*['"]InProgress['"])/,
+      /(?:OPTIONAL_REFERENCE_TYPES|optionalReferenceTypes)\s*=\s*\[[^\]]*['"]Account['"][^\]]*['"]Other['"][^\]]*\]/,
     );
-    assertBoundHandler(page, 'supportService', 'appendMessage', 'onSubmit');
+    assert.match(
+      page,
+      /(?:allowsOrder|OPTIONAL_REFERENCE_TYPES[\s\S]{0,200}\.includes\([^)]*type\))[\s\S]{0,1600}(?:name|id)=["']orderId["']/,
+    );
+    assert.match(
+      page,
+      /(?:allowsProduct|OPTIONAL_REFERENCE_TYPES[\s\S]{0,200}\.includes\([^)]*type\))[\s\S]{0,1600}(?:name|id)=["']productId["']/,
+    );
+    assert.doesNotMatch(
+      page,
+      /(?:Account|Other)[\s\S]{0,500}(?:name|id)=["'](?:orderId|productId)["'][^>]*required/,
+    );
+  });
+
+  it('AT-165 renders immutable paged messages and binds appendMessage', () => {
+    const page = clientSource('pages/customer/SupportPage.jsx');
+    const timeline = renderedMap(page, 'messages');
+
+    assert.match(timeline, /message\.content/);
+    assert.match(timeline, /message\.(?:actorRole|role)/);
+    assert.match(timeline, /message\.createdAt/);
+    assert.match(
+      page,
+      /(?:messagePage|page)[\s\S]{0,1200}messages?\.totalPages[\s\S]{0,1200}(?:onClick|onChange)/,
+    );
+    assert.match(page, /messagePageSize|messages?\.pageSize/);
+    assert.doesNotMatch(page, /editMessage|deleteMessage|removeMessage/);
+    assertBoundHandler(
+      page,
+      'supportService',
+      'appendMessage',
+      'onSubmit',
+      /message[\s\S]{0,500}expectedVersion/,
+    );
+  });
+
+  it('AT-166 conditionally lets the owner message only New/InProgress tickets', () => {
+    const page = clientSource('pages/customer/SupportPage.jsx');
+    const handler = assertBoundHandler(page, 'supportService', 'appendMessage', 'onSubmit');
+    assertGuardedHandler(
+      page,
+      handler,
+      /(?:\[['"]New['"],\s*['"]InProgress['"]\]\.includes\([^)]*status\)|(?:canCustomerMessage|canOwnerMessage))/,
+    );
   });
 
   it('AT-171 binds create, New-only unassigned withdraw, and final-response display', () => {
     const page = clientSource('pages/customer/SupportPage.jsx');
 
     assertBoundHandler(page, 'supportService', 'createRequest', 'onSubmit');
-    assertBoundHandler(page, 'supportService', 'withdraw');
-    assert.match(
+    const withdrawHandler = assertBoundHandler(page, 'supportService', 'withdraw');
+    assertGuardedHandler(
       page,
-      /status\s*===\s*['"]New['"][\s\S]{0,300}(?:(?:assigneeId|assignedTo)\s*===?\s*(?:null|undefined)|!(?:ticket|request)\.(?:assigneeId|assignedTo))/,
+      withdrawHandler,
+      /status\s*===\s*['"]New['"][\s\S]{0,500}(?:(?:assigneeId|assignedTo)\s*===?\s*(?:null|undefined)|!(?:ticket|request)\.(?:assigneeId|assignedTo)|(?:canWithdraw))/,
     );
-    assert.match(page, /finalMessage|resolutionMessage/);
+    const timeline = renderedMap(page, 'messages');
+    assert.match(timeline, /finalMessage|resolutionMessage|message\.content/);
   });
 
   it('AT-172 binds reopen/message to the server deadline and disables it after expiry', () => {
     const page = clientSource('pages/customer/SupportPage.jsx');
 
-    assertBoundHandler(page, 'supportService', 'reopen', 'onSubmit|onClick');
-    assert.match(page, /reopenDeadline/);
-    assert.match(page, /disabled=\{[^}]*(?:reopen|deadline|expired)/i);
+    const reopenHandler = assertBoundHandler(
+      page,
+      'supportService',
+      'reopen',
+      'onSubmit|onClick',
+      /message[\s\S]{0,500}expectedVersion/,
+    );
+    assertGuardedHandler(
+      page,
+      reopenHandler,
+      /status\s*===\s*['"]Resolved['"]|canReopen/,
+    );
+    assert.match(
+      page,
+      /reopenDeadline[\s\S]{0,1200}disabled=\{[^}]*(?:canReopen|deadline|expired)/i,
+    );
   });
 });
 
@@ -333,22 +558,24 @@ describe('SL-008 Staff Support UI integration contract', () => {
   it('AT-167 binds the queue claim action to supportService.claim', () => {
     const queue = clientSource('pages/staff/SupportQueuePage.jsx');
 
-    assertBoundHandler(queue, 'supportService', 'claim');
-    assert.match(queue, /status\s*===\s*['"]New['"]|recoveryClaim/);
+    const claim = assertBoundHandler(queue, 'supportService', 'claim');
+    assertGuardedHandler(
+      queue,
+      claim,
+      /status\s*===\s*['"]New['"]|(?:status\s*===\s*['"]InProgress['"][\s\S]{0,500}(?:!.*assignee|assigneeId\s*===\s*null))|canClaim/,
+    );
   });
 
   it('AT-168 conditionally mounts assignee-only messaging/priority/transfer/resolve controls', () => {
     const detail = clientSource('pages/staff/SupportDetailPage.jsx');
 
-    assert.match(detail, /isCurrentAssignee|currentAssignee/);
     for (const method of ['appendMessage', 'changePriority', 'transfer', 'resolve']) {
       const handler = assertBoundHandler(detail, 'supportService', method, 'onClick|onSubmit');
-      assert.match(
+      assertGuardedHandler(
         detail,
-        new RegExp(
-          `\\{(?:isCurrentAssignee|currentAssignee)\\s*&&\\s*\\(`
-            + `[\\s\\S]{0,6000}(?:onClick|onSubmit)=\\{${handler}\\}`,
-        ),
+        handler,
+        /isCurrentActiveAssignee|canAssigneeOperate/,
+        6000,
       );
     }
   });
@@ -356,38 +583,83 @@ describe('SL-008 Staff Support UI integration contract', () => {
   it('AT-169 binds priority/transfer reasons and limits targets to Active Staff', () => {
     const detail = clientSource('pages/staff/SupportDetailPage.jsx');
 
-    assertBoundHandler(detail, 'supportService', 'changePriority', 'onSubmit');
-    assertBoundHandler(detail, 'supportService', 'transfer', 'onSubmit');
-    assert.match(detail, /Low/);
-    assert.match(detail, /Normal/);
-    assert.match(detail, /High/);
-    assert.match(detail, /Urgent/);
-    assert.match(detail, /reason/);
-    assert.match(detail, /activeStaff|status\s*===\s*['"]Active['"]/);
+    const priorityHandler = assertBoundHandler(
+      detail,
+      'supportService',
+      'changePriority',
+      'onSubmit',
+      /priority[\s\S]{0,500}reason[\s\S]{0,500}expectedVersion/,
+    );
+    const transferHandler = assertBoundHandler(
+      detail,
+      'supportService',
+      'transfer',
+      'onSubmit',
+      /assigneeId[\s\S]{0,500}reason[\s\S]{0,500}expectedVersion/,
+    );
+    assertGuardedHandler(detail, priorityHandler, /isCurrentActiveAssignee|canAssigneeOperate/);
+    assertGuardedHandler(detail, transferHandler, /isCurrentActiveAssignee|canAssigneeOperate/);
+    assert.match(
+      detail,
+      /<select\b[^>]*(?:name|id)=["']priority["'][\s\S]{0,1200}['"]Low['"][\s\S]{0,1200}['"]Normal['"][\s\S]{0,1200}['"]High['"][\s\S]{0,1200}['"]Urgent['"]/,
+    );
+    assert.match(
+      detail,
+      /<select\b[^>]*(?:name|id)=["']assigneeId["'][\s\S]{0,1200}(?:activeStaff|staffOptions)\.map\s*\(/,
+    );
+    assert.match(detail, /supportService\.(?:listActiveStaff|listTransferTargets)\s*\(/);
+    for (const field of ['priorityReason', 'transferReason']) {
+      const reasonInput = fieldElement(detail, field);
+      assert.match(reasonInput, /\brequired\b/);
+      assert.match(reasonInput, /minLength=\{?5\}?/);
+      assert.match(reasonInput, /maxLength=\{?500\}?/);
+    }
+    const assignmentTimeline = renderedMap(detail, 'assignmentHistory');
+    const priorityTimeline = renderedMap(detail, 'priorityHistory');
+    assert.match(assignmentTimeline, /reason[\s\S]{0,1000}(?:actor|createdAt)/);
+    assert.match(priorityTimeline, /reason[\s\S]{0,1000}(?:actor|createdAt)/);
   });
 
   it('AT-170 renders disabled-assignee recovery and a reclaim action without losing priority/history', () => {
     const queue = clientSource('pages/staff/SupportQueuePage.jsx');
     const detail = clientSource('pages/staff/SupportDetailPage.jsx');
 
+    const reclaim = assertBoundHandler(queue, 'supportService', 'claim');
+    assertGuardedHandler(
+      queue,
+      reclaim,
+      /status\s*===\s*['"]InProgress['"][\s\S]{0,500}(?:!.*assignee|assigneeId\s*===\s*null)|recoveryClaim/,
+    );
     assert.match(queue, /recovery|assigneeCleared|unassignedInProgress/i);
-    assertBoundHandler(queue, 'supportService', 'claim');
-    assert.match(detail, /priority/);
-    assert.match(detail, /assignmentHistory|messages/);
+    assert.match(detail, /ticket\.priority|request\.priority/);
+    const assignmentTimeline = renderedMap(detail, 'assignmentHistory');
+    const messageTimeline = renderedMap(detail, 'messages');
+    assert.match(assignmentTimeline, /beforeAssigneeId|afterAssigneeId|reason/);
+    assert.match(messageTimeline, /message\.content[\s\S]{0,1000}message\.(?:actorRole|role)/);
   });
 
   it('AT-171 binds the final response to resolve and removes generic status mutation', () => {
     const detail = clientSource('pages/staff/SupportDetailPage.jsx');
 
-    assertBoundHandler(detail, 'supportService', 'resolve', 'onSubmit');
-    assert.match(detail, /finalMessage/);
-    assert.match(detail, /maxLength=\{?2000\}?/);
+    const resolve = assertBoundHandler(
+      detail,
+      'supportService',
+      'resolve',
+      'onSubmit',
+      /finalMessage[\s\S]{0,500}expectedVersion/,
+    );
+    assertGuardedHandler(detail, resolve, /isCurrentActiveAssignee|canAssigneeOperate/);
+    assert.match(
+      detail,
+      /(?:name|id)=["']finalMessage["'][^>]*maxLength=\{?2000\}?/,
+    );
     assert.doesNotMatch(detail, /respondToRequest|setStatus|updateStatus/);
   });
 
   it('AT-173 sends type/date/status/priority/assignee paging filters and displays field errors', async () => {
     const queue = clientSource('pages/staff/SupportQueuePage.jsx');
 
+    const loadQueue = boundHandler(queue, 'supportService', 'listOperational');
     for (const filter of [
       'type',
       'dateFrom',
@@ -398,9 +670,9 @@ describe('SL-008 Staff Support UI integration contract', () => {
       'page',
       'pageSize',
     ]) {
-      assert.match(queue, new RegExp(filter));
+      assert.match(loadQueue.body, new RegExp(`\\b${filter}\\b`));
     }
-    assert.match(queue, /fieldErrors/);
+    assert.match(queue, /fieldErrors\.(?:type|dateFrom|dateTo|status|priority|assigneeId)|fieldErrors\[/);
 
     const { service, requests } = createRequestCapture(createSupportService);
     assert.equal(typeof service.listOperational, 'function');
@@ -586,21 +858,79 @@ describe('SL-008 direct-navigation RBAC and privacy contract', () => {
       app,
       /path="staff\/reviews"[\s\S]{0,400}allowedRoles=\{\[['"]Staff['"]\]\}/,
     );
+    assert.match(
+      app,
+      /path="staff\/support-requests\/:ticketId"[\s\S]{0,400}allowedRoles=\{\[['"]Staff['"]\]\}/,
+    );
+    assert.match(
+      app,
+      /path="support\/:ticketId"[\s\S]{0,400}allowedRoles=\{\[['"]Customer['"]\]\}/,
+    );
     assert.doesNotMatch(app, /path="admin\/(?:reviews|support(?:-requests)?)"/);
     assert.doesNotMatch(app, /path="warehouse\/(?:reviews|support(?:-requests)?)"/);
   });
 
-  it('AT-173 keeps Support UI projections free of raw IDs/contact data and renders invalid-filter errors', () => {
+  it('AT-173 ties safe Review/Support projections to protected reads and exact paged HTTP routes', async () => {
     const customer = clientSource('pages/customer/SupportPage.jsx');
     const queue = clientSource('pages/staff/SupportQueuePage.jsx');
     const detail = clientSource('pages/staff/SupportDetailPage.jsx');
-    const rendered = `${customer}\n${queue}\n${detail}`;
+    const moderation = clientSource('pages/staff/ReviewModerationPage.jsx');
+    const customerTickets = renderedMap(customer, ['tickets', 'requests']);
+    const staffTickets = renderedMap(queue, ['tickets', 'requests']);
+    const staffReviews = renderedMap(moderation, ['reviews', 'items']);
+    const staffMessages = renderedMap(detail, 'messages');
+    const rendered = [
+      customerTickets,
+      staffTickets,
+      staffReviews,
+      staffMessages,
+    ].join('\n');
 
     assert.doesNotMatch(
       rendered,
       /\{[^}]*\.(?:customerId|orderId|productId|email|phone|ObjectId)[^}]*\}/,
     );
+    assert.match(customerTickets, /ticketCode|subject|type|status/);
+    assert.match(staffTickets, /ticketCode|type|status|priority|assignee/);
+    assert.match(staffReviews, /rating|content|publicationStatus|moderationStatus/);
+    assert.match(staffMessages, /message\.content[\s\S]{0,1000}message\.(?:actorRole|role)/);
     assert.match(queue, /fieldErrors/);
     assert.match(queue, /SUPPORT_FILTER_INVALID|invalid.*filter/i);
+
+    const reviewCapture = createRequestCapture(createReviewService);
+    assert.equal(typeof reviewCapture.service.listModeration, 'function');
+    await reviewCapture.service.listModeration({
+      page: 1,
+      pageSize: 20,
+      productId: 'product-1',
+      publicationStatus: 'Published',
+      moderationStatus: 'Allowed',
+    });
+    assert.equal(
+      reviewCapture.requests[0].url,
+      'http://api.test/api/staff/reviews'
+        + '?page=1&pageSize=20&productId=product-1'
+        + '&publicationStatus=Published&moderationStatus=Allowed',
+    );
+
+    const ownCapture = createRequestCapture(createSupportService);
+    assert.equal(typeof ownCapture.service.listOwn, 'function');
+    await ownCapture.service.listOwn({ page: 2, pageSize: 20 });
+    assert.equal(
+      ownCapture.requests[0].url,
+      'http://api.test/api/support-requests/my?page=2&pageSize=20',
+    );
+
+    const detailCapture = createRequestCapture(createSupportService);
+    assert.equal(typeof detailCapture.service.getDetail, 'function');
+    await detailCapture.service.getDetail(
+      'ticket-1',
+      { page: 3, pageSize: 20 },
+      { scope: 'staff' },
+    );
+    assert.equal(
+      detailCapture.requests[0].url,
+      'http://api.test/api/staff/support-requests/ticket-1?page=3&pageSize=20',
+    );
   });
 });

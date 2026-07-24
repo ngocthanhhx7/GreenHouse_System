@@ -45,6 +45,7 @@ function snapshotEffects(state) {
     assignmentHistory: state.assignmentHistory?.length || 0,
     priorityHistory: state.priorityHistory?.length || 0,
     resolutionHistory: state.resolutionHistory?.length || 0,
+    commands: state.commands?.length || 0,
     audits: state.audits.length,
     outbox: state.outbox.length,
   };
@@ -81,9 +82,10 @@ function buildReviewFixture({ now = '2026-07-24T12:00:00.000Z' } = {}) {
     users: [
       { id: 'customer-1', displayName: 'Nguyen Thi Minh Anh', status: 'Active' },
       { id: 'customer-2', displayName: 'Tran Van Binh', status: 'Active' },
-      actors.staffA,
-      actors.staffB,
-      actors.inactiveStaff,
+      { id: 'customer-3', displayName: 'Ánh', status: 'Active' },
+      { ...actors.staffA },
+      { ...actors.staffB },
+      { ...actors.inactiveStaff },
     ],
     orders: [
       { id: 'order-old', customerId: 'customer-1', deliveredAt: new Date('2026-07-20T08:00:00.000Z'), status: 'Delivered' },
@@ -93,11 +95,12 @@ function buildReviewFixture({ now = '2026-07-24T12:00:00.000Z' } = {}) {
       { id: 'order-undelivered', customerId: 'customer-1', deliveredAt: null, status: 'Shipped' },
     ],
     orderDetails: [
-      { id: 'detail-001', orderId: 'order-old', productId: 'product-1', sku: 'SKU-1' },
+      // Deliberately shuffled: fallback ordering must not inherit repository insertion order.
       { id: 'detail-010', orderId: 'order-new', productId: 'product-1', sku: 'SKU-1' },
-      { id: 'detail-011', orderId: 'order-tie', productId: 'product-1', sku: 'SKU-1' },
       { id: 'detail-foreign', orderId: 'order-foreign', productId: 'product-1', sku: 'SKU-1' },
+      { id: 'detail-001', orderId: 'order-old', productId: 'product-1', sku: 'SKU-1' },
       { id: 'detail-undelivered', orderId: 'order-undelivered', productId: 'product-1', sku: 'SKU-1' },
+      { id: 'detail-011', orderId: 'order-tie', productId: 'product-1', sku: 'SKU-1' },
     ],
     reviews: [],
     contentHistory: [],
@@ -263,11 +266,11 @@ function reviewCommand(overrides = {}) {
 function buildSupportFixture({ now = '2026-07-24T12:00:00.000Z' } = {}) {
   const state = {
     users: [
-      actors.customer,
-      actors.foreignCustomer,
-      actors.staffA,
-      actors.staffB,
-      actors.inactiveStaff,
+      { ...actors.customer },
+      { ...actors.foreignCustomer },
+      { ...actors.staffA },
+      { ...actors.staffB },
+      { ...actors.inactiveStaff },
     ],
     products: [
       { id: 'product-1', status: 'Active' },
@@ -300,6 +303,7 @@ function buildSupportFixture({ now = '2026-07-24T12:00:00.000Z' } = {}) {
       shipments: [{ id: 'shipment-1', status: 'Delivered' }],
       inventory: [{ productId: 'product-1', available: 8 }],
     },
+    sessionRevocations: [],
   };
 
   const repository = {
@@ -443,6 +447,43 @@ function buildSupportFixture({ now = '2026-07-24T12:00:00.000Z' } = {}) {
       ) || null;
     },
   };
+  function mutationGateway(method) {
+    return {
+      calls: [],
+      async [method](...args) {
+        this.calls.push({ method, args: structuredClone(args) });
+      },
+    };
+  }
+  const foreignMutationGateways = {
+    order: mutationGateway('updateStatus'),
+    payment: mutationGateway('refund'),
+    returnRefund: mutationGateway('updateDisposition'),
+    exchange: mutationGateway('updateStatus'),
+    shipment: mutationGateway('reschedule'),
+    inventory: mutationGateway('reserve'),
+  };
+  const sl007SessionService = {
+    calls: [],
+    async revokeAllForUser(userId, reason) {
+      this.calls.push({ userId: String(userId), reason });
+      state.sessionRevocations.push({
+        userId: String(userId),
+        signal: 'SL007_SESSIONS_REVOKED',
+        reason,
+        occurredAt: clock.now(),
+      });
+      return { revokedCount: 2 };
+    },
+  };
+  const sl007Lifecycle = {
+    async disableStaff(userId, clearAssignment) {
+      await sl007SessionService.revokeAllForUser(userId, 'ACCOUNT_DISABLED');
+      return clearAssignment(String(userId), {
+        idempotencyKey: `sl007-disable-${userId}`,
+      });
+    },
+  };
   const service = createSupportService({
     repository,
     transactionManager,
@@ -452,6 +493,12 @@ function buildSupportFixture({ now = '2026-07-24T12:00:00.000Z' } = {}) {
     clock,
     now: () => clock.now(),
     assignmentCoordinator,
+    orderCommandGateway: foreignMutationGateways.order,
+    paymentCommandGateway: foreignMutationGateways.payment,
+    returnRefundCommandGateway: foreignMutationGateways.returnRefund,
+    exchangeCommandGateway: foreignMutationGateways.exchange,
+    shipmentCommandGateway: foreignMutationGateways.shipment,
+    inventoryCommandGateway: foreignMutationGateways.inventory,
   });
 
   return {
@@ -462,6 +509,9 @@ function buildSupportFixture({ now = '2026-07-24T12:00:00.000Z' } = {}) {
     clock,
     transactionManager,
     assignmentCoordinator,
+    foreignMutationGateways,
+    sl007SessionService,
+    sl007Lifecycle,
     service,
   };
 }
@@ -509,25 +559,40 @@ describe('SL-008 Review behavioral acceptance', () => {
   });
 
   it('AT-151 deterministically falls back by deliveredAt DESC then OrderDetail ID DESC', async () => {
-    const fixture = buildReviewFixture();
-    const createReview = requiredMethod(fixture.service, 'createReview');
+    const tieFixture = buildReviewFixture();
+    const createWithTie = requiredMethod(tieFixture.service, 'createReview');
 
-    const result = await createReview(
+    const tieResult = await createWithTie(
       actors.customer,
       'product-1',
       reviewCommand({ orderDetailId: undefined }),
     );
+    assert.equal(tieResult.orderDetailId, 'detail-011');
 
-    assert.equal(result.orderDetailId, 'detail-011');
+    const deliveredAtFixture = buildReviewFixture();
+    deliveredAtFixture.state.orderDetails = deliveredAtFixture.state.orderDetails.filter(
+      (detail) => detail.id !== 'detail-011',
+    );
+    const createWithoutTie = requiredMethod(deliveredAtFixture.service, 'createReview');
+    const deliveredAtResult = await createWithoutTie(
+      actors.customer,
+      'product-1',
+      reviewCommand({
+        orderDetailId: undefined,
+        idempotencyKey: 'review-fallback-delivered-at-0001',
+      }),
+    );
+    assert.equal(deliveredAtResult.orderDetailId, 'detail-010');
   });
 
   it('AT-152 keeps one Customer+Product identity across repeat purchases', async () => {
     const fixture = buildReviewFixture();
     const createReview = requiredMethod(fixture.service, 'createReview');
-    await createReview(actors.customer, 'product-1', reviewCommand());
+    const updateReview = requiredMethod(fixture.service, 'updateReview');
+    const created = await createReview(actors.customer, 'product-1', reviewCommand());
     const before = snapshotEffects(fixture.state);
 
-    await expectDomainError(
+    const duplicate = await expectDomainError(
       () => createReview(
         actors.customer,
         'product-1',
@@ -541,6 +606,19 @@ describe('SL-008 Review behavioral acceptance', () => {
 
     assert.deepEqual(snapshotEffects(fixture.state), before);
     assert.equal(fixture.state.reviews.length, 1);
+    assert.equal(duplicate.data.review.id, created.id);
+    assert.equal(duplicate.data.review.version, created.version);
+    assert.equal(duplicate.data.review.publicationStatus, 'Published');
+    assert.equal(duplicate.data.review.moderationStatus, 'Allowed');
+
+    const updated = await updateReview(actors.customer, duplicate.data.review.id, {
+      rating: 4,
+      content: 'Updated from the existing Review identity.',
+      expectedVersion: duplicate.data.review.version,
+      idempotencyKey: 'review-existing-identity-update-0001',
+    });
+    assert.equal(updated.id, created.id);
+    assert.equal(fixture.state.reviews.length, 1);
   });
 
   it('AT-153 preserves Review identity after return/refund and same-SKU exchange changes', async () => {
@@ -548,7 +626,21 @@ describe('SL-008 Review behavioral acceptance', () => {
     const createReview = requiredMethod(fixture.service, 'createReview');
     const listPublic = requiredMethod(fixture.service, 'listPublic');
     const created = await createReview(actors.customer, 'product-1', reviewCommand());
+    const originalHistory = structuredClone(fixture.state.contentHistory);
     fixture.state.orders.find((item) => item.id === 'order-old').status = 'Returned';
+    fixture.state.returnRefunds = [{
+      id: 'return-refund-later',
+      orderId: 'order-old',
+      orderDetailId: 'detail-001',
+      status: 'Refunded',
+    }];
+    fixture.state.exchanges = [{
+      id: 'exchange-same-sku',
+      sourceOrderDetailId: 'detail-001',
+      replacementOrderDetailId: 'detail-exchange',
+      sku: 'SKU-1',
+      status: 'Completed',
+    }];
     fixture.state.orderDetails.push({
       id: 'detail-exchange',
       orderId: 'order-new',
@@ -557,10 +649,23 @@ describe('SL-008 Review behavioral acceptance', () => {
       source: 'Exchange',
     });
 
+    const beforeSecondCreate = snapshotEffects(fixture.state);
+    const duplicate = await expectDomainError(
+      () => createReview(actors.customer, 'product-1', reviewCommand({
+        orderDetailId: 'detail-exchange',
+        idempotencyKey: 'review-after-sales-second-create-0001',
+      })),
+      'REVIEW_ALREADY_EXISTS',
+    );
     const publicPage = await listPublic('product-1', { page: 1, pageSize: 20 });
 
+    assert.deepEqual(snapshotEffects(fixture.state), beforeSecondCreate);
     assert.equal(fixture.state.reviews.length, 1);
     assert.equal(fixture.state.reviews[0].id, created.id);
+    assert.equal(fixture.state.reviews[0].orderDetailId, 'detail-001');
+    assert.deepEqual(fixture.state.contentHistory, originalHistory);
+    assert.equal(duplicate.data.review.id, created.id);
+    assert.equal(duplicate.data.review.orderDetailId, 'detail-001');
     assert.equal(publicPage.total, 1);
   });
 
@@ -588,6 +693,8 @@ describe('SL-008 Review behavioral acceptance', () => {
       { rating: 0, content: '' },
       { rating: 6, content: '' },
       { rating: 1.5, content: '' },
+      { rating: 'five', content: '' },
+      { rating: undefined, content: '' },
       { rating: 5, content: 'x'.repeat(1001) },
     ];
     for (const [index, input] of invalidCases.entries()) {
@@ -612,6 +719,7 @@ describe('SL-008 Review behavioral acceptance', () => {
           assignmentHistory: 0,
           priorityHistory: 0,
           resolutionHistory: 0,
+          commands: 0,
           audits: 0,
           outbox: 0,
         });
@@ -620,17 +728,23 @@ describe('SL-008 Review behavioral acceptance', () => {
   });
 
   it('AT-155 denies invalid, foreign, and non-delivered eligibility without effects or disclosure', async () => {
-    const cases = ['missing-detail', 'detail-foreign', 'detail-undelivered'];
-    for (const [index, orderDetailId] of cases.entries()) {
+    const cases = [
+      { actor: actors.customer, productId: 'product-1', orderDetailId: 'missing-detail' },
+      { actor: actors.customer, productId: 'product-1', orderDetailId: 'detail-foreign' },
+      { actor: actors.customer, productId: 'product-1', orderDetailId: 'detail-undelivered' },
+      { actor: actors.customer, productId: 'missing-product', orderDetailId: 'detail-001' },
+      { actor: actors.foreignCustomer, productId: 'product-1', orderDetailId: 'detail-001' },
+    ];
+    for (const [index, testCase] of cases.entries()) {
       const fixture = buildReviewFixture();
       const createReview = requiredMethod(fixture.service, 'createReview');
       const before = snapshotEffects(fixture.state);
       const error = await expectDomainError(
         () => createReview(
-          actors.customer,
-          'product-1',
+          testCase.actor,
+          testCase.productId,
           reviewCommand({
-            orderDetailId,
+            orderDetailId: testCase.orderDetailId,
             idempotencyKey: `review-denied-${index}-0001`,
           }),
         ),
@@ -638,6 +752,8 @@ describe('SL-008 Review behavioral acceptance', () => {
       );
       assert.equal(error.statusCode, 404);
       assert.equal(error.data?.orderId, undefined);
+      assert.equal(error.data?.orderDetailId, undefined);
+      assert.equal(error.data?.productId, undefined);
       assert.equal(error.data?.customerId, undefined);
       assert.deepEqual(snapshotEffects(fixture.state), before);
     }
@@ -648,23 +764,44 @@ describe('SL-008 Review behavioral acceptance', () => {
     const createReview = requiredMethod(fixture.service, 'createReview');
     const listPublic = requiredMethod(fixture.service, 'listPublic');
     await createReview(actors.customer, 'product-1', reviewCommand());
+    await fixture.repository.insertReview({
+      id: 'review-unicode-name',
+      customerId: 'customer-3',
+      productId: 'product-1',
+      orderDetailId: 'detail-011',
+      rating: 4,
+      content: 'Unicode one-token display name',
+      publicationStatus: 'Published',
+      moderationStatus: 'Allowed',
+      createdAt: new Date('2026-07-23T12:00:00.000Z'),
+      updatedAt: new Date('2026-07-23T12:00:00.000Z'),
+    });
 
     const result = await listPublic('product-1', { page: 1, pageSize: 20 });
 
-    assert.deepEqual(Object.keys(result.items[0]).sort(), [
-      'content',
-      'createdAt',
-      'displayName',
-      'rating',
-      'updatedAt',
-      'verifiedPurchase',
-    ]);
-    assert.equal(result.items[0].displayName, 'Nguyen T. M. A.');
-    assert.equal(result.items[0].verifiedPurchase, true);
-    assert.equal(JSON.stringify(result), JSON.stringify(result).replace(
-      /customerId|orderId|orderDetailId|email|phone|moderationReason|staffId/g,
-      '',
-    ));
+    for (const item of result.items) {
+      assert.deepEqual(Object.keys(item).sort(), [
+        'content',
+        'createdAt',
+        'displayName',
+        'rating',
+        'updatedAt',
+        'verifiedPurchase',
+      ]);
+      assert.equal(item.verifiedPurchase, true);
+    }
+    assert.equal(
+      result.items.find((item) => item.content === 'Very useful product').displayName,
+      'Anh N.',
+    );
+    assert.equal(
+      result.items.find((item) => item.content === 'Unicode one-token display name').displayName,
+      'Á***',
+    );
+    assert.doesNotMatch(
+      JSON.stringify(result),
+      /customerId|orderId|orderDetailId|email|phone|moderationReason|staffId/,
+    );
 
     fixture.state.products[0].status = 'Inactive';
     assert.equal((await listPublic('product-1', { page: 1, pageSize: 20 })).total, 0);
@@ -678,6 +815,7 @@ describe('SL-008 Review behavioral acceptance', () => {
     const createReview = requiredMethod(fixture.service, 'createReview');
     const setPublication = requiredMethod(fixture.service, 'setPublication');
     const moderate = requiredMethod(fixture.service, 'moderate');
+    const listPublic = requiredMethod(fixture.service, 'listPublic');
     const created = await createReview(actors.customer, 'product-1', reviewCommand());
 
     const withdrawn = await setPublication(actors.customer, created.id, {
@@ -687,6 +825,7 @@ describe('SL-008 Review behavioral acceptance', () => {
     });
     assert.equal(withdrawn.publicationStatus, 'Withdrawn');
     assert.equal(withdrawn.moderationStatus, 'Allowed');
+    assert.equal((await listPublic('product-1', { page: 1, pageSize: 20 })).total, 0);
 
     const hidden = await moderate(actors.staffA, created.id, {
       moderationStatus: 'HiddenByStaff',
@@ -696,28 +835,81 @@ describe('SL-008 Review behavioral acceptance', () => {
     });
     assert.equal(hidden.publicationStatus, 'Withdrawn');
     assert.equal(hidden.moderationStatus, 'HiddenByStaff');
-    assert.equal(fixture.state.publicationHistory.length, 1);
-    assert.equal(fixture.state.moderationHistory.length, 1);
+    assert.equal((await listPublic('product-1', { page: 1, pageSize: 20 })).total, 0);
+
+    const republishedWhileHidden = await setPublication(actors.customer, created.id, {
+      publicationStatus: 'Published',
+      expectedVersion: hidden.version,
+      idempotencyKey: 'review-republish-0001',
+    });
+    assert.equal(republishedWhileHidden.publicationStatus, 'Published');
+    assert.equal(republishedWhileHidden.moderationStatus, 'HiddenByStaff');
+    assert.equal((await listPublic('product-1', { page: 1, pageSize: 20 })).total, 0);
+
+    const restored = await moderate(actors.staffA, created.id, {
+      moderationStatus: 'Allowed',
+      reason: 'Rechecked and approved for public display',
+      expectedVersion: republishedWhileHidden.version,
+      idempotencyKey: 'review-restore-0001',
+    });
+    assert.equal(restored.publicationStatus, 'Published');
+    assert.equal(restored.moderationStatus, 'Allowed');
+    assert.equal((await listPublic('product-1', { page: 1, pageSize: 20 })).total, 1);
+    assert.equal(fixture.state.publicationHistory.length, 2);
+    assert.equal(fixture.state.moderationHistory.length, 2);
   });
 
   it('AT-158 appends immutable histories and exposes no delete or Staff content edit', async () => {
     const fixture = buildReviewFixture();
     const createReview = requiredMethod(fixture.service, 'createReview');
     const updateReview = requiredMethod(fixture.service, 'updateReview');
+    const setPublication = requiredMethod(fixture.service, 'setPublication');
+    const moderate = requiredMethod(fixture.service, 'moderate');
+    const listPublic = requiredMethod(fixture.service, 'listPublic');
     const created = await createReview(actors.customer, 'product-1', reviewCommand());
-    const originalHistory = structuredClone(fixture.state.contentHistory);
+    const originalContentHistory = structuredClone(fixture.state.contentHistory);
+
+    const hidden = await moderate(actors.staffA, created.id, {
+      moderationStatus: 'HiddenByStaff',
+      reason: 'Temporarily hidden for policy review',
+      expectedVersion: created.version,
+      idempotencyKey: 'review-history-hide-0001',
+    });
+    const withdrawn = await setPublication(actors.customer, created.id, {
+      publicationStatus: 'Withdrawn',
+      expectedVersion: hidden.version,
+      idempotencyKey: 'review-history-withdraw-0001',
+    });
+    const firstModeration = structuredClone(fixture.state.moderationHistory[0]);
+    const firstPublication = structuredClone(fixture.state.publicationHistory[0]);
 
     const updated = await updateReview(actors.customer, created.id, {
       rating: 4,
       content: 'Updated customer content',
-      expectedVersion: created.version,
+      expectedVersion: withdrawn.version,
       idempotencyKey: 'review-update-0001',
+    });
+    assert.equal(updated.moderationStatus, 'HiddenByStaff');
+    assert.equal(updated.publicationStatus, 'Withdrawn');
+    assert.equal((await listPublic('product-1', { page: 1, pageSize: 20 })).total, 0);
+    const updatedContentHistory = structuredClone(fixture.state.contentHistory.at(-1));
+
+    const republished = await setPublication(actors.customer, created.id, {
+      publicationStatus: 'Published',
+      expectedVersion: updated.version,
+      idempotencyKey: 'review-history-republish-0001',
+    });
+    const restored = await moderate(actors.staffA, created.id, {
+      moderationStatus: 'Allowed',
+      reason: 'Policy review completed',
+      expectedVersion: republished.version,
+      idempotencyKey: 'review-history-restore-0001',
     });
     await expectDomainError(
       () => updateReview(actors.staffA, created.id, {
         rating: 1,
         content: 'Staff overwrite',
-        expectedVersion: updated.version,
+        expectedVersion: restored.version,
         idempotencyKey: 'review-staff-edit-0001',
       }),
       'REVIEW_FORBIDDEN',
@@ -725,28 +917,29 @@ describe('SL-008 Review behavioral acceptance', () => {
 
     assert.equal(typeof fixture.service.deleteReview, 'undefined');
     assert.equal(fixture.state.reviews.length, 1);
-    assert.deepEqual(fixture.state.contentHistory.slice(0, originalHistory.length), originalHistory);
+    assert.deepEqual(
+      fixture.state.contentHistory.slice(0, originalContentHistory.length),
+      originalContentHistory,
+    );
     assert.equal(fixture.state.contentHistory.at(-1).rating, 4);
+    assert.equal(updatedContentHistory.actorId, actors.customer.id);
+    assert.ok(updatedContentHistory.createdAt);
+    assert.equal(firstPublication.actorId, actors.customer.id);
+    assert.ok(firstPublication.createdAt);
+    assert.equal(firstModeration.actorId, actors.staffA.id);
+    assert.equal(firstModeration.reason, 'Temporarily hidden for policy review');
+    assert.ok(firstModeration.createdAt);
+    assert.deepEqual(fixture.state.contentHistory.at(-1), updatedContentHistory);
+    assert.deepEqual(fixture.state.publicationHistory[0], firstPublication);
+    assert.deepEqual(fixture.state.moderationHistory[0], firstModeration);
   });
 
   it('AT-159 derives count/list/one-decimal mean from one visible set with stable paging and no edit reposition', async () => {
     const fixture = buildReviewFixture();
     fixture.state.reviews.push(
       {
-        id: 'review-c',
-        customerId: 'customer-1',
-        productId: 'product-1',
-        rating: 5,
-        content: 'C',
-        publicationStatus: 'Published',
-        moderationStatus: 'Allowed',
-        createdAt: new Date('2026-07-23T00:00:00.000Z'),
-        updatedAt: new Date('2026-07-23T00:00:00.000Z'),
-        version: 1,
-      },
-      {
         id: 'review-b',
-        customerId: 'customer-2',
+        customerId: 'customer-3',
         productId: 'product-1',
         rating: 4,
         content: 'B',
@@ -757,43 +950,92 @@ describe('SL-008 Review behavioral acceptance', () => {
         version: 1,
       },
       {
-        id: 'review-a',
+        id: 'review-d',
+        customerId: 'customer-1',
+        productId: 'product-1',
+        rating: 5,
+        content: 'D',
+        publicationStatus: 'Published',
+        moderationStatus: 'Allowed',
+        createdAt: new Date('2026-07-23T00:00:00.000Z'),
+        updatedAt: new Date('2026-07-23T00:00:00.000Z'),
+        version: 1,
+      },
+      {
+        id: 'review-c',
+        customerId: 'customer-2',
+        productId: 'product-1',
+        rating: 3,
+        content: 'C',
+        publicationStatus: 'Published',
+        moderationStatus: 'Allowed',
+        createdAt: new Date('2026-07-23T00:00:00.000Z'),
+        updatedAt: new Date('2026-07-23T00:00:00.000Z'),
+        version: 1,
+      },
+      {
+        id: 'review-withdrawn',
         customerId: 'customer-3',
         productId: 'product-1',
         rating: 1,
-        content: 'hidden',
+        content: 'withdrawn-hidden',
         publicationStatus: 'Withdrawn',
         moderationStatus: 'Allowed',
         createdAt: new Date('2026-07-24T00:00:00.000Z'),
         updatedAt: new Date('2026-07-24T00:00:00.000Z'),
         version: 1,
       },
+      {
+        id: 'review-staff-hidden',
+        customerId: 'customer-3',
+        productId: 'product-1',
+        rating: 1,
+        content: 'staff-hidden',
+        publicationStatus: 'Published',
+        moderationStatus: 'HiddenByStaff',
+        createdAt: new Date('2026-07-25T00:00:00.000Z'),
+        updatedAt: new Date('2026-07-25T00:00:00.000Z'),
+        version: 1,
+      },
     );
-    fixture.state.users.push({ id: 'customer-3', displayName: 'Hidden User' });
     const listPublic = requiredMethod(fixture.service, 'listPublic');
     const updateReview = requiredMethod(fixture.service, 'updateReview');
 
-    const first = await listPublic('product-1', { page: 1, pageSize: 1 });
-    assert.equal(first.total, 2);
-    assert.equal(first.averageRating, 4.5);
-    assert.equal(first.items[0].content, 'C');
+    const first = await listPublic('product-1', { page: 1, pageSize: 2 });
+    const second = await listPublic('product-1', { page: 2, pageSize: 2 });
+    const firstPass = [...first.items, ...second.items].map((item) => item.content);
+    assert.equal(first.total, 3);
+    assert.equal(second.total, 3);
+    assert.equal(first.averageRating, 4.0);
+    assert.equal(second.averageRating, 4.0);
+    assert.deepEqual(firstPass, ['D', 'C', 'B']);
+    assert.equal(new Set(firstPass).size, 3);
     assert.equal(first.totalPages, 2);
+    assert.equal(second.totalPages, 2);
 
-    await updateReview(actors.customer, 'review-c', {
-      rating: 3,
-      content: 'C edited later',
+    await updateReview(actors.customer, 'review-d', {
+      rating: 2,
+      content: 'D edited later',
       expectedVersion: 1,
       idempotencyKey: 'review-stable-edit-0001',
     });
-    const afterEdit = await listPublic('product-1', { page: 1, pageSize: 2 });
-    assert.deepEqual(afterEdit.items.map((item) => item.content), ['C edited later', 'B']);
-    assert.equal(afterEdit.averageRating, 3.5);
+    const afterEditPage1 = await listPublic('product-1', { page: 1, pageSize: 2 });
+    const afterEditPage2 = await listPublic('product-1', { page: 2, pageSize: 2 });
+    const afterEdit = [...afterEditPage1.items, ...afterEditPage2.items]
+      .map((item) => item.content);
+    assert.deepEqual(afterEdit, ['D edited later', 'C', 'B']);
+    assert.equal(new Set(afterEdit).size, 3);
+    assert.equal(afterEditPage1.averageRating, 3.0);
+    assert.equal(afterEditPage1.items.some((item) => item.content === 'staff-hidden'), false);
+    assert.equal(afterEditPage1.items.some((item) => item.content === 'withdrawn-hidden'), false);
   });
 
-  it('AT-160 replays one Review result, resolves a same-key race once, and rejects stale versions without effects', async () => {
+  it('AT-160 applies distinct/same-key races and repeated state commands exactly once, with stale no-effects', async () => {
     const fixture = buildReviewFixture();
     const createReview = requiredMethod(fixture.service, 'createReview');
     const updateReview = requiredMethod(fixture.service, 'updateReview');
+    const setPublication = requiredMethod(fixture.service, 'setPublication');
+    const moderate = requiredMethod(fixture.service, 'moderate');
     const command = reviewCommand();
 
     const [first, replay] = await Promise.all([
@@ -806,17 +1048,81 @@ describe('SL-008 Review behavioral acceptance', () => {
     assert.equal(fixture.state.audits.length, 1);
     assert.equal(fixture.state.outbox.length, 1);
 
+    const publicationCommand = {
+      publicationStatus: 'Withdrawn',
+      expectedVersion: first.version,
+      idempotencyKey: 'review-publication-race-0001',
+    };
+    const [publication, publicationReplay] = await Promise.all([
+      setPublication(actors.customer, first.id, publicationCommand),
+      setPublication(actors.customer, first.id, publicationCommand),
+    ]);
+    assert.equal(publicationReplay.version, publication.version);
+    assert.equal(publication.version, first.version + 1);
+    assert.equal(fixture.state.publicationHistory.length, 1);
+    assert.equal(
+      fixture.state.audits.filter((item) => item.action === 'REVIEW_PUBLICATION_CHANGED').length,
+      1,
+    );
+    assert.equal(
+      fixture.state.outbox.filter((item) => item.eventType === 'REVIEW_PUBLICATION_CHANGED').length,
+      1,
+    );
+
+    const moderationCommand = {
+      moderationStatus: 'HiddenByStaff',
+      reason: 'Repeated moderation must apply once',
+      expectedVersion: publication.version,
+      idempotencyKey: 'review-moderation-race-0001',
+    };
+    const [moderated, moderationReplay] = await Promise.all([
+      moderate(actors.staffA, first.id, moderationCommand),
+      moderate(actors.staffA, first.id, moderationCommand),
+    ]);
+    assert.equal(moderationReplay.version, moderated.version);
+    assert.equal(moderated.version, publication.version + 1);
+    assert.equal(fixture.state.moderationHistory.length, 1);
+    assert.equal(
+      fixture.state.audits.filter((item) => item.action === 'REVIEW_MODERATION_CHANGED').length,
+      1,
+    );
+    assert.equal(
+      fixture.state.outbox.filter((item) => item.eventType === 'REVIEW_MODERATION_CHANGED').length,
+      1,
+    );
+
     const beforeStale = snapshotEffects(fixture.state);
     await expectDomainError(
       () => updateReview(actors.customer, first.id, {
         rating: 4,
         content: 'stale',
-        expectedVersion: 0,
+        expectedVersion: publication.version,
         idempotencyKey: 'review-stale-0001',
       }),
       'REVIEW_VERSION_CONFLICT',
     );
     assert.deepEqual(snapshotEffects(fixture.state), beforeStale);
+
+    const distinctKeyFixture = buildReviewFixture();
+    const distinctCreate = requiredMethod(distinctKeyFixture.service, 'createReview');
+    const distinctResults = await Promise.allSettled([
+      distinctCreate(actors.customer, 'product-1', reviewCommand({
+        idempotencyKey: 'review-distinct-race-a',
+      })),
+      distinctCreate(actors.customer, 'product-1', reviewCommand({
+        idempotencyKey: 'review-distinct-race-b',
+      })),
+    ]);
+    assert.equal(distinctResults.filter((item) => item.status === 'fulfilled').length, 1);
+    assert.equal(distinctResults.filter((item) => item.status === 'rejected').length, 1);
+    const distinctWinner = distinctResults.find((item) => item.status === 'fulfilled').value;
+    const distinctLoser = distinctResults.find((item) => item.status === 'rejected').reason;
+    assert.equal(distinctLoser.errorCode, 'REVIEW_ALREADY_EXISTS');
+    assert.equal(distinctLoser.data.review.id, distinctWinner.id);
+    assert.equal(distinctKeyFixture.state.reviews.length, 1);
+    assert.equal(distinctKeyFixture.state.contentHistory.length, 1);
+    assert.equal(distinctKeyFixture.state.audits.length, 1);
+    assert.equal(distinctKeyFixture.state.outbox.length, 1);
 
     for (const [index, invalid] of [
       { idempotencyKey: 'short' },
@@ -852,7 +1158,7 @@ describe('SL-008 Support behavioral acceptance', () => {
       ['Payment', { orderId: 'order-1' }],
       ['ReturnRefund', { orderId: 'order-1' }],
       ['Exchange', { orderId: 'order-1' }],
-      ['Product', { productId: 'product-1' }],
+      ['Product', { productId: 'product-1', orderId: 'order-1' }],
       ['Account', {}],
       ['Other', {}],
     ];
@@ -871,7 +1177,20 @@ describe('SL-008 Support behavioral acceptance', () => {
       assert.ok(ticket.ticketCode);
       codes.add(ticket.ticketCode);
       assert.equal(fixture.state.messages.length, index + 1);
-      assert.equal(fixture.state.messages.at(-1).content, 'The delivered package needs support.');
+      const initialMessage = fixture.state.messages.at(-1);
+      assert.equal(initialMessage.ticketId, ticket.id);
+      assert.equal(initialMessage.content, 'The delivered package needs support.');
+      assert.equal(initialMessage.actorId, actors.customer.id);
+      assert.equal(initialMessage.actorRole, 'Customer');
+      assert.equal(new Date(initialMessage.createdAt).toISOString(), fixture.clock.now().toISOString());
+      assert.equal(initialMessage.commandId, `support-type-${index}-0001`);
+      assert.equal(fixture.state.audits.length, index + 1);
+      assert.equal(fixture.state.outbox.length, index + 1);
+      assert.equal(fixture.state.outbox.at(-1).eventType, 'SUPPORT_CREATED');
+      assert.doesNotMatch(
+        JSON.stringify([fixture.state.audits.at(-1), fixture.state.outbox.at(-1)]),
+        /The delivered package needs support\./,
+      );
     }
     assert.equal(codes.size, cases.length);
 
@@ -909,7 +1228,7 @@ describe('SL-008 Support behavioral acceptance', () => {
   });
 
   it('AT-162 denies missing or foreign required Order without leaking its identity or effects', async () => {
-    for (const [index, orderId] of ['missing-order', 'order-foreign'].entries()) {
+    for (const [index, orderId] of [undefined, 'missing-order', 'order-foreign'].entries()) {
       const fixture = buildSupportFixture();
       const createRequest = requiredMethod(fixture.service, 'createRequest');
       const before = snapshotEffects(fixture.state);
@@ -952,25 +1271,42 @@ describe('SL-008 Support behavioral acceptance', () => {
   it('AT-164 permits Account/Other without refs but validates every supplied optional ref', async () => {
     for (const type of ['Account', 'Other']) {
       const fixture = buildSupportFixture();
-      const valid = await createSupportTicket(fixture, {
+      const withoutRefs = await createSupportTicket(fixture, {
         type,
         orderId: undefined,
         productId: undefined,
-        idempotencyKey: `support-${type.toLowerCase()}-valid-0001`,
+        idempotencyKey: `support-${type.toLowerCase()}-without-refs-0001`,
       });
-      assert.equal(valid.type, type);
+      assert.equal(withoutRefs.type, type);
+      assert.equal(withoutRefs.orderId, undefined);
+      assert.equal(withoutRefs.productId, undefined);
 
-      const invalidFixture = buildSupportFixture();
-      const createRequest = requiredMethod(invalidFixture.service, 'createRequest');
-      await expectDomainError(
-        () => createRequest(actors.customer, supportCreate({
-          type,
-          orderId: 'order-foreign',
-          idempotencyKey: `support-${type.toLowerCase()}-invalid-0001`,
-        })),
-        'SUPPORT_REFERENCE_NOT_FOUND',
-      );
-      assert.equal(invalidFixture.state.tickets.length, 0);
+      const withRefs = await createSupportTicket(fixture, {
+        type,
+        orderId: 'order-1',
+        productId: 'product-1',
+        idempotencyKey: `support-${type.toLowerCase()}-with-refs-0001`,
+      });
+      assert.equal(withRefs.orderId, 'order-1');
+      assert.equal(withRefs.productId, 'product-1');
+
+      for (const [index, references] of [
+        { orderId: 'order-foreign', productId: undefined },
+        { orderId: 'order-1', productId: 'product-2' },
+      ].entries()) {
+        const invalidFixture = buildSupportFixture();
+        const createRequest = requiredMethod(invalidFixture.service, 'createRequest');
+        const before = snapshotEffects(invalidFixture.state);
+        await expectDomainError(
+          () => createRequest(actors.customer, supportCreate({
+            type,
+            ...references,
+            idempotencyKey: `support-${type.toLowerCase()}-invalid-${index}-0001`,
+          })),
+          'SUPPORT_REFERENCE_NOT_FOUND',
+        );
+        assert.deepEqual(snapshotEffects(invalidFixture.state), before);
+      }
     }
   });
 
@@ -978,6 +1314,7 @@ describe('SL-008 Support behavioral acceptance', () => {
     const fixture = buildSupportFixture();
     const ticket = await createSupportTicket(fixture);
     const appendMessage = requiredMethod(fixture.service, 'appendMessage');
+    const listMessages = requiredMethod(fixture.service, 'listMessages');
     const command = {
       message: 'x',
       expectedVersion: ticket.version,
@@ -1002,6 +1339,39 @@ describe('SL-008 Support behavioral acceptance', () => {
       ],
     );
     assert.ok(new Date(third.createdAt) >= new Date(first.createdAt));
+    for (const message of fixture.state.messages) {
+      message.createdAt = new Date('2026-07-24T12:30:00.000Z');
+    }
+    fixture.state.messages = [
+      fixture.state.messages[2],
+      fixture.state.messages[0],
+      fixture.state.messages[1],
+    ];
+    const page1 = await listMessages(actors.customer, ticket.id, { page: 1, pageSize: 2 });
+    const page2 = await listMessages(actors.customer, ticket.id, { page: 2, pageSize: 2 });
+    const pagedMessages = [...page1.items, ...page2.items];
+    assert.deepEqual(
+      pagedMessages.map((item) => item.content),
+      ['The delivered package needs support.', 'x', 'm'.repeat(2000)],
+    );
+    assert.equal(new Set(pagedMessages.map((item) => item.id)).size, 3);
+    assert.equal(page1.total, 3);
+    assert.equal(page1.totalPages, 2);
+    assert.deepEqual(
+      pagedMessages.map((item) => item.actorRole),
+      ['Customer', 'Customer', 'Customer'],
+    );
+    assert.ok(pagedMessages.every((item) => item.actorId === actors.customer.id));
+    assert.ok(pagedMessages.every(
+      (item) => new Date(item.createdAt).toISOString() === '2026-07-24T12:30:00.000Z',
+    ));
+    assert.deepEqual(
+      pagedMessages.map((item) => item.commandId),
+      ['support-create-0001', 'support-message-0001', 'support-message-0002'],
+    );
+    assert.equal(typeof fixture.service.editMessage, 'undefined');
+    assert.equal(typeof fixture.service.deleteMessage, 'undefined');
+    assert.equal(typeof fixture.service.overwriteMessage, 'undefined');
 
     for (const [index, message] of ['', 'm'.repeat(2001)].entries()) {
       const before = snapshotEffects(fixture.state);
@@ -1017,10 +1387,28 @@ describe('SL-008 Support behavioral acceptance', () => {
     }
   });
 
-  it('AT-166 allows only owner and current Active assignee to append in New/InProgress', async () => {
+  it('AT-166 enforces owner/assignee, New/InProgress, terminal, stale, and immutable-message rules', async () => {
     const fixture = buildSupportFixture();
     const ticket = await createSupportTicket(fixture);
     const appendMessage = requiredMethod(fixture.service, 'appendMessage');
+    const beforeForeign = snapshotEffects(fixture.state);
+    await expectDomainError(
+      () => appendMessage(actors.foreignCustomer, ticket.id, {
+        message: 'Foreign Customer message.',
+        expectedVersion: ticket.version,
+        idempotencyKey: 'support-foreign-customer-message-0001',
+      }),
+      'SUPPORT_FORBIDDEN',
+    );
+    assert.deepEqual(snapshotEffects(fixture.state), beforeForeign);
+    await expectDomainError(
+      () => appendMessage(actors.staffA, ticket.id, {
+        message: 'Staff cannot message an unassigned New ticket.',
+        expectedVersion: ticket.version,
+        idempotencyKey: 'support-staff-new-message-0001',
+      }),
+      'SUPPORT_FORBIDDEN',
+    );
     const customerMessage = await appendMessage(actors.customer, ticket.id, {
       message: 'Owner message while New.',
       expectedVersion: ticket.version,
@@ -1028,20 +1416,74 @@ describe('SL-008 Support behavioral acceptance', () => {
     });
     const claimed = await claimSupportTicket(fixture, customerMessage);
 
+    const customerInProgress = await appendMessage(actors.customer, ticket.id, {
+      message: 'Owner message while InProgress.',
+      expectedVersion: claimed.version,
+      idempotencyKey: 'support-owner-in-progress-0001',
+    });
     await expectDomainError(
       () => appendMessage(actors.staffB, ticket.id, {
         message: 'Non-assignee message.',
-        expectedVersion: claimed.version,
+        expectedVersion: customerInProgress.version,
         idempotencyKey: 'support-non-assignee-message-0001',
       }),
       'SUPPORT_FORBIDDEN',
     );
-    await appendMessage(actors.staffA, ticket.id, {
+    const staffMessage = await appendMessage(actors.staffA, ticket.id, {
       message: 'Current assignee message.',
-      expectedVersion: claimed.version,
+      expectedVersion: customerInProgress.version,
       idempotencyKey: 'support-assignee-message-0001',
     });
-    assert.equal(fixture.state.messages.length, 3);
+    const beforeStale = snapshotEffects(fixture.state);
+    await expectDomainError(
+      () => appendMessage(actors.customer, ticket.id, {
+        message: 'Stale message.',
+        expectedVersion: claimed.version,
+        idempotencyKey: 'support-stale-message-0001',
+      }),
+      'SUPPORT_VERSION_CONFLICT',
+    );
+    assert.deepEqual(snapshotEffects(fixture.state), beforeStale);
+
+    const resolve = requiredMethod(fixture.service, 'resolve');
+    const resolved = await resolve(actors.staffA, ticket.id, {
+      finalMessage: 'Terminal resolution message.',
+      expectedVersion: staffMessage.version,
+      idempotencyKey: 'support-message-terminal-resolve-0001',
+    });
+    for (const [index, actor] of [actors.customer, actors.staffA].entries()) {
+      const beforeTerminal = snapshotEffects(fixture.state);
+      await expectDomainError(
+        () => appendMessage(actor, ticket.id, {
+          message: 'Terminal tickets reject messages.',
+          expectedVersion: resolved.version,
+          idempotencyKey: `support-resolved-message-denied-${index}`,
+        }),
+        'SUPPORT_TRANSITION_INVALID',
+      );
+      assert.deepEqual(snapshotEffects(fixture.state), beforeTerminal);
+    }
+
+    const withdrawnFixture = buildSupportFixture();
+    const withdrawnTicket = await createSupportTicket(withdrawnFixture);
+    const withdraw = requiredMethod(withdrawnFixture.service, 'withdraw');
+    const withdrawn = await withdraw(actors.customer, withdrawnTicket.id, {
+      expectedVersion: withdrawnTicket.version,
+      idempotencyKey: 'support-message-withdraw-0001',
+    });
+    const appendWithdrawn = requiredMethod(withdrawnFixture.service, 'appendMessage');
+    await expectDomainError(
+      () => appendWithdrawn(actors.customer, withdrawn.id, {
+        message: 'Withdrawn tickets reject messages.',
+        expectedVersion: withdrawn.version,
+        idempotencyKey: 'support-withdrawn-message-denied-0001',
+      }),
+      'SUPPORT_TRANSITION_INVALID',
+    );
+    assert.equal(typeof fixture.service.editMessage, 'undefined');
+    assert.equal(typeof fixture.service.deleteMessage, 'undefined');
+    assert.equal(typeof fixture.service.overwriteMessage, 'undefined');
+    assert.equal(fixture.state.messages.some((item) => item.content === 'Stale message.'), false);
   });
 
   it('AT-167 makes a two-Staff claim race choose exactly one winner and one history', async () => {
@@ -1059,10 +1501,17 @@ describe('SL-008 Support behavioral acceptance', () => {
       }),
     ]);
 
-    assert.equal(results.filter((item) => item.status === 'fulfilled').length, 1);
-    assert.equal(results.filter((item) => item.status === 'rejected').length, 1);
+    const winners = results.filter((item) => item.status === 'fulfilled');
+    const losers = results.filter((item) => item.status === 'rejected');
+    assert.equal(winners.length, 1);
+    assert.equal(losers.length, 1);
     assert.equal(fixture.state.assignmentHistory.length, 1);
     assert.ok(['staff-a', 'staff-b'].includes(fixture.state.tickets[0].assigneeId));
+    assert.equal(losers[0].reason.errorCode, 'SUPPORT_VERSION_CONFLICT');
+    assert.equal(losers[0].reason.data.ticket.id, ticket.id);
+    assert.equal(losers[0].reason.data.ticket.assigneeId, winners[0].value.assigneeId);
+    assert.equal(losers[0].reason.data.ticket.status, 'InProgress');
+    assert.equal(losers[0].reason.data.ticket.version, winners[0].value.version);
   });
 
   it('AT-168 enforces the current-Active-assignee actor matrix for Staff commands', async () => {
@@ -1092,6 +1541,7 @@ describe('SL-008 Support behavioral acceptance', () => {
     ];
     const deniedActors = [
       actors.customer,
+      actors.foreignCustomer,
       actors.staffB,
       actors.inactiveStaff,
       actors.admin,
@@ -1139,14 +1589,23 @@ describe('SL-008 Support behavioral acceptance', () => {
     let current = await claimSupportTicket(fixture, ticket);
     const changePriority = requiredMethod(fixture.service, 'changePriority');
     const transfer = requiredMethod(fixture.service, 'transfer');
+    const prioritySnapshots = [];
 
     for (const [index, priority] of ['Low', 'Normal', 'High', 'Urgent'].entries()) {
+      const beforePriority = current.priority;
       current = await changePriority(actors.staffA, ticket.id, {
         priority,
         reason: 'Valid priority reason',
         expectedVersion: current.version,
         idempotencyKey: `support-priority-${index}-0001`,
       });
+      const history = fixture.state.priorityHistory.at(-1);
+      assert.equal(history.beforePriority, beforePriority);
+      assert.equal(history.afterPriority, priority);
+      assert.equal(history.actorId, actors.staffA.id);
+      assert.equal(history.reason, 'Valid priority reason');
+      assert.ok(history.createdAt);
+      prioritySnapshots.push(structuredClone(history));
     }
     assert.equal(fixture.state.priorityHistory.length, 4);
 
@@ -1164,15 +1623,21 @@ describe('SL-008 Support behavioral acceptance', () => {
         'SUPPORT_VALIDATION_FAILED',
       );
     }
-    await expectDomainError(
-      () => transfer(actors.staffA, ticket.id, {
-        assigneeId: actors.inactiveStaff.id,
-        reason: 'Transfer to unavailable Staff',
-        expectedVersion: current.version,
-        idempotencyKey: 'support-transfer-inactive-0001',
-      }),
-      'SUPPORT_TRANSFER_TARGET_INVALID',
-    );
+    for (const [index, target] of [
+      actors.inactiveStaff,
+      actors.customer,
+      actors.admin,
+    ].entries()) {
+      await expectDomainError(
+        () => transfer(actors.staffA, ticket.id, {
+          assigneeId: target.id,
+          reason: 'Transfer to invalid or unavailable target',
+          expectedVersion: current.version,
+          idempotencyKey: `support-transfer-target-invalid-${index}`,
+        }),
+        'SUPPORT_TRANSFER_TARGET_INVALID',
+      );
+    }
     for (const [index, reason] of ['four', 'x'.repeat(501)].entries()) {
       await expectDomainError(
         () => transfer(actors.staffA, ticket.id, {
@@ -1192,25 +1657,75 @@ describe('SL-008 Support behavioral acceptance', () => {
     });
     assert.equal(transferred.assigneeId, actors.staffB.id);
     assert.equal(fixture.state.assignmentHistory.length, 2);
+    const transferHistory = fixture.state.assignmentHistory.at(-1);
+    assert.equal(transferHistory.beforeAssigneeId, actors.staffA.id);
+    assert.equal(transferHistory.afterAssigneeId, actors.staffB.id);
+    assert.equal(transferHistory.actorId, actors.staffA.id);
+    assert.equal(transferHistory.reason, 'Specialist ownership transfer');
+    assert.ok(transferHistory.createdAt);
+    assert.deepEqual(fixture.state.priorityHistory, prioritySnapshots);
   });
 
   it('AT-170 clears a disabled assignee exactly once, preserves state, and permits recovery claim', async () => {
     const fixture = buildSupportFixture();
     const ticket = await createSupportTicket(fixture);
-    const claimed = await claimSupportTicket(fixture, ticket);
+    let claimed = await claimSupportTicket(fixture, ticket);
+    const appendMessage = requiredMethod(fixture.service, 'appendMessage');
+    claimed = await appendMessage(actors.staffA, ticket.id, {
+      message: 'Operational context must survive Staff disable.',
+      expectedVersion: claimed.version,
+      idempotencyKey: 'support-disable-preserved-message-0001',
+    });
+    const changePriority = requiredMethod(fixture.service, 'changePriority');
+    claimed = await changePriority(actors.staffA, ticket.id, {
+      priority: 'High',
+      reason: 'Customer impact remains high during recovery',
+      expectedVersion: claimed.version,
+      idempotencyKey: 'support-disable-preserved-priority-0001',
+    });
     const clearDisabledAssignee = requiredMethod(fixture.service, 'clearDisabledAssignee');
     fixture.state.users.find((item) => item.id === actors.staffA.id).status = 'Disabled';
+    const preservedMessages = structuredClone(fixture.state.messages);
+    const preservedAssignments = structuredClone(fixture.state.assignmentHistory);
+    const preservedPriority = structuredClone(fixture.state.priorityHistory);
 
-    const cleared = await clearDisabledAssignee(actors.staffA.id, {
-      idempotencyKey: 'support-assignee-clear-0001',
-    });
+    const cleared = await fixture.sl007Lifecycle.disableStaff(
+      actors.staffA.id,
+      (userId, command) => clearDisabledAssignee(userId, command),
+    );
     await clearDisabledAssignee(actors.staffA.id, {
-      idempotencyKey: 'support-assignee-clear-0001',
+      idempotencyKey: `sl007-disable-${actors.staffA.id}`,
     });
 
+    assert.deepEqual(fixture.sl007SessionService.calls, [{
+      userId: actors.staffA.id,
+      reason: 'ACCOUNT_DISABLED',
+    }]);
+    assert.deepEqual(fixture.state.sessionRevocations, [{
+      userId: actors.staffA.id,
+      signal: 'SL007_SESSIONS_REVOKED',
+      reason: 'ACCOUNT_DISABLED',
+      occurredAt: fixture.clock.now(),
+    }]);
     assert.equal(cleared.status, 'InProgress');
     assert.equal(cleared.priority, claimed.priority);
     assert.equal(cleared.assigneeId, null);
+    assert.deepEqual(fixture.state.messages, preservedMessages);
+    assert.deepEqual(
+      fixture.state.assignmentHistory.slice(0, preservedAssignments.length),
+      preservedAssignments,
+    );
+    assert.equal(
+      fixture.state.assignmentHistory.length,
+      preservedAssignments.length + 1,
+    );
+    const clearedHistory = fixture.state.assignmentHistory.at(-1);
+    assert.equal(clearedHistory.beforeAssigneeId, actors.staffA.id);
+    assert.equal(clearedHistory.afterAssigneeId, null);
+    assert.equal(clearedHistory.actorRole, 'System');
+    assert.equal(clearedHistory.reason, 'ASSIGNEE_DISABLED');
+    assert.ok(clearedHistory.createdAt);
+    assert.deepEqual(fixture.state.priorityHistory, preservedPriority);
     assert.equal(
       fixture.state.outbox.filter((item) => item.eventType === 'ASSIGNEE_CLEARED').length,
       1,
@@ -1223,6 +1738,10 @@ describe('SL-008 Support behavioral acceptance', () => {
     );
     assert.equal(recovered.assigneeId, actors.staffB.id);
     assert.equal(recovered.status, 'InProgress');
+    assert.equal(
+      fixture.state.assignmentHistory.length,
+      preservedAssignments.length + 2,
+    );
   });
 
   it('AT-171 allows only approved withdraw/resolve transitions and resolves with one atomic final message', async () => {
@@ -1315,8 +1834,8 @@ describe('SL-008 Support behavioral acceptance', () => {
     assert.deepEqual(snapshotEffects(resolveFixture.state), beforeDenied);
   });
 
-  it('AT-172 reopens at exactly resolvedAt+72h and rejects +1ms without effects', async () => {
-    async function resolvedFixture() {
+  it('AT-172 reopens through +72h, retains Active assignee, clears inactive assignee, and rejects +1ms', async () => {
+    async function resolvedFixture({ disableAssignee = false } = {}) {
       const fixture = buildSupportFixture();
       const ticket = await createSupportTicket(fixture);
       const claimed = await claimSupportTicket(fixture, ticket);
@@ -1326,11 +1845,17 @@ describe('SL-008 Support behavioral acceptance', () => {
         expectedVersion: claimed.version,
         idempotencyKey: 'support-boundary-resolve-0001',
       });
+      if (disableAssignee) {
+        fixture.state.users.find((item) => item.id === actors.staffA.id).status = 'Disabled';
+      }
       return { fixture, resolved };
     }
 
     const atBoundary = await resolvedFixture();
     const reopen = requiredMethod(atBoundary.fixture.service, 'reopen');
+    const activeMessagesBefore = structuredClone(atBoundary.fixture.state.messages);
+    const activeAssignmentsBefore = structuredClone(atBoundary.fixture.state.assignmentHistory);
+    const activeResolutionCount = atBoundary.fixture.state.resolutionHistory.length;
     atBoundary.fixture.clock.set(
       new Date(atBoundary.resolved.resolvedAt).getTime() + 72 * 60 * 60 * 1000,
     );
@@ -1340,6 +1865,66 @@ describe('SL-008 Support behavioral acceptance', () => {
       idempotencyKey: 'support-reopen-boundary-0001',
     });
     assert.equal(reopened.status, 'InProgress');
+    assert.equal(reopened.assigneeId, actors.staffA.id);
+    assert.deepEqual(atBoundary.fixture.state.messages.slice(0, activeMessagesBefore.length), activeMessagesBefore);
+    assert.equal(atBoundary.fixture.state.messages.length, activeMessagesBefore.length + 1);
+    assert.equal(atBoundary.fixture.state.messages.at(-1).content, 'The same issue returned.');
+    assert.equal(atBoundary.fixture.state.messages.at(-1).actorId, actors.customer.id);
+    assert.deepEqual(atBoundary.fixture.state.assignmentHistory, activeAssignmentsBefore);
+    assert.equal(atBoundary.fixture.state.resolutionHistory.length, activeResolutionCount + 1);
+    assert.equal(atBoundary.fixture.state.resolutionHistory.at(-1).actorId, actors.customer.id);
+    assert.equal(atBoundary.fixture.state.resolutionHistory.at(-1).transition, 'Reopened');
+    assert.ok(atBoundary.fixture.state.resolutionHistory.at(-1).createdAt);
+    assert.equal(
+      atBoundary.fixture.state.outbox.filter(
+        (item) => item.eventType === 'ASSIGNEE_CLEARED',
+      ).length,
+      0,
+    );
+
+    const inactiveBoundary = await resolvedFixture({ disableAssignee: true });
+    const reopenInactive = requiredMethod(inactiveBoundary.fixture.service, 'reopen');
+    const inactiveMessagesBefore = structuredClone(inactiveBoundary.fixture.state.messages);
+    const inactiveAssignmentCount = inactiveBoundary.fixture.state.assignmentHistory.length;
+    const inactiveResolutionCount = inactiveBoundary.fixture.state.resolutionHistory.length;
+    inactiveBoundary.fixture.clock.set(
+      new Date(inactiveBoundary.resolved.resolvedAt).getTime() + 72 * 60 * 60 * 1000,
+    );
+    const reopenedInactive = await reopenInactive(
+      actors.customer,
+      inactiveBoundary.resolved.id,
+      {
+        message: 'Reopened after the former assignee was disabled.',
+        expectedVersion: inactiveBoundary.resolved.version,
+        idempotencyKey: 'support-reopen-inactive-assignee-0001',
+      },
+    );
+    assert.equal(reopenedInactive.status, 'InProgress');
+    assert.equal(reopenedInactive.assigneeId, null);
+    assert.equal(inactiveBoundary.fixture.state.messages.length, inactiveMessagesBefore.length + 1);
+    assert.deepEqual(
+      inactiveBoundary.fixture.state.messages.slice(0, inactiveMessagesBefore.length),
+      inactiveMessagesBefore,
+    );
+    assert.equal(
+      inactiveBoundary.fixture.state.assignmentHistory.length,
+      inactiveAssignmentCount + 1,
+    );
+    assert.equal(
+      inactiveBoundary.fixture.state.assignmentHistory.at(-1).beforeAssigneeId,
+      actors.staffA.id,
+    );
+    assert.equal(inactiveBoundary.fixture.state.assignmentHistory.at(-1).afterAssigneeId, null);
+    assert.equal(
+      inactiveBoundary.fixture.state.resolutionHistory.length,
+      inactiveResolutionCount + 1,
+    );
+    assert.equal(
+      inactiveBoundary.fixture.state.outbox.filter(
+        (item) => item.eventType === 'ASSIGNEE_CLEARED',
+      ).length,
+      1,
+    );
 
     const afterBoundary = await resolvedFixture();
     const reopenLate = requiredMethod(afterBoundary.fixture.service, 'reopen');
@@ -1358,20 +1943,53 @@ describe('SL-008 Support behavioral acceptance', () => {
     assert.deepEqual(snapshotEffects(afterBoundary.fixture.state), before);
   });
 
-  it('AT-173 returns owner/Staff-safe paged projections and rejects invalid filters privately', async () => {
+  it('AT-173 protects Review management and returns role-safe Support list/detail projections privately', async () => {
+    const reviewFixture = buildReviewFixture();
+    const createReview = requiredMethod(reviewFixture.service, 'createReview');
+    await createReview(actors.customer, 'product-1', reviewCommand());
+    const listModeration = requiredMethod(reviewFixture.service, 'listModeration');
+    const moderationPage = await listModeration(actors.staffA, {
+      page: 1,
+      pageSize: 20,
+      productId: 'product-1',
+      publicationStatus: 'Published',
+      moderationStatus: 'Allowed',
+    });
+    assert.equal(moderationPage.total, 1);
+    assert.doesNotMatch(
+      JSON.stringify(moderationPage),
+      /orderId|orderDetailId|email|phone/,
+    );
+    for (const actor of [
+      actors.guest,
+      actors.customer,
+      actors.foreignCustomer,
+      actors.admin,
+      actors.warehouse,
+    ]) {
+      await expectDomainError(
+        () => listModeration(actor, { page: 1, pageSize: 20 }),
+        'REVIEW_FORBIDDEN',
+      );
+    }
+
     const fixture = buildSupportFixture();
-    await createSupportTicket(fixture);
+    const ownTicket = await createSupportTicket(fixture);
     const createRequest = requiredMethod(fixture.service, 'createRequest');
-    await createRequest(actors.foreignCustomer, supportCreate({
+    const foreignTicket = await createRequest(actors.foreignCustomer, supportCreate({
       type: 'Other',
       orderId: undefined,
       idempotencyKey: 'support-foreign-owner-0001',
     }));
     const listOwn = requiredMethod(fixture.service, 'listOwn');
     const listOperational = requiredMethod(fixture.service, 'listOperational');
+    const getDetail = requiredMethod(fixture.service, 'getDetail');
 
     const own = await listOwn(actors.customer, { page: 1, pageSize: 20 });
+    const foreignOwn = await listOwn(actors.foreignCustomer, { page: 1, pageSize: 20 });
     assert.equal(own.total, 1);
+    assert.equal(foreignOwn.total, 1);
+    assert.equal(foreignOwn.items[0].id, foreignTicket.id);
     assert.equal(own.items[0].customerId, undefined);
     assert.equal(own.items[0].email, undefined);
     assert.equal(own.items[0].phone, undefined);
@@ -1390,6 +2008,53 @@ describe('SL-008 Support behavioral acceptance', () => {
     assert.equal(staff.pageSize, 20);
     assert.equal(JSON.stringify(staff).includes('The delivered package needs support.'), false);
 
+    const ownerDetail = await getDetail(
+      actors.customer,
+      ownTicket.id,
+      { page: 1, pageSize: 20 },
+    );
+    const staffDetail = await getDetail(
+      actors.staffA,
+      ownTicket.id,
+      { page: 1, pageSize: 20 },
+    );
+    assert.equal(ownerDetail.id, ownTicket.id);
+    assert.equal(staffDetail.id, ownTicket.id);
+    assert.ok(Array.isArray(ownerDetail.messages.items));
+    assert.ok(Array.isArray(staffDetail.messages.items));
+    assert.doesNotMatch(
+      JSON.stringify([ownerDetail, staffDetail]),
+      /email|phone|password|sessionToken/,
+    );
+
+    for (const actor of [actors.guest, actors.admin, actors.warehouse]) {
+      await expectDomainError(
+        () => listOwn(actor, { page: 1, pageSize: 20 }),
+        'SUPPORT_FORBIDDEN',
+      );
+    }
+    for (const actor of [
+      actors.customer,
+      actors.foreignCustomer,
+      actors.admin,
+      actors.warehouse,
+    ]) {
+      await expectDomainError(
+        () => listOperational(actor, { page: 1, pageSize: 20 }),
+        'SUPPORT_FORBIDDEN',
+      );
+    }
+    for (const actor of [
+      actors.foreignCustomer,
+      actors.admin,
+      actors.warehouse,
+    ]) {
+      await expectDomainError(
+        () => getDetail(actor, ownTicket.id, { page: 1, pageSize: 20 }),
+        'SUPPORT_FORBIDDEN',
+      );
+    }
+
     await expectDomainError(
       () => listOperational(actors.staffA, {
         status: 'Open',
@@ -1398,9 +2063,55 @@ describe('SL-008 Support behavioral acceptance', () => {
       }),
       'SUPPORT_FILTER_INVALID',
     );
+    assert.doesNotMatch(
+      JSON.stringify([fixture.state.audits, fixture.state.outbox]),
+      /The delivered package needs support\.|email|phone|password|sessionToken/,
+    );
   });
 
   it('AT-174 rolls back grouped writes, retries delivery safely, and never mutates foreign domains', async () => {
+    const reviewFixture = buildReviewFixture();
+    const createReview = requiredMethod(reviewFixture.service, 'createReview');
+    const reviewAtomicCommand = reviewCommand({
+      idempotencyKey: 'review-atomic-retry-0001',
+    });
+    reviewFixture.outbox.failNext = true;
+    await expectDomainError(
+      () => createReview(actors.customer, 'product-1', reviewAtomicCommand),
+      'OUTBOX_WRITE_FAILED',
+    );
+    assert.deepEqual(snapshotEffects(reviewFixture.state), {
+      reviews: 0,
+      tickets: 0,
+      messages: 0,
+      contentHistory: 0,
+      publicationHistory: 0,
+      moderationHistory: 0,
+      assignmentHistory: 0,
+      priorityHistory: 0,
+      resolutionHistory: 0,
+      commands: 0,
+      audits: 0,
+      outbox: 0,
+    });
+    assert.equal(reviewFixture.state.commands.length, 0);
+    const appliedReview = await createReview(
+      actors.customer,
+      'product-1',
+      reviewAtomicCommand,
+    );
+    const replayedReview = await createReview(
+      actors.customer,
+      'product-1',
+      reviewAtomicCommand,
+    );
+    assert.equal(replayedReview.id, appliedReview.id);
+    assert.equal(reviewFixture.state.reviews.length, 1);
+    assert.equal(reviewFixture.state.contentHistory.length, 1);
+    assert.equal(reviewFixture.state.commands.length, 1);
+    assert.equal(reviewFixture.state.audits.length, 1);
+    assert.equal(reviewFixture.state.outbox.length, 1);
+
     const fixture = buildSupportFixture();
     const createRequest = requiredMethod(fixture.service, 'createRequest');
     const command = supportCreate({ idempotencyKey: 'support-atomic-retry-0001' });
@@ -1415,6 +2126,7 @@ describe('SL-008 Support behavioral acceptance', () => {
     assert.equal(fixture.state.messages.length, 0);
     assert.equal(fixture.state.audits.length, 0);
     assert.equal(fixture.state.outbox.length, 0);
+    assert.equal(fixture.state.commands.length, 0);
 
     const applied = await createRequest(actors.customer, command);
     const replay = await createRequest(actors.customer, command);
@@ -1423,9 +2135,13 @@ describe('SL-008 Support behavioral acceptance', () => {
     assert.equal(fixture.state.messages.length, 1);
     assert.equal(fixture.state.audits.length, 1);
     assert.equal(fixture.state.outbox.length, 1);
+    assert.equal(fixture.state.commands.length, 1);
     assert.deepEqual(fixture.state.foreignDomains, foreignBefore);
     assert.equal(fixture.state.outbox[0].payload?.initialMessage, undefined);
-    assert.equal(fixture.state.audits[0].description?.includes('The delivered package'), false);
+    assert.equal(
+      String(fixture.state.audits[0].description || '').includes('The delivered package'),
+      false,
+    );
 
     const claim = requiredMethod(fixture.service, 'claim');
     const beforeStale = snapshotEffects(fixture.state);
@@ -1470,5 +2186,8 @@ describe('SL-008 Support behavioral acceptance', () => {
     assert.equal(delivered.status, 'Delivered');
     assert.equal(delivered.attempts, 2);
     assert.deepEqual(fixture.state.foreignDomains, beforeDelivery);
+    for (const gateway of Object.values(fixture.foreignMutationGateways)) {
+      assert.equal(gateway.calls.length, 0);
+    }
   });
 });

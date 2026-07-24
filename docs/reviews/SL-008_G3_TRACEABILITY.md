@@ -48,7 +48,7 @@ publication.
 | `InProgress`, assigned | current Active assignee `resolve` | atomically append final message/history and set exact `resolvedAt` |
 | `InProgress`, assignee disabled | system clear | assignee null once; retain state/priority/messages/history |
 | `InProgress`, unassigned recovery | first Active Staff `claim` | assigned recovery; state remains `InProgress` |
-| `Resolved` | owning Customer `reopen` with message at/before deadline | `InProgress`, unassigned; message/history appended |
+| `Resolved` | owning Customer `reopen` with message at/before deadline | `InProgress`; retain the current assignee when that Staff account is Active, otherwise clear the inactive assignee; message/history appended |
 | `Resolved` after exact deadline | any reopen | denial and no effects |
 | `Withdrawn` | any transition | denial and no effects |
 
@@ -118,15 +118,15 @@ business permissions, states, eligibility, or transitions.
 
 | BR | Exact approved behavior | Planned code boundary | Executable evidence |
 |---|---|---|---|
-| BR-083 | One Customer+Product Review identity with delivered owned evidence | Review aggregate/repository/create command | AT-150–153 server; AT-150 client |
-| BR-084 | Rating/text validation and eligibility privacy | Review validation/eligibility | AT-154–155 server; AT-154 client |
-| BR-085 | Safe public Review projection and independent publication/moderation | Review public mapper/query and state commands | AT-156–157 server/client |
-| BR-086 | Immutable Review history, exact aggregate/paging, concurrency | Review histories/query/command transaction | AT-158–160 server/client |
+| BR-083 | One Customer+Product Review identity with delivered owned evidence | Review aggregate/repository/create command | AT-150–153, AT-155, AT-160 |
+| BR-084 | Rating/text validation and eligibility privacy | Review validation/eligibility | AT-150, AT-154–156 |
+| BR-085 | Independent publication/moderation and immutable Review histories | Review state commands/histories/command transaction | AT-157, AT-158, AT-160 |
+| BR-086 | Safe public Review projection, exact aggregate/paging, and concurrency | Review public mapper/query/index/transaction | AT-156, AT-159, AT-160 |
 | BR-087 | Seven Support types and exact reference validation | Support create/reference validator | AT-161–164 server/client |
 | BR-088 | Immutable initial/later messages and authorized messaging | SupportMessage repository/commands | AT-165 **and AT-166** server/client |
-| BR-089 | Atomic claim, current-assignee operations, priority/transfer, disable recovery | Support assignment/priority service and SL-007 adapter | AT-167–170 server/client |
-| BR-090 | Approved withdraw/resolve/reopen transitions | Support transition service | AT-171–172 server/client |
-| BR-091 | Guest/Customer/Staff minimum projections; no Admin/Warehouse commands | Routes/RBAC/mappers/UI guards | AT-156, AT-173 server/client |
+| BR-089 | Approved Support lifecycle, including atomic claim and withdraw/resolve/reopen transitions | Support claim/transition service | AT-167, AT-171, AT-172 |
+| BR-090 | Assignment, priority, transfer, disable recovery, and current-assignee operations | Support assignment/priority service and SL-007 adapter | AT-167–170 |
+| BR-091 | Private denials and Guest/Customer/Staff minimum projections; no Admin/Warehouse commands | Routes/RBAC/mappers/UI guards | AT-155, AT-156, AT-166, AT-168, AT-173 |
 | BR-092 | Support never mutates Order/Payment/Return/Exchange/Shipment/Inventory | Repository dependency boundary | AT-174 foreign-domain snapshot assertions |
 | BR-093 | Idempotency/version plus atomic domain/history/audit/outbox | Shared command transaction/persistence | AT-160 Review and AT-174 Support/server/client |
 
@@ -141,13 +141,13 @@ evidence, baseline discrepancy, and current status.
 | AT-151 | Customer/System | No supplied detail chooses newest deliveredAt, then greatest detail ID | Owned delivered Orders/details | `createReview` fallback | Server-issued eligible display selector | Server `AT-151 deterministically falls back...` | Legacy requires an order and has no deterministic fallback | RED |
 | AT-152 | Customer | Repeat purchase does not create second Customer+Product identity | Unique Customer+Product index; multiple eligible details | `createReview` identity conflict | Existing Review shown instead of another create form | Server `AT-152 keeps one...` | Legacy uniqueness permits one Review per Order | RED |
 | AT-153 | Customer/System | Later return/refund/same-SKU exchange preserves Review identity | Durable Review independent of current after-sales state | `listPublic` after downstream state changes | Same Review remains represented | Server `AT-153 preserves Review...` | Legacy identity is bound to selected Order | RED |
-| AT-154 | Customer | Rating integer 1–5; normalized optional text 0–1000 | Validation before writes; immutable normalized content | `createReview`/`updateReview` | 1–5 rating; optional textarea; live 0/1000 counter | Server `AT-154...boundary` plus seven subtests; client `AT-154 binds...` | Legacy requires nonblank content and has no max | RED |
+| AT-154 | Customer | Rating integer 1–5; normalized optional text 0–1000 | Validation before writes; immutable normalized content | `createReview`/`updateReview` | 1–5 rating; optional textarea; live 0/1000 counter | Server `AT-154...boundary` plus nine subtests (including missing/nonnumeric rating); client `AT-154 binds...` | Legacy requires nonblank content and has no max | RED |
 | AT-155 | Customer/foreign Customer | Invalid, foreign, or non-delivered evidence returns private denial and zero effects | Owned delivered detail predicate; no command/history/audit/outbox on denial | `createReview`; generic 404-style eligibility error | Field/general error without foreign IDs | Server `AT-155 denies invalid...`; client reference/field-error contracts | Legacy varies 400/404/409 and can disclose delivery/containment facts | RED |
 | AT-156 | Guest | Public DTO exact safe keys; only Active Product+Category dependencies | masked current display name; verified label; visible Review | `listPublic`; public GET | PublicReviewList safe fields only | Server `AT-156 returns only...`; client `AT-156 renders only...` | Legacy exposes Customer/Order IDs and does not enforce Category Active | RED |
 | AT-157 | Customer/Staff | Publication and moderation change independently | `Published/Withdrawn`; `Allowed/HiddenByStaff`; separate histories | `setPublication`, `moderate` | Customer withdraw/republish separate from Staff reasoned moderation | Server/client `AT-157...` | Legacy one `Visible/Hidden` status | RED |
 | AT-158 | Customer/Staff | Histories immutable; no delete; Staff cannot edit content/publication | append-only content/publication/moderation records | `updateReview`; no delete; Staff edit forbidden | Customer edit handler; no delete; Staff moderation-only UI | Server/client `AT-158...` | Legacy overwrites document and has no histories | RED |
 | AT-159 | Guest | List/count/one-decimal mean share exact visible set; createdAt DESC+ID DESC paging; edit does not reposition | public query/index; immutable createdAt; updatedAt changes only | `listPublic`; public GET paging | aggregate/totalPages/pageSize/toFixed(1) | Server/client `AT-159...` | Legacy unbounded list/in-memory mean; no stable ID tie break | RED |
-| AT-160 | Customer/Staff/System | Replay/race applies once; stale loser has no aggregate/history/audit/outbox effects | command key/fingerprint/result; version; transaction | All Review commands; command headers/body | Four mocked command requests verify key+version | Server `AT-160 replays...`; four client `AT-160 sends...` tests | Legacy has no key/version/transactional outbox | RED |
+| AT-160 | Customer/Staff/System | Replay/race applies once; stale loser has no aggregate/history/audit/outbox effects | command key/fingerprint/result; version; transaction | All Review commands; command headers/body | Four mocked command requests verify key+version | Server `AT-160 applies distinct/same-key races...`; four client `AT-160 sends...` tests | Legacy has no key/version/transactional outbox | RED |
 | AT-161 | Customer | Seven types enforce approved reference matrix; create unique/New/unassigned/Normal + immutable initial message | ticket code; SupportRequest; initial SupportMessage | `createRequest`; Support POST | All seven type values and type-dependent selectors | Server `AT-161 accepts all seven...`; client `AT-161 binds...` | Legacy lacks Exchange/Account and stores mutable content | RED |
 | AT-162 | Customer/foreign Customer | Missing/foreign required Order is private denial with no effects | owned Order predicate | `createRequest` | Server-authorized Order selector and private field errors | Server `AT-162 denies...`; client `AT-162/163/164...` | Legacy optional raw Order input | RED |
 | AT-163 | Customer | Missing/inactive Product or Product+Order mismatch is denied without effects | Active Product and matching OrderDetail | `createRequest` | Active Product selector conditional on type | Server `AT-163 denies...`; client type/reference tests | Legacy lacks Active/match validation | RED |
@@ -159,7 +159,7 @@ evidence, baseline discrepancy, and current status.
 | AT-169 | current Active assignee | Priority enum and transfer Active Staff/reason validated; histories append | priority/assignment histories; Active Staff target | `changePriority`, `transfer` | enum, reason, Active Staff selector/handlers | Server/client `AT-169...` | Legacy no priority/transfer/history | RED |
 | AT-170 | System/Active Staff | Disable clears assignee once, retains InProgress/priority/messages/history, permits reclaim | active-assignment adapter; `ASSIGNEE_CLEARED`; recovery unassigned | `clearDisabledAssignee`, `claim` recovery | recovery label/reclaim; retained detail | Server/client `AT-170...` | Legacy handledBy stays disabled and has no recovery | RED |
 | AT-171 | owning Customer/current assignee | Withdraw only unassigned New; resolve atomically appends final response and deadline; no generic transitions | approved state map; final SupportMessage; resolution history | `withdraw`, `resolve` | New+unassigned withdraw; final response form; no generic status dropdown | Server/client `AT-171...` | Legacy generic response/status mutation | RED |
-| AT-172 | owning Customer | Reopen by message is allowed through exact resolvedAt+72h and denied at +1ms | resolvedAt/deadline; reopen history/message; unassigned InProgress | `reopen` | server deadline display and disabled expired action | Server/client `AT-172...` | Legacy Resolved is terminal | RED |
+| AT-172 | owning Customer | Reopen by message is allowed through exact resolvedAt+72h and denied at +1ms; retain an Active current assignee and clear only an inactive one | resolvedAt/deadline; reopen history/message; `InProgress`; conditional assignee retention/clear | `reopen` | server deadline display and disabled expired action | Server/client `AT-172...` | Legacy Resolved is terminal | RED |
 | AT-173 | Guest/Customer/Staff/Admin/Warehouse | Owner/filter projections are paged/private; invalid filters rejected; direct navigation obeys RBAC | safe DTOs; filter validator; route role guards | public Review, own Support, Staff operational reads | filters type/date/status/priority/assignee; field errors; Customer/Staff routes only | Server `AT-173 returns...`; three client `AT-173...` tests | Legacy leaks internal IDs/content and has partial filters; no Staff Review route | RED |
 | AT-174 | System/all command actors | Grouped failure rolls back; retry/replay applies once; audit/outbox omit text; foreign domains unchanged | command/audit/outbox in transaction; foreign snapshots | all Support commands | Nine mocked Support command request tests verify header+version | Server `AT-174 rolls back...`; nine client `AT-174 sends...` tests | Legacy Support audit contains subject/text and has no outbox/idempotency/version | RED |
 
@@ -205,11 +205,11 @@ Exact commands executed after this rework:
 
 ```text
 server> node --test src/acceptance/sl008.acceptance.test.js
-tests 32; pass 0; fail 32
-(25 AT tests plus seven explicit AT-154 boundary subtests)
+tests 34; pass 0; fail 34
+(25 AT tests plus nine explicit AT-154 boundary subtests)
 
 client> node --test src/acceptance/sl008UiContract.test.js
-tests 33; pass 0; fail 33
+tests 35; pass 0; fail 35
 ```
 
 Representative expected failures:
