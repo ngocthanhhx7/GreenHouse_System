@@ -50,6 +50,7 @@ function createRepository() {
 
   return {
     reviews,
+    publicationHistory,
     async findProductById(id) {
       return products.find((product) => product._id === id) || null;
     },
@@ -401,5 +402,38 @@ describe('review service', () => {
       { idempotencyKey: 'review-test-publish-0001' },
     );
     assert.equal(repository.reviews[0].status, 'Visible');
+  });
+
+  it('records the pre-transition publication status before repository mutation', async () => {
+    const created = await service.createReview(
+      { id: 'customer-1', role: 'Customer', status: 'Active' },
+      'product-1',
+      {
+        orderDetailId: 'detail-1',
+        rating: 5,
+        content: 'Stable publication history.',
+        expectedVersion: 0,
+      },
+      { idempotencyKey: 'review-before-status-0001' },
+    );
+
+    await service.setPublication(
+      { id: 'customer-1', role: 'Customer', status: 'Active' },
+      created.id,
+      {
+        publicationStatus: 'Withdrawn',
+        expectedVersion: created.version,
+      },
+      { idempotencyKey: 'review-before-status-0002' },
+    );
+
+    assert.deepEqual(repository.publicationHistory.at(-1), {
+      reviewId: created.id,
+      actorId: 'customer-1',
+      version: created.version + 1,
+      beforeStatus: 'Published',
+      afterStatus: 'Withdrawn',
+      createdAt: repository.publicationHistory.at(-1).createdAt,
+    });
   });
 });

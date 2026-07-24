@@ -393,6 +393,7 @@ function createReviewService(options = {}) {
         }
         if (Number(current.version || 1) !== expectedVersion) throw versionConflict();
         if (validateTransition) validateTransition(normalizedReview(current), input);
+        const before = normalizedReview(current);
         const update = changes(current, input, occurredAt);
         const updated = await repository.updateReviewByVersion(
           reviewId,
@@ -403,7 +404,7 @@ function createReviewService(options = {}) {
         if (!updated) throw versionConflict();
         const result = mapResult(updated);
         await appendHistory({
-          current: normalizedReview(current),
+          current: before,
           updated: normalizedReview(updated),
           input,
           result,
