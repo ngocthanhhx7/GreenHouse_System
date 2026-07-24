@@ -426,7 +426,7 @@ describe('SL-009 audit log service', () => {
       {
         $or: [
           { actorType: 'User' },
-          { actorType: { $exists: false }, userId: { $ne: null } },
+          { actorType: { $exists: false }, userId: { $type: 'objectId' } },
         ],
       },
       {
@@ -442,6 +442,41 @@ describe('SL-009 audit log service', () => {
         ],
       },
     ]);
+  });
+
+  it('uses the exact partial-index predicate for legacy User rows without an actor ID', async () => {
+    let query;
+    const fakeModel = {
+      find(receivedQuery) {
+        query = receivedQuery;
+        return {
+          sort() {
+            return {
+              limit() {
+                return { lean: async () => [] };
+              },
+            };
+          },
+        };
+      },
+    };
+
+    await createModelRepository(fakeModel).list({
+      actorType: 'User',
+      limit: 20,
+    });
+
+    assert.deepEqual(query, {
+      $and: [{
+        $or: [
+          { actorType: 'User' },
+          {
+            actorType: { $exists: false },
+            userId: { $type: 'objectId' },
+          },
+        ],
+      }],
+    });
   });
 
   it('AT-189 emits a next cursor without skipping equal-timestamp rows', async () => {

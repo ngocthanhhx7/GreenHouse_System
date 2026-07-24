@@ -214,7 +214,7 @@ function createModelRepository(model = AuditLog) {
         predicates.push({
           $or: [
             { actorType: 'User' },
-            { actorType: { $exists: false }, userId: { $ne: null } },
+            { actorType: { $exists: false }, userId: { $type: 'objectId' } },
           ],
         });
       } else if (filters.actorType !== undefined) {

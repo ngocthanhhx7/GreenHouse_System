@@ -94,7 +94,17 @@ describe('SL-009 AuditLog model contract', () => {
     assert.ok(schemaIndexes.some(([fields, options]) => (
       JSON.stringify(fields) === JSON.stringify({ userId: 1, timestamp: -1, _id: -1 })
       && options.name === 'audit_legacy_user_cursor'
-      && options.partialFilterExpression?.userId?.$type === 'objectId'
+      && JSON.stringify(options.partialFilterExpression) === JSON.stringify({
+        userId: { $type: 'objectId' },
+      })
+    )));
+    assert.ok(schemaIndexes.some(([fields, options]) => (
+      JSON.stringify(fields) === JSON.stringify({ timestamp: -1, _id: -1 })
+      && options.name === 'audit_legacy_user_order_cursor'
+      && JSON.stringify(options.partialFilterExpression) === JSON.stringify({
+        actorType: { $exists: false },
+        userId: { $type: 'objectId' },
+      })
     )));
     assert.ok(schemaIndexes.some(([fields, options]) => (
       JSON.stringify(fields) === JSON.stringify({

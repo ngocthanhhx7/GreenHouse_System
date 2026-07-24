@@ -373,6 +373,16 @@ auditLogSchema.index(
   }
 );
 auditLogSchema.index(
+  { timestamp: -1, _id: -1 },
+  {
+    name: 'audit_legacy_user_order_cursor',
+    partialFilterExpression: {
+      actorType: { $exists: false },
+      userId: { $type: 'objectId' },
+    },
+  }
+);
+auditLogSchema.index(
   { targetEntity: 1, timestamp: -1, _id: -1 },
   {
     name: 'audit_legacy_target_cursor',
