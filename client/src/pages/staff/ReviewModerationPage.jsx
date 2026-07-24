@@ -40,8 +40,7 @@ export default function ReviewModerationPage() {
 
   async function submitModeration(event, review) {
     event.preventDefault();
-    review = review || reviews.find((item) => item.id === event.currentTarget?.dataset?.reviewId) || reviews[0];
-    if (!review) return;
+    if (!review?.id) return;
     const key = review.id;
     if (pendingKeys.current.has(key)) return;
     pendingKeys.current.add(key);
@@ -128,7 +127,7 @@ export default function ReviewModerationPage() {
                 <span>{review.moderationStatus || 'Allowed'}</span>
               </div>
               <p>{review.content || 'Không có nội dung'}</p>
-              <form data-review-id={review.id} onSubmit={submitModeration}>
+              <form data-review-id={review.id} onSubmit={(event) => submitModeration(event, review)}>
                 <label htmlFor={`moderationStatus-${review.id}`}>Staff moderation</label>
                 <select
                   id={`moderationStatus-${review.id}`}
@@ -148,7 +147,7 @@ export default function ReviewModerationPage() {
                   maxLength={500}
                   required
                 />
-                <button type="submit" className="btn btn-primary" data-sl008-action="moderate" onClick={submitModeration} disabled={Boolean(pending[review.id])}>
+                <button type="submit" className="btn btn-primary" data-sl008-action="moderate" onClick={(event) => submitModeration(event, review)} disabled={Boolean(pending[review.id])}>
                   {pending[review.id] ? 'Đang lưu…' : 'Lưu quyết định'}
                 </button>
               </form>

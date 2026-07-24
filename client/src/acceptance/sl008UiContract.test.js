@@ -765,6 +765,31 @@ describe('SL-008 Review UI integration contract', () => {
     });
   });
 
+  it('AT-157 moderates the clicked Review instead of the first paged item', async () => {
+    const runtime = await renderRealComponent('pages/staff/ReviewModerationPage.jsx', {
+      actor: { id: 'staff-a', role: 'Staff', status: 'Active' },
+      responses: {
+        listModeration: {
+          items: [
+            { id: 'review-1', rating: 5, content: 'First', publicationStatus: 'Published', moderationStatus: 'Allowed', version: 1 },
+            { id: 'review-2', rating: 2, content: 'Second', publicationStatus: 'Published', moderationStatus: 'Allowed', version: 3 },
+          ],
+          total: 2,
+          page: 1,
+          pageSize: 20,
+          totalPages: 1,
+        },
+      },
+    });
+
+    const controls = runtime.findControls('moderate');
+    assert.equal(controls.length, 2);
+    runtime.invoke(controls[1]);
+    await runtime.flush();
+    const call = runtime.calls.find((item) => item.method === 'moderate');
+    assert.equal(call?.args?.[0], 'review-2');
+  });
+
   it('AT-158 binds Customer edit, exposes no delete, and gives Staff no content-edit handler', () => {
     const panel = clientSource('components/review/ProductReviewPanel.jsx');
     const moderation = clientSource('pages/staff/ReviewModerationPage.jsx');
