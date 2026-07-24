@@ -803,19 +803,50 @@ describe('SL-008 Review UI integration contract', () => {
         },
       },
     };
-    for (const descriptor of [
-      { method: 'createReview' },
-      { method: 'updateReview' },
-      { method: 'setPublication', controlAction: 'setPublication:Withdrawn' },
-      { method: 'setPublication', controlAction: 'setPublication:Published' },
-    ]) {
-      await assertDeferredMutation({
-        componentPath: 'components/review/ProductReviewPanel.jsx',
-        ...descriptor,
-        scenario: panelScenario,
-        props: { productId: 'product-1' },
-      });
-    }
+    await assertDeferredMutation({
+      componentPath: 'components/review/ProductReviewPanel.jsx',
+      method: 'createReview',
+      scenario: {
+        ...panelScenario,
+        responses: {
+          ...panelScenario.responses,
+          listOwn: { ...panelScenario.responses.listOwn, items: [] },
+        },
+      },
+      props: { productId: 'product-1' },
+    });
+    await assertDeferredMutation({
+      componentPath: 'components/review/ProductReviewPanel.jsx',
+      method: 'updateReview',
+      scenario: panelScenario,
+      props: { productId: 'product-1' },
+    });
+    await assertDeferredMutation({
+      componentPath: 'components/review/ProductReviewPanel.jsx',
+      method: 'setPublication',
+      controlAction: 'setPublication:Withdrawn',
+      scenario: panelScenario,
+      props: { productId: 'product-1' },
+    });
+    await assertDeferredMutation({
+      componentPath: 'components/review/ProductReviewPanel.jsx',
+      method: 'setPublication',
+      controlAction: 'setPublication:Published',
+      scenario: {
+        ...panelScenario,
+        responses: {
+          ...panelScenario.responses,
+          listOwn: {
+            ...panelScenario.responses.listOwn,
+            items: [{
+              ...panelScenario.responses.listOwn.items[0],
+              publicationStatus: 'Withdrawn',
+            }],
+          },
+        },
+      },
+      props: { productId: 'product-1' },
+    });
     await assertDeferredMutation({
       componentPath: 'pages/staff/ReviewModerationPage.jsx',
       method: 'moderate',
