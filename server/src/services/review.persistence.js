@@ -173,8 +173,12 @@ function createModelRepository() {
         .skip(skip)
         .limit(limit);
       const countQuery = ProductReview.countDocuments(filter);
+      const aggregateFilter = {
+        ...filter,
+        productId: new mongoose.Types.ObjectId(String(productId)),
+      };
       const ratingQuery = ProductReview.aggregate([
-        { $match: filter },
+        { $match: aggregateFilter },
         { $group: { _id: null, ratingSum: { $sum: '$rating' } } },
       ]);
       const [items, total, ratingRows] = await Promise.all([
