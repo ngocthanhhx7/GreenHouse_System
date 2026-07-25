@@ -116,12 +116,30 @@ function createModelRepository() {
     async listOrderDetails(orderId, session) {
       return withOptionalSession(OrderDetail.find({ orderId }).sort({ createdAt: 1 }), session).lean();
     },
+    async listOrderReservations(orderId, session) {
+      return withOptionalSession(
+        OrderReservation.find({ orderId }).sort({ createdAt: 1 }),
+        session,
+      ).lean();
+    },
     async findInventoryByProductId(productId, session) {
       return withOptionalSession(Inventory.findOne({ productId }), session).lean();
     },
-    async claimOrderReservationConsumption(orderId, orderDetailId, session) {
+    async claimOrderReservationConsumption(
+      orderId,
+      orderDetailId,
+      productId,
+      quantity,
+      session,
+    ) {
       return withOptionalSession(OrderReservation.findOneAndUpdate(
-        { orderId, orderDetailId, status: 'Reserved' },
+        {
+          orderId,
+          orderDetailId,
+          productId,
+          quantity,
+          status: 'Reserved',
+        },
         { $set: { status: 'Consumed' } },
         { new: true, runValidators: true },
       ), session).lean();
@@ -131,6 +149,7 @@ function createModelRepository() {
         {
           productId,
           inventoryHealth: { $ne: 'ReconciliationRequired' },
+          stockQuantity: { $gte: quantity },
           sellableQuantity: { $gte: quantity },
           reservedQuantity: { $gte: quantity },
         },
