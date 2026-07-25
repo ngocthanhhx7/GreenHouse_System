@@ -71,7 +71,7 @@ describe('Phase 2 business guard route matrix', () => {
     await withHttpServer(
       { id: 'staff-1', role: 'Staff', status: 'Active' },
       async (baseUrl) => {
-        const response = await fetch(`${baseUrl}/api/staff/orders/order-1/confirm`, {
+        const response = await fetch(`${baseUrl}/api/staff/orders/507f1f77bcf86cd799439011/confirm`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ note: 'Reviewed' }),

@@ -360,7 +360,7 @@ export default function StaffOrderDetailPage() {
           <div className="row g-3">
             <div className="col-md-6"><strong>Địa chỉ nhận hàng:</strong> {order.shippingAddress}</div>
             <div className="col-md-3"><strong>Phí vận chuyển:</strong> {formatCurrency(order.shippingFee)}</div>
-            <div className="col-md-3"><strong>Đã quyết toán nghĩa vụ tài chính:</strong> {String(order.moneyObligationsSettled ?? true)}</div>
+            <div className="col-md-3"><strong>Nghĩa vụ hoàn/thu hồi tiền:</strong> {order.moneyObligationsSettled === false ? 'Còn mở' : 'Không còn'}</div>
           </div>
 
           <div className="action-row mt-3">

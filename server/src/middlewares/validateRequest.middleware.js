@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const { sendError } = require('../utils/apiResponse');
 const { validate } = require('../validation/requestValidation');
 
@@ -12,4 +13,21 @@ function validateRequest(schema) {
   };
 }
 
-module.exports = { validateRequest };
+function validateObjectIdParam(paramName = 'id') {
+  return (req, res, next) => {
+    const value = req.params?.[paramName];
+    if (!mongoose.isObjectIdOrHexString(value)) {
+      return sendError(
+        res,
+        'Mã định danh không hợp lệ',
+        400,
+        [{ field: paramName, message: 'Mã định danh không hợp lệ' }],
+        'INVALID_ID',
+        req,
+      );
+    }
+    return next();
+  };
+}
+
+module.exports = { validateObjectIdParam, validateRequest };

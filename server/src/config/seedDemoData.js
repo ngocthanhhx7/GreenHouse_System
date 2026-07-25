@@ -19,6 +19,9 @@ const StockExportRequest = require('../models/stockExportRequest.model');
 const ReturnRefundRequest = require('../models/returnRefundRequest.model');
 const SupportRequest = require('../models/supportRequest.model');
 const ProductReview = require('../models/productReview.model');
+const ExchangeCase = require('../models/exchangeCase.model');
+const ExchangeLine = require('../models/exchangeLine.model');
+const DamageReport = require('../models/damageReport.model');
 const SystemSetting = require('../models/systemSetting.model');
 const Notification = require('../models/notification.model');
 const AuditLog = require('../models/auditLog.model');
@@ -229,6 +232,18 @@ const DEMO_ORDER_SPECS = [
       { productName: 'Bộ đĩa gốm tối giản 4 món', quantity: 1 },
     ],
   },
+  {
+    orderCode: 'GH-DEMO-1005',
+    paymentMethod: 'ONLINE',
+    paymentStatus: 'Paid',
+    orderStatus: 'Delivered',
+    deliveredAt: new Date('2026-07-24T10:00:00.000Z'),
+    shippingAddress: '12 Nguyễn Trãi, Thanh Xuân, Hà Nội',
+    transactionId: 'DEMO-TXN-1005',
+    items: [
+      { productName: 'Bộ hộp thực phẩm xếp chồng 5 món', quantity: 1 },
+    ],
+  },
 ];
 
 const DEMO_RETURN_REFUND_SPECS = [
@@ -236,16 +251,37 @@ const DEMO_RETURN_REFUND_SPECS = [
     orderCode: 'GH-DEMO-1004',
     requestCode: 'RET-DEMO-1004',
     reason: 'Bộ đĩa nhận được có một sản phẩm bị vỡ.',
-    status: 'Pending',
+    status: 'New',
   },
 ];
 
 const DEMO_SUPPORT_SPECS = [
   {
     orderCode: 'GH-DEMO-1004',
+    ticketCode: 'SUP-DEMO-1004',
     subject: 'Kiện hàng bị hở bao bì',
     content: 'Bao bì kiện hàng bị hở khi giao và cần nhân viên hỗ trợ kiểm tra.',
     status: 'New',
+  },
+];
+
+const DEMO_EXCHANGE_SPECS = [
+  {
+    orderCode: 'GH-DEMO-1005',
+    requestCode: 'EX-DEMO-1005',
+    productName: 'Bộ hộp thực phẩm xếp chồng 5 món',
+    requestedQuantity: 1,
+    reason: 'Sản phẩm bị lỗi và khách hàng muốn đổi sản phẩm cùng loại.',
+    status: 'Submitted',
+  },
+];
+
+const DEMO_DAMAGE_REPORT_SPECS = [
+  {
+    productName: 'Chảo gốm chống dính GreenHome',
+    quantity: 1,
+    reason: 'Phát hiện một sản phẩm bị trầy xước trong quá trình kiểm tra kho.',
+    status: 'PendingReview',
   },
 ];
 
@@ -520,6 +556,7 @@ async function upsertDemoOrders(userMap, productMap) {
           receiverPhone: '0900000001',
           customerNote: '',
           cancelReason: '',
+          ...(orderSpec.deliveredAt ? { deliveredAt: orderSpec.deliveredAt } : {}),
         },
       },
       { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
@@ -580,6 +617,7 @@ async function upsertReturnRefundRequests(userMap, orderMap) {
       {
         $set: {
           orderId: order._id,
+          requestCode: requestSpec.requestCode,
           customerId: customer._id,
           reason: requestSpec.reason,
           status: requestSpec.status,
@@ -611,6 +649,7 @@ async function upsertSupportRequests(userMap, orderMap) {
       {
         $set: {
           customerId: customer._id,
+          ticketCode: requestSpec.ticketCode,
           orderId: order ? order._id : null,
           subject: requestSpec.subject,
           content: requestSpec.content,
@@ -627,6 +666,100 @@ async function upsertSupportRequests(userMap, orderMap) {
   }
 
   return requests;
+}
+
+async function upsertExchangeCases(userMap, orderMap, productMap) {
+  const customer = userMap.Customer;
+  const cases = [];
+  const now = new Date();
+  const deadlineAt = new Date(now.getTime() + 5 * 24 * 60 * 60 * 1000);
+
+  for (const exchangeSpec of DEMO_EXCHANGE_SPECS) {
+    const order = orderMap[exchangeSpec.orderCode];
+    const product = productMap[exchangeSpec.productName];
+    if (!order || !product) continue;
+    const orderDetail = await OrderDetail.findOne({ orderId: order._id, productId: product._id });
+    if (!orderDetail) continue;
+
+    const exchangeCase = await ExchangeCase.findOneAndUpdate(
+      { requestCode: exchangeSpec.requestCode },
+      {
+        $set: {
+          orderId: order._id,
+          customerId: customer._id,
+          requestCode: exchangeSpec.requestCode,
+          status: exchangeSpec.status,
+          reason: exchangeSpec.reason,
+          evidenceImages: [],
+          deadlineAt,
+          sourceTimelyRequestedAt: now,
+          sourceCycle: 0,
+        },
+        $setOnInsert: {
+          idempotencyKey: `DEMO-${exchangeSpec.requestCode}`,
+          requestFingerprint: `DEMO-FINGERPRINT-${exchangeSpec.requestCode}`,
+          requestedAt: now,
+        },
+      },
+      { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true },
+    );
+
+    await ExchangeLine.deleteMany({ exchangeCaseId: exchangeCase._id });
+    await ExchangeLine.create({
+      exchangeCaseId: exchangeCase._id,
+      orderDetailId: orderDetail._id,
+      productId: product._id,
+      productNameSnapshot: orderDetail.productNameSnapshot,
+      productSkuSnapshot: orderDetail.productSkuSnapshot,
+      productImageSnapshot: orderDetail.productImageSnapshot || '',
+      unitSnapshot: orderDetail.unitSnapshot || '',
+      purchasedQuantity: orderDetail.quantity,
+      requestedQuantity: exchangeSpec.requestedQuantity,
+    });
+    cases.push(exchangeCase);
+  }
+
+  return cases;
+}
+
+async function upsertDamageReports(userMap, inventoryMap, productMap) {
+  const staff = userMap.Staff;
+  const reports = [];
+
+  for (const reportSpec of DEMO_DAMAGE_REPORT_SPECS) {
+    const product = productMap[reportSpec.productName];
+    const inventory = inventoryMap[reportSpec.productName];
+    if (!product || !inventory) continue;
+    const report = await DamageReport.findOneAndUpdate(
+      { idempotencyKey: `DEMO-DAMAGE-${product.sku}` },
+      {
+        $set: {
+          inventoryId: inventory._id,
+          productId: product._id,
+          reportedBy: staff._id,
+          quantity: reportSpec.quantity,
+          reportedQuantity: reportSpec.quantity,
+          confirmedQuantity: null,
+          reason: reportSpec.reason,
+          evidence: [{ source: 'demo-seed', reference: `damage-${product.sku}` }],
+          decisionEvidence: [],
+          status: reportSpec.status,
+          confirmedBy: null,
+          confirmedAt: null,
+          withdrawnBy: null,
+          withdrawnAt: null,
+          withdrawalReason: '',
+        },
+        $setOnInsert: {
+          idempotencyKey: `DEMO-DAMAGE-${product.sku}`,
+        },
+      },
+      { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true },
+    );
+    reports.push(report);
+  }
+
+  return reports;
 }
 
 async function upsertProductReviews(userMap, orderMap, productMap) {
@@ -784,6 +917,8 @@ async function seedDemoData() {
   const returnRefunds = await upsertReturnRefundRequests(userMap, orderMap);
   const supportRequests = await upsertSupportRequests(userMap, orderMap);
   const productReviews = await upsertProductReviews(userMap, orderMap, productMap);
+  const exchangeCases = await upsertExchangeCases(userMap, orderMap, productMap);
+  const damageReports = await upsertDamageReports(userMap, inventoryMap, productMap);
   const systemSettings = await upsertSystemSettings(userMap);
   const notifications = await upsertNotifications(userMap, orderMap);
   const auditLogs = await upsertAuditLogs(userMap);
@@ -798,6 +933,8 @@ async function seedDemoData() {
     returnRefunds: returnRefunds.length,
     supportRequests: supportRequests.length,
     productReviews: productReviews.length,
+    exchangeCases: exchangeCases.length,
+    damageReports: damageReports.length,
     systemSettings: systemSettings.length,
     notifications: notifications.length,
     auditLogs: auditLogs.length,
@@ -819,6 +956,8 @@ async function runCli() {
     { type: 'ReturnRefunds', count: result.returnRefunds },
     { type: 'SupportRequests', count: result.supportRequests },
     { type: 'ProductReviews', count: result.productReviews },
+    { type: 'ExchangeCases', count: result.exchangeCases },
+    { type: 'DamageReports', count: result.damageReports },
     { type: 'SystemSettings', count: result.systemSettings },
     { type: 'Notifications', count: result.notifications },
     { type: 'AuditLogs', count: result.auditLogs },
@@ -841,6 +980,8 @@ module.exports = {
   DEMO_CATEGORIES,
   DEMO_NOTIFICATION_SPECS,
   DEMO_ORDER_SPECS,
+  DEMO_DAMAGE_REPORT_SPECS,
+  DEMO_EXCHANGE_SPECS,
   DEMO_RETURN_REFUND_SPECS,
   DEMO_PASSWORD,
   DEMO_PRODUCTS,

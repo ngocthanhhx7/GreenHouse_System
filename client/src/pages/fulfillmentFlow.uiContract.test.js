@@ -38,4 +38,9 @@ describe('fulfillment flow UI contract', () => {
     assert.match(staffDetail, /order\.orderStatus === 'Delivered'/);
     assert.match(staffDetail, /Đơn hàng đã giao thành công/);
   });
+
+  it('labels financial obligations in plain language instead of implying COD payment is complete', () => {
+    assert.match(staffDetail, /Nghĩa vụ hoàn\/thu hồi tiền/);
+    assert.doesNotMatch(staffDetail, /Đã quyết toán nghĩa vụ tài chính/);
+  });
 });
