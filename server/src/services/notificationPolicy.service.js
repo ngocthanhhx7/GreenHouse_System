@@ -41,6 +41,7 @@ const INTERNAL_ROLES = Object.freeze({
   REPLENISHMENT_RECEIVED: 'WarehouseManager',
   INSPECTION_ASSIGNED: 'WarehouseManager',
   INSPECTION_COMPLETED: 'WarehouseManager',
+  REFUND_PAYOUT_OPERATION_RECONCILED: 'Staff',
 });
 
 const PACKED_TYPES = new Set(['PACKED', 'ORDER_PACKED']);
