@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 
 import { cartService } from '../../services/cartService.js';
@@ -25,9 +25,11 @@ export function formatShippingAddress(address) {
     .join(', ');
 }
 
-function toFieldErrors(errors) {
+function toFieldErrors(errors, errorCode) {
   return (Array.isArray(errors) ? errors : []).reduce((result, entry) => {
-    const field = String(entry?.field || '').startsWith('expectedItems.')
+    const field = errorCode === 'CHECKOUT_STOCK_INSUFFICIENT'
+      ? 'checkoutStock'
+      : String(entry?.field || '').startsWith('expectedItems.')
       ? 'checkoutPrice'
       : entry?.field === 'savedAddressId' || entry?.field === 'deliveryAddress'
       ? 'addressSource'
@@ -61,6 +63,7 @@ export default function CheckoutPage() {
   const [error, setError] = useState('');
   const [fieldErrors, setFieldErrors] = useState({});
   const [checkoutIdempotencyKey] = useState(() => createCheckoutIdempotencyKey());
+  const submittingRef = useRef(false);
 
   useEffect(() => {
     let active = true;
@@ -109,6 +112,8 @@ export default function CheckoutPage() {
 
   async function handleSubmit(event) {
     event.preventDefault();
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setSubmitting(true);
     setError('');
     setFieldErrors({});
@@ -150,11 +155,12 @@ export default function CheckoutPage() {
       resetCart();
       navigate(`/orders/${order.id}`, { replace: true });
     } catch (requestError) {
-      const nextFieldErrors = toFieldErrors(requestError.errors);
+      const nextFieldErrors = toFieldErrors(requestError.errors, requestError.errorCode);
       setFieldErrors(nextFieldErrors);
       setError(Object.keys(nextFieldErrors).length ? '' : requestError.message);
       if (requestError.data?.cart) setCart(requestError.data.cart);
     } finally {
+      submittingRef.current = false;
       setSubmitting(false);
     }
   }
@@ -174,6 +180,7 @@ export default function CheckoutPage() {
 
       {error && <div className="alert alert-danger" role="alert">{error}</div>}
       {fieldErrors.checkoutPrice && <div className="alert alert-warning" role="alert">{fieldErrors.checkoutPrice}</div>}
+      {fieldErrors.checkoutStock && <div className="alert alert-warning" role="alert">{fieldErrors.checkoutStock}</div>}
       {!cart.canCheckout && cart.items.length > 0 && (
         <div className="alert alert-warning" role="alert">
           Giỏ hàng đã thay đổi hoặc có sản phẩm chưa thể mua. Vui lòng quay lại giỏ hàng để xử lý.

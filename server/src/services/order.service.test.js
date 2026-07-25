@@ -304,6 +304,23 @@ describe('order service', () => {
     assert.equal(auditLogger.entries[0].action, 'ORDER_CREATE');
   });
 
+  it('AT-227 returns a stable Vietnamese stock error for a final checkout shortage', async () => {
+    inventoryRepository.reserve = async () => {
+      throw new Error('Insufficient available inventory for checkout');
+    };
+
+    await assert.rejects(
+      () => orderService.placeOrder('customer-1', checkoutInput({ idempotencyKey: 'stock-short-001' })),
+      (error) => {
+        assert.equal(error.statusCode, 409);
+        assert.equal(error.errorCode, 'CHECKOUT_STOCK_INSUFFICIENT');
+        assert.match(error.message, /không còn đủ số lượng/i);
+        return true;
+      },
+    );
+    assert.equal(cartRepository.carts[0].status, 'Active');
+  });
+
   it('creates an online checkout as Pending without creating a synthetic provider attempt', async () => {
     const result = await orderService.placeOrder('customer-1', checkoutInput({
       paymentMethod: 'ONLINE',

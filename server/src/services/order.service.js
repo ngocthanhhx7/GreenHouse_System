@@ -253,6 +253,15 @@ function createModelProductRepository() {
   };
 }
 
+function createCheckoutStockInsufficientError(productId) {
+  return new ApiError(
+    409,
+    'Sản phẩm không còn đủ số lượng để đặt hàng.',
+    [{ field: `expectedItems.${String(productId)}.quantity`, message: 'Số lượng tồn kho không đủ.' }],
+    'CHECKOUT_STOCK_INSUFFICIENT',
+  );
+}
+
 function createModelInventoryRepository() {
   return {
     async reserve(productId, quantity, session) {
@@ -273,7 +282,7 @@ function createModelInventoryRepository() {
         ),
         session
       ).lean();
-      if (!inventory) throw new ApiError(409, 'Insufficient available inventory for checkout');
+      if (!inventory) throw createCheckoutStockInsufficientError(productId);
       return inventory;
     },
     async release(productId, quantity, session) {
@@ -870,7 +879,14 @@ function createOrderService({
 
           const inventories = [];
           for (const line of lines) {
-            inventories.push(await inventoryRepository.reserve(line.productId, line.quantity, session));
+            try {
+              inventories.push(await inventoryRepository.reserve(line.productId, line.quantity, session));
+            } catch (error) {
+              if (/insufficient available inventory for checkout/i.test(String(error?.message || ''))) {
+                throw createCheckoutStockInsufficientError(line.productId);
+              }
+              throw error;
+            }
             const detail = await orderRepository.createOrderDetail({ orderId: order._id, ...line }, session);
             if (detail?._id && orderRepository.createReservation) {
               await orderRepository.createReservation({

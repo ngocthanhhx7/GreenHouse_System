@@ -32,7 +32,7 @@ describe('checkout address book contract', () => {
   it('renders backend checkout field errors beside their matching address controls and clears them on correction', () => {
     assert.match(source, /const \[fieldErrors, setFieldErrors\] = useState\(\{\}\)/);
     assert.match(source, /requestError\.errors/);
-    assert.match(source, /const nextFieldErrors = toFieldErrors\(requestError\.errors\)/);
+  assert.match(source, /const nextFieldErrors = toFieldErrors\(requestError\.errors(?:, requestError\.errorCode)?\)/);
     assert.match(source, /setFieldErrors\(nextFieldErrors\)/);
     assert.match(source, /entry\?\.field === 'savedAddressId'[\s\S]*?'addressSource'/);
     assert.match(source, /updateNewAddress[\s\S]*?clearFieldError\(field\)/);
@@ -65,5 +65,13 @@ describe('checkout address book contract', () => {
     assert.match(source, /startsWith\('expectedItems\.'/);
     assert.match(source, /fieldErrors\.checkoutPrice/);
     assert.match(source, /role="alert"/);
+  });
+
+  it('locks duplicate checkout clicks and shows stock conflicts separately', () => {
+    assert.match(source, /CHECKOUT_STOCK_INSUFFICIENT/);
+    assert.match(source, /checkoutStock/);
+    assert.match(source, /submittingRef/);
+    assert.match(source, /if \(submittingRef\.current\) return/);
+    assert.match(source, /submittingRef\.current = true/);
   });
 });
