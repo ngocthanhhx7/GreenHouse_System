@@ -128,3 +128,13 @@ not invent command records for legacy Products.
   handoff.
 - No claim in this slice covers staging actors, provider behavior, production
   migration, deployment, staging, or production acceptance.
+
+## 2026-07-25 Product media preview correction
+
+| Boundary | Required behavior | Evidence |
+|---|---|---|
+| Authenticated Admin | May read `Attached`/`Retained` managed Product media that the exact Product still references, including when Product is `Inactive` | `productMedia.service.js`; service tests cover inactive Attached, inactive Retained, and missing Product reference denial |
+| Anonymous/public | May read the same media only where the exact Product and populated Category remain `Active` | Existing `findPublicByIdAndImageUrl` publication query and public denial regression |
+| Temporary media | Owner Admin only, before expiry | Existing owner/expiry regression |
+
+Test-first evidence: before the correction, `node --test --test-name-pattern "allows an authenticated Admin to preview" src/services/productMedia.service.test.js` failed with `404 Product media not found`; after the minimal authorization branch, `node --test src/services/productMedia.service.test.js` is `9/9` GREEN and `node --test src/controller/upload.controller.test.js` is `1/1` GREEN.

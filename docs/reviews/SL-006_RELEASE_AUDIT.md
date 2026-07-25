@@ -129,3 +129,7 @@ No exact initial client UI RED count was retained. The final client acceptance c
 
 - The implementation is locally green and the identified price-version, Best Seller, strict legacy-stock migration and durable Admin Product-create idempotency findings have automated regression coverage.
 - Independent re-review of the complete diff is still in progress. Do not mark SL-006 merge-ready until that reviewer records that no P0/P1 finding remains.
+
+## Addendum — 2026-07-25 Product media authorization
+
+Closed a dashboard preview defect: an Admin-created Product is `Inactive` by default, while attached media had been readable only via the public Active Product/Category query. Authenticated `Admin` users can now read `Attached` and `Retained` media for the exact currently referenced Product irrespective of publication status. Public/anonymous access remains restricted to Active Product plus Active Category, and a removed Product reference remains a 404 for Admin as well. Test-first evidence: focused test RED was `404 Product media not found`; service suite GREEN `9/9`, controller suite GREEN `1/1`.
