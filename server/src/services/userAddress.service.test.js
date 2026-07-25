@@ -119,7 +119,7 @@ describe('user address service', () => {
       return originalUpdate(userId, id, changes, session);
     };
 
-    await assert.rejects(() => service.updateAddress('user-1', second.id, { isDefault: true }), /Address not found/);
+    await assert.rejects(() => service.updateAddress('user-1', second.id, { isDefault: true }), /Không tìm thấy địa chỉ/);
 
     assert.equal(repository.addresses.find((item) => item._id === first.id).isDefault, true);
     assert.equal(repository.addresses.find((item) => item._id === second.id).isDefault, false);
@@ -179,7 +179,7 @@ describe('user address service', () => {
 
   it('does not expose another user address', async () => {
     const created = await service.createAddress('user-1', validAddress);
-    await assert.rejects(() => service.updateAddress('user-2', created.id, { label: 'Khác' }), /Address not found/);
+    await assert.rejects(() => service.updateAddress('user-2', created.id, { label: 'Khác' }), /Không tìm thấy địa chỉ/);
   });
 
   it('AT-148 blocks deletion of a default while another address remains', async () => {
@@ -208,7 +208,7 @@ describe('user address service', () => {
   it('validates Vietnamese phone and required address fields', async () => {
     await assert.rejects(
       () => service.createAddress('user-1', { ...validAddress, phoneNumber: '123' }),
-      /Invalid address data/
+      /Dữ liệu địa chỉ không hợp lệ/
     );
   });
 
@@ -221,7 +221,7 @@ describe('user address service', () => {
           assert.equal(error.errorCode, 'VALIDATION_ERROR');
           assert.deepEqual(error.errors, [{
             field,
-            message: `${field} must not exceed 100 characters`,
+            message: 'Thông tin địa chỉ không được vượt quá 100 ký tự.',
           }]);
           return true;
         }
