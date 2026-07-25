@@ -21,6 +21,26 @@ function normalizeDetail(order, detail) {
   };
 }
 
+export async function loadAllOwnReviews(fetchPage, { maxPages = 100 } = {}) {
+  const pageSize = 50;
+  const boundedMaxPages = Math.max(1, Math.floor(Number(maxPages) || 1));
+  const first = await fetchPage({ page: 1, pageSize });
+  const reviews = [...(first?.items || [])];
+  const reportedPages = Number(first?.totalPages)
+    || Math.ceil((Number(first?.total) || reviews.length) / pageSize)
+    || 1;
+  const totalPages = Math.max(1, Math.floor(reportedPages));
+  if (totalPages > boundedMaxPages) {
+    throw new Error(`Review page bound exceeded (${totalPages} > ${boundedMaxPages})`);
+  }
+
+  for (let page = 2; page <= totalPages; page += 1) {
+    const result = await fetchPage({ page, pageSize });
+    reviews.push(...(result?.items || []));
+  }
+  return reviews;
+}
+
 export function buildReviewWorkspace(orders = [], ownReviews = []) {
   const deliveredLines = orders
     .filter((order) => order?.orderStatus === 'Delivered')

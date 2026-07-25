@@ -193,8 +193,7 @@ function createNodeComponentRuntime(scenario) {
       return calls.slice();
     },
     async flush() {
-      await Promise.resolve();
-      await Promise.resolve();
+      for (let tick = 0; tick < 8; tick += 1) await Promise.resolve();
     },
     async settle(method, mode = 'resolve', value = {}) {
       const queue = deferred.get(method) || [];
@@ -400,6 +399,8 @@ async function assertDeferredMutation({
   scenario,
   props,
   setup,
+  sharedDisabledActions = [],
+  refreshMethod,
 }) {
   const runtime = await renderRealComponent(componentPath, {
     ...scenario,
@@ -426,7 +427,20 @@ async function assertDeferredMutation({
     true,
     `${method} control must be disabled while pending`,
   );
+  for (const action of sharedDisabledActions) {
+    const siblings = runtime.findControls(action);
+    assert.equal(siblings.length, 1, `${action} must render exactly one same-aggregate control`);
+    assert.equal(
+      siblings[0].props.disabled,
+      true,
+      `${action} must be disabled while ${method} is pending for the same Review`,
+    );
+  }
+  const refreshCallsBeforeReject = refreshMethod
+    ? runtime.calls.filter((call) => call.method === refreshMethod).length
+    : 0;
   await runtime.settle(method, 'reject', new Error(`${method} failed`));
+  await runtime.flush();
   controls = runtime.findControls(controlAction);
   assert.equal(controls.length, 1, `${method} control must remain rendered after rejection`);
   assert.equal(
@@ -434,6 +448,25 @@ async function assertDeferredMutation({
     false,
     `${method} control must unlock in finally after rejection`,
   );
+  for (const action of sharedDisabledActions) {
+    const siblings = runtime.findControls(action);
+    assert.equal(siblings.length, 1, `${action} must remain rendered after rejection`);
+    assert.equal(
+      siblings[0].props.disabled,
+      false,
+      `${action} must unlock after ${method} rejection`,
+    );
+  }
+  if (refreshMethod) {
+    assert.equal(
+      runtime.calls.filter((call) => call.method === refreshMethod).length,
+      refreshCallsBeforeReject + 1,
+      `${method} rejection must refresh ${refreshMethod}() state`,
+    );
+    const alerts = runtime.findNodes((node) => node.props?.role === 'alert');
+    assert.equal(alerts.length, 1, `${method} rejection must remain visible after refresh`);
+    assert.equal(alerts[0].props.children, `${method} failed`);
+  }
 }
 
 async function assertActionHiddenForActor({
@@ -486,7 +519,7 @@ function assertCustomerReviewManagementRoute(appSource, readSource = clientSourc
   const route = customerReviewRouteComponent(appSource, readSource);
   assert.match(
     route.componentSource,
-    /reviewService\.listOwn\s*\(\s*\{\s*page\s*:\s*1\s*,\s*pageSize\s*:\s*50\s*\}\s*\)/,
+    /loadAllOwnReviews\s*\(\s*\(query\)\s*=>\s*reviewService\.listOwn\s*\(\s*query\s*\)\s*\)/,
   );
   assert.match(route.componentSource, /buildReviewWorkspace\s*\(/);
   for (const field of [
@@ -861,6 +894,7 @@ describe('SL-008 Review UI integration contract', () => {
           listOwn: { ...centerScenario.responses.listOwn, items: [] },
         },
       },
+      refreshMethod: 'listOwn',
     });
     const openCompletedTab = async (runtime) => {
       const tabs = runtime.findNodes((node) => (
@@ -876,6 +910,8 @@ describe('SL-008 Review UI integration contract', () => {
       method: 'updateReview',
       scenario: centerScenario,
       setup: openCompletedTab,
+      sharedDisabledActions: ['setPublication:Withdrawn'],
+      refreshMethod: 'listOwn',
     });
     await assertDeferredMutation({
       componentPath: 'pages/customer/ReviewManagementPage.jsx',
@@ -883,6 +919,8 @@ describe('SL-008 Review UI integration contract', () => {
       controlAction: 'setPublication:Withdrawn',
       scenario: centerScenario,
       setup: openCompletedTab,
+      sharedDisabledActions: ['updateReview'],
+      refreshMethod: 'listOwn',
     });
     await assertDeferredMutation({
       componentPath: 'pages/customer/ReviewManagementPage.jsx',
@@ -902,6 +940,8 @@ describe('SL-008 Review UI integration contract', () => {
         },
       },
       setup: openCompletedTab,
+      sharedDisabledActions: ['updateReview'],
+      refreshMethod: 'listOwn',
     });
     await assertDeferredMutation({
       componentPath: 'pages/staff/ReviewModerationPage.jsx',

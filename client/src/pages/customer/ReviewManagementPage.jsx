@@ -4,7 +4,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { resolveMediaUrl } from '../../services/apiClient.js';
 import { orderService } from '../../services/orderService.js';
 import { reviewService } from '../../services/reviewService.js';
-import { buildReviewWorkspace } from './reviewWorkspace.js';
+import { buildReviewWorkspace, loadAllOwnReviews } from './reviewWorkspace.js';
 import '../../styles/modules/customer-reviews.css';
 
 function commandKey(prefix) {
@@ -81,8 +81,8 @@ export default function ReviewManagementPage() {
         return { ...order, details: [] };
       }
     }));
-    const ownPage = await reviewService.listOwn({ page: 1, pageSize: 50 });
-    const next = buildReviewWorkspace(detailedOrders, ownPage?.items || []);
+    const ownReviews = await loadAllOwnReviews((query) => reviewService.listOwn(query));
+    const next = buildReviewWorkspace(detailedOrders, ownReviews);
     if (preferredOrderId) {
       next.pending.sort((left, right) => (
         Number(String(right.orderId) === preferredOrderId)
@@ -116,6 +116,15 @@ export default function ReviewManagementPage() {
     setPending((current) => ({ ...current, [key]: false }));
   }
 
+  async function refreshAfterFailure(error) {
+    try {
+      await loadWorkspace();
+    } catch (_refreshError) {
+      // A refresh failure must not replace the actionable mutation error.
+    }
+    setPageError(errorText(error));
+  }
+
   async function submitCreate(event, item) {
     event.preventDefault();
     const key = `createReview:${item.orderDetailId}`;
@@ -132,8 +141,8 @@ export default function ReviewManagementPage() {
       await loadWorkspace();
       setActiveTab('completed');
     } catch (error) {
-      setPageError(errorText(error));
       setErrors((current) => ({ ...current, [key]: errorFields(error) }));
+      await refreshAfterFailure(error);
     } finally {
       finish(key);
     }
@@ -141,7 +150,7 @@ export default function ReviewManagementPage() {
 
   async function submitUpdate(event, review) {
     event.preventDefault();
-    const key = `updateReview:${review.id}`;
+    const key = `review:${review.id}`;
     if (!begin(key)) return;
     const form = editForms[review.id] || { rating: review.rating, content: review.content || '' };
     setErrors((current) => ({ ...current, [key]: {} }));
@@ -153,15 +162,15 @@ export default function ReviewManagementPage() {
       }, { idempotencyKey: commandKey('review-update') });
       await loadWorkspace();
     } catch (error) {
-      setPageError(errorText(error));
       setErrors((current) => ({ ...current, [key]: errorFields(error) }));
+      await refreshAfterFailure(error);
     } finally {
       finish(key);
     }
   }
 
   async function setPublication(review, publicationStatus) {
-    const key = `setPublication:${publicationStatus}:${review.id}`;
+    const key = `review:${review.id}`;
     if (!begin(key)) return;
     try {
       await reviewService.setPublication(review.id, {
@@ -170,7 +179,7 @@ export default function ReviewManagementPage() {
       }, { idempotencyKey: commandKey('review-publication') });
       await loadWorkspace();
     } catch (error) {
-      setPageError(errorText(error));
+      await refreshAfterFailure(error);
     } finally {
       finish(key);
     }
@@ -257,7 +266,7 @@ export default function ReviewManagementPage() {
 
           {activeTab === 'completed' && items.map((review) => {
             const edit = editForms[review.id] || { rating: review.rating, content: review.content || '' };
-            const updateKey = `updateReview:${review.id}`;
+            const reviewPending = Boolean(pending[`review:${review.id}`]);
             return (
               <article className="review-purchase-card" key={review.id}>
                 <div className="review-product-summary">
@@ -299,7 +308,7 @@ export default function ReviewManagementPage() {
                           type="button"
                           className="btn btn-outline-secondary btn-sm"
                           data-sl008-action="setPublication:Withdrawn"
-                          disabled={Boolean(pending[`setPublication:Withdrawn:${review.id}`])}
+                          disabled={reviewPending}
                           onClick={() => setPublication(review, 'Withdrawn')}
                         >
                           Ẩn đánh giá
@@ -309,14 +318,14 @@ export default function ReviewManagementPage() {
                           type="button"
                           className="btn btn-outline-secondary btn-sm"
                           data-sl008-action="setPublication:Published"
-                          disabled={Boolean(pending[`setPublication:Published:${review.id}`])}
+                          disabled={reviewPending}
                           onClick={() => setPublication(review, 'Published')}
                         >
                           Hiển thị lại
                         </button>
                       )}
-                      <button type="submit" className="btn btn-outline-success btn-sm" data-sl008-action="updateReview" disabled={Boolean(pending[updateKey])}>
-                        {pending[updateKey] ? 'Đang lưu…' : 'Lưu thay đổi'}
+                      <button type="submit" className="btn btn-outline-success btn-sm" data-sl008-action="updateReview" disabled={reviewPending}>
+                        {reviewPending ? 'Đang lưu…' : 'Lưu thay đổi'}
                       </button>
                     </div>
                   </div>
