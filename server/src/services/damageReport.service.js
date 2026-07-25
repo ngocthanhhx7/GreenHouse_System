@@ -11,6 +11,11 @@ const { notificationService } = require('./notification.service');
 const { canonicalEnvelope } = require('./domainEventProducer.service');
 const { lowStockAlertLifecycle: defaultLowStockLifecycle } = require('./lowStockAlertLifecycle.service');
 const {
+  buildStaffQueuePage,
+  escapeRegex,
+  parseStaffQueueQuery,
+} = require('../utils/staffQueueQuery');
+const {
   assignmentCoordinator: defaultAssignmentCoordinator,
 } = require('./assignmentCoordination.service');
 
@@ -46,8 +51,31 @@ function toResponse(report) {
 }
 function createModelRepository() { return {
   async listReports(query = {}) {
-    const filter = query.status ? { status: query.status } : {};
+    const filter = {};
+    if (query.status) filter.status = query.status;
+    if (query.reportedBy) filter.reportedBy = query.reportedBy;
     return DamageReport.find(filter).sort({ createdAt: -1 }).lean();
+  },
+  async listReportsPage(query = {}) {
+    const filter = {};
+    if (query.status) filter.status = query.status;
+    if (query.reportedBy) filter.reportedBy = query.reportedBy;
+    if (query.search) {
+      const pattern = new RegExp(escapeRegex(query.search), 'i');
+      filter.$or = [
+        { reason: pattern },
+        { idempotencyKey: pattern },
+      ];
+    }
+    const [items, total] = await Promise.all([
+      DamageReport.find(filter)
+        .sort({ createdAt: -1, _id: -1 })
+        .skip(query.skip)
+        .limit(query.pageSize)
+        .lean(),
+      DamageReport.countDocuments(filter),
+    ]);
+    return { items, total };
   },
   async createReport(data, session) { const [report] = await DamageReport.create([data], session ? { session } : undefined); return report.toObject(); },
   async findReportByIdempotencyKey(idempotencyKey, session) { return withOptionalSession(DamageReport.findOne({ idempotencyKey }), session).lean(); },
@@ -123,6 +151,35 @@ function createDamageReportService({
     } catch (_) { /* Notifications never roll back committed inventory facts. */ }
   }
   const api = {
+    async listStaffReports(staffId, query = {}) {
+      const paging = parseStaffQueueQuery(query, {
+        allowedStatuses: DAMAGE_REPORT_STATUSES,
+      });
+      const reportQuery = { ...paging, reportedBy: staffId };
+      const listed = repository.listReportsPage
+        ? await repository.listReportsPage(reportQuery)
+        : await repository.listReports(reportQuery);
+      let reports;
+      let total;
+      if (Array.isArray(listed)) {
+        const normalizedSearch = paging.search.toLowerCase();
+        const owned = listed.filter((report) => (
+          String(report.reportedBy) === String(staffId)
+          && (!paging.status || report.status === paging.status)
+          && (
+            !normalizedSearch
+            || String(report.reason || '').toLowerCase().includes(normalizedSearch)
+            || String(report.idempotencyKey || '').toLowerCase().includes(normalizedSearch)
+          )
+        ));
+        total = owned.length;
+        reports = owned.slice(paging.skip, paging.skip + paging.pageSize);
+      } else {
+        reports = listed.items || [];
+        total = Number(listed.total || 0);
+      }
+      return buildStaffQueuePage(reports.map(toResponse), total, paging);
+    },
     async listWarehouseReports(query = {}) {
       const status = String(query.status || '').trim();
       if (status && !DAMAGE_REPORT_STATUSES.has(status)) {

@@ -22,6 +22,30 @@ function createResponseRecorder() {
 }
 
 describe('damage report controller', () => {
+  it('lists only reports for the authenticated Staff actor', async (t) => {
+    const expected = { items: [], total: 0, page: 1, pageSize: 20 };
+    t.mock.method(damageReportService, 'listStaffReports', async (staffId, query) => {
+      assert.equal(staffId, 'staff-1');
+      assert.deepEqual(query, { status: 'PendingReview', page: '1' });
+      return expected;
+    });
+    const { state, response } = createResponseRecorder();
+    const nextErrors = [];
+
+    await damageReportController.listStaffReports(
+      {
+        user: { id: 'staff-1' },
+        query: { status: 'PendingReview', page: '1' },
+      },
+      response,
+      (error) => nextErrors.push(error),
+    );
+
+    assert.equal(state.statusCode, 200);
+    assert.equal(state.payload.data, expected);
+    assert.deepEqual(nextErrors, []);
+  });
+
   it('waits for a Warehouse decision before returning success', async (t) => {
     let finishDecision;
     const pendingDecision = new Promise((resolve) => {

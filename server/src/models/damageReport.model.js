@@ -31,6 +31,7 @@ const damageReportSchema = new mongoose.Schema(
 );
 
 damageReportSchema.index({ status: 1, createdAt: -1 });
+damageReportSchema.index({ reportedBy: 1, status: 1, createdAt: -1 });
 damageReportSchema.index({ idempotencyKey: 1 }, { unique: true, partialFilterExpression: { idempotencyKey: { $type: 'string', $gt: '' } }, name: 'damage_report_idempotency_unique' });
 damageReportSchema.index({ inventoryId: 1, status: 1, createdAt: -1 });
 

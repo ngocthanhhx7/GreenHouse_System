@@ -6,6 +6,7 @@ const { authorizeRoles } = require('../middlewares/authorize.middleware');
 const router = express.Router();
 
 router.post('/staff/damage-reports', authenticate, authorizeRoles('Staff'), damageReportController.createStaffReport);
+router.get('/staff/damage-reports', authenticate, authorizeRoles('Staff'), damageReportController.listStaffReports);
 router.get('/staff/damage-reports/:id', authenticate, authorizeRoles('Staff'), damageReportController.getStaffReport);
 router.post('/staff/damage-reports/:id/withdraw', authenticate, authorizeRoles('Staff'), damageReportController.withdrawStaffReport);
 router.patch('/staff/damage-reports/:id/withdraw', authenticate, authorizeRoles('Staff'), damageReportController.withdrawStaffReport);

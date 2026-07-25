@@ -66,10 +66,12 @@ function createDamageRepository() {
   };
   const reports = [];
   const transactions = [];
+  const outbox = [];
   return {
     inventory,
     reports,
     transactions,
+    outbox,
     async findInventoryById(id) { return id === inventory._id ? inventory : null; },
     async findReportById(id) { return reports.find((entry) => entry._id === id) || null; },
     async findReportByIdempotencyKey(key) { return reports.find((entry) => entry.idempotencyKey === key) || null; },
@@ -90,6 +92,12 @@ function createDamageRepository() {
       return inventory;
     },
     async createTransaction(data) { transactions.push(data); return data; },
+    async enqueuePostCommitWork(data) {
+      const existing = outbox.find((entry) => entry.identityKey === data.identityKey);
+      if (existing) return existing;
+      outbox.push(data);
+      return data;
+    },
   };
 }
 
@@ -273,6 +281,7 @@ describe('SL-005 acceptance contracts', () => {
     });
     assert.equal(repository.inventory.sellableQuantity, 6);
     assert.equal(repository.inventory.quarantinedQuantity, 4);
+    assert.equal(repository.outbox.length, 1);
     assert.equal((await service.createStaffReport('staff-1', {
       inventoryId: 'inv-1', quantity: 4, reason: 'retry', evidence: [{ file: 'damage.jpg' }], idempotencyKey: 'damage-1',
     })).id, report.id);
