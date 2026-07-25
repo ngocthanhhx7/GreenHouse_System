@@ -148,4 +148,93 @@ describe('order controller checkout boundary', () => {
       orderService.getMyOrder = originalGetMyOrder;
     }
   });
+
+  it('binds delivery confirmation identity to the authenticated Customer and header', async () => {
+    let captured;
+    const confirmDelivery = orderController.createConfirmDeliveryController({
+      async recordDecision(...args) {
+        captured = args;
+        return { outcome: 'RECEIVED' };
+      },
+    });
+    const response = createResponse();
+    await confirmDelivery(
+      {
+        user: { id: 'customer-from-session', role: 'Customer' },
+        params: { id: 'order-owned' },
+        body: {
+          outcome: 'RECEIVED',
+          expectedDeliveryEventId: 'event-1',
+        },
+        get(name) {
+          return name === 'Idempotency-Key' ? 'receipt-header-key-001' : '';
+        },
+      },
+      response,
+      (error) => { throw error; },
+    );
+
+    assert.deepEqual(captured, [
+      'customer-from-session',
+      'order-owned',
+      {
+        outcome: 'RECEIVED',
+        expectedDeliveryEventId: 'event-1',
+        idempotencyKey: 'receipt-header-key-001',
+      },
+    ]);
+    assert.equal(response.statusCode, 201);
+  });
+
+  it('rejects unknown and credential-shaped delivery confirmation fields', async () => {
+    for (const forbiddenField of ['customerId', 'idempotencyKey', 'pin', 'otp', 'password', 'cvv', 'passcode']) {
+      let nextError;
+      await orderController.createConfirmDeliveryController({
+        async recordDecision() {
+          throw new Error('service must not receive unknown fields');
+        },
+      })(
+        {
+          user: { id: 'customer-1' },
+          params: { id: 'order-1' },
+          body: {
+            outcome: 'RECEIVED',
+            expectedDeliveryEventId: 'event-1',
+            [forbiddenField]: 'must-not-pass',
+          },
+          get() { return 'receipt-header-key-001'; },
+        },
+        createResponse(),
+        (error) => { nextError = error; },
+      );
+      assert.equal(nextError?.statusCode, 422, forbiddenField);
+      assert.equal(nextError?.errorCode, 'DELIVERY_RECEIPT_INPUT_INVALID', forbiddenField);
+    }
+  });
+
+  it('preserves the receipt service error codes for missing and invalid headers', async () => {
+    for (const [headerValue, expectedCode] of [
+      ['', 'IDEMPOTENCY_KEY_REQUIRED'],
+      ['bad key', 'IDEMPOTENCY_KEY_INVALID'],
+    ]) {
+      let nextError;
+      await orderController.confirmDelivery(
+        {
+          user: { id: 'customer-1' },
+          params: { id: 'order-1' },
+          body: {
+            outcome: 'RECEIVED',
+            expectedDeliveryEventId: 'event-1',
+          },
+          get(name) {
+            return name === 'Idempotency-Key' ? headerValue : '';
+          },
+        },
+        createResponse(),
+        (error) => { nextError = error; },
+      );
+      assert.equal(nextError?.statusCode, 422);
+      assert.equal(nextError?.errorCode, expectedCode);
+    }
+  });
 });

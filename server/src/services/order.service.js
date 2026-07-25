@@ -14,12 +14,14 @@ const OrderReservation = require('../models/orderReservation.model');
 const Shipment = require('../models/shipment.model');
 const DomainOutbox = require('../models/domainOutbox.model');
 const ReturnRefundRequest = require('../models/returnRefundRequest.model');
+const CustomerDeliveryReceipt = require('../models/customerDeliveryReceipt.model');
 const UserAddress = require('../models/userAddress.model');
 const { createPayOSGateway } = require('../config/payos');
 const { logAudit } = require('../utils/auditLogger');
 const { canonicalEnvelope } = require('./domainEventProducer.service');
 const { systemSettingService } = require('./systemSetting.service');
 const { lowStockAlertLifecycle } = require('./lowStockAlertLifecycle.service');
+const { projectCustomerDelivery } = require('./customerDeliveryProjection');
 
 function toShippingResponse(shipment) {
   if (!shipment) return { shippingStatus: null, shipping: null };
@@ -36,7 +38,7 @@ function toShippingResponse(shipment) {
   };
 }
 
-function toOrderResponse(order, details = [], shipment = null) {
+function toOrderResponse(order, details = [], shipment = null, latestReceipt = null) {
   return {
     id: String(order._id),
     orderCode: order.orderCode,
@@ -70,6 +72,7 @@ function toOrderResponse(order, details = [], shipment = null) {
     details,
     createdAt: order.createdAt,
     ...toShippingResponse(shipment),
+    ...projectCustomerDelivery(order, shipment, latestReceipt),
   };
 }
 
@@ -453,6 +456,24 @@ function createModelOrderRepository() {
         if (!latest.has(key)) latest.set(key, row);
       }
       return latest;
+    },
+    async listLatestDeliveryReceiptsByOrders(orderIds) {
+      if (!orderIds.length) return new Map();
+      const rows = await CustomerDeliveryReceipt.find({ orderId: { $in: orderIds } })
+        .sort({ orderId: 1, createdAt: -1, _id: -1 })
+        .lean();
+      const latest = new Map();
+      for (const row of rows) {
+        const key = String(row.orderId);
+        if (!latest.has(key)) latest.set(key, row);
+      }
+      return latest;
+    },
+    async findLatestDeliveryReceiptByOrder(orderId, session) {
+      return withOptionalSession(
+        CustomerDeliveryReceipt.findOne({ orderId }).sort({ createdAt: -1, _id: -1 }),
+        session,
+      ).lean();
     },
     async findById(id, session) {
       return withOptionalSession(Order.findById(id), session).lean();
@@ -1077,13 +1098,20 @@ function createOrderService({
 
     async listMyOrders(customerId) {
       const orders = await orderRepository.listByCustomer(customerId);
-      const latestShipments = orderRepository.listLatestShipmentsByOrders
-        ? await orderRepository.listLatestShipmentsByOrders(orders.map((order) => order._id))
-        : new Map();
+      const orderIds = orders.map((order) => order._id);
+      const [latestShipments, latestReceipts] = await Promise.all([
+        orderRepository.listLatestShipmentsByOrders
+          ? orderRepository.listLatestShipmentsByOrders(orderIds)
+          : new Map(),
+        orderRepository.listLatestDeliveryReceiptsByOrders
+          ? orderRepository.listLatestDeliveryReceiptsByOrders(orderIds)
+          : new Map(),
+      ]);
       return orders.map((order) => toOrderResponse(
         order,
         [],
         latestShipments.get(String(order._id)),
+        latestReceipts.get(String(order._id)),
       ));
     },
 
@@ -1097,7 +1125,10 @@ function createOrderService({
       const shipment = orderRepository.findLatestShipmentByOrder
         ? await orderRepository.findLatestShipmentByOrder(orderId)
         : null;
-      return toOrderResponse(order, details, shipment);
+      const latestReceipt = orderRepository.findLatestDeliveryReceiptByOrder
+        ? await orderRepository.findLatestDeliveryReceiptByOrder(orderId)
+        : null;
+      return toOrderResponse(order, details, shipment, latestReceipt);
     },
 
     async cancelOrder(customerId, orderId, input = {}) {

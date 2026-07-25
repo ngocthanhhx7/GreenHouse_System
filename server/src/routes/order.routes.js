@@ -9,5 +9,6 @@ router.post('/orders', authenticate, authorizeRoles('Customer'), orderController
 router.get('/orders/my', authenticate, authorizeRoles('Customer'), orderController.listMyOrders);
 router.get('/orders/:id', authenticate, authorizeRoles('Customer'), orderController.getMyOrder);
 router.patch('/orders/:id/cancel', authenticate, authorizeRoles('Customer'), orderController.cancelOrder);
+router.post('/orders/:id/delivery-confirmation', authenticate, authorizeRoles('Customer'), orderController.confirmDelivery);
 
 module.exports = router;

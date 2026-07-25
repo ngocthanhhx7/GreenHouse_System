@@ -3,6 +3,7 @@ const { describe, it } = require('node:test');
 const mongoose = require('mongoose');
 
 const Category = require('../models/category.model');
+const CustomerDeliveryReceipt = require('../models/customerDeliveryReceipt.model');
 const Order = require('../models/order.model');
 const OrderDetail = require('../models/orderDetail.model');
 const Product = require('../models/product.model');
@@ -165,6 +166,74 @@ describe('Review production persistence adapter', () => {
         { 'order.deliveredAt': -1, _id: -1 },
       );
       assert.equal(aggregatePipeline.find((stage) => stage.$limit).$limit, 1);
+      assert.equal(result, detail);
+    } finally {
+      restore();
+    }
+  });
+
+  it('finds one owned terminal-RECEIVED fallback detail in a single bounded aggregation', async () => {
+    const customerId = '507f191e810c19729de860eb';
+    const productId = '507f1f77bcf86cd799439011';
+    const detail = {
+      _id: new mongoose.Types.ObjectId('507f191e810c19729de860ec'),
+      orderId: new mongoose.Types.ObjectId('507f191e810c19729de860ed'),
+      productId: new mongoose.Types.ObjectId(productId),
+      order: {
+        _id: new mongoose.Types.ObjectId('507f191e810c19729de860ed'),
+        customerId: new mongoose.Types.ObjectId(customerId),
+        deliveredAt: new Date('2026-07-24T08:00:00.000Z'),
+      },
+      deliveryReceipt: {
+        _id: new mongoose.Types.ObjectId('507f191e810c19729de860ee'),
+        outcome: 'RECEIVED',
+      },
+    };
+    let aggregateCalls = 0;
+    let aggregatePipeline;
+    const restore = replaceMethods([
+      [OrderDetail, 'aggregate', async (pipeline) => {
+        aggregateCalls += 1;
+        aggregatePipeline = pipeline;
+        return [detail];
+      }],
+      [OrderDetail, 'find', () => {
+        throw new Error('received fallback must not scan OrderDetail rows');
+      }],
+      [Order, 'find', () => {
+        throw new Error('received fallback must not scan lifetime Orders');
+      }],
+      [CustomerDeliveryReceipt, 'find', () => {
+        throw new Error('received fallback must not issue per-order receipt reads');
+      }],
+    ]);
+
+    try {
+      const repository = createModelRepository();
+      const result = await repository.findOwnedReceivedOrderDetail(
+        customerId,
+        productId,
+      );
+
+      assert.equal(aggregateCalls, 1);
+      const lookups = aggregatePipeline.filter((stage) => stage.$lookup);
+      assert.equal(lookups.length, 2);
+      assert.equal(lookups[0].$lookup.from, Order.collection.name);
+      assert.equal(lookups[1].$lookup.from, CustomerDeliveryReceipt.collection.name);
+      assert.deepEqual(
+        lookups[1].$lookup.pipeline.find((stage) => stage.$sort).$sort,
+        { createdAt: -1, _id: -1 },
+      );
+      assert.equal(
+        lookups[1].$lookup.pipeline.find((stage) => stage.$limit).$limit,
+        1,
+      );
+      assert.match(JSON.stringify(aggregatePipeline), /RECEIVED/u);
+      assert.deepEqual(
+        aggregatePipeline.find((stage) => stage.$sort).$sort,
+        { 'order.deliveredAt': -1, _id: -1 },
+      );
+      assert.equal(aggregatePipeline.at(-1).$limit, 1);
       assert.equal(result, detail);
     } finally {
       restore();

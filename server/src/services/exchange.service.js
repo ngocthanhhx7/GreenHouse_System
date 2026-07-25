@@ -37,6 +37,9 @@ const {
   createOutboxWriter,
 } = require('./domainEventProducer.service');
 const { lowStockAlertLifecycle } = require('./lowStockAlertLifecycle.service');
+const {
+  createCustomerDeliveryReceiptPolicy,
+} = require('./customerDeliveryReceiptPolicy');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const EXCHANGE_WINDOW_MS = 5 * DAY_MS;
@@ -503,6 +506,7 @@ function createExchangeService({
   notifier = createExchangeNotificationOutbox(),
   clock = () => new Date(),
   assignmentCoordinator = defaultAssignmentCoordinator,
+  deliveryReceiptPolicy = createCustomerDeliveryReceiptPolicy({ repository }),
 } = {}) {
   async function activeAfterSalesConflict(orderId, customerId, session, requireVerified = false) {
     const resolved = await resolveActiveAfterSalesConflict({
@@ -980,7 +984,7 @@ function createExchangeService({
       if (!reason) throw new ApiError(400, 'Exchange reason is required');
       if (reason.length > 2000) throw new ApiError(400, 'Exchange reason must not exceed 2000 characters');
       const evidenceImages = evidenceVerifier(customerId, input.evidenceImages);
-      let order = await repository.findOrderById(input.orderId);
+      const order = await repository.findOrderById(input.orderId);
       if (!order || String(order.customerId) !== String(customerId)) throw new ApiError(404, 'Order not found');
       if (order.orderStatus !== 'Delivered') throw new ApiError(409, 'Only Delivered orders can be exchanged');
       const replacementUnitIds = [...new Set(
@@ -988,9 +992,11 @@ function createExchangeService({
           .map((value) => String(value || '').trim())
           .filter(Boolean)
       )];
-      if (!replacementUnitIds.length && !order.deliveredAt && !order.exchangeDeadlineAt) {
-        throw new ApiError(409, 'DeliveredAt is required to determine the five-day Exchange window');
-      }
+      const receiptEligibility = await deliveryReceiptPolicy.requireReceived({
+        order,
+        customerId,
+        deadlineField: replacementUnitIds.length ? null : 'exchangeDeadlineAt',
+      });
       let replacementUnits = [];
       if (replacementUnitIds.length) {
         if (!repository.findUnitsByIds) throw new ApiError(409, 'Replacement lineage lookup is unavailable');
@@ -1006,13 +1012,12 @@ function createExchangeService({
         }
       }
       const deadlineAt = replacementUnits.length
-        ? new Date(Math.min(...replacementUnits.map((unit) => new Date(unit.exchangeDeadlineAt).getTime())))
-        : order.exchangeDeadlineAt
-          ? new Date(order.exchangeDeadlineAt)
-          : new Date(new Date(order.deliveredAt).getTime() + EXCHANGE_WINDOW_MS);
+        ? new Date(Math.min(...replacementUnits.map(
+          (unit) => new Date(unit.exchangeDeadlineAt).getTime(),
+        )))
+        : receiptEligibility.deadlineAt;
       if (Number.isNaN(deadlineAt.getTime())) throw new ApiError(409, 'The stored Exchange deadline is invalid');
       if (new Date(clock()).getTime() > deadlineAt.getTime()) throw new ApiError(409, 'The five-day Exchange window has expired');
-      if (!replacementUnits.length && !order.exchangeDeadlineAt) order = await repository.ensureExchangeDeadline(order._id, deadlineAt);
 
       const details = await repository.listOrderDetails(order._id);
       const detailById = new Map(details.map((detail) => [String(detail._id), detail]));

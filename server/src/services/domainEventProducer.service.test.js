@@ -1,5 +1,8 @@
 const assert = require('node:assert/strict');
 const { describe, it } = require('node:test');
+const DomainOutbox = require('../models/domainOutbox.model');
+const { canonicalNotificationEvent } = require('./notificationOutbox.service');
+const { renderNotification } = require('../utils/notificationContract');
 
 let createDomainEventProducer;
 let canonicalEnvelope;
@@ -129,6 +132,46 @@ describe('SL-009 atomic domain event producer', () => {
     assert.match(first.eventHash, /^[a-f0-9]{64}$/);
     assert.equal(first.eventHash, same.eventHash);
     assert.notEqual(first.eventHash, changed.eventHash);
+  });
+
+  it('AT-DR-004 persists and consumes the two customer delivery receipt notification types with one direct Customer and Order target', () => {
+    for (const [eventType, suffix, subject, content] of [
+      ['ORDER_COMPLETED_BY_CUSTOMER', 'received', 'Đơn hàng ORD-001 đã hoàn tất', 'Bạn đã xác nhận đã nhận đơn hàng ORD-001. Cảm ơn bạn đã mua sắm tại GreenHome.'],
+      ['CUSTOMER_DELIVERY_DISPUTED', 'not-received', 'Đơn hàng ORD-001 cần hỗ trợ giao hàng', 'Bạn đã báo chưa nhận được đơn hàng ORD-001. Nhân viên GreenHome sẽ hỗ trợ bạn.'],
+    ]) {
+      const envelope = canonicalEnvelope({
+        businessEventId: `order:order-1:customer-delivery:${suffix}`,
+        eventType,
+        aggregateType: 'Order',
+        aggregateId: 'order-1',
+        recipientId: 'customer-1',
+        target: { collection: 'Order', id: 'order-1' },
+        displayValues: { orderCode: 'ORD-001' },
+        occurredAt: '2026-07-26T01:02:03.000Z',
+      });
+
+      assert.equal(new DomainOutbox(envelope).validateSync(), undefined, eventType);
+      assert.deepEqual(canonicalNotificationEvent(envelope), {
+        businessEventId: `order:order-1:customer-delivery:${suffix}`,
+        type: eventType,
+        displayValues: { orderCode: 'ORD-001' },
+        recipientId: 'customer-1',
+        target: { collection: 'Order', id: 'order-1' },
+      });
+      assert.deepEqual(renderNotification(eventType, eventType, { orderCode: 'ORD-001' }), { subject, content });
+      assert.throws(
+        () => renderNotification(eventType, eventType, { orderCode: 'ORD-001', reason: 'private customer text' }),
+        /not allowed/,
+      );
+
+      assert.throws(
+        () => canonicalNotificationEvent({
+          ...envelope,
+          payload: { ...envelope.payload, recipientRole: 'Customer' },
+        }),
+        /exactly one recipient selector/,
+      );
+    }
   });
 
   it('AT-176 replays identical DomainOutbox facts and rejects identity reuse with different facts', async () => {

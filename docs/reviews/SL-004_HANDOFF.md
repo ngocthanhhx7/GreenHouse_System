@@ -84,6 +84,52 @@ No target or production database was mutated.
 5. Perform authenticated Staff/Warehouse/Customer and signed-Carrier walkthroughs.
 6. Verify target DomainOutbox worker/notification configuration.
 
+## Addendum 2026-07-26 - Customer delivery receipt handoff
+
+The Customer-facing completion boundary is now separate from physical delivery:
+
+- Staff/Carrier `Delivered` is physical evidence only; it must not move a
+  Customer order to `Completed` or open after-sales.
+- The Customer detail flow has two initial choices, `Da nhan duoc hang` and
+  `Chua nhan duoc hang`. A non-receipt requires a reason; a later receipt can
+  supersede it while preserving dispute history.
+- A Customer `Received` decision starts the immutable five-day Exchange/Return
+  snapshots. Direct Review, Exchange, and Return services enforce the same
+  receipt gate, so hidden UI cannot bypass it.
+- Receipt migration commands are `migrate:customer-delivery-receipt`,
+  `migrate:customer-delivery-receipt:apply`, and
+  `verify:customer-delivery-receipt`. They are technical index/guard checks
+  only: dry-run writes nothing; repeat apply makes zero business writes; legacy
+  Delivered Orders are never backfilled as Received.
+
+Local evidence known at this handoff: model/schema 11 passing assertions,
+service variants 46 and 32, API/projection 90, after-sales 161, and migration
+RED 0/6 to GREEN 6/6, followed by command-identity P1 RED 6/7 to GREEN 7/7.
+The bounded/read-only quality expansion was RED 5/9 then GREEN 9/9; a
+disposable MongoDB 8.2 dry-run preserved the collection list `[] -> []`.
+The guard BSON expansion was RED 7/10 then GREEN 10/10. The migration accepts
+only finite integral BSON int/long/double values through
+`9,007,199,254,740,990`; real Infinity and Decimal128 fixtures were rejected
+with zero mutation using the portable disposable-Mongo resolver.
+Final local branch gates recorded on 2026-07-26:
+
+- server `npm test`: 1194/1194 across 183 suites, 0 failed and 0 skipped;
+- client `npm test`: 357/357 across 79 suites, 0 failed and 0 skipped;
+- receipt migration: 10/10 against real MongoDB, 0 skipped;
+- Vite 6.4.3 production build: exit 0, 169 modules; the non-blocking large
+  JavaScript chunk warning is 745.88 kB (gzip 216.31 kB), above 500 kB;
+- syntax verification: 36 files;
+- diff, prohibited-file, and secret scans: clean;
+- production dependency audits: server 0 findings; client 3 high findings in
+  `postcss`, `react-router`, and `react-router-dom`. These findings pre-existed
+  this receipt branch, and neither package manifest nor lockfile changed;
+- branch divergence at gate time: 21 commits ahead and 0 behind.
+
+Deployment owner must identify the target database, take the normal backup,
+run dry-run/apply/verify, record a zero-business-write second apply, and then
+perform authenticated Customer/Staff walkthroughs. No target migration,
+provider, deployment, or production claim is made.
+
 ## Addendum 2026-07-25 - Demo/non-production Staff COD reconciliation
 
 - Staff Order Detail now uses the protected operational evidence uploader for
