@@ -421,3 +421,13 @@ current snapshot. Settings chỉ cho phép `PAYMENT_TIMEOUT_MINUTES` và
 Audit + reevaluation outbox atomically. `RETURN_WINDOW_DAYS` không còn là
 setting hợp lệ; Product threshold override của Warehouse vẫn thắng global
 default.
+
+## UX Relocation Evidence 2026-07-25 - Customer Reviews
+
+- Product Detail now renders public Review content only; Customer Review
+  mutations are no longer hosted there.
+- The protected `/reviews` purchase center separates pending and completed
+  per-product Reviews derived from delivered purchases.
+- The focused Review client set passed `54/54`; the production client build
+  exited `0` with the existing Vite chunk-size warning.
+- This focused relocation verification does not claim a new full regression.

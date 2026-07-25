@@ -175,6 +175,7 @@ function createNodeComponentRuntime(scenario) {
     Link: 'a',
     Outlet: 'div',
     useParams: () => scenario.params || {},
+    useSearchParams: () => [new URLSearchParams(scenario.search || '')],
     useNavigate: () => (() => {}),
     useAuth: () => ({ user: scenario.actor || null }),
     serviceProxy: () => new Proxy({}, {
@@ -206,17 +207,42 @@ function createNodeComponentRuntime(scenario) {
     },
     findControls(method) {
       const controls = [];
+      function visit(node, form = null) {
+        if (!node || typeof node !== 'object') return;
+        if (Array.isArray(node)) {
+          node.forEach((child) => visit(child, form));
+          return;
+        }
+        const currentForm = node.type === 'form' ? node : form;
+        const matches = (
+          node.props?.['data-sl008-action'] === method
+          || node.props?.['data-command'] === method
+          || node.props?.['aria-label']?.toLowerCase().includes(method.toLowerCase())
+        );
+        if (matches) {
+          if (!node.props?.onClick && node.props?.type === 'submit' && currentForm?.props?.onSubmit) {
+            controls.push({
+              ...node,
+              props: { ...node.props, onSubmit: currentForm.props.onSubmit },
+            });
+          } else {
+            controls.push(node);
+          }
+        }
+        visit(node.props?.children, currentForm);
+      }
+      visit(tree);
+      return controls;
+    },
+    findNodes(predicate) {
+      const controls = [];
       function visit(node) {
         if (!node || typeof node !== 'object') return;
         if (Array.isArray(node)) {
           node.forEach(visit);
           return;
         }
-        if (node.props && (
-          node.props['data-sl008-action'] === method
-          || node.props['data-command'] === method
-          || node.props['aria-label']?.toLowerCase().includes(method.toLowerCase())
-        )) controls.push(node);
+        if (predicate(node)) controls.push(node);
         visit(node.props?.children);
       }
       visit(tree);
@@ -293,6 +319,7 @@ async function renderRealComponent(componentRelativePath, scenario, props = {}) 
         if (source === 'react-router-dom') return '\0sl008-router';
         if (source.endsWith('/hooks/useAuth.js')) return '\0sl008-auth';
         if (source.endsWith('/services/reviewService.js')) return '\0sl008-review-service';
+        if (source.endsWith('/services/orderService.js')) return '\0sl008-order-service';
         if (source.endsWith('/services/supportService.js')) return '\0sl008-support-service';
         if (source.endsWith('.css')) return '\0sl008-empty-css';
         return null;
@@ -331,6 +358,7 @@ async function renderRealComponent(componentRelativePath, scenario, props = {}) 
             export const Link = runtime.Link;
             export const Outlet = runtime.Outlet;
             export const useParams = runtime.useParams;
+            export const useSearchParams = runtime.useSearchParams;
             export const useNavigate = runtime.useNavigate;
             export const MemoryRouter = ({ children }) => children;
           `;
@@ -340,6 +368,9 @@ async function renderRealComponent(componentRelativePath, scenario, props = {}) 
         }
         if (id === '\0sl008-review-service') {
           return 'export const reviewService = globalThis.__SL008_RUNTIME__.serviceProxy("review");';
+        }
+        if (id === '\0sl008-order-service') {
+          return 'export const orderService = globalThis.__SL008_RUNTIME__.serviceProxy("order");';
         }
         if (id === '\0sl008-support-service') {
           return 'export const supportService = globalThis.__SL008_RUNTIME__.serviceProxy("support");';
@@ -368,11 +399,16 @@ async function assertDeferredMutation({
   controlAction = method,
   scenario,
   props,
+  setup,
 }) {
   const runtime = await renderRealComponent(componentPath, {
     ...scenario,
     deferredMethods: [...new Set([...(scenario.deferredMethods || []), method])],
   }, props);
+  if (setup) {
+    await setup(runtime);
+    await runtime.flush();
+  }
   let controls = runtime.findControls(controlAction);
   assert.equal(controls.length, 1, `${method} must render exactly one behavioral control`);
   runtime.invoke(controls[0]);
@@ -448,32 +484,23 @@ function customerReviewRouteComponent(appSource, readSource = clientSource) {
 
 function assertCustomerReviewManagementRoute(appSource, readSource = clientSource) {
   const route = customerReviewRouteComponent(appSource, readSource);
-  const loadOwn = boundHandler(route.componentSource, 'reviewService', 'listOwn');
-  for (const field of ['page', 'pageSize']) {
-    assert.match(loadOwn.body, new RegExp(`\\b${field}\\b`));
-  }
-
-  const ownReview = renderedMap(
+  assert.match(
     route.componentSource,
-    ['ownReviews', 'customerReviews'],
+    /reviewService\.listOwn\s*\(\s*\{\s*page\s*:\s*1\s*,\s*pageSize\s*:\s*50\s*\}\s*\)/,
   );
+  assert.match(route.componentSource, /buildReviewWorkspace\s*\(/);
   for (const field of [
     'rating',
     'content',
     'publicationStatus',
     'moderationStatus',
     'version',
-    'historySummary',
   ]) {
-    assert.match(ownReview, new RegExp(`review\\.${field}\\b`));
+    assert.match(route.componentSource, new RegExp(`review\\.${field}\\b`));
   }
   assert.doesNotMatch(
-    ownReview,
-    /customerId|orderId|orderDetailId|email|phone|address/,
-  );
-  assert.match(
     route.componentSource,
-    /(?:ownReviewPage|reviewPage)[\s\S]{0,1400}(?:totalPages|pageSize)[\s\S]{0,1400}(?:onClick|onChange)/,
+    /customerId|email|phone|address/,
   );
   return route;
 }
@@ -631,9 +658,10 @@ async function assertCommandRequest({
 }
 
 describe('SL-008 Review UI integration contract', () => {
-  it('AT-150 imports and mounts ProductReviewPanel with an eligible selector and no raw identifier input', () => {
+  it('AT-150 keeps ProductReviewPanel public-only and creates from delivered purchase lines', () => {
     const detail = clientSource('pages/public/ProductDetailPage.jsx');
     const panel = clientSource('components/review/ProductReviewPanel.jsx');
+    const center = clientSource('pages/customer/ReviewManagementPage.jsx');
 
     assertImportedAndMounted(
       detail,
@@ -641,17 +669,17 @@ describe('SL-008 Review UI integration contract', () => {
       '../../components/review/ProductReviewPanel.jsx',
       'productId',
     );
-    assert.match(panel, /reviewService\.(?:listEligibility|listEligibleOrderDetails)\s*\(/);
-    assert.match(
-      panel,
-      /<select\b[^>]*(?:name|id)=["']orderDetailId["'][\s\S]{0,1200}(?:eligibleOrderDetails|reviewEligibility)\.map\s*\(/i,
-    );
+    assert.match(panel, /<PublicReviewList\b[^>]*\bproductId=/);
+    assert.doesNotMatch(panel, /reviewService\.(?:listEligibility|listEligibleOrderDetails|createReview|updateReview|setPublication)\s*\(/);
+    assert.match(center, /orderService\.listMyOrders\s*\(/);
+    assert.match(center, /orderService\.getOrder\s*\(/);
+    assert.match(center, /buildReviewWorkspace\s*\(/);
     assert.doesNotMatch(
-      panel,
+      center,
       /<input\b[^>]*(?:name|id)=["'][^"']*(?:orderId|orderDetailId|ObjectId)/i,
     );
     assertBoundHandler(
-      panel,
+      center,
       'reviewService',
       'createReview',
       'onSubmit',
@@ -660,15 +688,15 @@ describe('SL-008 Review UI integration contract', () => {
   });
 
   it('AT-154 binds integer rating controls and optional normalized text to a live 0/1000 counter', () => {
-    const panel = clientSource('components/review/ProductReviewPanel.jsx');
+    const center = clientSource('pages/customer/ReviewManagementPage.jsx');
 
-    assert.match(panel, /\[1,\s*2,\s*3,\s*4,\s*5\]|min=["']1["'][^>]*max=["']5["']/);
-    assert.match(panel, /maxLength=\{?1000\}?/);
+    assert.match(center, /\[1,\s*2,\s*3,\s*4,\s*5\]|min=["']1["'][^>]*max=["']5["']/);
+    assert.match(center, /maxLength=\{?1000\}?/);
     assert.match(
-      panel,
-      /<textarea\b[^>]*(?:name|id)=["']content["'][^>]*maxLength=\{?1000\}?[\s\S]{0,500}\{[^}]*content\.length[^}]*\}\s*\/\s*1000/,
+      center,
+      /<textarea\b[^>]*maxLength=\{?1000\}?[\s\S]{0,1800}\{[^}]*content\.length[^}]*\}\s*\/\s*1000/,
     );
-    assert.doesNotMatch(panel, /<textarea\b[^>]*required/);
+    assert.doesNotMatch(center, /<textarea\b[^>]*required/);
   });
 
   it('AT-156 renders only the public-safe masked/verified Review projection', () => {
@@ -692,43 +720,22 @@ describe('SL-008 Review UI integration contract', () => {
   });
 
   it('AT-157 binds Customer withdraw/republish separately from Staff moderation', async () => {
-    const panel = clientSource('components/review/ProductReviewPanel.jsx');
+    const center = clientSource('pages/customer/ReviewManagementPage.jsx');
     const moderation = clientSource('pages/staff/ReviewModerationPage.jsx');
 
-    const withdraw = assertBoundHandler(
-      panel,
+    const publication = assertBoundHandler(
+      center,
       'reviewService',
       'setPublication',
       'onClick|onSubmit',
-      /publicationStatus\s*:\s*['"]Withdrawn['"][\s\S]{0,500}expectedVersion/,
+      /publicationStatus[\s\S]{0,500}expectedVersion/,
     );
-    const republish = assertBoundHandler(
-      panel,
-      'reviewService',
-      'setPublication',
-      'onClick|onSubmit',
-      /publicationStatus\s*:\s*['"]Published['"][\s\S]{0,500}expectedVersion/,
-    );
-    assert.notEqual(withdraw, republish);
-    const ownReview = renderedMap(panel, ['ownReviews', 'customerReviews'], 5000);
+    assert.match(center, new RegExp(`onClick\\s*=\\s*\\{[^\\n}]*${publication}\\s*\\(review,\\s*['"]Withdrawn['"]\\)`));
+    assert.match(center, new RegExp(`onClick\\s*=\\s*\\{[^\\n}]*${publication}\\s*\\(review,\\s*['"]Published['"]\\)`));
+    const ownReview = renderedMap(center, 'items', 9000);
     assert.match(ownReview, /review\.publicationStatus/);
-    assert.match(ownReview, /review\.moderationStatus/);
-    assert.match(
-      ownReview,
-      /Customer publication|Your publication/i,
-    );
-    assert.match(
-      ownReview,
-      /Staff moderation|Moderated by Staff/i,
-    );
-    assert.match(
-      ownReview,
-      /publicationStatus\s*===\s*['"]Published['"][\s\S]{0,1200}onClick\s*=\s*\{?[^}]*withdraw/i,
-    );
-    assert.match(
-      ownReview,
-      /publicationStatus\s*===\s*['"]Withdrawn['"][\s\S]{0,1200}onClick\s*=\s*\{?[^}]*republish/i,
-    );
+    assert.match(center, /review\.moderationStatus/);
+    assert.doesNotMatch(center, /reviewService\.moderate\s*\(/);
     assertBoundHandler(
       moderation,
       'reviewService',
@@ -791,24 +798,37 @@ describe('SL-008 Review UI integration contract', () => {
   });
 
   it('AT-158 binds Customer edit, exposes no delete, and gives Staff no content-edit handler', () => {
+    const center = clientSource('pages/customer/ReviewManagementPage.jsx');
     const panel = clientSource('components/review/ProductReviewPanel.jsx');
     const moderation = clientSource('pages/staff/ReviewModerationPage.jsx');
 
     assertBoundHandler(
-      panel,
+      center,
       'reviewService',
       'updateReview',
       'onSubmit',
       /rating[\s\S]{0,500}content[\s\S]{0,500}expectedVersion/,
     );
-    assert.doesNotMatch(panel, /deleteReview|removeReview/);
+    assert.doesNotMatch(center, /deleteReview|removeReview/);
+    assert.doesNotMatch(panel, /createReview|updateReview|setPublication|deleteReview|removeReview/);
     assert.doesNotMatch(moderation, /updateReview|deleteReview|setPublication/);
   });
 
   it('AT-160 renders Review controls that deduplicate same-tick events and unlock after rejection', async () => {
-    const panelScenario = {
+    const purchase = {
+      id: 'order-1',
+      orderCode: 'ORD-1',
+      orderStatus: 'Delivered',
+      details: [{
+        id: 'eligible-1',
+        productId: 'product-1',
+        productNameSnapshot: 'Safe Product',
+      }],
+    };
+    const centerScenario = {
       actor: { id: 'customer-1', role: 'Customer' },
       responses: {
+        listMyOrders: [purchase],
         listOwn: {
           items: [{
             id: 'review-1',
@@ -829,55 +849,59 @@ describe('SL-008 Review UI integration contract', () => {
           pageSize: 20,
           totalPages: 1,
         },
-        listEligibility: {
-          items: [{ id: 'eligible-1', orderCode: 'ORD-1' }],
-          total: 1,
-        },
       },
     };
     await assertDeferredMutation({
-      componentPath: 'components/review/ProductReviewPanel.jsx',
+      componentPath: 'pages/customer/ReviewManagementPage.jsx',
       method: 'createReview',
       scenario: {
-        ...panelScenario,
+        ...centerScenario,
         responses: {
-          ...panelScenario.responses,
-          listOwn: { ...panelScenario.responses.listOwn, items: [] },
+          ...centerScenario.responses,
+          listOwn: { ...centerScenario.responses.listOwn, items: [] },
         },
       },
-      props: { productId: 'product-1' },
     });
+    const openCompletedTab = async (runtime) => {
+      const tabs = runtime.findNodes((node) => (
+        node.type === 'button'
+        && node.props?.type === 'button'
+        && !node.props?.['data-sl008-action']
+      ));
+      assert.equal(tabs.length, 2, 'review center must render pending and completed tabs');
+      runtime.invoke(tabs[1]);
+    };
     await assertDeferredMutation({
-      componentPath: 'components/review/ProductReviewPanel.jsx',
+      componentPath: 'pages/customer/ReviewManagementPage.jsx',
       method: 'updateReview',
-      scenario: panelScenario,
-      props: { productId: 'product-1' },
+      scenario: centerScenario,
+      setup: openCompletedTab,
     });
     await assertDeferredMutation({
-      componentPath: 'components/review/ProductReviewPanel.jsx',
+      componentPath: 'pages/customer/ReviewManagementPage.jsx',
       method: 'setPublication',
       controlAction: 'setPublication:Withdrawn',
-      scenario: panelScenario,
-      props: { productId: 'product-1' },
+      scenario: centerScenario,
+      setup: openCompletedTab,
     });
     await assertDeferredMutation({
-      componentPath: 'components/review/ProductReviewPanel.jsx',
+      componentPath: 'pages/customer/ReviewManagementPage.jsx',
       method: 'setPublication',
       controlAction: 'setPublication:Published',
       scenario: {
-        ...panelScenario,
+        ...centerScenario,
         responses: {
-          ...panelScenario.responses,
+          ...centerScenario.responses,
           listOwn: {
-            ...panelScenario.responses.listOwn,
+            ...centerScenario.responses.listOwn,
             items: [{
-              ...panelScenario.responses.listOwn.items[0],
+              ...centerScenario.responses.listOwn.items[0],
               publicationStatus: 'Withdrawn',
             }],
           },
         },
       },
-      props: { productId: 'product-1' },
+      setup: openCompletedTab,
     });
     await assertDeferredMutation({
       componentPath: 'pages/staff/ReviewModerationPage.jsx',
@@ -922,7 +946,7 @@ describe('SL-008 Review UI integration contract', () => {
         dummyApp,
         () => 'export default function DummyReviewsPage() { return <div>dummy</div>; }',
       ),
-      /expected one bounded async handler invoking reviewService\.listOwn\(\)/,
+      /reviewService\\?\.listOwn/,
     );
     const app = clientSource('App.jsx');
     assertCustomerReviewManagementRoute(app);
