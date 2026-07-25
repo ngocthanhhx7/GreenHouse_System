@@ -35,6 +35,25 @@ describe('public authentication responsive contract', () => {
     }
   });
 
+  it('preserves a safe shopping return path through login and registration', () => {
+    assert.match(login, /useLocation/);
+    assert.match(login, /safeReturnPath/);
+    assert.match(login, /location\.state\?\.from/);
+    assert.match(login, /state=\{\{\s*from:/);
+    assert.match(register, /useLocation/);
+    assert.match(register, /safeReturnPath/);
+    assert.match(register, /state:\s*\{\s*message:[\s\S]*?from:/);
+  });
+
+  it('supports OTP resend after 60 seconds and changing the email', () => {
+    assert.match(register, /const \[resendSeconds, setResendSeconds\] = useState\(0\)/);
+    assert.match(register, /setResendSeconds\(60\)/);
+    assert.match(register, /async function resendChallenge/);
+    assert.match(register, /Gửi lại mã/);
+    assert.match(register, /Thay đổi email/);
+    assert.doesNotMatch(register, /challengeId/);
+  });
+
   it('uses the shared responsive surface instead of the legacy generic auth card', () => {
     assert.match(styles, /\.auth-page(?:\s*,|\s*\{)/);
     assert.match(styles, /\.auth-page-shell\s*\{/);

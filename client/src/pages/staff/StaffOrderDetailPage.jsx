@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
+import OrderProgress from '../../components/order/OrderProgress.jsx';
 import { staffOrderService } from '../../services/staffOrderService.js';
 import {
   formatCurrency,
@@ -9,24 +10,70 @@ import {
   translatePaymentStatus,
 } from '../../utils/formatters.js';
 
+function toLocalDateTimeValue(value = new Date()) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
+    .toISOString()
+    .slice(0, 16);
+}
+
 function blankHandoff() {
   return {
     carrierName: '',
     trackingReference: '',
-    handedOffAt: '',
+    handedOffAt: toLocalDateTimeValue(),
     evidenceReference: '',
   };
 }
 
 function blankEvent() {
   return {
-    eventType: 'ATTEMPT_FAILED',
+    eventType: 'DELIVERED',
     source: 'STAFF_EVIDENCE',
-    occurredAt: '',
+    occurredAt: toLocalDateTimeValue(),
     evidenceReference: '',
     reason: '',
     replacesEventId: '',
   };
+}
+
+function validateHandoffDraft(draft) {
+  const errors = {};
+  if (!draft.carrierName.trim()) errors.carrierName = 'Vui lòng nhập đơn vị vận chuyển.';
+  if (!draft.trackingReference.trim()) errors.trackingReference = 'Vui lòng nhập mã vận đơn.';
+  if (!draft.evidenceReference.trim()) errors.evidenceReference = 'Vui lòng nhập bằng chứng bàn giao.';
+  if (!draft.handedOffAt || Number.isNaN(new Date(draft.handedOffAt).getTime())) {
+    errors.handedOffAt = 'Vui lòng chọn thời điểm bàn giao hợp lệ.';
+  }
+  return errors;
+}
+
+function validateShipmentEventDraft(draft) {
+  const errors = {};
+  if (!draft.evidenceReference.trim()) errors.evidenceReference = 'Vui lòng nhập bằng chứng giao hàng.';
+  if (!draft.occurredAt || Number.isNaN(new Date(draft.occurredAt).getTime())) {
+    errors.occurredAt = 'Vui lòng chọn thời điểm sự kiện hợp lệ.';
+  }
+  if (['CORRECTION', 'DISPUTED'].includes(draft.eventType) && !draft.replacesEventId.trim()) {
+    errors.replacesEventId = 'Vui lòng chọn sự kiện cần thay thế.';
+  }
+  return errors;
+}
+
+function translateFulfillmentEventType(eventType) {
+  const labels = {
+    HANDOFF: 'Đã bàn giao cho đơn vị vận chuyển',
+    ATTEMPT_FAILED: 'Giao không thành công',
+    RESCHEDULED: 'Đã hẹn giao lại',
+    DELIVERED: 'Đã giao thành công',
+    RETURNED_TO_SHOP: 'Đã hoàn về cửa hàng',
+    LOST: 'Thất lạc',
+    DAMAGED: 'Hư hỏng',
+    CORRECTION: 'Điều chỉnh bằng chứng',
+    DISPUTED: 'Tranh chấp bằng chứng',
+  };
+  return labels[eventType] || eventType;
 }
 
 export default function StaffOrderDetailPage() {
@@ -73,7 +120,7 @@ export default function StaffOrderDetailPage() {
       setChecklist((loadedOrder.details || []).map((item) => ({
         orderDetailId: item._id || item.id,
         quantity: Number(item.quantity),
-        checked: true,
+        checked: false,
       })));
       setDestination((current) => ({
         ...current,
@@ -101,6 +148,7 @@ export default function StaffOrderDetailPage() {
         ? 'AlreadyProcessed: thao tác này đã được ghi nhận trước đó.'
         : successMessage);
       await loadOrder();
+      return result;
     } catch (err) {
       setError(err.message);
       setFieldErrors(Object.fromEntries((err.errors || []).map((entry) => [entry.field, entry.message])));
@@ -108,11 +156,65 @@ export default function StaffOrderDetailPage() {
       submittingRef.current = false;
       setSubmitting(false);
     }
+    return null;
   }
 
   const activeCycle = fulfillment.cycles?.at(-1);
   const shipment = activeCycle?.shipment;
   const shipmentHistory = activeCycle?.events || [];
+  const allItemsChecked = checklist.length > 0 && checklist.every((line) => line.checked);
+
+  function submitPacking() {
+    return runAction(
+      () => staffOrderService.confirmPacking(order.id, {
+        checklist: checklist.map((line) => ({
+          ...line,
+          checkedQuantity: line.checked ? line.quantity : 0,
+        })),
+        idempotencyKey: idempotencyKey(`packing:${activeCycle?.id || order.id}`),
+      }),
+      'Đã đóng gói đủ sản phẩm; đơn hàng chuyển sang Đã đóng gói.',
+    );
+  }
+
+  function submitHandoff() {
+    const errors = validateHandoffDraft(handoff);
+    if (Object.keys(errors).length) {
+      setFieldErrors(errors);
+      setError('Vui lòng kiểm tra đầy đủ thông tin bàn giao.');
+      return;
+    }
+    return runAction(
+      () => staffOrderService.createShipment(order.id, {
+        ...handoff,
+        handedOffAt: new Date(handoff.handedOffAt).toISOString(),
+        idempotencyKey: idempotencyKey(`handoff:${activeCycle?.id || order.id}`),
+      }),
+      'Đã bàn giao cho đơn vị vận chuyển; đơn hàng chuyển sang Đang giao.',
+    );
+  }
+
+  async function submitShipmentEvent() {
+    const errors = validateShipmentEventDraft(shipmentEvent);
+    if (Object.keys(errors).length) {
+      setFieldErrors(errors);
+      setError('Vui lòng kiểm tra thời gian và bằng chứng giao hàng.');
+      return;
+    }
+    const result = await runAction(
+      () => staffOrderService.recordShipmentEvent(shipment.id, {
+        ...shipmentEvent,
+        eventKey: idempotencyKey(
+          `event:${shipment.id}:${shipmentEvent.eventType}:${shipmentEvent.occurredAt}`,
+        ),
+        occurredAt: new Date(shipmentEvent.occurredAt).toISOString(),
+      }),
+      shipmentEvent.eventType === 'DELIVERED'
+        ? 'Đã xác nhận giao thành công; đơn hàng chuyển sang Đã giao.'
+        : 'Đã thêm sự kiện vào lịch sử vận chuyển.',
+    );
+    if (result) setShipmentEvent(blankEvent());
+  }
 
   if (!order && !error) return <div className="page-center">Đang tải đơn hàng...</div>;
 
@@ -132,6 +234,8 @@ export default function StaffOrderDetailPage() {
             </div>
             <Link className="btn btn-outline-success" to={`/staff/orders/${order.id}/invoice`}>In hóa đơn</Link>
           </div>
+
+          <OrderProgress status={order.orderStatus} />
 
           <div className="row g-3">
             <div className="col-md-6"><strong>Checkout address:</strong> {order.shippingAddress}</div>
@@ -155,7 +259,10 @@ export default function StaffOrderDetailPage() {
 
           {order.orderStatus === 'Confirmed' && order.stockExportRequest?.status === 'Completed' && (
             <section className="border rounded p-3 mt-4">
-              <h2 className="h5">Packing checklist · PackingRecord</h2>
+              <h2 className="h5">Kiểm tra và xác nhận đóng gói <small className="text-secondary">· PackingRecord</small></h2>
+              <p className="text-secondary">
+                Chỉ khi toàn bộ sản phẩm được kiểm tra đủ số lượng, đơn hàng mới chuyển sang Đã đóng gói.
+              </p>
               {checklist.map((line, index) => (
                 <label className="d-flex gap-2 align-items-center mb-2" key={line.orderDetailId}>
                   <input
@@ -168,25 +275,34 @@ export default function StaffOrderDetailPage() {
                   <span>{order.details[index]?.productNameSnapshot} · {line.quantity}</span>
                 </label>
               ))}
-              <button className="btn btn-success" type="button" disabled={submitting} onClick={() => runAction(
-                () => staffOrderService.confirmPacking(order.id, {
-                  checklist,
-                  idempotencyKey: idempotencyKey(`packing:${activeCycle?.id || order.id}`),
-                }),
-                'PackingRecord hoàn tất; không gửi thông báo nội bộ cho Customer.',
-              )}>Xác nhận đóng gói chính xác</button>
+              {!allItemsChecked && (
+                <div className="alert alert-warning mt-3 mb-2">
+                  Vui lòng kiểm tra đủ tất cả sản phẩm trước khi xác nhận đóng gói.
+                </div>
+              )}
+              <button
+                className="btn btn-success"
+                type="button"
+                disabled={submitting || !allItemsChecked}
+                onClick={submitPacking}
+              >
+                Xác nhận đóng gói
+              </button>
             </section>
           )}
 
           {order.orderStatus === 'Packed' && (
             <section className="border rounded p-3 mt-4">
-              <h2 className="h5">Bàn giao Carrier</h2>
+              <h2 className="h5">Bàn giao cho đơn vị vận chuyển</h2>
+              <p className="text-secondary">
+                Ghi nhận đủ mã vận đơn, thời điểm và bằng chứng để chuyển đơn sang Đang giao.
+              </p>
               <div className="row g-2">
                 {[
-                  ['carrierName', 'Carrier name', 'text'],
-                  ['trackingReference', 'Tracking reference', 'text'],
-                  ['handedOffAt', 'Handed off at', 'datetime-local'],
-                  ['evidenceReference', 'Evidence reference', 'text'],
+                  ['carrierName', 'Đơn vị vận chuyển', 'text'],
+                  ['trackingReference', 'Mã vận đơn', 'text'],
+                  ['handedOffAt', 'Thời điểm bàn giao', 'datetime-local'],
+                  ['evidenceReference', 'Bằng chứng bàn giao', 'text'],
                 ].map(([field, label, type]) => (
                   <label className="col-md-6" key={field}>
                     <span className="form-label">{label}</span>
@@ -195,56 +311,69 @@ export default function StaffOrderDetailPage() {
                   </label>
                 ))}
               </div>
-              <button className="btn btn-success mt-3" type="button" disabled={submitting} onClick={() => runAction(
-                () => staffOrderService.createShipment(order.id, {
-                  ...handoff,
-                  handedOffAt: new Date(handoff.handedOffAt).toISOString(),
-                  idempotencyKey: idempotencyKey(`handoff:${activeCycle?.id || order.id}`),
-                }),
-                'Đã ghi nhận bàn giao Carrier và Shipment.',
-              )}>Tạo Shipment</button>
+              <button className="btn btn-success mt-3" type="button" disabled={submitting} onClick={submitHandoff}>
+                Xác nhận bàn giao và bắt đầu giao hàng
+              </button>
             </section>
           )}
 
           {shipment && (
             <section className="border rounded p-3 mt-4">
-              <h2 className="h5">Shipment history</h2>
-              <p><strong>{shipment.carrierName}</strong> · {shipment.trackingReference}</p>
-              <ul>{shipmentHistory.map((entry) => <li key={entry.id}>{entry.eventType} · {entry.occurredAt}</li>)}</ul>
-              <div className="row g-2">
-                <label className="col-md-4">Action
-                  <select className="form-select" value={shipmentEvent.eventType} onChange={(event) => setShipmentEvent({ ...shipmentEvent, eventType: event.target.value })}>
-                    <option value="ATTEMPT_FAILED">AttemptFailed</option>
-                    <option value="RESCHEDULED">Rescheduled</option>
-                    <option value="DELIVERED">Delivered delivery</option>
-                    <option value="RETURNED_TO_SHOP">ReturnedToShop</option>
-                    <option value="LOST">Lost</option>
-                    <option value="DAMAGED">Damaged</option>
-                    <option value="CORRECTION">Correction</option>
-                    <option value="DISPUTED">Dispute</option>
-                  </select>
-                </label>
-                <label className="col-md-4">Occurred at
-                  <input className="form-control" type="datetime-local" value={shipmentEvent.occurredAt} onChange={(event) => setShipmentEvent({ ...shipmentEvent, occurredAt: event.target.value })} />
-                </label>
-                <label className="col-md-4">Evidence
-                  <input className="form-control" value={shipmentEvent.evidenceReference} onChange={(event) => setShipmentEvent({ ...shipmentEvent, evidenceReference: event.target.value })} />
-                </label>
-                <label className="col-md-6">Reason
-                  <input className="form-control" value={shipmentEvent.reason} onChange={(event) => setShipmentEvent({ ...shipmentEvent, reason: event.target.value })} />
-                </label>
-                <label className="col-md-6">Replaces event (Correction / Dispute)
-                  <input className="form-control" value={shipmentEvent.replacesEventId} onChange={(event) => setShipmentEvent({ ...shipmentEvent, replacesEventId: event.target.value })} />
-                </label>
-              </div>
-              <button className="btn btn-outline-success mt-3" type="button" disabled={submitting} onClick={() => runAction(
-                () => staffOrderService.recordShipmentEvent(shipment.id, {
-                  ...shipmentEvent,
-                  eventKey: idempotencyKey(`event:${shipment.id}:${shipmentEvent.eventType}`),
-                  occurredAt: new Date(shipmentEvent.occurredAt).toISOString(),
-                }),
-                'Đã thêm sự kiện vào shipment history.',
-              )}>Ghi sự kiện</button>
+              <h2 className="h5">Lịch sử vận chuyển</h2>
+              <p><strong>{shipment.carrierName}</strong> · Mã vận đơn {shipment.trackingReference}</p>
+              <ul>{shipmentHistory.map((entry) => (
+                <li key={entry.id}>
+                  {translateFulfillmentEventType(entry.eventType)}
+                  {' · '}
+                  {new Date(entry.occurredAt).toLocaleString('vi-VN')}
+                </li>
+              ))}</ul>
+
+              {order.orderStatus === 'Shipped' && (
+                <>
+                  <h3 className="h6 mt-4">Ghi nhận sự kiện giao hàng</h3>
+                  <div className="row g-2">
+                    <label className="col-md-4">Loại sự kiện
+                      <select className="form-select" value={shipmentEvent.eventType} onChange={(event) => setShipmentEvent({ ...shipmentEvent, eventType: event.target.value })}>
+                        <option value="DELIVERED">Giao thành công</option>
+                        <option value="ATTEMPT_FAILED">Giao không thành công</option>
+                        <option value="RESCHEDULED">Hẹn giao lại</option>
+                        <option value="RETURNED_TO_SHOP">Hoàn về cửa hàng</option>
+                        <option value="LOST">Thất lạc</option>
+                        <option value="DAMAGED">Hư hỏng</option>
+                        <option value="CORRECTION">Điều chỉnh bằng chứng</option>
+                        <option value="DISPUTED">Tranh chấp bằng chứng</option>
+                      </select>
+                    </label>
+                    <label className="col-md-4">Thời điểm xảy ra
+                      <input className={`form-control ${fieldErrors.occurredAt ? 'is-invalid' : ''}`} type="datetime-local" value={shipmentEvent.occurredAt} onChange={(event) => setShipmentEvent({ ...shipmentEvent, occurredAt: event.target.value })} required />
+                      {fieldErrors.occurredAt && <span className="invalid-feedback">{fieldErrors.occurredAt}</span>}
+                    </label>
+                    <label className="col-md-4">Bằng chứng giao hàng
+                      <input className={`form-control ${fieldErrors.evidenceReference ? 'is-invalid' : ''}`} value={shipmentEvent.evidenceReference} onChange={(event) => setShipmentEvent({ ...shipmentEvent, evidenceReference: event.target.value })} required />
+                      {fieldErrors.evidenceReference && <span className="invalid-feedback">{fieldErrors.evidenceReference}</span>}
+                    </label>
+                    <label className="col-md-6">Ghi chú
+                      <input className="form-control" value={shipmentEvent.reason} onChange={(event) => setShipmentEvent({ ...shipmentEvent, reason: event.target.value })} />
+                    </label>
+                    {['CORRECTION', 'DISPUTED'].includes(shipmentEvent.eventType) && (
+                      <label className="col-md-6">Mã sự kiện được thay thế
+                        <input className={`form-control ${fieldErrors.replacesEventId ? 'is-invalid' : ''}`} value={shipmentEvent.replacesEventId} onChange={(event) => setShipmentEvent({ ...shipmentEvent, replacesEventId: event.target.value })} required />
+                        {fieldErrors.replacesEventId && <span className="invalid-feedback">{fieldErrors.replacesEventId}</span>}
+                      </label>
+                    )}
+                  </div>
+                  <button className="btn btn-success mt-3" type="button" disabled={submitting} onClick={submitShipmentEvent}>
+                    {shipmentEvent.eventType === 'DELIVERED' ? 'Xác nhận đã giao hàng' : 'Ghi nhận sự kiện'}
+                  </button>
+                </>
+              )}
+
+              {order.orderStatus === 'Delivered' && (
+                <div className="alert alert-success mt-3 mb-0">
+                  <strong>Đơn hàng đã giao thành công.</strong> Customer hiện có thể xem trạng thái Đã giao trong lịch sử mua hàng.
+                </div>
+              )}
             </section>
           )}
 

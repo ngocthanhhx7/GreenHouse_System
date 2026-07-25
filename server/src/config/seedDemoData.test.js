@@ -75,6 +75,24 @@ describe('demo data seed config', () => {
     assert.match(scriptSource, /await inventory\.save\(\)/);
   });
 
+  it('writes canonical search and public review fields when reseeding', () => {
+    const scriptSource = readFileSync(path.join(__dirname, 'seedDemoData.js'), 'utf8');
+    const productWriter = scriptSource.match(
+      /async function upsertProducts[\s\S]*?async function materializeProductMedia/,
+    )?.[0] || '';
+    const reviewWriter = scriptSource.match(
+      /async function upsertProductReviews[\s\S]*?async function upsertSystemSettings/,
+    )?.[0] || '';
+
+    assert.match(scriptSource, /buildProductSearchText/);
+    assert.match(productWriter, /searchTextNormalized:\s*buildProductSearchText\(product\)/);
+    assert.match(reviewWriter, /OrderDetail\.findOne/);
+    assert.match(reviewWriter, /ProductReview\.collection\.updateOne/);
+    assert.match(reviewWriter, /orderDetailId:\s*orderDetail\._id/);
+    assert.match(reviewWriter, /publicationStatus:\s*'Published'/);
+    assert.match(reviewWriter, /moderationStatus:\s*'Allowed'/);
+  });
+
   it('includes notification demo records for every signed-in role', () => {
     const notificationRoles = DEMO_NOTIFICATION_SPECS.map((notification) => notification.roleName).sort();
 
@@ -104,5 +122,15 @@ describe('demo data seed config', () => {
     assert.ok(actions.includes('AUTH_LOGIN_SUCCESS'));
     assert.ok(actions.includes('ORDER_CREATE'));
     assert.ok(actions.includes('RETURN_REFUND_APPROVED_FOR_INSPECTION'));
+    const scriptSource = readFileSync(path.join(__dirname, 'seedDemoData.js'), 'utf8');
+    const auditWriter = scriptSource.match(
+      /async function upsertAuditLogs[\s\S]*?async function seedDemoData/,
+    )?.[0] || '';
+    assert.match(auditWriter, /AuditLog\.collection\.updateOne/);
+    assert.match(auditWriter, /auditId/);
+    assert.match(auditWriter, /actorType:\s*'User'/);
+    assert.match(auditWriter, /targetType:\s*auditSpec\.targetEntity/);
+    assert.match(auditWriter, /businessEventId/);
+    assert.match(auditWriter, /correlationId/);
   });
 });

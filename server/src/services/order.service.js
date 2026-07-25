@@ -991,21 +991,12 @@ function createOrderService({
             return { cancelled: order, orderCode: order.orderCode, replay: true };
           }
         }
-        if (order.orderStatus !== 'Pending' || !['Unpaid', 'Pending', 'Failed', 'Paid'].includes(order.paymentStatus)) {
-          throw new ApiError(409, 'Only Pending orders can be cancelled by the customer');
+        if (order.orderStatus !== 'Pending' || !['Unpaid', 'Failed', 'Cancelled'].includes(order.paymentStatus)) {
+          throw new ApiError(409, 'Only Pending orders with Unpaid, Failed, or Cancelled payment can be cancelled by the customer');
         }
-        const isPaid = order.paymentStatus === 'Paid';
-        const paidAttempt = isPaid
-          ? await orderRepository.findPrimaryPaidPaymentAttemptByOrder(orderId, session)
-          : null;
-        if (isPaid && !paidAttempt) {
-          throw new ApiError(409, 'A verified paid attempt is required before cancelling a paid order');
-        }
-        const cancelledPaymentStatus = isPaid
-          ? 'Paid'
-          : order.paymentMethod === 'COD'
-            ? 'Unpaid'
-            : 'Cancelled';
+        const cancelledPaymentStatus = order.paymentMethod === 'COD'
+          ? 'Unpaid'
+          : 'Cancelled';
         const cancelData = {
           orderStatus: 'Cancelled',
           paymentStatus: cancelledPaymentStatus,
@@ -1034,53 +1025,16 @@ function createOrderService({
         const payment = orderRepository.findPaymentByOrderId
           ? await orderRepository.findPaymentByOrderId(orderId, session)
           : null;
-        if (!isPaid && payment && orderRepository.updatePayment) {
+        if (payment && orderRepository.updatePayment) {
           await orderRepository.updatePayment(payment._id, { paymentStatus: cancelledPaymentStatus }, session);
         }
-        if (!isPaid && orderRepository.findActivePaymentAttemptByOrder) {
+        if (orderRepository.findActivePaymentAttemptByOrder) {
           const activeAttempt = await orderRepository.findActivePaymentAttemptByOrder(orderId, session);
           if (activeAttempt) {
             await orderRepository.updatePaymentAttempt(activeAttempt._id, {
               paymentStatus: order.paymentMethod === 'COD' ? 'Unpaid' : 'Cancelled',
             }, session);
             retiredPaymentLinkId = activeAttempt.paymentLinkId || '';
-          }
-        }
-        if (isPaid) {
-          const obligationKey = `PAYMENT_REVERSAL:${String(paidAttempt._id)}`;
-          let refundRequest = orderRepository.findRefundRequestByObligationKey
-            ? await orderRepository.findRefundRequestByObligationKey(order._id, obligationKey, session)
-            : null;
-          if (!refundRequest && orderRepository.createRefundRequest) {
-            refundRequest = await orderRepository.createRefundRequest({
-              orderId: order._id,
-              requestCode: `CAN-${order.orderCode}-${crypto.createHash('sha256').update(obligationKey).digest('hex').slice(0, 12).toUpperCase()}`,
-              customerId: order.customerId,
-              paymentId: payment?._id || null,
-              obligationKey,
-              reason: `Customer cancellation: ${cancelReason}`,
-              status: 'ReadyForRefund',
-              refundAmount: order.totalAmount,
-              requestedAt: new Date(clock()),
-            }, session);
-          }
-          const refund = await orderRepository.upsertRefundPending({
-            orderId: order._id,
-            paymentAttemptId: paidAttempt._id,
-            customerId: order.customerId,
-            returnRefundRequestId: refundRequest?._id || null,
-            amount: order.totalAmount,
-            currency: order.currency || paidAttempt.currency || 'VND',
-            reason: `Customer cancellation: ${cancelReason}`,
-            status: 'RefundPending',
-            obligationType: 'PAYMENT_REVERSAL',
-            obligationKey,
-          }, session);
-          if (refundRequest && orderRepository.updateRefundRequest) {
-            await orderRepository.updateRefundRequest(refundRequest._id, { refundPendingId: refund._id }, session);
-          }
-          if (orderRepository.markMoneyObligationsUnsettled) {
-            await orderRepository.markMoneyObligationsUnsettled(order._id, session);
           }
         }
         const inventories = [];

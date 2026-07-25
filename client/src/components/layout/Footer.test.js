@@ -15,13 +15,14 @@ describe('shared footer design contract', () => {
     assert.match(footer, /Khám phá/);
     assert.match(footer, /Hỗ trợ/);
     assert.match(footer, /\/products/);
-    assert.match(footer, /\/support/);
-    assert.match(footer, /\/profile/);
-    assert.match(footer, /\/notifications/);
+    assert.match(footer, /\/contact#contact-form/);
+    assert.match(footer, /\/#quy-trinh-mua-hang/);
+    assert.match(footer, /\/login/);
     assert.match(footer, /0856 464 980/);
     assert.match(footer, /kitchennhas@greenhome\.com/);
     assert.match(footer, /Hà Nội, Việt Nam/);
     assert.doesNotMatch(footer, /\/cart/);
+    assert.doesNotMatch(footer, /\/support|\/profile|\/notifications/);
     assert.doesNotMatch(footer, /Vermont|Heritage Lane|Newsletter|Shipping Policy|Returns/);
     assert.doesNotMatch(footer, /footer-cta/);
     assert.doesNotMatch(footer, /Sẵn sàng nâng cấp căn bếp của bạn/);

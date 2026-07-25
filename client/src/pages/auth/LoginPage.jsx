@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 
 import useAuth from '../../hooks/useAuth.js';
+import { safeReturnPath } from '../../utils/authNavigation.js';
 
 export default function LoginPage() {
+  const location = useLocation();
   const navigate = useNavigate();
   const { login, getDashboardPath, isAuthenticated, user } = useAuth();
   const [form, setForm] = useState({ email: '', password: '' });
@@ -12,8 +14,9 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (!isAuthenticated || !user?.role) return;
-    navigate(getDashboardPath(user.role), { replace: true });
-  }, [getDashboardPath, isAuthenticated, navigate, user]);
+    const dashboardPath = getDashboardPath(user.role);
+    navigate(safeReturnPath(location.state?.from, dashboardPath), { replace: true });
+  }, [getDashboardPath, isAuthenticated, location.state?.from, navigate, user]);
 
   async function handleSubmit(event) {
     event.preventDefault();
@@ -47,6 +50,9 @@ export default function LoginPage() {
           </div>
 
           <div className="auth-feedback" aria-live="polite">
+            {location.state?.message && (
+              <div className="auth-success" role="status">{location.state.message}</div>
+            )}
             {error && <div className="auth-alert" role="alert">{error}</div>}
           </div>
 
@@ -80,7 +86,15 @@ export default function LoginPage() {
           <button className="auth-submit" type="submit" disabled={submitting}>
             {submitting ? 'Đang đăng nhập…' : 'Đăng nhập'}
           </button>
-          <p className="auth-cross-link">Chưa có tài khoản? <Link to="/register">Đăng ký</Link></p>
+          <p className="auth-cross-link">
+            Chưa có tài khoản?{' '}
+            <Link
+              to="/register"
+              state={{ from: safeReturnPath(location.state?.from, '/') }}
+            >
+              Đăng ký
+            </Link>
+          </p>
         </form>
       </div>
     </main>

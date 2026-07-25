@@ -688,6 +688,8 @@ describe('order service', () => {
       paymentMethod: 'ONLINE',
       idempotencyKey: 'cancel-online-checkout-001',
     }));
+    orderRepository.orders[0].paymentStatus = 'Failed';
+    orderRepository.payments[0].paymentStatus = 'Failed';
     orderRepository.attempts.push(
       { _id: 'attempt-old', orderId: order.id, paymentStatus: 'Failed', amount: 50, currency: 'VND' },
       {
@@ -734,7 +736,7 @@ describe('order service', () => {
     );
   });
 
-  it('keeps paid evidence immutable and creates one refund obligation for customer cancellation', async () => {
+  it('rejects customer cancellation of a paid order per SRS UC-CS-10', async () => {
     const order = await orderService.placeOrder('customer-1', checkoutInput({
       paymentMethod: 'ONLINE',
       idempotencyKey: 'cancel-paid-checkout-001',
@@ -749,27 +751,19 @@ describe('order service', () => {
       currency: 'VND',
     });
 
-    const cancelled = await orderService.cancelOrder('customer-1', order.id, {
-      cancelReason: 'Customer requested cancellation',
-      idempotencyKey: 'cancel-paid-command-001',
-    });
-
-    assert.equal(cancelled.orderStatus, 'Cancelled');
-    assert.equal(cancelled.paymentStatus, 'Paid');
-    assert.equal(orderRepository.payments[0].paymentStatus, 'Paid');
-    assert.equal(orderRepository.attempts[0].paymentStatus, 'Paid');
-    assert.equal(orderRepository.refunds.length, 1);
-    assert.equal(orderRepository.refunds[0].obligationType, 'PAYMENT_REVERSAL');
-    assert.equal(orderRepository.refunds[0].paymentAttemptId, 'attempt-paid');
-    assert.equal(orderRepository.refundRequests.length, 1);
-    assert.equal(
-      orderRepository.refundRequests[0].obligationKey,
-      'PAYMENT_REVERSAL:attempt-paid',
+    await assert.rejects(
+      () => orderService.cancelOrder('customer-1', order.id, {
+        cancelReason: 'Customer requested cancellation',
+        idempotencyKey: 'cancel-paid-command-001',
+      }),
+      (error) => {
+        assert.equal(error.statusCode, 409);
+        assert.match(error.message, /Unpaid, Failed, or Cancelled/);
+        return true;
+      }
     );
-    assert.equal(
-      orderRepository.refunds[0].returnRefundRequestId,
-      orderRepository.refundRequests[0]._id,
-    );
+    assert.equal(orderRepository.orders[0].orderStatus, 'Pending');
+    assert.equal(orderRepository.refunds.length, 0);
   });
 
   it('generates unique order codes when orders are placed in the same millisecond', async () => {

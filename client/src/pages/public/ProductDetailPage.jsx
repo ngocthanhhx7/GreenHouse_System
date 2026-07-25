@@ -94,7 +94,11 @@ export default function ProductDetailPage() {
                 {isOutOfStock ? 'Tạm hết hàng' : 'Thêm vào giỏ hàng'}
               </button>
             ) : (
-              <Link className="btn btn-success me-2" to="/login">
+              <Link
+                className="btn btn-success me-2"
+                to="/login"
+                state={{ from: `/products/${id}` }}
+              >
                 Đăng nhập để mua
               </Link>
             )}

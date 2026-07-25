@@ -8,9 +8,9 @@ const DISCOVERY_LINKS = [
 ];
 
 const SUPPORT_LINKS = [
-  { to: '/support', label: 'Yêu cầu hỗ trợ' },
-  { to: '/profile', label: 'Hồ sơ cá nhân' },
-  { to: '/notifications', label: 'Thông báo' },
+  { to: '/contact#contact-form', label: 'Liên hệ hỗ trợ' },
+  { to: '/#quy-trinh-mua-hang', label: 'Quy trình mua hàng' },
+  { to: '/login', label: 'Đăng nhập tài khoản' },
 ];
 
 export default function Footer() {

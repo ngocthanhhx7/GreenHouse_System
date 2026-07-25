@@ -24,6 +24,7 @@ const Notification = require('../models/notification.model');
 const AuditLog = require('../models/auditLog.model');
 const UserAddress = require('../models/userAddress.model');
 const { DEMO_IMAGE_MANIFEST } = require('../demo-data/demoImageManifest');
+const { buildProductSearchText } = require('../utils/catalogNormalization');
 const { normalizeNotificationType, sanitizeDisplayValues } = require('../utils/notificationContract');
 
 const DEMO_PASSWORD = 'GreenHome@123';
@@ -408,6 +409,7 @@ async function upsertProducts(categoryMap) {
           price: product.price,
           unit: product.unit,
           categoryId: categoryMap[product.categoryName]._id,
+          searchTextNormalized: buildProductSearchText(product),
           status: 'Active',
         },
       },
@@ -625,20 +627,32 @@ async function upsertProductReviews(userMap, orderMap, productMap) {
     const order = orderMap[reviewSpec.orderCode];
     const product = productMap[reviewSpec.productName];
     if (!order || !product) continue;
-    const review = await ProductReview.findOneAndUpdate(
-      { customerId: customer._id, orderId: order._id, productId: product._id },
+    const orderDetail = await OrderDetail.findOne({ orderId: order._id, productId: product._id });
+    if (!orderDetail) continue;
+    const reviewIdentity = { customerId: customer._id, productId: product._id };
+    const now = new Date();
+    await ProductReview.collection.updateOne(
+      reviewIdentity,
       {
         $set: {
           customerId: customer._id,
           orderId: order._id,
+          orderDetailId: orderDetail._id,
           productId: product._id,
           rating: reviewSpec.rating,
           content: reviewSpec.content,
+          publicationStatus: 'Published',
+          moderationStatus: 'Allowed',
+          moderationReason: '',
+          version: 1,
           status: 'Visible',
+          updatedAt: now,
         },
+        $setOnInsert: { createdAt: now },
       },
-      { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
+      { upsert: true }
     );
+    const review = await ProductReview.findOne(reviewIdentity);
     reviews.push(review);
   }
 
@@ -706,26 +720,36 @@ async function upsertAuditLogs(userMap) {
 
   for (const auditSpec of DEMO_AUDIT_SPECS) {
     const user = userMap[auditSpec.roleName];
-    const auditLog = await AuditLog.findOneAndUpdate(
+    const targetId = auditSpec.targetId || 'unknown';
+    const auditId = `demo-seed:${auditSpec.roleName}:${auditSpec.action}:${targetId}`;
+    await AuditLog.collection.updateOne(
+      { auditId },
       {
-        userId: user._id,
-        action: auditSpec.action,
-        targetId: auditSpec.targetId || '',
-      },
-      {
-        $set: {
+        $setOnInsert: {
+          auditId,
+          actorType: 'User',
+          actorId: String(user._id),
+          actorRole: auditSpec.roleName,
+          source: 'DemoSeed',
           userId: user._id,
           action: auditSpec.action,
+          targetType: auditSpec.targetEntity,
           targetEntity: auditSpec.targetEntity,
-          targetId: auditSpec.targetId || '',
+          targetId,
+          outcome: 'Success',
+          businessEventId: auditId,
+          correlationId: auditId,
+          eventId: auditId,
+          reasonCode: 'DEMO_SEED',
+          reason: auditSpec.description,
           description: auditSpec.description,
-          ip: '127.0.0.1',
-          userAgent: 'GreenHome demo seed',
+          safeFacts: { source: 'demo-seed' },
           timestamp: new Date(),
         },
       },
-      { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
+      { upsert: true }
     );
+    const auditLog = await AuditLog.findOne({ auditId });
     auditLogs.push(auditLog);
   }
 

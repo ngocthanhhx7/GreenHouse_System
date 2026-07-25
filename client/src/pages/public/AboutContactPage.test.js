@@ -32,6 +32,17 @@ describe('contact page storefront design contract', () => {
     assert.match(contactPage, /https:\/\/maps\.app\.goo\.gl\/DUDu37Cr5h13RsqFA/);
     assert.match(contactPage, /contact-map-panel/);
     assert.match(contactPage, /Vị trí GreenHome Kitchen tại Hà Nội/);
+    assert.match(contactPage, /href="#contact-form"/);
+    assert.doesNotMatch(contactPage, /to="\/support"/);
     assert.doesNotMatch(contactPage, /Support Request|Store Locator|Contact Us/);
+  });
+
+  it('submits through the contact API and only reports success after it resolves', () => {
+    assert.match(contactPage, /import\s+\{\s*contactService\s*\}\s+from\s+'..\/..\/services\/contactService\.js'/);
+    assert.match(contactPage, /async function handleSubmit/);
+    assert.match(contactPage, /await contactService\.submit\(form\)/);
+    assert.match(contactPage, /id="contact-form"/);
+    assert.match(contactPage, /disabled=\{submitting\}/);
+    assert.match(contactPage, /contact-error/);
   });
 });

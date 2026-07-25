@@ -17,6 +17,7 @@ export default function ProductCard({ product }) {
   const [error, setError] = useState('');
   const [imageError, setImageError] = useState(false);
   const cartCommandRetries = useRef(createCartCommandRetryStore());
+  const productId = product.id || product._id;
   const imageUrl = resolveMediaUrl(product.imageUrls?.[0]);
   const isOutOfStock = product.availabilityStatus === 'OutOfStock';
 
@@ -27,7 +28,7 @@ export default function ProductCard({ product }) {
     event.stopPropagation();
 
     if (!user) {
-      navigate('/login');
+      navigate('/login', { state: { from: `/products/${productId}` } });
       return;
     }
 
@@ -42,14 +43,14 @@ export default function ProductCard({ product }) {
     setError('');
     try {
       await runCartMutation((currentCart) => {
-        const command = cartCommandRetries.current.acquire(`add:${product.id || product._id}`, {
-          productId: product.id || product._id,
+        const command = cartCommandRetries.current.acquire(`add:${productId}`, {
+          productId,
           quantity: 1,
           expectedVersion: Number(currentCart.version || 0),
         });
         return cartService.addItem(command.facts, { idempotencyKey: command.idempotencyKey })
           .then((result) => {
-            cartCommandRetries.current.confirm(`add:${product.id || product._id}`, command);
+            cartCommandRetries.current.confirm(`add:${productId}`, command);
             return result;
           });
       });
@@ -96,7 +97,7 @@ export default function ProductCard({ product }) {
         </span>
         <div className="product-footer">
           <strong className="product-price">{formatCurrency(product.price)}</strong>
-          <Link className="btn-detail-link" to={`/products/${product.id || product._id}`}>
+          <Link className="btn-detail-link" to={`/products/${productId}`}>
             Xem chi tiết
           </Link>
         </div>

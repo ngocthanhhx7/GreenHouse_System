@@ -64,9 +64,10 @@ describe('SL-006 UI and client contract acceptance', () => {
     const card = readClientSource('components/product/ProductCard.jsx');
     const detail = readClientSource('pages/public/ProductDetailPage.jsx');
 
-    assert.match(card, /if \(!user\)[\s\S]*?navigate\('\/login'\)/);
+    assert.match(card, /if \(!user\)[\s\S]*?navigate\('\/login',\s*\{\s*state:\s*\{\s*from:/);
     assert.match(detail, /user\?\.role === 'Customer'/);
     assert.match(detail, /to="\/login"/);
+    assert.match(detail, /state=\{\{\s*from:/);
   });
 
   it('AT-116/117/119 sends a Cart command idempotency key and expected version exactly once', async () => {

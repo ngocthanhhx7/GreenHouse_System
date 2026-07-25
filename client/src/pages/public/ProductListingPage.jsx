@@ -55,7 +55,7 @@ export default function ProductListingPage() {
 
   useEffect(() => {
     categoryService.listCategories().then(setCategories).catch(() => setCategories([]));
-    loadProducts({
+    const nextFilters = {
       keyword: searchParams.get('keyword') || '',
       categoryId: searchParams.get('categoryId') || '',
       minPrice: '',
@@ -63,7 +63,9 @@ export default function ProductListingPage() {
       availability: '',
       page: 1,
       pageSize: 12,
-    });
+    };
+    setFilters(nextFilters);
+    loadProducts(nextFilters);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 

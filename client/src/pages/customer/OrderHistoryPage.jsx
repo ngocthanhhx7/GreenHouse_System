@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 
+import OrderProgress from '../../components/order/OrderProgress.jsx';
 import { orderService } from '../../services/orderService.js';
 import { formatCurrency, translateOrderStatus, translatePaymentMethod, translatePaymentStatus } from '../../utils/formatters.js';
 
@@ -30,6 +31,7 @@ export default function OrderHistoryPage() {
               <th>Tổng tiền</th>
               <th>Thanh toán</th>
               <th>Trạng thái</th>
+              <th>Tiến trình giao hàng</th>
               <th></th>
             </tr>
           </thead>
@@ -40,6 +42,7 @@ export default function OrderHistoryPage() {
                 <td>{formatCurrency(order.totalAmount)}</td>
                 <td>{translatePaymentMethod(order.paymentMethod)} / {translatePaymentStatus(order.paymentStatus)}</td>
                 <td><span className="status-pill">{translateOrderStatus(order.orderStatus)}</span></td>
+                <td><OrderProgress status={order.orderStatus} compact /></td>
                 <td><Link to={`/orders/${order.id}`}>Xem chi tiết</Link></td>
               </tr>
             ))}
