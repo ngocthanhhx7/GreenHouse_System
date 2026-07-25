@@ -50,6 +50,7 @@ describe('SL-004 persistence contracts', () => {
     const incidentModel = loadModel('deliveryIncident.model.js');
     assert.ok(enumValues(eventModel, 'eventType').includes('ATTEMPT_FAILED'));
     assert.ok(enumValues(eventModel, 'eventType').includes('CORRECTION'));
+    assert.ok(eventModel.schema.path('evidenceReferences'));
     assert.ok(hasUniqueIndex(eventModel, 'shipment_event_key_unique'));
     assert.ok(hasUniqueIndex(destinationModel, 'shipment_destination_version_unique'));
     assert.deepEqual(enumValues(incidentModel, 'incidentType'), ['ReturnedToShop', 'Lost', 'Damaged']);

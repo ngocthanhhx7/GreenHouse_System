@@ -23,6 +23,15 @@ const codEvidenceSchema = new mongoose.Schema(
     collectionTiming: { type: String, enum: ['AT_DELIVERY', 'AFTER_DELIVERY', null], default: null },
     occurredAt: { type: Date, required: true },
     evidenceReference: { type: String, required: true, trim: true, maxlength: 256 },
+    evidenceReferences: {
+      type: [String],
+      default: [],
+      immutable: true,
+      validate: {
+        validator(value) { return Array.isArray(value) && value.length <= 5; },
+        message: 'A maximum of 5 operational evidence images is allowed',
+      },
+    },
     providerMessageId: { type: String, default: '', trim: true, maxlength: 160 },
   },
   { timestamps: true, strict: true }

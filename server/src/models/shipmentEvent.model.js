@@ -24,6 +24,15 @@ const shipmentEventSchema = new mongoose.Schema(
     occurredAt: { type: Date, required: true, immutable: true },
     recordedAt: { type: Date, required: true, default: Date.now, immutable: true },
     evidenceReference: { type: String, required: true, trim: true, maxlength: 256, immutable: true },
+    evidenceReferences: {
+      type: [String],
+      default: [],
+      immutable: true,
+      validate: {
+        validator(value) { return Array.isArray(value) && value.length <= 5; },
+        message: 'A maximum of 5 operational evidence images is allowed',
+      },
+    },
     actorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null, immutable: true },
     replacesEventId: { type: mongoose.Schema.Types.ObjectId, ref: 'ShipmentEvent', default: null, immutable: true },
     reason: { type: String, default: '', trim: true, maxlength: 1000, immutable: true },
