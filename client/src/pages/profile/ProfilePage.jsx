@@ -4,6 +4,7 @@ import useAuth from '../../hooks/useAuth.js';
 import { resolveMediaUrl } from '../../services/apiClient.js';
 import { profileService } from '../../services/profileService.js';
 import { translateRole } from '../../utils/formatters.js';
+import { translateApiError } from '../../utils/errorMessages.js';
 
 const EMPTY_ADDRESS = {
   label: '', receiverName: '', phoneNumber: '', province: '', district: '', ward: '', addressLine: '', isDefault: false,
@@ -48,7 +49,7 @@ export default function ProfilePage() {
       });
       setAddresses(addressResult.items || []);
     } catch (requestError) {
-      setError(requestError.message);
+      setError(translateApiError(requestError));
     } finally {
       setLoading(false);
     }
@@ -74,7 +75,7 @@ export default function ProfilePage() {
 
   function showError(requestError) {
     setMessage('');
-    setError(requestError.message);
+    setError(translateApiError(requestError));
   }
 
   async function submitProfile(event) {

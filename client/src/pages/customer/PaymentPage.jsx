@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 
 import { paymentService } from '../../services/paymentService.js';
 import { formatCurrency, translatePaymentStatus } from '../../utils/formatters.js';
+import { translateApiError } from '../../utils/errorMessages.js';
 
 export default function PaymentPage() {
   const { id } = useParams();
@@ -10,7 +11,7 @@ export default function PaymentPage() {
   const [error, setError] = useState('');
 
   useEffect(() => {
-    paymentService.createOnlinePayment(id).then(setPayment).catch((err) => setError(err.message));
+    paymentService.createOnlinePayment(id).then(setPayment).catch((err) => setError(translateApiError(err)));
   }, [id]);
 
   return (

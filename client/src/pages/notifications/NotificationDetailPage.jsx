@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 
 import { notificationService } from '../../services/notificationService.js';
 import { translateNotificationType } from '../../utils/notification.js';
+import { translateApiError } from '../../utils/errorMessages.js';
 
 function formatDate(value) {
   if (!value) return '-';
@@ -33,7 +34,7 @@ export default function NotificationDetailPage() {
           if (active) setTargetUnavailable(true);
         }
       } catch (requestError) {
-        if (active) setError(requestError.message);
+        if (active) setError(translateApiError(requestError));
       } finally {
         if (active) setLoading(false);
       }
@@ -48,7 +49,7 @@ export default function NotificationDetailPage() {
       await notificationService.archiveNotification(id);
       navigate('/notifications', { replace: true });
     } catch (requestError) {
-      setError(requestError.message);
+      setError(translateApiError(requestError));
     }
   }
 

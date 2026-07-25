@@ -6,6 +6,7 @@ import { useCart } from '../../contexts/CartContext.jsx';
 import { createCheckoutIdempotencyKey, orderService } from '../../services/orderService.js';
 import { profileService } from '../../services/profileService.js';
 import { formatCurrency } from '../../utils/formatters.js';
+import { translateApiError } from '../../utils/errorMessages.js';
 
 const EMPTY_ADDRESS = {
   label: 'Địa chỉ mới', receiverName: '', phoneNumber: '', province: '', district: '', ward: '', addressLine: '', isDefault: false,
@@ -88,7 +89,7 @@ export default function CheckoutPage() {
           isDefault: savedAddresses.length === 0,
         }));
       } catch (requestError) {
-        if (active) setError(requestError.message);
+        if (active) setError(translateApiError(requestError));
       } finally {
         if (active) setLoading(false);
       }
@@ -162,7 +163,7 @@ export default function CheckoutPage() {
     } catch (requestError) {
       const nextFieldErrors = toFieldErrors(requestError.errors, requestError.errorCode);
       setFieldErrors(nextFieldErrors);
-      setError(Object.keys(nextFieldErrors).length ? '' : requestError.message);
+      setError(Object.keys(nextFieldErrors).length ? '' : translateApiError(requestError));
       if (requestError.data?.cart) setCart(requestError.data.cart);
     } finally {
       submittingRef.current = false;

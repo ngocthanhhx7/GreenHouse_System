@@ -5,6 +5,7 @@ import ProductCard from '../../components/product/ProductCard.jsx';
 import ProductFilter from '../../components/product/ProductFilter.jsx';
 import { categoryService } from '../../services/categoryService.js';
 import { productService } from '../../services/productService.js';
+import { translateApiError } from '../../utils/errorMessages.js';
 
 export default function ProductListingPage() {
   const [searchParams] = useSearchParams();
@@ -43,7 +44,7 @@ export default function ProductListingPage() {
         totalPages: result.totalPages || 0,
       });
     } catch (err) {
-      setError(err.message);
+      setError(translateApiError(err));
       setFieldErrors((err.errors || []).reduce((current, item) => ({
         ...current,
         [item.field]: item.message,

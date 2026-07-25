@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import AuthenticatedEvidenceList from '../../components/returnRefund/AuthenticatedEvidenceList.jsx';
 import { returnRefundService } from '../../services/returnRefundService.js';
 import { translateRequestStatus } from '../../utils/formatters.js';
+import { translateApiError } from '../../utils/errorMessages.js';
 
 function formatDate(value) {
   return value ? new Date(value).toLocaleString('vi-VN') : '-';
@@ -21,7 +22,7 @@ export default function ReturnRefundPage() {
       const result = await returnRefundService.listMyRequests();
       setItems(result.items || []);
     } catch (err) {
-      setError(err.message);
+      setError(translateApiError(err));
     }
   }
 
@@ -42,7 +43,7 @@ export default function ReturnRefundPage() {
       await loadRequests();
       setMessage(successMessage);
     } catch (err) {
-      setError(err.message);
+      setError(translateApiError(err));
     } finally {
       setBusyId('');
     }

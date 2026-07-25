@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import { notificationService } from '../../services/notificationService.js';
+import { translateApiError } from '../../utils/errorMessages.js';
 
 function formatDate(value) {
   if (!value) return '-';
@@ -32,7 +33,7 @@ export default function NotificationPage() {
       setUnreadCount(result.unreadCount || 0);
       setNextCursor(result.nextCursor || null);
     } catch (requestError) {
-      setError(requestError.message);
+      setError(translateApiError(requestError));
     } finally {
       setLoading(false);
       setLoadingMore(false);
@@ -49,7 +50,7 @@ export default function NotificationPage() {
       await notificationService.archiveNotification(id);
       setItems((current) => current.filter((item) => item.id !== id));
     } catch (requestError) {
-      setError(requestError.message);
+      setError(translateApiError(requestError));
     }
   }
 
