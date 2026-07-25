@@ -68,7 +68,7 @@ describe('category service', () => {
   it('rejects duplicate category names', async () => {
     await assert.rejects(
       () => categoryService.createCategory({ name: 'Cookware', description: '', status: 'Active' }, { id: 'admin-1' }),
-      /Category name already exists/
+      /Tên danh mục đã tồn tại/
     );
   });
 });

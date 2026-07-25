@@ -92,7 +92,7 @@ export default function CategoryManagementPage() {
       {error && <div className="alert alert-danger">{error}</div>}
       {activeProductIds.length > 0 && (
         <div className="alert alert-warning">
-          <strong>Active Products đang chặn thao tác:</strong>
+          <strong>Sản phẩm đang hoạt động ngăn chặn thao tác này:</strong>
           <ul className="mb-0">
             {activeProducts.map((product) => (
               <li key={product.id}>{product.name} ({product.sku})</li>
