@@ -270,6 +270,26 @@ Warehouse and Carrier exchange lifecycle. Nguyễn Ngọc Thành performs the
 separate post-merge integration review and closure; that review does not
 transfer original module authorship away from Nhật.
 
+## Ownership Addendum 2026-07-26 - Customer receipt confirmation
+
+Nhat owns the Customer-delivery receipt and after-sales boundary under SL-004.
+The latest rule supersedes the older shorthand that treated Staff/Carrier
+physical `Delivered` evidence as Customer completion:
+
+- `Order.orderStatus=Delivered` remains physical evidence only.
+- The owning Customer alone records either `Received` or `Not received`.
+- Only `Received` moves the Customer projection to `Completed` and snapshots
+  the exact five-day Exchange/Return deadline.
+- `Not received` is append-only dispute evidence, stays in the in-transit
+  Customer projection, and blocks Review, Exchange, and Return.
+- The migration is index/technical-guard compatibility only. It never infers a
+  Customer receipt from a legacy Delivered Order.
+
+The Customer Order/Notification projection seam is consumed by Huy; Audit and
+final integration remain Thanh's seam. The detailed approved design and
+implementation record are `docs/CUSTOMER_DELIVERY_RECEIPT_DESIGN.md` and
+`docs/CUSTOMER_DELIVERY_RECEIPT_IMPLEMENTATION_PLAN.md`.
+
 ## Ownership Addendum 2026-07-24 - SL-004 Fulfillment and Delivery Evidence
 
 Nguyễn Hữu Anh Nhật remains the primary implementation owner for SL-004. The

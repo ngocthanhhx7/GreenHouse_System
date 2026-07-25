@@ -117,6 +117,44 @@ Supplemental verification result: focused server `41/41`, focused client
 with 158 transformed modules. `git diff --check` is recorded separately in the
 handoff review. The known client chunk-size warning is unchanged.
 
+## Addendum 2026-07-26 - Customer receipt completion boundary
+
+### Release decision for this addendum
+
+- Owner: Nguyen Huu Anh Nhat.
+- Scope: Customer receipt confirmation, Customer order projection, direct
+  after-sales receipt gates, and index-only rollout support.
+- Rule: physical `Delivered` is not Customer `Completed`; only Customer
+  `Received` starts the exact five-day after-sales snapshots.
+- No live payment, target database, or production deployment is claimed.
+
+### Factual local evidence recorded so far
+
+| Gate | Result |
+|---|---|
+| Receipt model/schema | 11 passing assertions |
+| Transactional service variants | 46 and 32 passing assertions |
+| API/projection | 90 passing assertions |
+| Direct Review/Exchange/Return receipt gates | 161 passing assertions |
+| Receipt migration | RED 0/6, then GREEN 6/6 |
+| Current combined server receipt-targeted command | 270/270 |
+| Client receipt UI | Pending isolated client gate; no count estimated |
+| Combined server/client regression and production build | Pending final integration; no result implied |
+
+### Migration audit
+
+`migrateCustomerDeliveryReceipt.js` has explicit dry-run, apply, and verify
+modes. It reads receipt/shipment technical state, fails closed for duplicate
+receipt identities, unsafe guard types, or index-definition drift, and creates
+only the five exact `CustomerDeliveryReceipt` indexes. It does not backfill or
+rewrite legacy `Delivered` Orders, does not create `Received` rows, and reports
+only safe counts. A second apply performs zero business writes by contract.
+
+The target deployment remains responsible for database identity/backup,
+dry-run/apply/verify execution, a recorded second zero-write apply, and
+authenticated Customer and Staff walkthroughs. The existing Vite bundle warning
+is not restated as evidence until the current branch's production build is run.
+
 ## Main integration gate 2026-07-25
 
 Thành merged the reviewed Nhật COD branch with `--no-ff`, preserved the newer

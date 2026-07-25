@@ -156,6 +156,30 @@ Current local evidence is summarized in `SL-004_HANDOFF.md` and
 `SL-004_RELEASE_AUDIT.md`. It does not claim provider verification, staging
 actor acceptance, deployment, or a production migration.
 
+## 9. Addendum 2026-07-26 - Customer delivery receipt (supersedes physical-completion shorthand)
+
+| Requirement | Code boundary | Test/migration evidence |
+|---|---|---|
+| Physical delivery is not Customer completion | `Order.orderStatus=Delivered` remains physical; `customerDeliveryReceipt.model.js` is a separate append-only aggregate | Model/schema contract: 11 passing assertions |
+| Customer has exactly two initial choices | Customer order detail receives authoritative `availableDeliveryActions` and posts one idempotent receipt command | API/projection contract: 90 passing assertions; final client count recorded only after its isolated gate |
+| Only Customer receipt starts after-sales time | `customerDeliveryReceipt.service.js` snapshots both deadlines at `Received`; exchange/return/review share the receipt policy | Service variants: 46 and 32 passing assertions; direct after-sales gates: 161 passing assertions |
+| Non-receipt remains investigable without fake completion | Immutable `NOT_RECEIVED` row, no Customer `Completed`, and direct after-sales gates return typed refusal | Same service and after-sales evidence above |
+| Legacy Delivered records remain awaiting confirmation | `migrateCustomerDeliveryReceipt.js` creates only receipt indexes and verifies Shipment guard compatibility; it writes no receipt row | Migration RED 0/6 then GREEN 6/6; dry-run and repeat-apply contracts assert zero business writes |
+| Exact technical indexes cannot silently drift | Migration preflight rejects duplicate terminal/initial receipt identities, unsafe guard types, and same-key index semantic conflicts | `migrateCustomerDeliveryReceipt.test.js` |
+
+Operational commands are deliberately explicit:
+
+```powershell
+cd server
+npm run migrate:customer-delivery-receipt
+npm run migrate:customer-delivery-receipt:apply
+npm run verify:customer-delivery-receipt
+```
+
+The first command is dry-run. Apply and verify must be executed against the
+named target database by the deployment owner; no production or target run is
+claimed in this local evidence.
+
 ## 8. Demo-only Staff delivery/COD reconciliation extension (2026-07-25)
 
 | Invariant | Code boundary | Test evidence |

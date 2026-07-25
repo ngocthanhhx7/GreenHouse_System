@@ -84,6 +84,39 @@ No target or production database was mutated.
 5. Perform authenticated Staff/Warehouse/Customer and signed-Carrier walkthroughs.
 6. Verify target DomainOutbox worker/notification configuration.
 
+## Addendum 2026-07-26 - Customer delivery receipt handoff
+
+The Customer-facing completion boundary is now separate from physical delivery:
+
+- Staff/Carrier `Delivered` is physical evidence only; it must not move a
+  Customer order to `Completed` or open after-sales.
+- The Customer detail flow has two initial choices, `Da nhan duoc hang` and
+  `Chua nhan duoc hang`. A non-receipt requires a reason; a later receipt can
+  supersede it while preserving dispute history.
+- A Customer `Received` decision starts the immutable five-day Exchange/Return
+  snapshots. Direct Review, Exchange, and Return services enforce the same
+  receipt gate, so hidden UI cannot bypass it.
+- Receipt migration commands are `migrate:customer-delivery-receipt`,
+  `migrate:customer-delivery-receipt:apply`, and
+  `verify:customer-delivery-receipt`. They are technical index/guard checks
+  only: dry-run writes nothing; repeat apply makes zero business writes; legacy
+  Delivered Orders are never backfilled as Received.
+
+Local evidence known at this handoff: model/schema 11 passing assertions,
+service variants 46 and 32, API/projection 90, after-sales 161, and migration
+RED 0/6 to GREEN 6/6. The isolated client task's final count and the combined
+full-suite/build results are pending final integration and must be recorded
+there, not guessed here.
+
+The current combined server receipt-targeted command passed 270/270. It is a
+local targeted gate only, not a claim that the final full server/client/build
+release gates have run.
+
+Deployment owner must identify the target database, take the normal backup,
+run dry-run/apply/verify, record a zero-business-write second apply, and then
+perform authenticated Customer/Staff walkthroughs. No target migration,
+provider, deployment, or production claim is made.
+
 ## Addendum 2026-07-25 - Demo/non-production Staff COD reconciliation
 
 - Staff Order Detail now uses the protected operational evidence uploader for
