@@ -176,6 +176,47 @@ describe('SL-009 canonical Notification DomainOutbox consumer', () => {
     assert.equal(emailRows.length, 2);
   });
 
+  it('AT-DR-010 fails closed when either owner-scoped delivery event reaches DomainOutbox as a Customer broadcast', async () => {
+    const notificationRows = [];
+    let broadcastLookups = 0;
+    const publisher = createNotificationService({
+      notificationRepository: {
+        async listActiveUsersByRole() {
+          broadcastLookups += 1;
+          return [
+            { _id: 'customer-1', email: 'customer-1@example.com', role: 'Customer', status: 'Active' },
+            { _id: 'customer-2', email: 'customer-2@example.com', role: 'Customer', status: 'Active' },
+          ];
+        },
+        async createTuple(data) {
+          const row = { _id: `notification-${notificationRows.length + 1}`, ...data };
+          notificationRows.push(row);
+          return row;
+        },
+      },
+      emailOutboxService: { async enqueue(data) { return data; } },
+    });
+    const rows = ['ORDER_COMPLETED_BY_CUSTOMER', 'CUSTOMER_DELIVERY_DISPUTED'].map((type) => ({
+      _id: `row-${type}`,
+      identityKey: `customer-delivery-receipt:${type}:broadcast`,
+      eventType: type,
+      payload: {
+        businessEventId: `customer-delivery-receipt:${type}:broadcast`,
+        type,
+        recipientRole: 'Customer',
+        target: { collection: 'Order', id: 'order-1' },
+        displayValues: { orderCode: 'ORD-001' },
+      },
+    }));
+    const test = harness(rows, (event) => publisher.publishDomainEvent(event));
+
+    assert.deepEqual(await test.service.drainPostCommitWork(), {
+      claimed: 2, completed: 0, failed: 2,
+    });
+    assert.equal(broadcastLookups, 0);
+    assert.deepEqual(notificationRows, []);
+  });
+
   it('never persists raw publisher errors and leaves the fifth failed claim terminal', async () => {
     const row = { ...canonicalRows()[0], attemptCount: 4, status: 'Failed' };
     const test = harness([row], async () => {

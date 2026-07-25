@@ -267,6 +267,45 @@ describe('SL-009 Notification service', () => {
     assert.deepEqual(unintended, []);
   });
 
+  it('AT-DR-009 rejects Customer role broadcasts for owner-scoped delivery events before fan-out', async () => {
+    const rows = [];
+    let broadcastLookups = 0;
+    const service = createNotificationService({
+      notificationRepository: {
+        async listActiveUsersByRole() {
+          broadcastLookups += 1;
+          return [
+            { _id: 'customer-1', email: 'customer-1@example.com', role: 'Customer', status: 'Active' },
+            { _id: 'customer-2', email: 'customer-2@example.com', role: 'Customer', status: 'Active' },
+          ];
+        },
+        async createTuple(data) {
+          const row = { _id: `notification-${rows.length + 1}`, ...data };
+          rows.push(row);
+          return row;
+        },
+      },
+      emailOutboxService: { async enqueue(data) { return data; } },
+    });
+
+    for (const type of ['ORDER_COMPLETED_BY_CUSTOMER', 'CUSTOMER_DELIVERY_DISPUTED']) {
+      await assert.rejects(
+        () => service.publishDomainEvent({
+          businessEventId: `customer-delivery-receipt:${type}:broadcast`,
+          type,
+          recipientRole: 'Customer',
+          target: { collection: 'Order', id: 'order-1' },
+          displayValues: { orderCode: 'ORD-001' },
+        }),
+        (error) => error.code === 'NOTIFICATION_DIRECT_RECIPIENT_REQUIRED'
+          && error.message === 'Notification event requires a direct recipient',
+      );
+    }
+
+    assert.equal(broadcastLookups, 0);
+    assert.deepEqual(rows, []);
+  });
+
   it('AT-181 fails closed for wrong recipient roles and keeps disabled Customers out of InApp', async () => {
     const scenarios = [
       [{ _id: 'staff-1', email: 'staff@example.com', role: 'Staff' }, 'ORDER_SHIPPED', []],
