@@ -90,8 +90,23 @@ function toOrderDetail(order, details = []) {
   return { ...toOrderSummary(order), details };
 }
 
-function toStockExportRequest(request) {
-  return { id: String(request._id), orderId: String(request.orderId), requestedBy: String(request.requestedBy), status: request.status, note: request.note || '', createdAt: request.createdAt };
+function toStockExportRequest(request, details = []) {
+  return {
+    id: String(request._id),
+    orderId: String(request.orderId),
+    cycleId: request.cycleId ? String(request.cycleId) : null,
+    requestKind: request.requestKind,
+    requestedBy: String(request.requestedBy),
+    status: request.status,
+    note: request.note || '',
+    createdAt: request.createdAt,
+    items: details.map((detail) => ({
+      orderDetailId: String(detail._id),
+      productId: String(detail.productId),
+      productNameSnapshot: detail.productNameSnapshot,
+      quantity: Number(detail.quantity),
+    })),
+  };
 }
 
 function toInvoiceResponse(invoice, order) {
@@ -172,6 +187,12 @@ function createModelOrderRepository() {
       return withOptionalSession(
         StockExportRequest.findOne({ orderId, status: { $in: ['Pending', 'Processing', 'Failed'] } }),
         session
+      ).lean();
+    },
+    async findInitialStockExportRequest(orderId, session) {
+      return withOptionalSession(
+        StockExportRequest.findOne({ orderId, requestKind: 'Initial' }),
+        session,
       ).lean();
     },
     async cancelOpenStockExportRequest(orderId, data, session) {
@@ -270,29 +291,66 @@ function createStaffOrderService({
   }
 
   async function assertExactReservation(details, session) {
-    if (!orderRepository.findInventoryByProductId) return;
-    if (orderRepository.listReservationsByOrder) {
-      const reservations = await orderRepository.listReservationsByOrder(details[0]?.orderId, session);
-      const ownedByDetail = new Map((reservations || []).map((reservation) => [String(reservation.orderDetailId), Number(reservation.quantity)]));
-      for (const detail of details) {
-        if ((ownedByDetail.get(String(detail._id)) || 0) < Number(detail.quantity || 0)) {
-          throw new ApiError(409, 'Order exact reservation is no longer intact');
-        }
-      }
-      return;
+    if (!details.length || !orderRepository.listReservationsByOrder) {
+      throw new ApiError(
+        409,
+        'Đơn chưa có dữ liệu giữ hàng đầy đủ.',
+        [],
+        'ORDER_CONFIRM_RESERVATION_MISSING',
+      );
     }
+
+    const reservations = await orderRepository.listReservationsByOrder(details[0].orderId, session);
+    const byDetail = new Map();
+    for (const reservation of reservations || []) {
+      const key = String(reservation.orderDetailId);
+      const rows = byDetail.get(key) || [];
+      rows.push(reservation);
+      byDetail.set(key, rows);
+    }
+
     const requiredByProduct = new Map();
     for (const detail of details) {
+      const quantity = Number(detail.quantity);
+      const rows = byDetail.get(String(detail._id)) || [];
+      if (
+        rows.length !== 1
+        || String(rows[0].orderId) !== String(detail.orderId)
+        || String(rows[0].productId) !== String(detail.productId)
+        || Number(rows[0].quantity) !== quantity
+        || rows[0].status !== 'Reserved'
+      ) {
+        throw new ApiError(
+          409,
+          'Dữ liệu giữ hàng của đơn không còn đầy đủ.',
+          [],
+          'ORDER_CONFIRM_RESERVATION_MISSING',
+        );
+      }
       const productId = String(detail.productId);
-      requiredByProduct.set(productId, (requiredByProduct.get(productId) || 0) + Number(detail.quantity || 0));
+      requiredByProduct.set(productId, (requiredByProduct.get(productId) || 0) + quantity);
     }
+
+    if (byDetail.size !== details.length) {
+      throw new ApiError(
+        409,
+        'Dữ liệu giữ hàng của đơn không khớp chi tiết đơn.',
+        [],
+        'ORDER_CONFIRM_RESERVATION_MISSING',
+      );
+    }
+
     for (const [productId, quantity] of requiredByProduct) {
       const inventory = await orderRepository.findInventoryByProductId(productId, session);
-      if (!inventory
-        || inventory.inventoryHealth === 'ReconciliationRequired'
-        || Number(inventory.sellableQuantity ?? inventory.stockQuantity ?? 0) < quantity
-        || Number(inventory.reservedQuantity || 0) < quantity) {
-        throw new ApiError(409, 'Order exact reservation is no longer intact');
+      const sellable = Number(inventory?.sellableQuantity ?? inventory?.stockQuantity ?? 0);
+      const reserved = Number(inventory?.reservedQuantity || 0);
+      if (!inventory || inventory.inventoryHealth !== 'Normal' || sellable < quantity || reserved < quantity) {
+        throw new ApiError(
+          409,
+          'Số lượng giữ hàng không còn đủ để xác nhận.',
+          [],
+          'ORDER_CONFIRM_RESERVATION_MISSING',
+        );
       }
     }
   }
@@ -356,17 +414,20 @@ function createStaffOrderService({
 
     async getOrder(orderId) {
       const order = await getOrderOrThrow(orderId);
-      const [details, openStockExportRequest, completedStockExportRequest] = await Promise.all([
+      const [details, initialStockExportRequest, openStockExportRequest, completedStockExportRequest] = await Promise.all([
         orderRepository.listOrderDetails(orderId),
+        orderRepository.findInitialStockExportRequest
+          ? orderRepository.findInitialStockExportRequest(orderId)
+          : null,
         orderRepository.findOpenStockExportRequest ? orderRepository.findOpenStockExportRequest(orderId) : null,
         orderRepository.findCompletedStockExportRequest
           ? orderRepository.findCompletedStockExportRequest(orderId)
           : null,
       ]);
-      const stockExportRequest = openStockExportRequest || completedStockExportRequest;
+      const stockExportRequest = initialStockExportRequest || openStockExportRequest || completedStockExportRequest;
       return {
         ...toOrderDetail(order, details),
-        stockExportRequest: stockExportRequest ? toStockExportRequest(stockExportRequest) : null,
+        stockExportRequest: stockExportRequest ? toStockExportRequest(stockExportRequest, details) : null,
       };
     },
 
@@ -443,7 +504,9 @@ function createStaffOrderService({
       }
       return {
         ...toOrderDetail(result.updated, result.details),
-        stockExportRequest: result.stockExportRequest ? toStockExportRequest(result.stockExportRequest) : null,
+        stockExportRequest: result.stockExportRequest
+          ? toStockExportRequest(result.stockExportRequest, result.details)
+          : null,
         idempotentReplay: Boolean(result.idempotentReplay),
       };
     },

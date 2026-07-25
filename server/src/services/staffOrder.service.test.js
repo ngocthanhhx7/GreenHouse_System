@@ -18,6 +18,14 @@ function createOrderRepository() {
   const details = [
     { _id: 'detail-1', orderId: 'order-1', productId: 'p1', productNameSnapshot: 'Green Pan', productSkuSnapshot: 'PAN-01', unitSnapshot: 'piece', productImageSnapshot: 'pan.jpg', quantity: 2, priceSnapshot: 25, subtotal: 50 },
   ];
+  const reservations = [{
+    _id: 'reservation-1',
+    orderId: 'order-1',
+    orderDetailId: 'detail-1',
+    productId: 'p1',
+    quantity: 2,
+    status: 'Reserved',
+  }];
   const exports = [];
   const cycles = [];
   const payments = [
@@ -32,12 +40,12 @@ function createOrderRepository() {
   const invoices = [];
   let reservedQuantity = 2;
   let releaseCalls = 0;
-  const inventories = [{ productId: 'p1', stockQuantity: 10, reservedQuantity: 2 }];
+  const inventories = [{ productId: 'p1', stockQuantity: 10, reservedQuantity: 2, inventoryHealth: 'Normal' }];
   let cancelExportCalls = 0;
   const confirmationMutationSessions = [];
 
   return {
-    orders, exports, cycles, payments, attempts, refunds, invoices,
+    orders, exports, cycles, payments, attempts, refunds, invoices, reservations,
     get reservedQuantity() { return reservedQuantity; },
     get releaseCalls() { return releaseCalls; },
     get cancelExportCalls() { return cancelExportCalls; },
@@ -46,6 +54,9 @@ function createOrderRepository() {
     async listOrders(query = {}) { return orders.filter((order) => !query.status || order.orderStatus === query.status); },
     async findOrderById(id) { return orders.find((order) => order._id === id) || null; },
     async listOrderDetails(orderId) { return details.filter((detail) => detail.orderId === orderId); },
+    async listReservationsByOrder(orderId) {
+      return reservations.filter((entry) => entry.orderId === orderId && entry.status === 'Reserved');
+    },
     async updateOrder(id, data) { const order = orders.find((entry) => entry._id === id); Object.assign(order, data); return order; },
     async claimStaffConfirmation(id, data, session) {
       const order = orders.find((entry) => entry._id === id && entry.orderStatus === 'Pending');
@@ -70,6 +81,9 @@ function createOrderRepository() {
       return inventories.find((inventory) => inventory.productId === productId) || null;
     },
     async findOpenStockExportRequest(orderId) { return exports.find((entry) => entry.orderId === orderId && ['Pending', 'Approved', 'Processing'].includes(entry.status)) || null; },
+    async findInitialStockExportRequest(orderId) {
+      return exports.find((entry) => entry.orderId === orderId && entry.requestKind === 'Initial') || null;
+    },
     async cancelOpenStockExportRequest(orderId, data) {
       const request = exports.find((entry) => entry.orderId === orderId && ['Pending', 'Approved'].includes(entry.status));
       if (!request) return null;
@@ -214,11 +228,50 @@ describe('staff order service', () => {
 
     await assert.rejects(
       () => service.confirmOrder('staff-1', 'order-1', {}),
-      /full reservation|reservation.*intact/i,
+      (error) => error.statusCode === 409 && error.errorCode === 'ORDER_CONFIRM_RESERVATION_MISSING',
     );
 
     assert.equal(orderRepository.orders[0].orderStatus, 'Pending');
     assert.equal(orderRepository.exports.length, 0);
+  });
+
+  it('rejects an order whose reservation rows do not exactly match its details', async () => {
+    orderRepository.reservations[0].quantity = 1;
+
+    await assert.rejects(
+      () => service.confirmOrder('staff-1', 'order-1', { idempotencyKey: 'staff-confirm-001' }),
+      (error) => error.statusCode === 409 && error.errorCode === 'ORDER_CONFIRM_RESERVATION_MISSING',
+    );
+    assert.equal(orderRepository.orders[0].orderStatus, 'Pending');
+    assert.equal(orderRepository.exports.length, 0);
+  });
+
+  it('rejects an order with duplicate active reservations for one detail', async () => {
+    orderRepository.reservations.push({
+      ...orderRepository.reservations[0],
+      _id: 'reservation-duplicate',
+    });
+
+    await assert.rejects(
+      () => service.confirmOrder('staff-1', 'order-1', { idempotencyKey: 'staff-confirm-001' }),
+      (error) => error.statusCode === 409 && error.errorCode === 'ORDER_CONFIRM_RESERVATION_MISSING',
+    );
+  });
+
+  it('returns exact request metadata and immutable detail items', async () => {
+    const result = await service.confirmOrder('staff-1', 'order-1', {
+      idempotencyKey: 'staff-confirm-001',
+      note: 'Reviewed',
+    });
+
+    assert.equal(result.stockExportRequest.cycleId, 'cycle-1');
+    assert.equal(result.stockExportRequest.requestKind, 'Initial');
+    assert.deepEqual(result.stockExportRequest.items, [{
+      orderDetailId: 'detail-1',
+      productId: 'p1',
+      productNameSnapshot: 'Green Pan',
+      quantity: 2,
+    }]);
   });
 
   it('replays a staff confirmation under the same idempotency key without creating another request', async () => {
