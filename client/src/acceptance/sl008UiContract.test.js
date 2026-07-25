@@ -247,6 +247,23 @@ function createNodeComponentRuntime(scenario) {
       visit(tree);
       return controls;
     },
+    textContent() {
+      const values = [];
+      function visit(node) {
+        if (node === null || node === undefined || typeof node === 'boolean') return;
+        if (typeof node === 'string' || typeof node === 'number') {
+          values.push(String(node));
+          return;
+        }
+        if (Array.isArray(node)) {
+          node.forEach(visit);
+          return;
+        }
+        visit(node.props?.children);
+      }
+      visit(tree);
+      return values.join(' ');
+    },
     invoke(control) {
       const handler = control?.props?.onSubmit || control?.props?.onClick;
       assert.equal(typeof handler, 'function', 'rendered control must expose an event handler');
@@ -401,6 +418,9 @@ async function assertDeferredMutation({
   setup,
   sharedDisabledActions = [],
   refreshMethod,
+  rejection = new Error(`${method} failed`),
+  draftRecovery,
+  fieldErrors = [],
 }) {
   const runtime = await renderRealComponent(componentPath, {
     ...scenario,
@@ -409,6 +429,14 @@ async function assertDeferredMutation({
   if (setup) {
     await setup(runtime);
     await runtime.flush();
+  }
+  if (draftRecovery) {
+    let drafts = runtime.findNodes((node) => node.type === 'textarea' && node.props?.id === draftRecovery.id);
+    assert.equal(drafts.length, 1, `${draftRecovery.id} must render one editable draft`);
+    drafts[0].props.onChange({ target: { value: draftRecovery.staleValue } });
+    await runtime.flush();
+    drafts = runtime.findNodes((node) => node.type === 'textarea' && node.props?.id === draftRecovery.id);
+    assert.equal(drafts[0].props.value, draftRecovery.staleValue);
   }
   let controls = runtime.findControls(controlAction);
   assert.equal(controls.length, 1, `${method} must render exactly one behavioral control`);
@@ -439,7 +467,7 @@ async function assertDeferredMutation({
   const refreshCallsBeforeReject = refreshMethod
     ? runtime.calls.filter((call) => call.method === refreshMethod).length
     : 0;
-  await runtime.settle(method, 'reject', new Error(`${method} failed`));
+  await runtime.settle(method, 'reject', rejection);
   await runtime.flush();
   controls = runtime.findControls(controlAction);
   assert.equal(controls.length, 1, `${method} control must remain rendered after rejection`);
@@ -458,14 +486,34 @@ async function assertDeferredMutation({
     );
   }
   if (refreshMethod) {
-    assert.equal(
-      runtime.calls.filter((call) => call.method === refreshMethod).length,
-      refreshCallsBeforeReject + 1,
+    assert.ok(
+      runtime.calls.filter((call) => call.method === refreshMethod).length > refreshCallsBeforeReject,
       `${method} rejection must refresh ${refreshMethod}() state`,
     );
     const alerts = runtime.findNodes((node) => node.props?.role === 'alert');
     assert.equal(alerts.length, 1, `${method} rejection must remain visible after refresh`);
-    assert.equal(alerts[0].props.children, `${method} failed`);
+    assert.equal(alerts[0].props.children, rejection.message);
+  }
+  if (draftRecovery) {
+    const drafts = runtime.findNodes((node) => node.type === 'textarea' && node.props?.id === draftRecovery.id);
+    assert.equal(drafts.length, 1, `${draftRecovery.id} must remain editable after recovery`);
+    assert.equal(
+      drafts[0].props.value,
+      draftRecovery.refreshedValue,
+      `${method} rejection must discard the stale local draft`,
+    );
+  }
+  for (const message of fieldErrors) {
+    assert.match(runtime.textContent(), new RegExp(message));
+  }
+  if (fieldErrors.length) {
+    controls = runtime.findControls(controlAction);
+    runtime.invoke(controls[0]);
+    await runtime.flush();
+    for (const message of fieldErrors) {
+      assert.doesNotMatch(runtime.textContent(), new RegExp(message));
+    }
+    await runtime.settle(method, 'resolve', {});
   }
 }
 
@@ -891,7 +939,12 @@ describe('SL-008 Review UI integration contract', () => {
         ...centerScenario,
         responses: {
           ...centerScenario.responses,
-          listOwn: { ...centerScenario.responses.listOwn, items: [] },
+          listOwn: {
+            ...centerScenario.responses.listOwn,
+            items: [],
+            total: 0,
+            totalPages: 0,
+          },
         },
       },
       refreshMethod: 'listOwn',
@@ -912,6 +965,18 @@ describe('SL-008 Review UI integration contract', () => {
       setup: openCompletedTab,
       sharedDisabledActions: ['setPublication:Withdrawn'],
       refreshMethod: 'listOwn',
+      rejection: Object.assign(new Error('updateReview failed'), {
+        errors: [
+          { field: 'rating', message: 'Rating is stale' },
+          { field: 'content', message: 'Content is stale' },
+        ],
+      }),
+      draftRecovery: {
+        id: 'edit-content-review-1',
+        staleValue: 'Unsaved stale draft',
+        refreshedValue: 'Safe Review',
+      },
+      fieldErrors: ['Rating is stale', 'Content is stale'],
     });
     await assertDeferredMutation({
       componentPath: 'pages/customer/ReviewManagementPage.jsx',
