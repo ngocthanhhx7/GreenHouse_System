@@ -26,10 +26,19 @@
 - The BSON guard compatibility expansion was observed RED at 7/10, then GREEN
   at 10/10. The portable disposable-Mongo resolver exercised real positive
   Infinity and Decimal128 rows with zero migration mutation.
-- Task 5 client count remains pending the isolated client task's final evidence;
-  this document deliberately does not estimate it.
-- The current combined server receipt-targeted command passed 270/270; it is not
-  a substitute for the final full server/client/build gates.
+- Final local gates: server `npm test` 1194/1194 across 183 suites and client
+  `npm test` 357/357 across 79 suites, both with 0 failed and 0 skipped.
+- Receipt migration passed 10/10 against real MongoDB with 0 skipped; syntax
+  verification covered 36 files; diff, prohibited-file, and secret scans were
+  clean.
+- Vite 6.4.3 production build exited 0 after 169 modules. Its non-blocking
+  JavaScript chunk warning was 745.88 kB (gzip 216.31 kB), above 500 kB.
+- Production dependency audits reported 0 server findings and 3 pre-existing
+  client high findings in `postcss`, `react-router`, and `react-router-dom`;
+  package manifest and lockfile were unchanged.
+- Branch divergence at gate time was 21 commits ahead and 0 behind.
+- Target-database dry-run/apply/verify and authenticated Customer/Staff
+  walkthroughs remain deployment-only; no deployment is claimed.
 
 ### Task 1: Persist append-only Customer receipt decisions
 

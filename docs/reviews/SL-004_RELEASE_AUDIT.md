@@ -140,8 +140,14 @@ handoff review. The known client chunk-size warning is unchanged.
 | Disposable MongoDB 8.2 dry-run | Empty collection list remained `[] -> []` |
 | Receipt guard BSON compatibility | RED 7/10 then GREEN 10/10; real Infinity and Decimal128 rejected with zero mutation |
 | Current combined server receipt-targeted command | 270/270 |
-| Client receipt UI | Pending isolated client gate; no count estimated |
-| Combined server/client regression and production build | Pending final integration; no result implied |
+| Full server regression | `npm test`: 1194/1194 across 183 suites, 0 failed, 0 skipped |
+| Full client regression | `npm test`: 357/357 across 79 suites, 0 failed, 0 skipped |
+| Receipt migration | 10/10 against real MongoDB, 0 skipped |
+| Production build | Vite 6.4.3 exit 0, 169 modules; non-blocking JavaScript chunk warning 745.88 kB (gzip 216.31 kB), above 500 kB |
+| Syntax verification | 36 files |
+| Diff/scope/security scans | Diff, prohibited-file, and secret scans clean |
+| Production dependency audit | Server: 0; client: 3 high in `postcss`, `react-router`, and `react-router-dom`, pre-existing with package manifest and lockfile unchanged |
+| Branch divergence at gate time | 21 commits ahead, 0 behind |
 
 ### Migration audit
 
@@ -163,8 +169,10 @@ tests resolve mongod from `MONGOD_BINARY`, PATH, or shared platform fallbacks.
 
 The target deployment remains responsible for database identity/backup,
 dry-run/apply/verify execution, a recorded second zero-write apply, and
-authenticated Customer and Staff walkthroughs. The existing Vite bundle warning
-is not restated as evidence until the current branch's production build is run.
+authenticated Customer and Staff walkthroughs. The current branch production
+build passed with the non-blocking 745.88 kB JavaScript chunk warning recorded
+above. No target migration, authenticated target walkthrough, deployment, or
+production result is claimed.
 
 ## Main integration gate 2026-07-25
 

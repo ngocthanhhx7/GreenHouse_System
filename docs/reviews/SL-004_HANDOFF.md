@@ -111,13 +111,19 @@ The guard BSON expansion was RED 7/10 then GREEN 10/10. The migration accepts
 only finite integral BSON int/long/double values through
 `9,007,199,254,740,990`; real Infinity and Decimal128 fixtures were rejected
 with zero mutation using the portable disposable-Mongo resolver.
-The isolated client task's final count and the combined
-full-suite/build results are pending final integration and must be recorded
-there, not guessed here.
+Final local branch gates recorded on 2026-07-26:
 
-The current combined server receipt-targeted command passed 270/270. It is a
-local targeted gate only, not a claim that the final full server/client/build
-release gates have run.
+- server `npm test`: 1194/1194 across 183 suites, 0 failed and 0 skipped;
+- client `npm test`: 357/357 across 79 suites, 0 failed and 0 skipped;
+- receipt migration: 10/10 against real MongoDB, 0 skipped;
+- Vite 6.4.3 production build: exit 0, 169 modules; the non-blocking large
+  JavaScript chunk warning is 745.88 kB (gzip 216.31 kB), above 500 kB;
+- syntax verification: 36 files;
+- diff, prohibited-file, and secret scans: clean;
+- production dependency audits: server 0 findings; client 3 high findings in
+  `postcss`, `react-router`, and `react-router-dom`. These findings pre-existed
+  this receipt branch, and neither package manifest nor lockfile changed;
+- branch divergence at gate time: 21 commits ahead and 0 behind.
 
 Deployment owner must identify the target database, take the normal backup,
 run dry-run/apply/verify, record a zero-business-write second apply, and then

@@ -290,6 +290,18 @@ final integration remain Thanh's seam. The detailed approved design and
 implementation record are `docs/CUSTOMER_DELIVERY_RECEIPT_DESIGN.md` and
 `docs/CUSTOMER_DELIVERY_RECEIPT_IMPLEMENTATION_PLAN.md`.
 
+Fresh local release evidence on 2026-07-26: server `npm test` 1194/1194 across
+183 suites and client `npm test` 357/357 across 79 suites, both with 0 failed
+and 0 skipped; receipt migration 10/10 against real MongoDB with 0 skipped;
+syntax verification for 36 files; and clean diff/prohibited-file/secret scans.
+Vite 6.4.3 build exited 0 after 169 modules with the non-blocking 745.88 kB
+JavaScript chunk warning (gzip 216.31 kB), above 500 kB. Production dependency
+audits reported server 0 and client 3 pre-existing high findings in `postcss`,
+`react-router`, and `react-router-dom`; package manifest and lockfile were
+unchanged. The branch was 21 commits ahead and 0 behind at gate time.
+Target-database dry-run/apply/verify and authenticated Customer/Staff
+walkthroughs remain deployment-only; no deployment is claimed.
+
 ## Ownership Addendum 2026-07-24 - SL-004 Fulfillment and Delivery Evidence
 
 Nguyễn Hữu Anh Nhật remains the primary implementation owner for SL-004. The
