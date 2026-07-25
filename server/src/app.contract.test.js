@@ -79,7 +79,7 @@ describe('API error contract app integration', () => {
     assert.equal(res.statusCode, 400);
     assert.equal(body.errorCode, 'VALIDATION_ERROR');
     assert.equal(body.requestId, 'integration-parser-error');
-    assert.equal(body.message, 'Invalid request body');
+    assert.equal(body.message, 'Dữ liệu yêu cầu không hợp lệ.');
     assert.equal(body.stack, undefined);
     assert.equal(body.message.includes('Unexpected end'), false);
   });
