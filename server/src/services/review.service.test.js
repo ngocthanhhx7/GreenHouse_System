@@ -3,6 +3,15 @@ const { describe, it, beforeEach } = require('node:test');
 
 const { createReviewService } = require('./review.service');
 
+async function captureError(work) {
+  try {
+    await work();
+  } catch (error) {
+    return error;
+  }
+  assert.fail('Expected operation to reject');
+}
+
 function createRepository() {
   const products = [{
     _id: 'product-1',
@@ -43,6 +52,22 @@ function createRepository() {
     { _id: 'detail-2', orderId: 'order-2', productId: 'product-1', productNameSnapshot: 'Minimal Dinner Plate Set' },
   ];
   const reviews = [];
+  const customerDeliveryReceipts = [
+    {
+      _id: 'customer-receipt-1',
+      orderId: 'order-1',
+      customerId: 'customer-1',
+      outcome: 'RECEIVED',
+      respondedAt: new Date('2026-07-20T09:00:00.000Z'),
+    },
+    {
+      _id: 'customer-receipt-inactive-product',
+      orderId: 'order-inactive-product',
+      customerId: 'customer-1',
+      outcome: 'RECEIVED',
+      respondedAt: new Date('2026-07-21T09:00:00.000Z'),
+    },
+  ];
   const contentHistory = [];
   const publicationHistory = [];
   const moderationHistory = [];
@@ -50,6 +75,7 @@ function createRepository() {
 
   return {
     reviews,
+    customerDeliveryReceipts,
     publicationHistory,
     async findProductById(id) {
       return products.find((product) => product._id === id) || null;
@@ -62,6 +88,11 @@ function createRepository() {
     },
     async findOrderById(id) {
       return orders.find((order) => order._id === id) || null;
+    },
+    async findLatestCustomerDeliveryReceiptByOrder(orderId) {
+      return customerDeliveryReceipts
+        .filter((item) => item.orderId === orderId)
+        .sort((left, right) => new Date(right.respondedAt) - new Date(left.respondedAt))[0] || null;
     },
     async findOrderDetail(orderId, productId) {
       return details.find((detail) => detail.orderId === orderId && detail.productId === productId) || null;
@@ -272,6 +303,39 @@ describe('review service', () => {
       () => service.createCustomerReview('customer-1', 'product-1', { orderId: 'order-2', rating: 4, content: 'Nice' }),
       /Only delivered orders can be reviewed/
     );
+  });
+
+  it('requires Customer receipt and blocks a non-receipt dispute at both Review create boundaries', async () => {
+    repository.customerDeliveryReceipts.length = 0;
+    const awaiting = await captureError(() => service.createReview(
+      { id: 'customer-1', role: 'Customer', status: 'Active' },
+      'product-1',
+      {
+        orderDetailId: 'detail-1',
+        rating: 5,
+        content: 'Awaiting customer confirmation.',
+        expectedVersion: 0,
+      },
+      { idempotencyKey: 'review-awaiting-receipt-0001' },
+    ));
+    assert.equal(awaiting.errorCode, 'AFTER_SALES_DELIVERY_CONFIRMATION_REQUIRED');
+
+    repository.customerDeliveryReceipts.push({
+      _id: 'customer-receipt-dispute',
+      orderId: 'order-1',
+      customerId: 'customer-1',
+      outcome: 'NOT_RECEIVED',
+      respondedAt: new Date('2026-07-21T09:00:00.000Z'),
+    });
+    const disputed = await captureError(
+      () => service.createCustomerReview('customer-1', 'product-1', {
+        orderId: 'order-1',
+        rating: 5,
+        content: 'Delivery remains disputed.',
+      }),
+    );
+    assert.equal(disputed.errorCode, 'AFTER_SALES_DELIVERY_DISPUTED');
+    assert.equal(repository.reviews.length, 0);
   });
 
   it('rejects duplicate review for same order product', async () => {

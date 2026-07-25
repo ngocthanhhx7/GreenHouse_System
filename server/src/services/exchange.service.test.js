@@ -47,6 +47,15 @@ function makeHarness() {
     inspections: [],
     shipments: [],
     shipmentEvents: [],
+    customerDeliveryReceipts: [{
+      _id: 'customer-receipt-1',
+      orderId: 'order-1',
+      customerId: 'customer-1',
+      outcome: 'RECEIVED',
+      respondedAt: new Date(now.getTime() - DAY),
+      exchangeDeadlineAt: new Date(now),
+      returnDeadlineAt: new Date(now),
+    }],
     conversions: [],
     inventoryTransactions: [],
     notifications: [],
@@ -58,6 +67,11 @@ function makeHarness() {
     snapshot: () => structuredClone(state),
     restore(snapshot) { Object.keys(snapshot).forEach((key) => { state[key] = snapshot[key]; }); },
     async findOrderById(id) { return state.orders.find((item) => item._id === id) || null; },
+    async findLatestCustomerDeliveryReceiptByOrder(orderId) {
+      return state.customerDeliveryReceipts
+        .filter((item) => item.orderId === orderId)
+        .sort((left, right) => new Date(right.respondedAt) - new Date(left.respondedAt))[0] || null;
+    },
     async ensureExchangeDeadline(id, value) {
       const order = state.orders.find((item) => item._id === id);
       order.exchangeDeadlineAt ||= value;
@@ -426,6 +440,42 @@ describe('SL-002 Exchange service', () => {
     assert.equal(second.idempotentReplay, true);
     assert.equal(harness.state.cases.length, 1);
     assert.equal(harness.state.lines[0].requestedQuantity, 2);
+  });
+
+  it('requires Customer receipt and blocks an active non-receipt dispute at the direct Exchange boundary', async () => {
+    harness.state.customerDeliveryReceipts = [];
+    const awaiting = await captureError(
+      () => harness.service.createCustomerRequest('customer-1', validRequest()),
+    );
+    assert.equal(awaiting.errorCode, 'AFTER_SALES_DELIVERY_CONFIRMATION_REQUIRED');
+    assert.equal(harness.state.cases.length, 0);
+
+    harness.state.customerDeliveryReceipts.push({
+      _id: 'customer-receipt-dispute',
+      orderId: 'order-1',
+      customerId: 'customer-1',
+      outcome: 'NOT_RECEIVED',
+      respondedAt: new Date(harness.now.getTime() - DAY),
+    });
+    const disputed = await captureError(
+      () => harness.service.createCustomerRequest('customer-1', validRequest()),
+    );
+    assert.equal(disputed.errorCode, 'AFTER_SALES_DELIVERY_DISPUTED');
+    assert.equal(harness.state.cases.length, 0);
+  });
+
+  it('uses only the immutable Customer receipt Exchange deadline', async () => {
+    harness.state.orders[0].deliveredAt = new Date(harness.now);
+    harness.state.orders[0].exchangeDeadlineAt = new Date(harness.now.getTime() + 30 * DAY);
+    harness.state.customerDeliveryReceipts[0].exchangeDeadlineAt = new Date(
+      harness.now.getTime() - 1,
+    );
+
+    await assert.rejects(
+      () => harness.service.createCustomerRequest('customer-1', validRequest()),
+      /five-day Exchange window has expired/i,
+    );
+    assert.equal(harness.state.cases.length, 0);
   });
 
   it('rejects reuse of a submit idempotency key for a different Exchange command', async () => {
