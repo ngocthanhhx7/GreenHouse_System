@@ -370,3 +370,22 @@ fencing, tối đa năm attempt và không rollback business truth. Thành revie
 Notification của Huy, Reports/Settings của Cường, chạy full regression và quản
 lý handoff/merge. Evidence nằm tại `docs/reviews/SL-009_G3_TRACEABILITY.md`,
 `docs/reviews/SL-009_RELEASE_AUDIT.md` và `docs/reviews/SL-009_HANDOFF.md`.
+
+## Integration Addendum 2026-07-25 - Customer Order and Review UX
+
+Nguyễn Ngọc Thành sở hữu Header seam và final integration cho khu vực hậu mua
+hàng:
+
+- Dropdown avatar và mobile account navigation chỉ thêm `Đơn hàng của tôi` và
+  `Đánh giá của tôi` cho Customer; role khác giữ nguyên menu hiện có.
+- Order center của Nguyễn Quang Huy và Review center của Lê Vũ Cường được giữ
+  trong commit/branch owner riêng trước khi merge `--no-ff`.
+- Product Detail chỉ còn aggregate và danh sách Review công khai; mọi Customer
+  Review mutation nằm trên route Customer-protected `/reviews`.
+- Focused integration verification sau hai owner merge đạt `72/72` test; client
+  production build exit `0` với warning chunk lớn đã tồn tại từ baseline.
+- Full regression trước independent review đạt server `1052/1052` và client
+  `272/272`. Ba P1 do independent review phát hiện được trả về đúng owner để
+  bổ sung regression test và remediation trước gate merge cuối.
+- Remote-main verification được ghi sau gate cuối; addendum này không tự nhận
+  deployment hoặc migration production.

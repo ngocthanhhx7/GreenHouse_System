@@ -119,6 +119,25 @@ Nguyen Ngoc Thanh can kiem tra cac muc sau truoc khi merge len `main`:
 | API unauthorized | Response 401 | Kiem tra token sau login va header Authorization trong `apiClient` |
 | Role forbidden | Response 403 | Dung dung account role cua flow can demo |
 
+## 7.1 Customer order and review UX addendum 2026-07-25
+
+Customer demo sau checkout dùng hai lối vào trong dropdown avatar:
+
+1. `Đơn hàng của tôi`: lọc theo trạng thái, xem snapshot từng sản phẩm, theo dõi
+   thanh toán/giao hàng và mở đúng thao tác hợp lệ.
+2. `Đánh giá của tôi`: tab `Chờ đánh giá` chiếu riêng từng sản phẩm thuộc đơn đã
+   giao; tab `Đã đánh giá` cho sửa nội dung/điểm và quản lý trạng thái hiển thị.
+3. Product Detail chỉ dùng để đọc số sao, tổng lượt và đánh giá công khai, không
+   còn form Customer.
+
+Ownership không đổi: Nguyễn Quang Huy sở hữu Order, Lê Vũ Cường sở hữu Review,
+Nguyễn Ngọc Thành sở hữu Header/final integration.
+
+Pre-merge evidence: focused integration `72/72`, full server `1052/1052`, full
+client `272/272`, client production build exit `0`; warning chunk lớn của Vite
+không chặn release và đã tồn tại ở baseline. Independent review không có P0 và
+ba P1 đang được remediation trước merge cuối.
+
 ## 8. Definition of Done cho phase chot
 
 - [ ] Co tai lieu demo readiness trong `docs`.
