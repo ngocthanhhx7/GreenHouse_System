@@ -74,4 +74,11 @@ describe('checkout address book contract', () => {
     assert.match(source, /if \(submittingRef\.current\) return/);
     assert.match(source, /submittingRef\.current = true/);
   });
+
+  it('keeps this checkout slice explicitly COD-only', () => {
+    assert.match(source, /const paymentMethod = ['"]COD['"]/);
+    assert.match(source, /paymentMethod,/);
+    assert.doesNotMatch(source, /value=["']ONLINE["']/);
+    assert.match(source, /Thanh toán khi nhận hàng/);
+  });
 });

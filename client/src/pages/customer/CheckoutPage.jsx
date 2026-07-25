@@ -56,7 +56,7 @@ export default function CheckoutPage() {
   const [addressMode, setAddressMode] = useState('new');
   const [newAddress, setNewAddress] = useState(EMPTY_ADDRESS);
   const [saveAddress, setSaveAddress] = useState(false);
-  const [paymentMethod, setPaymentMethod] = useState('COD');
+  const paymentMethod = 'COD';
   const [customerNote, setCustomerNote] = useState('');
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -223,8 +223,7 @@ export default function CheckoutPage() {
           <section className="checkout-panel">
             <div className="checkout-panel-heading"><div><span>02</span><h2>Phương thức thanh toán</h2></div></div>
             <div className="checkout-payment-options">
-              <label className={paymentMethod === 'COD' ? 'selected' : ''}><input type="radio" name="paymentMethod" value="COD" checked={paymentMethod === 'COD'} onChange={(event) => setPaymentMethod(event.target.value)} /><span><strong>Thanh toán khi nhận hàng</strong><small>Thanh toán cho đơn vị giao hàng khi nhận sản phẩm.</small></span></label>
-              <label className={paymentMethod === 'ONLINE' ? 'selected' : ''}><input type="radio" name="paymentMethod" value="ONLINE" checked={paymentMethod === 'ONLINE'} onChange={(event) => setPaymentMethod(event.target.value)} /><span><strong>Thanh toán trực tuyến</strong><small>Chuyển sang bước thanh toán online sau khi tạo đơn.</small></span></label>
+              <label className="selected"><input type="radio" name="paymentMethod" value="COD" checked readOnly /><span><strong>Thanh toán khi nhận hàng</strong><small>Thanh toán cho đơn vị giao hàng khi nhận sản phẩm.</small></span></label>
             </div>
             <label className="checkout-note">Ghi chú cho đơn hàng<textarea name="customerNote" rows="3" maxLength="500" value={customerNote} placeholder="Ví dụ: Giao giờ hành chính, gọi trước khi giao..." onChange={(event) => { setCustomerNote(event.target.value); clearFieldError('customerNote'); }} />{fieldErrors.customerNote && <small className="field-error" role="alert">{fieldErrors.customerNote}</small>}</label>
           </section>
