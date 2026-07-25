@@ -232,6 +232,49 @@ describe('versioned system setting service', () => {
     assert.deepEqual(completed, ['outbox-v2', 'outbox-v1']);
   });
 
+  it('never persists raw threshold reevaluation errors', async () => {
+    const failures = [];
+    const claimed = {
+      _id: 'outbox-private-error',
+      processingStartedAt: new Date('2026-07-25T00:00:00.000Z'),
+      payload: {
+        version: 1,
+        values: {
+          PAYMENT_TIMEOUT_MINUTES: 15,
+          LOW_STOCK_DEFAULT_THRESHOLD: 5,
+        },
+      },
+    };
+    const worker = createSystemSettingService({
+      repository: {
+        async listVersions() {
+          return [{
+            version: 1,
+            effectiveAt: new Date('2026-07-25T00:00:00.000Z'),
+            values: claimed.payload.values,
+          }];
+        },
+        async listPendingReevaluations() { return [claimed]; },
+        async claimReevaluation() { return claimed; },
+        async completeReevaluation() { assert.fail('failed reevaluation cannot complete'); },
+        async failReevaluation(_id, _lease, error) {
+          failures.push(error.message);
+        },
+      },
+      lowStockLifecycle: {
+        async evaluateAll() {
+          throw new Error('Mongo mongodb://private-user:secret@host/customer@example.com');
+        },
+      },
+      clock: () => new Date('2026-07-25T00:00:00.000Z'),
+    });
+
+    await worker.drainPostCommitWork();
+
+    assert.deepEqual(failures, ['System setting reevaluation failed']);
+    assert.doesNotMatch(JSON.stringify(failures), /private-user|secret|customer@example|mongodb/i);
+  });
+
   it('classifies a concurrent same-key/different-facts winner as idempotency reuse', async () => {
     const raceRepository = createRepository();
     const raceService = createSystemSettingService({

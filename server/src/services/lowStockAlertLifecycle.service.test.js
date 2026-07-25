@@ -198,4 +198,30 @@ describe('low stock alert lifecycle', () => {
     assert.equal(repository.alerts[0].settingVersion, 2);
     assert.equal(repository.alerts[0].crossingKey, 'system-settings:2');
   });
+
+  it('loads the approved setting version once for a bounded all-inventory reevaluation', async () => {
+    const repository = createRepository();
+    let versionReads = 0;
+    repository.listInventories = async () => [
+      { _id: 'inventory-1', productId: 'product-1', sellableQuantity: 1, reservedQuantity: 0, quarantinedQuantity: 0, lowStockThresholdOverride: null },
+      { _id: 'inventory-2', productId: 'product-2', sellableQuantity: 2, reservedQuantity: 0, quarantinedQuantity: 0, lowStockThresholdOverride: null },
+      { _id: 'inventory-3', productId: 'product-3', sellableQuantity: 3, reservedQuantity: 0, quarantinedQuantity: 0, lowStockThresholdOverride: null },
+    ];
+    repository.findLatestSettingVersion = async () => {
+      versionReads += 1;
+      return 2;
+    };
+    const lifecycle = createLowStockAlertLifecycle({ repository });
+
+    const results = await lifecycle.evaluateAll({
+      eventKey: 'system-settings:1',
+      settingVersion: 1,
+      globalThreshold: 4,
+    });
+
+    assert.equal(versionReads, 1);
+    assert.equal(results.length, 3);
+    assert.equal(results.every((result) => result.staleSettingVersion === true), true);
+    assert.equal(repository.alerts.length, 0);
+  });
 });

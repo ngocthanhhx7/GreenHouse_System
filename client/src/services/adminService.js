@@ -26,6 +26,30 @@ export function createAdminService({ baseUrl = DEFAULT_BASE_URL, fetcher } = {})
       const query = buildQuery(params);
       return request(`/admin/reports/overview${query ? `?${query}` : ''}`);
     },
+    async getRevenueReport(params = {}) {
+      const query = buildQuery(params);
+      return request(`/admin/reports/revenue${query ? `?${query}` : ''}`);
+    },
+    async getOrderReport(params = {}) {
+      const query = buildQuery(params);
+      return request(`/admin/reports/orders${query ? `?${query}` : ''}`);
+    },
+    async getProductReport(params = {}) {
+      const query = buildQuery(params);
+      return request(`/admin/reports/products${query ? `?${query}` : ''}`);
+    },
+    async getCustomerReport(params = {}) {
+      const query = buildQuery(params);
+      return request(`/admin/reports/customers${query ? `?${query}` : ''}`);
+    },
+    async getStaffReport(params = {}) {
+      const query = buildQuery(params);
+      return request(`/admin/reports/staff${query ? `?${query}` : ''}`);
+    },
+    async getInventoryReport(params = {}) {
+      const query = buildQuery(params);
+      return request(`/admin/reports/inventory${query ? `?${query}` : ''}`);
+    },
     async listAuditLogs(params = {}) {
       const query = buildQuery(params);
       return request(`/admin/audit-logs${query ? `?${query}` : ''}`);

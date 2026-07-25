@@ -118,8 +118,16 @@ function createLowStockAlertLifecycle({
         ? claimedGlobalThreshold
         : Number(await repository.findDefaultThreshold?.() ?? inventory.lowStockThreshold ?? DEFAULT_THRESHOLD);
     const open = await repository.findOpen(productId);
-    const latestApprovedVersion = hasClaimedSettingVersion && repository.findLatestSettingVersion
-      ? Number(await repository.findLatestSettingVersion())
+    const suppliedLatestVersion = Number(context.latestApprovedSettingVersion);
+    const hasSuppliedLatestVersion = Object.hasOwn(context, 'latestApprovedSettingVersion')
+      && Number.isInteger(suppliedLatestVersion)
+      && suppliedLatestVersion >= 0;
+    const latestApprovedVersion = hasClaimedSettingVersion
+      ? hasSuppliedLatestVersion
+        ? suppliedLatestVersion
+        : repository.findLatestSettingVersion
+          ? Number(await repository.findLatestSettingVersion())
+          : null
       : null;
     const persistedSettingVersion = Number(open?.settingVersion);
     const newerVersionExists = hasClaimedSettingVersion && (
@@ -236,7 +244,18 @@ function createLowStockAlertLifecycle({
   async function evaluateAll(context = {}) {
     if (!repository.listInventories) return [];
     const inventories = await repository.listInventories();
-    return Promise.all(inventories.map((inventory) => evaluate(inventory, context)));
+    const settingVersion = Number(context.settingVersion);
+    const shouldLoadApprovedVersion = Number.isInteger(settingVersion)
+      && settingVersion >= 0
+      && !Object.hasOwn(context, 'latestApprovedSettingVersion')
+      && repository.findLatestSettingVersion;
+    const sharedContext = shouldLoadApprovedVersion
+      ? {
+        ...context,
+        latestApprovedSettingVersion: Number(await repository.findLatestSettingVersion()),
+      }
+      : context;
+    return Promise.all(inventories.map((inventory) => evaluate(inventory, sharedContext)));
   }
 
   return { evaluate, evaluateAll };

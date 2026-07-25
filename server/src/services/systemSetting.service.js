@@ -12,6 +12,14 @@ const SETTING_KEYS = Object.freeze(['PAYMENT_TIMEOUT_MINUTES', 'LOW_STOCK_DEFAUL
 const DEFAULT_VALUES = Object.freeze({ PAYMENT_TIMEOUT_MINUTES: 15, LOW_STOCK_DEFAULT_THRESHOLD: 5 });
 const HISTORY_LIMIT = 20;
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,199}$/;
+const SETTING_REEVALUATION_FAILURE_CODE = 'SYSTEM_SETTING_REEVALUATION_FAILED';
+const SETTING_REEVALUATION_FAILURE_MESSAGE = 'System setting reevaluation failed';
+
+function safeReevaluationFailure() {
+  const error = new Error(SETTING_REEVALUATION_FAILURE_MESSAGE);
+  error.code = SETTING_REEVALUATION_FAILURE_CODE;
+  return error;
+}
 
 function withOptionalSession(query, session) { return session ? query.session(session) : query; }
 
@@ -65,8 +73,18 @@ function createModelRepository() {
     async completeReevaluation(id, processingStartedAt) {
       return DomainOutbox.findOneAndUpdate({ _id: id, status: 'Processing', processingStartedAt }, { $set: { status: 'Completed', completedAt: new Date(), processingStartedAt: null, lastError: '' } }, { new: true, runValidators: true }).lean();
     },
-    async failReevaluation(id, processingStartedAt, error) {
-      return DomainOutbox.findOneAndUpdate({ _id: id, status: 'Processing', processingStartedAt }, { $set: { status: 'Failed', processingStartedAt: null, lastError: String(error?.message || error || '') } }, { new: true, runValidators: true }).lean();
+    async failReevaluation(id, processingStartedAt) {
+      return DomainOutbox.findOneAndUpdate(
+        { _id: id, status: 'Processing', processingStartedAt },
+        {
+          $set: {
+            status: 'Failed',
+            processingStartedAt: null,
+            lastError: SETTING_REEVALUATION_FAILURE_CODE,
+          },
+        },
+        { new: true, runValidators: true },
+      ).lean();
     },
   };
 }
@@ -232,12 +250,24 @@ function createSystemSettingService({
             globalThreshold: Number(claimed.payload.values.LOW_STOCK_DEFAULT_THRESHOLD),
           });
           await repository.completeReevaluation(claimed._id, claimed.processingStartedAt);
-        } catch (error) {
-          await repository.failReevaluation(claimed._id, claimed.processingStartedAt, error);
+        } catch (_error) {
+          await repository.failReevaluation(
+            claimed._id,
+            claimed.processingStartedAt,
+            safeReevaluationFailure(),
+          );
         }
       }
     },
   };
 }
 
-module.exports = { SETTING_KEYS, DEFAULT_VALUES, createSystemSettingService, systemSettingService: createSystemSettingService() };
+module.exports = {
+  SETTING_KEYS,
+  DEFAULT_VALUES,
+  SETTING_REEVALUATION_FAILURE_CODE,
+  SETTING_REEVALUATION_FAILURE_MESSAGE,
+  createSystemSettingService,
+  safeReevaluationFailure,
+  systemSettingService: createSystemSettingService(),
+};

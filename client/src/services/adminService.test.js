@@ -68,4 +68,33 @@ describe('client admin service', () => {
 
     assert.equal(result.total, 1);
   });
+
+  it('loads each bounded SL-009 report endpoint with the same encoded period', async () => {
+    const calls = [];
+    const service = createAdminService({
+      baseUrl: 'http://api.test/api',
+      fetcher: async (url) => {
+        calls.push(url);
+        return { ok: true, json: async () => ({ success: true, data: {} }) };
+      },
+    });
+
+    const query = { mode: 'period', from: '2026-07-01', to: '2026-07-31' };
+    await service.getRevenueReport(query);
+    await service.getOrderReport(query);
+    await service.getProductReport(query);
+    await service.getCustomerReport(query);
+    await service.getStaffReport(query);
+    await service.getInventoryReport(query);
+
+    const suffix = '?mode=period&from=2026-07-01&to=2026-07-31';
+    assert.deepEqual(calls, [
+      `http://api.test/api/admin/reports/revenue${suffix}`,
+      `http://api.test/api/admin/reports/orders${suffix}`,
+      `http://api.test/api/admin/reports/products${suffix}`,
+      `http://api.test/api/admin/reports/customers${suffix}`,
+      `http://api.test/api/admin/reports/staff${suffix}`,
+      `http://api.test/api/admin/reports/inventory${suffix}`,
+    ]);
+  });
 });
