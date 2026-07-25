@@ -73,6 +73,20 @@ export function createAuthService({
       });
     },
 
+    async requestPasswordReset(email) {
+      return request('/auth/forgot-password', {
+        method: 'POST',
+        body: JSON.stringify({ email }),
+      });
+    },
+
+    async resetPassword(input) {
+      return request('/auth/reset-password', {
+        method: 'POST',
+        body: JSON.stringify(input),
+      });
+    },
+
     async acceptInvitation(input) {
       const idempotencyKey = input.idempotencyKey || createIdempotencyKey();
       return request('/internal-invitations/accept', {
