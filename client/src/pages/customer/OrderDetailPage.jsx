@@ -61,7 +61,7 @@ export default function OrderDetailPage() {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
-  async function loadOrder() {
+  async function loadOrder(signal) {
     setError('');
     try {
       const [loadedOrder, fulfillmentResult, exchangeResult, returnResult] = await Promise.all([
@@ -70,6 +70,7 @@ export default function OrderDetailPage() {
         exchangeService.listMyRequests(),
         returnRefundService.listMyRequests(),
       ]);
+      if (signal?.aborted) return;
       setOrder(loadedOrder);
       setFulfillment(fulfillmentResult || { cycles: [], incidents: [] });
       setDestinationCorrection((current) => ({
@@ -89,13 +90,18 @@ export default function OrderDetailPage() {
       ));
       setActiveCase(exchange ? { type: 'EXCHANGE', ...exchange } : returnRequest ? { type: 'RETURN', ...returnRequest } : null);
     } catch (err) {
+      if (signal?.aborted) return;
       setError(err.message);
     }
   }
 
   useEffect(() => {
-    loadOrder();
+    const controller = new AbortController();
+    setOrder(null);
+    setError('');
+    loadOrder(controller.signal);
     // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => controller.abort();
   }, [id]);
 
   useEffect(() => {

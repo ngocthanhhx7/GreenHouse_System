@@ -22,7 +22,14 @@ export default function ProductDetailPage() {
   const cartCommandRetries = useRef(createCartCommandRetryStore());
 
   useEffect(() => {
-    productService.getProduct(id).then(setProduct).catch((err) => setError(err.message));
+    let cancelled = false;
+    setProduct(null);
+    setError('');
+    productService
+      .getProduct(id)
+      .then((data) => { if (!cancelled) setProduct(data); })
+      .catch((err) => { if (!cancelled) setError(err.message); });
+    return () => { cancelled = true; };
   }, [id]);
 
   useEffect(() => {

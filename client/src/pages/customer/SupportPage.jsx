@@ -417,8 +417,13 @@ export default function SupportPage() {
                 )}
               </div>
 
-              {ticket.finalMessage && <p className="mt-3 mb-0">{ticket.finalMessage}</p>}
-              {ticket.resolutionMessage && <p className="mt-3 mb-0">{ticket.resolutionMessage}</p>}
+              {ticket.status === 'Resolved' && (() => {
+                const staffMessages = messages.filter((m) => m.actorRole === 'Staff' || m.role === 'Staff');
+                const lastStaffMessage = staffMessages[staffMessages.length - 1];
+                return lastStaffMessage ? (
+                  <p className="mt-3 mb-0"><strong>Phản hồi từ nhân viên:</strong> {lastStaffMessage.content}</p>
+                ) : null;
+              })()}
 
               <div className="mt-3" aria-label="Dòng thời gian tin nhắn">
                 <h4 className="h6">Tin nhắn</h4>
