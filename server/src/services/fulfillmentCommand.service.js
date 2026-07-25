@@ -180,6 +180,7 @@ function validateHandoff(input) {
   try { values.handedOffAt = requiredDate(input.handedOffAt, 'handedOffAt'); } catch (error) {
     errors.push(...(error.errors || [{ field: 'handedOffAt', message: error.message }]));
   }
+  values.note = optionalText(input.note, 1000);
   if (errors.length) {
     throw new ApiError(
       400,
@@ -357,6 +358,7 @@ function createFulfillmentCommandService({
         trackingReference: handoff.trackingReference,
         handedOffAt: handoff.handedOffAt,
         handoffEvidenceReference: handoff.evidenceReference,
+        note: handoff.note,
         recordedBy: staffId,
         currentDestinationVersionId: currentDestination._id,
         status: 'HandedOff',
