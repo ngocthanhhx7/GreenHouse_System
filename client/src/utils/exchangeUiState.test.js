@@ -117,6 +117,7 @@ describe('Exchange UI state', () => {
       status: 'AwaitingExactStockChoice',
       waitingFor: 'INITIAL_APPROVAL',
     }), {
+      canCancel: true,
       canWaitOrConvert: true,
       canRetryReservation: false,
       canResend: false,
@@ -130,6 +131,16 @@ describe('Exchange UI state', () => {
       status: 'WaitingForExactStock',
       waitingFor: 'INCIDENT_RESEND',
     }).canResend, true);
+    assert.equal(getExchangeWorkflowActions({
+      status: 'WaitingForExactStock',
+      waitingFor: 'INCIDENT_RESEND',
+      handoffAt: '2026-07-23T09:00:00.000Z',
+    }).canCancel, false);
+    assert.equal(getExchangeWorkflowActions({
+      status: 'ApprovedAwaitingShipment',
+      waitingFor: '',
+      handoffAt: null,
+    }).canCancel, true);
     assert.equal(getExchangeWorkflowActions({
       status: 'AwaitingExactStockChoice',
       waitingFor: 'INCIDENT_RESEND',

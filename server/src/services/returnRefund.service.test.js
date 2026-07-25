@@ -97,10 +97,14 @@ function createRepository() {
     async findPaymentByOrderId(orderId) { return state.payments.find((payment) => payment.orderId === orderId) || null; },
     async findLatestPaymentAttemptByOrder(orderId) { return state.attempts.filter((attempt) => attempt.orderId === orderId).at(-1) || null; },
     async findOpenRequestByOrderId(orderId) {
-      return state.requests.find((request) => request.orderId === orderId && ACTIVE_STATUSES.includes(request.status)) || null;
+      return state.requests.find((request) => (
+        request.orderId === orderId
+        && ACTIVE_STATUSES.includes(request.status)
+        && !request.obligationKey
+      )) || null;
     },
     async createRequest(data) {
-      if (await this.findOpenRequestByOrderId(data.orderId)) throw duplicateError();
+      if (!data.obligationKey && await this.findOpenRequestByOrderId(data.orderId)) throw duplicateError();
       const request = { _id: `request-${state.requests.length + 1}`, createdAt: new Date(), ...data };
       state.requests.push(request);
       return request;
@@ -460,6 +464,24 @@ describe('return/refund service', () => {
     assert.equal(repository.requests.length, 1);
   });
 
+  it('does not let a payment-only refund obligation block a physical Return request', async () => {
+    repository.state.requests.push({
+      _id: 'payment-only-refund-1',
+      orderId: 'order-1',
+      customerId: 'customer-1',
+      obligationKey: 'PAYMENT_REVERSAL:attempt-1',
+      status: 'New',
+      reason: 'Payment-only obligation',
+      evidenceImages: [],
+    });
+
+    const result = await createRequest();
+
+    assert.equal(result.status, 'New');
+    assert.equal(repository.requests.length, 2);
+    assert.equal(repository.requests[1].obligationKey || '', '');
+  });
+
   it('requires at least one evidence attachment', async () => {
     await assert.rejects(
       () => service.createCustomerRequest('customer-1', { orderId: 'order-1', reason: 'Damaged' }),
@@ -613,6 +635,16 @@ describe('return/refund service', () => {
       /COD reconciliation/i,
     );
     assert.equal(repository.refunds.length, 0);
+  });
+
+  it('rejects Delivered+Unpaid COD intake without an open discrepancy', async () => {
+    repository.orders.find((order) => order._id === 'order-3').codDiscrepancyStatus = 'Resolved';
+
+    await assert.rejects(
+      () => createRequest('order-3'),
+      (error) => error.statusCode === 409 && /COD|discrepancy/i.test(error.message),
+    );
+    assert.equal(repository.requests.length, 0);
   });
 
   it('sets fixed ApprovedAt and ShipByAt while deriving the amount only on the server', async () => {
@@ -831,6 +863,30 @@ describe('return/refund service', () => {
     const warehouse = await service.getWarehouseRequest(requestId);
     assert.equal(Object.hasOwn(warehouse, 'destination'), false);
     assert.equal(JSON.stringify(warehouse).includes('6789'), false);
+  });
+
+  it('does not let Staff decide a destination after the Return becomes terminal', async () => {
+    const requestId = await approveRequest();
+    const destination = await service.submitDestination('customer-1', requestId, {
+      bankName: 'Test Bank',
+      accountNumber: '0123456789',
+      accountHolderName: 'Nguyen Van A',
+      confirmed: true,
+      idempotencyKey: 'destination-terminal-001',
+    });
+
+    for (const terminalStatus of ['Rejected', 'Expired', 'Completed']) {
+      repository.requests[0].status = terminalStatus;
+      repository.destinations[0].status = 'Submitted';
+      await assert.rejects(
+        () => service.verifyDestination('staff-1', requestId, {
+          destinationId: destination.id,
+          status: 'Verified',
+        }),
+        (error) => error.statusCode === 409 && /after approval|before completion/i.test(error.message),
+      );
+      assert.equal(repository.destinations[0].status, 'Submitted');
+    }
   });
 
   it('requires timely handoff proof before Warehouse receipt', async () => {

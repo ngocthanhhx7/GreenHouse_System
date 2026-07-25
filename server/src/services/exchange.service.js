@@ -15,6 +15,7 @@ const ExchangeShipment = require('../models/exchangeShipment.model');
 const ExchangeShipmentEvent = require('../models/exchangeShipmentEvent.model');
 const ExchangeConversion = require('../models/exchangeConversion.model');
 const ReturnRefundRequest = require('../models/returnRefundRequest.model');
+const Payment = require('../models/payment.model');
 const { afterSalesLockService } = require('./afterSalesLock.service');
 const {
   assignmentCoordinator: defaultAssignmentCoordinator,
@@ -105,6 +106,9 @@ function createModelTransactionManager() {
 function createModelRepository({ lockService = afterSalesLockService } = {}) {
   return {
     async findOrderById(id, session) { return withSession(Order.findById(id), session).lean(); },
+    async findPaymentByOrderId(orderId, session) {
+      return withSession(Payment.findOne({ orderId }), session).lean();
+    },
     async ensureExchangeDeadline(id, value, session) {
       const updated = await withSession(Order.findOneAndUpdate(
         { _id: id, exchangeDeadlineAt: null },
@@ -523,6 +527,22 @@ function createExchangeService({
   function isIncidentStockChoice(exchangeCase) {
     return ['AwaitingExactStockChoice', 'WaitingForExactStock'].includes(exchangeCase.status)
       && exchangeCase.waitingFor === 'INCIDENT_RESEND';
+  }
+
+  function canCustomerCancelBeforeHandoff(exchangeCase) {
+    if (exchangeCase.handoffAt || exchangeCase.customerShipmentId) return false;
+    if ([
+      'CustomerShipped',
+      'WarehouseInspecting',
+      'OutboundFulfillment',
+      'ReplacementShipped',
+      'DeliveryIncident',
+    ].includes(exchangeCase.status)) {
+      return false;
+    }
+    if (['Submitted', 'ApprovedAwaitingShipment'].includes(exchangeCase.status)) return true;
+    return ['AwaitingExactStockChoice', 'WaitingForExactStock'].includes(exchangeCase.status)
+      && exchangeCase.waitingFor === 'INITIAL_APPROVAL';
   }
 
   function isInitialReservationRetry(exchangeCase) {
@@ -1330,6 +1350,27 @@ function createExchangeService({
         throw new ApiError(409, 'This Exchange cannot convert without an exact-stock failure');
       }
       const convertedResult = await transactionManager.withTransaction(async (session) => {
+        const [currentOrder, payment] = await Promise.all([
+          repository.findOrderById(exchangeCase.orderId, session),
+          repository.findPaymentByOrderId(exchangeCase.orderId, session),
+        ]);
+        if (!currentOrder || String(currentOrder.customerId) !== String(customerId)) {
+          throw new ApiError(404, 'Exchange Order not found');
+        }
+        if (!payment) {
+          throw new ApiError(409, 'Payment record is required before converting to Return/Refund');
+        }
+        if (payment.paymentStatus !== currentOrder.paymentStatus) {
+          throw new ApiError(409, 'Order and Payment status must be reconciled before conversion');
+        }
+        const codHold = currentOrder.paymentMethod === 'COD'
+          && currentOrder.paymentStatus !== 'Paid';
+        if (codHold && currentOrder.codDiscrepancyStatus !== 'Open') {
+          throw new ApiError(409, 'Unpaid COD conversion requires an open COD discrepancy');
+        }
+        if (!codHold && currentOrder.paymentStatus !== 'Paid') {
+          throw new ApiError(409, 'Only paid orders can enter the normal Return/Refund flow');
+        }
         const claimed = await repository.claimCase(id, [
           'AwaitingExactStockChoice', 'WaitingForExactStock',
         ], {
@@ -1364,10 +1405,14 @@ function createExchangeService({
           orderId: exchangeCase.orderId,
           requestCode: `RET-X-${Date.now()}-${crypto.randomUUID().slice(0, 6).toUpperCase()}`,
           customerId: exchangeCase.customerId,
+          paymentId: payment._id,
           reason: `Chuyển từ yêu cầu đổi hàng ${exchangeCase.requestCode}: ${exchangeCase.reason}`,
           evidenceImages: exchangeCase.evidenceImages,
-          status: 'New',
+          status: codHold ? 'AwaitingCODReconciliation' : 'New',
           refundAmount: 0,
+          holdReason: codHold
+            ? 'Đã ghi nhận đúng hạn; đang chờ đối soát bằng chứng thu COD từ khách hàng.'
+            : '',
           deadlineAt: exchangeCase.deadlineAt,
           requestedAt: exchangeCase.sourceTimelyRequestedAt,
           sourceExchangeCaseId: exchangeCase._id,
@@ -1425,7 +1470,7 @@ function createExchangeService({
       const exchangeCase = await repository.findCaseById(id);
       if (!exchangeCase || String(exchangeCase.customerId) !== String(customerId)) throw new ApiError(404, 'Exchange request not found');
       if (exchangeCase.status === 'Cancelled' && exchangeCase.cancellationIdempotencyKey === idempotencyKey) return load(id, 'Customer', true);
-      if (!['Submitted', 'AwaitingExactStockChoice', 'WaitingForExactStock', 'ApprovedAwaitingShipment'].includes(exchangeCase.status)) {
+      if (!canCustomerCancelBeforeHandoff(exchangeCase)) {
         throw new ApiError(409, 'Customer cannot cancel after Carrier handoff');
       }
       const cancellationResult = await transactionManager.withTransaction(async (session) => {

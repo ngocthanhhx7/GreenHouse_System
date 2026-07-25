@@ -368,7 +368,11 @@ function createModelRepository() {
     async findPaymentByOrderId(orderId, session) { return withOptionalSession(Payment.findOne({ orderId }), session).lean(); },
     async findLatestPaymentAttemptByOrder(orderId, session) { return withOptionalSession(PaymentAttempt.findOne({ orderId }).sort({ createdAt: -1 }), session).lean(); },
     async findOpenRequestByOrderId(orderId, session) {
-      return withOptionalSession(ReturnRefundRequest.findOne({ orderId, status: { $in: OPEN_STATUSES } }), session).lean();
+      return withOptionalSession(ReturnRefundRequest.findOne({
+        orderId,
+        status: { $in: OPEN_STATUSES },
+        obligationKey: { $in: ['', null] },
+      }), session).lean();
     },
     async createRequest(data, session) {
       const [created] = await ReturnRefundRequest.create([data], session ? { session } : undefined);
@@ -994,6 +998,9 @@ function createReturnRefundService({
       const evidenceImages = normalizeCustomerEvidence(customerId, submittedEvidence);
       const payment = await repository.findPaymentByOrderId(order._id);
       const codHold = order.paymentMethod === 'COD' && order.paymentStatus !== 'Paid';
+      if (codHold && order.codDiscrepancyStatus !== 'Open') {
+        throw new ApiError(409, 'Unpaid COD return requires an open COD discrepancy');
+      }
       if (!codHold && order.paymentStatus !== 'Paid') throw new ApiError(409, 'Only paid orders can enter the normal return/refund flow');
 
       let request;
@@ -1325,6 +1332,9 @@ function createReturnRefundService({
       if (forbiddenFields.some((field) => Object.prototype.hasOwnProperty.call(input, field))) {
         await writeAudit(staffId, 'REFUND_DESTINATION_EDIT_DENIED', id, 'Blocked Staff attempt to edit Customer-confirmed refund destination values; sensitive values redacted');
         throw new ApiError(400, 'Staff can verify or reject destination details but cannot edit them');
+      }
+      if (![...RECEIVABLE_STATUSES, ...RECEIVED_STATUSES].includes(request.status)) {
+        throw new ApiError(409, 'Refund destination can only be decided after approval and before completion');
       }
       const status = String(input.status || '').trim();
       if (!['Verified', 'Rejected'].includes(status)) throw new ApiError(400, 'Destination status must be Verified or Rejected');

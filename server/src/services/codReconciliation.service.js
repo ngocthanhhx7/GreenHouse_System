@@ -9,6 +9,7 @@ const OrderDetail = require('../models/orderDetail.model');
 const RefundPending = require('../models/refundPending.model');
 const ReturnRefundRequest = require('../models/returnRefundRequest.model');
 const ExchangeCase = require('../models/exchangeCase.model');
+const CodDiscrepancy = require('../models/codDiscrepancy.model');
 const { logAudit } = require('../utils/auditLogger');
 const {
   afterSalesLockService: modelAfterSalesLockService,
@@ -66,6 +67,16 @@ function createModelRepository() {
     async updatePayment(id, data, session) { return withOptionalSession(Payment.findByIdAndUpdate(id, { $set: data }, { new: true, runValidators: true }), session).lean(); },
     async findLatestPaymentAttemptByOrder(orderId, session) { return withOptionalSession(PaymentAttempt.findOne({ orderId }).sort({ createdAt: -1 }), session).lean(); },
     async updatePaymentAttempt(id, data, session) { return withOptionalSession(PaymentAttempt.findByIdAndUpdate(id, { $set: data }, { new: true, runValidators: true }), session).lean(); },
+    async findCodDiscrepancyByOrder(orderId, session) {
+      return withOptionalSession(CodDiscrepancy.findOne({ orderId }), session).lean();
+    },
+    async updateCodDiscrepancyByOrder(orderId, data, session) {
+      return withOptionalSession(CodDiscrepancy.findOneAndUpdate(
+        { orderId },
+        { $set: data },
+        { new: true, runValidators: true },
+      ), session).lean();
+    },
     async findHeldRequestByOrder(orderId, session) {
       const returnRequest = await withOptionalSession(ReturnRefundRequest.findOne({
         orderId,
@@ -212,6 +223,31 @@ function createCodReconciliationService({
     return order;
   }
 
+  async function updateRequiredCodDiscrepancy(orderId, data, session) {
+    const discrepancy = await repository.findCodDiscrepancyByOrder(orderId, session);
+    if (!discrepancy) throw new ApiError(409, 'COD discrepancy record is missing');
+    const updated = await repository.updateCodDiscrepancyByOrder(orderId, data, session);
+    if (!updated) throw new ApiError(409, 'COD discrepancy changed during reconciliation');
+    return updated;
+  }
+
+  async function syncCollectionDiscrepancy(order, event, session) {
+    const expected = expectedAmount(order);
+    const amount = Number(event.customerCollectedAmount);
+    const fullCollection = amount === expected;
+    await updateRequiredCodDiscrepancy(order._id, {
+      customerCollectedAmount: amount,
+      status: fullCollection
+        ? (
+          event.collectionTiming === 'AT_DELIVERY'
+            ? 'ResolvedCollectedAtDelivery'
+            : 'ResolvedCollectedLater'
+        )
+        : 'RecoveryRequired',
+      resolvedAt: fullCollection ? new Date(event.occurredAt) : null,
+    }, session);
+  }
+
   async function closeHeldRequestAndLock(
     heldRequest,
     orderId,
@@ -275,6 +311,7 @@ function createCodReconciliationService({
       const replay = checkReplay(existing, orderId, 'COLLECTION', amount);
       if (replay) {
         const replayOrder = await loadOrder(orderId, session);
+        await syncCollectionDiscrepancy(replayOrder, existing, session);
         return { ...replay, order: replayOrder };
       }
 
@@ -319,6 +356,7 @@ function createCodReconciliationService({
         if (attempt) await repository.updatePaymentAttempt(attempt._id, { paymentStatus: 'Paid', paidAt }, session);
       }
       const updatedOrder = await repository.updateOrder(order._id, orderData, session);
+      await syncCollectionDiscrepancy(updatedOrder, event, session);
       const heldRequest = await repository.findHeldRequestByOrder(order._id, session);
       if (fullCollection && heldRequest) {
         await repository.updateRequest(heldRequest._id, {
@@ -406,6 +444,17 @@ function createCodReconciliationService({
           carrierSettlementEvidenceId: eventId,
           settlementReconciliationStatus: aggregate === expected ? 'Settled' : 'Open',
         }, session);
+        const discrepancy = await repository.findCodDiscrepancyByOrder(order._id, session);
+        if (discrepancy) {
+          const updatedDiscrepancy = await repository.updateCodDiscrepancyByOrder(
+            order._id,
+            { carrierSettlementAmount: aggregate },
+            session,
+          );
+          if (!updatedDiscrepancy) {
+            throw new ApiError(409, 'COD discrepancy changed during settlement reconciliation');
+          }
+        }
         return { event, order: updatedOrder, idempotentReplay: false };
       });
     } catch (error) {
@@ -482,6 +531,10 @@ function createCodReconciliationService({
           codRecoveryReceiptId: receiptId,
           codRecoveryReceivedAt: receivedAt,
           codDiscrepancyStatus: 'RecoveryInProgress',
+        }, session);
+        await updateRequiredCodDiscrepancy(order._id, {
+          status: 'RecoveryRequired',
+          resolvedAt: null,
         }, session);
         const heldRequest = await repository.findHeldRequestByOrder(order._id, session);
         if (heldRequest) {
@@ -584,6 +637,16 @@ function createCodReconciliationService({
             handledAt: completedAt,
           }, session, { requestAlreadyTerminal });
         }
+        await updateRequiredCodDiscrepancy(order._id, {
+          status: collected === 0
+            ? 'ResolvedUncollected'
+            : existingRefund?.status === 'Refunded'
+              ? 'ResolvedPartialRefunded'
+              : 'RecoveryRefundPending',
+          resolvedAt: collected === 0 || existingRefund?.status === 'Refunded'
+            ? new Date(clock())
+            : null,
+        }, session);
         return { order, refund: existingRefund, idempotentReplay: true };
       }
       if (order.orderStatus !== 'Delivered') throw new ApiError(409, 'COD recovery requires a Delivered order');
@@ -651,6 +714,16 @@ function createCodReconciliationService({
           await repository.updateRequest(heldRequest._id, requestData, session);
         }
       }
+      await updateRequiredCodDiscrepancy(order._id, {
+        status: collected === 0
+          ? 'ResolvedUncollected'
+          : refund?.status === 'Refunded'
+            ? 'ResolvedPartialRefunded'
+            : 'RecoveryRefundPending',
+        resolvedAt: collected === 0 || refund?.status === 'Refunded'
+          ? new Date(clock())
+          : null,
+      }, session);
       return { order: claimedOrder, refund, idempotentReplay: false, note };
     });
 
