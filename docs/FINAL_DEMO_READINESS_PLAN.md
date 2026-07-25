@@ -133,10 +133,11 @@ Customer demo sau checkout dùng hai lối vào trong dropdown avatar:
 Ownership không đổi: Nguyễn Quang Huy sở hữu Order, Lê Vũ Cường sở hữu Review,
 Nguyễn Ngọc Thành sở hữu Header/final integration.
 
-Pre-merge evidence: focused integration `72/72`, full server `1052/1052`, full
-client `272/272`, client production build exit `0`; warning chunk lớn của Vite
-không chặn release và đã tồn tại ở baseline. Independent review không có P0 và
-ba P1 đang được remediation trước merge cuối.
+Pre-merge evidence sau remediation: focused integration `76/76`, full server
+`1052/1052`, full client `276/276`, client production build exit `0`; warning
+chunk lớn của Vite không chặn release và đã tồn tại ở baseline. Independent
+review không có P0; ba P1 đã được owner đóng bằng regression test trước gate
+merge cuối.
 
 ## 8. Definition of Done cho phase chot
 

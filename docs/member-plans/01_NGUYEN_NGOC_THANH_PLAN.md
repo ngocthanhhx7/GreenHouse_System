@@ -382,10 +382,12 @@ hàng:
   trong commit/branch owner riêng trước khi merge `--no-ff`.
 - Product Detail chỉ còn aggregate và danh sách Review công khai; mọi Customer
   Review mutation nằm trên route Customer-protected `/reviews`.
-- Focused integration verification sau hai owner merge đạt `72/72` test; client
-  production build exit `0` với warning chunk lớn đã tồn tại từ baseline.
-- Full regression trước independent review đạt server `1052/1052` và client
-  `272/272`. Ba P1 do independent review phát hiện được trả về đúng owner để
-  bổ sung regression test và remediation trước gate merge cuối.
+- Focused integration verification sau hai owner merge và remediation đạt
+  `76/76` test; client production build exit `0` với warning chunk lớn đã tồn
+  tại từ baseline.
+- Full regression sau remediation đạt server `1052/1052` và client `276/276`.
+  Ba P1 do independent review phát hiện đã được đúng owner đóng bằng regression
+  test: payment action fail-closed, Review pagination vượt 50 mục và aggregate
+  mutation lock kèm refresh sau lỗi.
 - Remote-main verification được ghi sau gate cuối; addendum này không tự nhận
   deployment hoặc migration production.
