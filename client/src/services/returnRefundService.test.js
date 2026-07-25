@@ -119,6 +119,7 @@ describe('client return/refund service', () => {
     await service.recordPayoutEvidence('refund-1', { idempotencyKey: 'payout-001' });
     await service.startPayOSPayout('refund-1', { idempotencyKey: 'payos-payout-001' });
     await service.reconcilePayOSPayout('refund-1');
+    await service.reconcilePayout('refund-1', { operationKey: 'operation-1', outcome: 'Unknown' });
     await service.reportPayoutIncident('refund-1', { cause: 'CUSTOMER_CONFIRMED_DESTINATION' });
 
     assert.deepEqual(calls.map((call) => call.url), [
@@ -128,6 +129,7 @@ describe('client return/refund service', () => {
       'http://api.test/api/staff/return-refunds/refund-1/payout-evidence',
       'http://api.test/api/staff/return-refunds/refund-1/payos-payout',
       'http://api.test/api/staff/return-refunds/refund-1/payos-reconcile',
+      'http://api.test/api/staff/return-refunds/refund-1/payout-reconciliation',
       'http://api.test/api/staff/return-refunds/refund-1/payout-incident',
     ]);
     assert.deepEqual(JSON.parse(calls[1].options.body), {

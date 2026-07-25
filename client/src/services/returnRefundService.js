@@ -133,6 +133,20 @@ export function createReturnRefundService({ baseUrl = DEFAULT_BASE_URL, fetcher 
     async reconcilePayOSPayout(id) {
       return request(`/staff/return-refunds/${id}/payos-reconcile`, { method: 'POST' });
     },
+    async reconcilePayout(id, input) {
+      return request(`/staff/return-refunds/${id}/payout-reconciliation`, {
+        method: 'POST',
+        body: JSON.stringify({
+          idempotencyKey: input?.idempotencyKey,
+          operationKey: input?.operationKey,
+          outcome: input?.outcome,
+          providerReference: input?.providerReference,
+          occurredAt: input?.occurredAt,
+          reconciliationNote: input?.reconciliationNote,
+          confirmed: input?.confirmed === true,
+        }),
+      });
+    },
     async reportPayoutIncident(id, input) {
       return request(`/staff/return-refunds/${id}/payout-incident`, {
         method: 'POST',
