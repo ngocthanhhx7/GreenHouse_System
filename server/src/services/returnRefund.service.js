@@ -349,12 +349,16 @@ function toPayoutResponse(evidence, audience) {
   if (!evidence) return null;
   const response = {
     id: String(evidence._id),
+    evidenceKind: evidence.evidenceKind || 'PAYOUT_EXECUTION',
     method: evidence.method,
     status: evidence.status,
     occurredAt: evidence.occurredAt,
     createdAt: evidence.createdAt,
   };
-  if (audience === 'Staff') response.providerReference = evidence.providerReference;
+  if (audience === 'Staff') {
+    response.providerReference = evidence.providerReference;
+    response.reconcilesOperationKey = evidence.reconcilesOperationKey || '';
+  }
   return response;
 }
 
@@ -372,7 +376,20 @@ function toPayoutIncidentResponse(incident) {
   };
 }
 
-function toResponse({ request, order, details = [], items = [], destination = null, payoutEvidence = null, payoutIncident = null }, audience = 'Staff') {
+function toResponse(
+  {
+    request,
+    order,
+    details = [],
+    items = [],
+    destination = null,
+    refundPending = null,
+    payoutEvidence = null,
+    payoutIncident = null,
+  },
+  audience = 'Staff',
+  { payOSConfigured = false } = {}
+) {
   const preAccountedByDetail = new Map((request.preAccountedItems || []).map((item) => [
     String(item.orderDetailId),
     Number(item.sellableQuantity || 0) + Number(item.damagedQuantity || 0),
@@ -401,7 +418,7 @@ function toResponse({ request, order, details = [], items = [], destination = nu
     inspectionNote: request.inspectionNote || '',
     completedBy: request.completedBy ? String(request.completedBy) : null,
     completedAt: request.completedAt || null,
-    payoutStatus: payoutEvidence?.status || null,
+    payoutStatus: refundPending?.payoutStatus || null,
     details: details.map((detail) => ({
       ...toObject(detail),
       remainingReturnQuantity: Math.max(
@@ -414,13 +431,41 @@ function toResponse({ request, order, details = [], items = [], destination = nu
   };
 
   if (audience !== 'Warehouse') {
+    const destinationCapability = payoutDestinationCapability(destination);
+    const payoutStatus = refundPending?.payoutStatus || null;
+    const payoutMethod = refundPending?.payoutMethod || null;
+    const operationKey = refundPending?.payoutOperationKey || '';
+    const mayStart = ['NotStarted', 'Failed'].includes(payoutStatus);
+    const unresolvedPayOS = ['Processing', 'Unknown'].includes(payoutStatus)
+      && payoutMethod === 'PayOS'
+      && Boolean(operationKey);
+    const staffAudience = audience === 'Staff' || audience === 'StaffList';
+    const requestReady = RECEIVED_STATUSES.includes(request.status);
+    const canStart = staffAudience && requestReady && destinationCapability.ready && mayStart;
+    const safeEvidence = toPayoutResponse(payoutEvidence, audience);
+    if (staffAudience) {
+      response.payout = {
+        status: payoutStatus,
+        method: payoutMethod,
+        operationKey,
+        startedAt: refundPending?.payoutStartedAt || null,
+        evidence: safeEvidence,
+        canStartPayOS: canStart && payOSConfigured,
+        canRecordManualSuccess: canStart,
+        canReconcilePayOS: unresolvedPayOS,
+        requiresManualPayOSResolution: unresolvedPayOS,
+      };
+      response.capabilities = {
+        payOSConfigured: Boolean(payOSConfigured),
+        manualPayout: true,
+      };
+    }
     response.destination = toDestinationResponse(destination, audience);
-    response.payoutEvidence = toPayoutResponse(payoutEvidence, audience);
+    response.payoutEvidence = safeEvidence;
     response.payoutIncident = toPayoutIncidentResponse(payoutIncident);
     if (audience === 'Staff' || audience === 'StaffList') {
-      const capability = payoutDestinationCapability(destination);
-      response.payoutDestinationReady = capability.ready;
-      response.payoutDestinationIssueCode = capability.issueCode;
+      response.payoutDestinationReady = destinationCapability.ready;
+      response.payoutDestinationIssueCode = destinationCapability.issueCode;
     }
   }
 
@@ -577,7 +622,14 @@ function createModelRepository() {
     async updateRefundPending(id, data, session) {
       return withOptionalSession(RefundPending.findByIdAndUpdate(id, { $set: data }, { new: true, runValidators: true }), session).lean();
     },
-    async claimPayoutStart(id, idempotencyKey, expectedOperationKey = '', allowRecovery = false, session) {
+    async claimPayoutStart(
+      id,
+      idempotencyKey,
+      expectedOperationKey = '',
+      allowRecovery = false,
+      payoutStartedAt = new Date(),
+      session
+    ) {
       const retryConditions = [
         { payoutStatus: { $in: ['NotStarted', 'Failed'] } },
         { payoutStatus: 'Processing', payoutOperationKey: idempotencyKey },
@@ -598,6 +650,8 @@ function createModelRepository() {
           $set: {
             status: 'HandedOff',
             payoutStatus: 'Processing',
+            payoutMethod: 'PayOS',
+            payoutStartedAt,
             payoutOperationKey: idempotencyKey,
           },
         },
@@ -706,20 +760,25 @@ function createReturnRefundService({
   async function loadRequest(id, session) {
     const request = await repository.findRequestById(id, session);
     if (!request) throw new ApiError(404, 'Return/refund request not found');
-    const [order, details, items, destination, payoutEvidence, payoutIncident] = await Promise.all([
+    const [order, details, items, destination, refundPending, payoutEvidence, payoutIncident] = await Promise.all([
       repository.findOrderById(request.orderId, session),
       repository.listOrderDetails(request.orderId, session),
       repository.listReturnItems(request._id, session),
       repository.findLatestDestination ? repository.findLatestDestination(request._id, session) : null,
+      repository.findRefundPendingByRequestId
+        ? repository.findRefundPendingByRequestId(request._id, session)
+        : null,
       repository.findLatestPayoutEvidence ? repository.findLatestPayoutEvidence(request._id, session) : null,
       repository.findLatestPayoutIncident ? repository.findLatestPayoutIncident(request._id, session) : null,
     ]);
     if (!order) throw new ApiError(404, 'Related order not found');
-    return { request, order, details, items, destination, payoutEvidence, payoutIncident };
+    return { request, order, details, items, destination, refundPending, payoutEvidence, payoutIncident };
   }
 
   async function respond(id, audience, replay = false) {
-    const response = toResponse(await loadRequest(id), audience);
+    const response = toResponse(await loadRequest(id), audience, {
+      payOSConfigured: Boolean(payosGateway?.isConfigured?.()),
+    });
     return replay ? { ...response, replay: true } : response;
   }
 
@@ -807,6 +866,10 @@ function createReturnRefundService({
     const updatedRefund = await repository.updateRefundPending(refund._id, {
       status: 'Refunded',
       payoutStatus: 'Succeeded',
+      payoutMethod: evidence.method === 'PAYOS' ? 'PayOS' : 'Manual',
+      payoutStartedAt: refund.payoutStartedAt || evidence.occurredAt,
+      payoutOperationKey: refund.payoutOperationKey || evidence.idempotencyKey,
+      payoutProviderReference: evidence.providerReference,
       destinationId: loaded.request.verifiedDestinationId,
       payoutEvidenceId: evidence._id,
       refundedAt: completedAt,
@@ -1018,6 +1081,8 @@ function createReturnRefundService({
           amount: expectedAmount,
           currency: order.currency || 'VND',
           idempotencyKey,
+          evidenceKind: input.evidenceKind || 'PAYOUT_EXECUTION',
+          reconcilesOperationKey: String(input.reconcilesOperationKey || '').trim(),
           method,
           providerReference,
           status,
@@ -1043,6 +1108,8 @@ function createReturnRefundService({
           await repository.updateRefundPending(refund._id, {
             status: ['Processing', 'Unknown'].includes(status) ? 'HandedOff' : 'RefundPending',
             payoutStatus: status,
+            payoutMethod: method === 'PAYOS' ? 'PayOS' : 'Manual',
+            payoutStartedAt: refund.payoutStartedAt || occurredAt,
             destinationId: destination._id,
             payoutOperationKey: input.operationKey || refund.payoutOperationKey || idempotencyKey,
             payoutProviderReference: providerReference,
@@ -1770,8 +1837,24 @@ function createReturnRefundService({
         throw new ApiError(409, 'The previous payout attempt must be reconciled before another attempt');
       }
       const claimed = repository.claimPayoutStart
-        ? await repository.claimPayoutStart(refund._id, idempotencyKey, refund.payoutOperationKey || '', correctiveRecovery)
-        : await repository.updateRefundPending(refund._id, { status: 'HandedOff', payoutStatus: 'Processing', payoutOperationKey: idempotencyKey });
+        ? await repository.claimPayoutStart(
+          refund._id,
+          idempotencyKey,
+          refund.payoutOperationKey || '',
+          correctiveRecovery,
+          refund.payoutStatus === 'Processing'
+            && refund.payoutOperationKey === idempotencyKey
+            && refund.payoutStartedAt
+            ? refund.payoutStartedAt
+            : new Date(clock())
+        )
+        : await repository.updateRefundPending(refund._id, {
+          status: 'HandedOff',
+          payoutStatus: 'Processing',
+          payoutMethod: 'PayOS',
+          payoutStartedAt: new Date(clock()),
+          payoutOperationKey: idempotencyKey,
+        });
       if (!claimed) throw new ApiError(409, 'Another payout attempt already owns this refund obligation');
 
       const expectedAmount = normalizeRefundAmount(order.totalAmount, 'stored order total');

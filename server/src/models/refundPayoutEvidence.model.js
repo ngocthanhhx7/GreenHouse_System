@@ -8,6 +8,14 @@ const refundPayoutEvidenceSchema = new mongoose.Schema(
     amount: { type: Number, required: true, min: 0, immutable: true },
     currency: { type: String, required: true, trim: true, uppercase: true, immutable: true },
     idempotencyKey: { type: String, required: true, trim: true, maxlength: 160, immutable: true },
+    evidenceKind: {
+      type: String,
+      enum: ['PAYOUT_EXECUTION', 'OPERATION_RECONCILIATION'],
+      default: 'PAYOUT_EXECUTION',
+      required: true,
+      immutable: true,
+    },
+    reconcilesOperationKey: { type: String, default: '', trim: true, maxlength: 160, immutable: true },
     method: { type: String, enum: ['PAYOS', 'MANUAL'], required: true, immutable: true },
     providerReference: { type: String, required: true, trim: true, maxlength: 256, immutable: true },
     status: { type: String, enum: ['Processing', 'Succeeded', 'Failed', 'Unknown'], required: true, immutable: true },
@@ -23,5 +31,13 @@ const refundPayoutEvidenceSchema = new mongoose.Schema(
 refundPayoutEvidenceSchema.index({ idempotencyKey: 1 }, { unique: true, name: 'refund_payout_idempotency_unique' });
 refundPayoutEvidenceSchema.index({ returnRefundRequestId: 1, createdAt: -1 });
 refundPayoutEvidenceSchema.index({ refundPendingId: 1, status: 1, createdAt: -1 });
+refundPayoutEvidenceSchema.index(
+  { refundPendingId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { status: 'Succeeded' },
+    name: 'refund_payout_one_success_per_obligation',
+  }
+);
 
 module.exports = mongoose.model('RefundPayoutEvidence', refundPayoutEvidenceSchema);

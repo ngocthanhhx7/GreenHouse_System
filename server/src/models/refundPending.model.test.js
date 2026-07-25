@@ -13,4 +13,12 @@ describe('RefundPending obligation identity', () => {
     assert.ok(RefundPending.schema.path('payoutOperationKey'));
     assert.ok(RefundPending.schema.path('payoutProviderReference'));
   });
+
+  it('persists the authoritative payout method and start time', () => {
+    const payoutMethod = RefundPending.schema.path('payoutMethod');
+    assert.ok(payoutMethod);
+    assert.deepEqual(payoutMethod.enumValues, ['PayOS', 'Manual']);
+    assert.equal(payoutMethod.options.default, null);
+    assert.ok(RefundPending.schema.path('payoutStartedAt'));
+  });
 });

@@ -188,7 +188,7 @@ function createRepository() {
       Object.assign(refund, data);
       return refund;
     },
-    async claimPayoutStart(id, idempotencyKey, expectedOperationKey = '', allowRecovery = false) {
+    async claimPayoutStart(id, idempotencyKey, expectedOperationKey = '', allowRecovery = false, payoutStartedAt = new Date()) {
       const refund = state.refunds.find((entry) => entry._id === id);
       if (!refund || refund.status === 'Refunded') return null;
       const mayStart = ['NotStarted', 'Failed'].includes(refund.payoutStatus)
@@ -196,7 +196,11 @@ function createRepository() {
         || (allowRecovery && ['Processing', 'Unknown'].includes(refund.payoutStatus) && refund.payoutOperationKey === expectedOperationKey);
       if (!mayStart) return null;
       Object.assign(refund, {
-        status: 'HandedOff', payoutStatus: 'Processing', payoutOperationKey: idempotencyKey,
+        status: 'HandedOff',
+        payoutStatus: 'Processing',
+        payoutMethod: 'PayOS',
+        payoutStartedAt,
+        payoutOperationKey: idempotencyKey,
       });
       return refund;
     },
@@ -450,6 +454,86 @@ describe('return/refund service', () => {
     await inspectRequest(requestId);
     return requestId;
   }
+
+  it('projects authoritative RefundPending payout state when evidence is missing or stale', async () => {
+    const requestId = await prepareReceivedRequest({ verifyDestination: true });
+    Object.assign(repository.refunds[0], {
+      payoutStatus: 'Processing',
+      payoutMethod: 'PayOS',
+      payoutOperationKey: 'payos-lost-response-001',
+      payoutStartedAt: new Date('2026-07-23T09:59:00Z'),
+    });
+
+    let response = await service.getStaffRequest(requestId);
+    assert.equal(response.payoutStatus, 'Processing');
+    assert.deepEqual(response.payout, {
+      status: 'Processing',
+      method: 'PayOS',
+      operationKey: 'payos-lost-response-001',
+      startedAt: new Date('2026-07-23T09:59:00Z'),
+      evidence: null,
+      canStartPayOS: false,
+      canRecordManualSuccess: false,
+      canReconcilePayOS: true,
+      requiresManualPayOSResolution: true,
+    });
+    assert.deepEqual(response.capabilities, { payOSConfigured: true, manualPayout: true });
+
+    repository.payoutEvidence.push({
+      _id: 'stale-evidence-1',
+      returnRefundRequestId: requestId,
+      refundPendingId: repository.refunds[0]._id,
+      method: 'MANUAL',
+      status: 'Failed',
+      providerReference: 'SAFE-REFERENCE',
+      occurredAt: new Date('2026-07-23T09:58:00Z'),
+      createdAt: new Date('2026-07-23T09:58:00Z'),
+    });
+    Object.assign(repository.refunds[0], {
+      payoutStatus: 'Unknown',
+      payoutMethod: 'PayOS',
+    });
+    response = await service.getStaffRequest(requestId);
+    assert.equal(response.payout.status, 'Unknown');
+    assert.equal(response.payout.evidence.status, 'Failed');
+    assert.equal(response.payout.canStartPayOS, false);
+    assert.equal(response.payout.canRecordManualSuccess, false);
+    assert.equal(response.payout.canReconcilePayOS, true);
+    assert.equal(response.payout.requiresManualPayOSResolution, true);
+  });
+
+  it('derives payout actions from authoritative state, verified destination and server configuration', async () => {
+    const requestId = await prepareReceivedRequest({ verifyDestination: true });
+    let response = await service.getStaffRequest(requestId);
+    assert.equal(response.payout.status, 'NotStarted');
+    assert.equal(response.payout.canStartPayOS, true);
+    assert.equal(response.payout.canRecordManualSuccess, true);
+    assert.equal(response.payout.canReconcilePayOS, false);
+
+    Object.assign(repository.refunds[0], {
+      payoutStatus: 'Failed',
+      payoutMethod: 'Manual',
+      payoutOperationKey: 'manual-failed-001',
+      payoutStartedAt: now,
+    });
+    response = await service.getStaffRequest(requestId);
+    assert.equal(response.payout.canStartPayOS, true);
+    assert.equal(response.payout.canRecordManualSuccess, true);
+
+    const unconfigured = createService({
+      payosGateway: { isConfigured() { return false; } },
+    });
+    response = await unconfigured.getStaffRequest(requestId);
+    assert.deepEqual(response.capabilities, { payOSConfigured: false, manualPayout: true });
+    assert.equal(response.payout.canStartPayOS, false);
+    assert.equal(response.payout.canRecordManualSuccess, true);
+
+    Object.assign(repository.refunds[0], { payoutStatus: 'Succeeded', payoutMethod: 'Manual' });
+    response = await service.getStaffRequest(requestId);
+    assert.equal(response.payout.canStartPayOS, false);
+    assert.equal(response.payout.canRecordManualSuccess, false);
+    assert.equal(response.payout.canReconcilePayOS, false);
+  });
 
   it('creates exactly one New request with evidence and never exposes a refund amount', async () => {
     const result = await createRequest();
@@ -929,6 +1013,8 @@ describe('return/refund service', () => {
     assert.equal(Object.hasOwn(customer.items[0].destination, 'accountNumber'), false);
     assert.equal(Object.hasOwn(customer.items[0].destination, 'accountHolderName'), false);
     assert.equal(Object.hasOwn(customer.items[0].destination, 'bankBin'), false);
+    assert.equal(Object.hasOwn(customer.items[0], 'payout'), false);
+    assert.equal(Object.hasOwn(customer.items[0], 'capabilities'), false);
 
     const warehouse = await service.getWarehouseRequest(requestId);
     assert.equal(Object.hasOwn(warehouse, 'destination'), false);
@@ -1091,6 +1177,8 @@ describe('return/refund service', () => {
     assert.equal(started.status, 'Processing');
     assert.equal(repository.requests[0].status, 'Received');
     assert.equal(repository.refunds[0].payoutStatus, 'Processing');
+    assert.equal(repository.refunds[0].payoutMethod, 'PayOS');
+    assert.deepEqual(repository.refunds[0].payoutStartedAt, now);
     assert.equal(payosGateway.calls.length, 1);
     assert.deepEqual(payosGateway.calls[0].input, {
       referenceId: repository.requests[0].requestCode,

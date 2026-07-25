@@ -13,4 +13,22 @@ describe('refund payout evidence model', () => {
     const index = RefundPayoutEvidence.schema.indexes().find(([fields, options]) => fields.idempotencyKey === 1 && options.unique);
     assert.ok(index);
   });
+
+  it('classifies execution and operation-reconciliation evidence immutably', () => {
+    const evidenceKind = RefundPayoutEvidence.schema.path('evidenceKind');
+    assert.deepEqual(evidenceKind.enumValues, ['PAYOUT_EXECUTION', 'OPERATION_RECONCILIATION']);
+    assert.equal(evidenceKind.options.immutable, true);
+    assert.equal(evidenceKind.options.default, 'PAYOUT_EXECUTION');
+    assert.equal(RefundPayoutEvidence.schema.path('reconcilesOperationKey').options.immutable, true);
+  });
+
+  it('allows at most one successful evidence record per refund obligation', () => {
+    const successIndex = RefundPayoutEvidence.schema.indexes().find(([fields, options]) => (
+      fields.refundPendingId === 1
+      && options.unique === true
+      && options.partialFilterExpression?.status === 'Succeeded'
+    ));
+    assert.ok(successIndex);
+    assert.equal(successIndex[1].name, 'refund_payout_one_success_per_obligation');
+  });
 });
