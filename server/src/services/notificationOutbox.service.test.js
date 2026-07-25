@@ -7,6 +7,7 @@ const {
   MAX_NOTIFICATION_OUTBOX_ATTEMPTS,
   createNotificationOutboxService,
 } = require('./notificationOutbox.service');
+const { createNotificationService } = require('./notification.service');
 const { NOTIFICATION_TYPES } = require('../utils/notificationContract');
 
 function canonicalRows() {
@@ -117,6 +118,65 @@ describe('SL-009 canonical Notification DomainOutbox consumer', () => {
     const serverSource = readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
     assert.match(serverSource, /notificationOutboxService/);
     assert.match(serverSource, /services:\s*\[[^\]]*notificationOutboxService[^\]]*\]/s);
+  });
+
+  it('AT-DR-008 drains customer receipt completion and dispute rows through the production Notification consumer', async () => {
+    const notificationRows = [];
+    const emailRows = [];
+    const publisher = createNotificationService({
+      notificationRepository: {
+        async findRecipientById() {
+          return { _id: 'customer-1', email: 'customer@example.com', role: 'Customer', status: 'Active' };
+        },
+        async listActiveUsersByRole(role) {
+          assert.equal(role, 'Staff');
+          return [{ _id: 'staff-1', email: 'staff@example.com', role: 'Staff', status: 'Active' }];
+        },
+        async createTuple(data) {
+          const row = { _id: `notification-${notificationRows.length + 1}`, ...data };
+          notificationRows.push(row);
+          return row;
+        },
+      },
+      emailOutboxService: { async enqueue(data) { emailRows.push(data); return data; } },
+    });
+    const rows = [
+      {
+        _id: 'row-customer-received',
+        identityKey: 'customer-delivery-receipt:received-1',
+        eventType: 'ORDER_COMPLETED_BY_CUSTOMER',
+        payload: {
+          businessEventId: 'customer-delivery-receipt:received-1',
+          type: 'ORDER_COMPLETED_BY_CUSTOMER',
+          recipient: { userId: 'customer-1', role: 'Customer' },
+          target: { collection: 'Order', id: 'order-1' },
+          displayValues: { orderCode: 'ORD-001' },
+        },
+      },
+      {
+        _id: 'row-delivery-disputed',
+        identityKey: 'customer-delivery-receipt:disputed-1',
+        eventType: 'CUSTOMER_DELIVERY_DISPUTED',
+        payload: {
+          businessEventId: 'customer-delivery-receipt:disputed-1',
+          type: 'CUSTOMER_DELIVERY_DISPUTED',
+          recipientRole: 'Staff',
+          target: { collection: 'Order', id: 'order-1' },
+          displayValues: { orderCode: 'ORD-001' },
+        },
+      },
+    ];
+    const test = harness(rows, (event) => publisher.publishDomainEvent(event));
+
+    assert.deepEqual(await test.service.drainPostCommitWork(), {
+      claimed: 2, completed: 2, failed: 0,
+    });
+    assert.deepEqual(notificationRows.map((row) => [row.type, row.channel]), [
+      ['ORDER_COMPLETED_BY_CUSTOMER', 'Email'],
+      ['ORDER_COMPLETED_BY_CUSTOMER', 'InApp'],
+      ['CUSTOMER_DELIVERY_DISPUTED', 'InApp'],
+    ]);
+    assert.equal(emailRows.length, 1);
   });
 
   it('never persists raw publisher errors and leaves the fifth failed claim terminal', async () => {
