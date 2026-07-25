@@ -244,6 +244,7 @@ function createModelCartRepository() {
 function createModelProductRepository() {
   return {
     async findSellableById(id, session) {
+      if (!mongoose.isValidObjectId(id)) return null;
       const product = await withOptionalSession(
         Product.findOne({ _id: id, status: 'Active' }).populate('categoryId'),
         session,
@@ -632,11 +633,23 @@ function createOrderService({
     const expectedByProductId = new Map(expectedItems.map((item) => [item.productId, item]));
     const lines = [];
     for (const item of cartItems) {
+      const quantity = Number(item.quantity);
+      if (!item.productId || !Number.isInteger(quantity) || quantity <= 0) {
+        throw new ApiError(
+          400,
+          'Cart contains an invalid item',
+          [{
+            field: `cartItems.${String(item._id || lines.length)}`,
+            message: 'Product and quantity must be valid',
+          }],
+          'CART_ITEM_INVALID',
+        );
+      }
       const product = await productRepository.findSellableById(item.productId, session);
       if (!product) throw new ApiError(400, `Product is no longer available: ${item.productName}`);
       const productId = String(item.productId);
       const expected = expectedByProductId.get(productId);
-      if (!expected || expected.quantity !== Number(item.quantity)) {
+      if (!expected || expected.quantity !== quantity) {
         throw new ApiError(
           409,
           'Cart contents changed before checkout',
@@ -675,8 +688,8 @@ function createOrderService({
         productImageSnapshot: Array.isArray(product.imageUrls) ? product.imageUrls[0] || '' : '',
         priceSnapshot: product.price,
         priceVersionSnapshot: currentPriceVersion,
-        quantity: item.quantity,
-        subtotal: product.price * item.quantity,
+        quantity,
+        subtotal: product.price * quantity,
       });
       expectedByProductId.delete(productId);
     }
@@ -1187,6 +1200,7 @@ function createOrderService({
 }
 
 module.exports = {
+  createModelProductRepository,
   createOrderService,
   orderService: createOrderService({
     lowStockLifecycle: lowStockAlertLifecycle,

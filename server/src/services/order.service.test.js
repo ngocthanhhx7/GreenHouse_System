@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const { describe, it, beforeEach } = require('node:test');
 
-const { createOrderService } = require('./order.service');
+const { createModelProductRepository, createOrderService } = require('./order.service');
 
 function checkoutInput(overrides = {}) {
   const { deliveryAddress, ...inputOverrides } = overrides;
@@ -324,6 +324,28 @@ describe('order service', () => {
       },
     );
     assert.equal(cartRepository.carts[0].status, 'Active');
+  });
+
+  it('rejects a persisted Cart item with a non-positive quantity before creating an Order', async () => {
+    cartRepository.items[0].quantity = 0;
+
+    await assert.rejects(
+      () => orderService.placeOrder('customer-1', checkoutInput({
+        idempotencyKey: 'invalid-cart-quantity-001',
+      })),
+      (error) => error.statusCode === 400 && error.errorCode === 'CART_ITEM_INVALID',
+    );
+
+    assert.equal(orderRepository.orders.length, 0);
+    assert.equal(orderRepository.details.length, 0);
+    assert.equal(inventoryRepository.reservedQuantity, 0);
+    assert.equal(cartRepository.carts[0].status, 'Active');
+  });
+
+  it('returns no sellable Product for a malformed MongoDB ObjectId', async () => {
+    const repository = createModelProductRepository();
+
+    assert.equal(await repository.findSellableById('not-a-mongo-id'), null);
   });
 
   it('creates an online checkout as Pending without creating a synthetic provider attempt', async () => {
