@@ -11,6 +11,7 @@ const Payment = require('../models/payment.model');
 const PaymentAttempt = require('../models/paymentAttempt.model');
 const RefundPending = require('../models/refundPending.model');
 const OrderReservation = require('../models/orderReservation.model');
+const Shipment = require('../models/shipment.model');
 const DomainOutbox = require('../models/domainOutbox.model');
 const ReturnRefundRequest = require('../models/returnRefundRequest.model');
 const UserAddress = require('../models/userAddress.model');
@@ -20,7 +21,22 @@ const { canonicalEnvelope } = require('./domainEventProducer.service');
 const { systemSettingService } = require('./systemSetting.service');
 const { lowStockAlertLifecycle } = require('./lowStockAlertLifecycle.service');
 
-function toOrderResponse(order, details = []) {
+function toShippingResponse(shipment) {
+  if (!shipment) return { shippingStatus: null, shipping: null };
+  const toIso = (value) => (value ? new Date(value).toISOString() : null);
+  return {
+    shippingStatus: shipment.status || null,
+    shipping: {
+      providerName: shipment.carrierName || '',
+      trackingCode: shipment.trackingReference || '',
+      handedOverAt: toIso(shipment.handedOffAt),
+      deliveredAt: toIso(shipment.deliveredAt),
+      note: shipment.note || '',
+    },
+  };
+}
+
+function toOrderResponse(order, details = [], shipment = null) {
   return {
     id: String(order._id),
     orderCode: order.orderCode,
@@ -53,6 +69,7 @@ function toOrderResponse(order, details = []) {
     paymentDeadlineAt: order.paymentDeadlineAt ? new Date(order.paymentDeadlineAt).toISOString() : null,
     details,
     createdAt: order.createdAt,
+    ...toShippingResponse(shipment),
   };
 }
 
@@ -418,6 +435,24 @@ function createModelOrderRepository() {
     },
     async listByCustomer(customerId) {
       return Order.find({ customerId }).sort({ createdAt: -1 }).lean();
+    },
+    async findLatestShipmentByOrder(orderId, session) {
+      return withOptionalSession(
+        Shipment.findOne({ orderId }).sort({ createdAt: -1, _id: -1 }),
+        session,
+      ).lean();
+    },
+    async listLatestShipmentsByOrders(orderIds) {
+      if (!orderIds.length) return new Map();
+      const rows = await Shipment.find({ orderId: { $in: orderIds } })
+        .sort({ createdAt: -1, _id: -1 })
+        .lean();
+      const latest = new Map();
+      for (const row of rows) {
+        const key = String(row.orderId);
+        if (!latest.has(key)) latest.set(key, row);
+      }
+      return latest;
     },
     async findById(id, session) {
       return withOptionalSession(Order.findById(id), session).lean();
@@ -1042,14 +1077,27 @@ function createOrderService({
 
     async listMyOrders(customerId) {
       const orders = await orderRepository.listByCustomer(customerId);
-      return orders.map((order) => toOrderResponse(order));
+      const latestShipments = orderRepository.listLatestShipmentsByOrders
+        ? await orderRepository.listLatestShipmentsByOrders(orders.map((order) => order._id))
+        : new Map();
+      return orders.map((order) => toOrderResponse(
+        order,
+        [],
+        latestShipments.get(String(order._id)),
+      ));
     },
 
     async getMyOrder(customerId, orderId) {
+      if (!mongoose.isValidObjectId(orderId)) {
+        throw new ApiError(404, 'Order not found');
+      }
       const order = await orderRepository.findById(orderId);
       if (!order || String(order.customerId) !== String(customerId)) throw new ApiError(404, 'Order not found');
       const details = orderRepository.listDetails ? await orderRepository.listDetails(orderId) : [];
-      return toOrderResponse(order, details);
+      const shipment = orderRepository.findLatestShipmentByOrder
+        ? await orderRepository.findLatestShipmentByOrder(orderId)
+        : null;
+      return toOrderResponse(order, details, shipment);
     },
 
     async cancelOrder(customerId, orderId, input = {}) {

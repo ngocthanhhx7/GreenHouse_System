@@ -86,4 +86,36 @@ describe('order controller checkout boundary', () => {
     assert.equal(nextError?.statusCode, 400);
     assert.equal(nextError?.errorCode, 'CHECKOUT_COD_ONLY');
   });
+
+  it('uses the authenticated Customer identity when loading an order detail', async () => {
+    const originalGetMyOrder = orderService.getMyOrder;
+    let captured;
+    orderService.getMyOrder = async (customerId, orderId) => {
+      captured = { customerId, orderId };
+      return {
+        id: orderId,
+        customerId,
+        orderStatus: 'Delivered',
+        paymentStatus: 'Paid',
+        shippingStatus: 'Delivered',
+      };
+    };
+
+    try {
+      const response = createResponse();
+      await orderController.getMyOrder(
+        { user: { id: 'customer-from-session' }, params: { id: 'order-1' } },
+        response,
+        (error) => { throw error; },
+      );
+      assert.deepEqual(captured, {
+        customerId: 'customer-from-session',
+        orderId: 'order-1',
+      });
+      assert.equal(response.statusCode, 200);
+      assert.equal(response.payload.data.shippingStatus, 'Delivered');
+    } finally {
+      orderService.getMyOrder = originalGetMyOrder;
+    }
+  });
 });

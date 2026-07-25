@@ -309,6 +309,75 @@ describe('order service', () => {
     assert.equal(auditLogger.entries[0].action, 'ORDER_CREATE');
   });
 
+  it('projects the latest manual shipment into owned order history', async () => {
+    orderRepository.orders.push(
+      {
+        _id: 'order-owned',
+        customerId: 'customer-1',
+        orderCode: 'ORD-OWNED',
+        totalAmount: 50,
+        paymentMethod: 'COD',
+        paymentStatus: 'Paid',
+        orderStatus: 'Delivered',
+        shippingAddress: '12 Nguyễn Trãi',
+        createdAt: new Date('2026-07-25T08:00:00.000Z'),
+      },
+      {
+        _id: 'order-foreign',
+        customerId: 'customer-2',
+        orderCode: 'ORD-FOREIGN',
+        totalAmount: 75,
+        paymentMethod: 'COD',
+        paymentStatus: 'Unpaid',
+        orderStatus: 'Pending',
+        shippingAddress: 'Địa chỉ khác',
+        createdAt: new Date('2026-07-25T07:00:00.000Z'),
+      },
+    );
+    const shipments = new Map([
+      ['order-owned', {
+        orderId: 'order-owned',
+        status: 'HandedOff',
+        carrierName: 'Manual Carrier',
+        trackingReference: 'TRACK-001',
+        handedOffAt: new Date('2026-07-25T09:00:00.000Z'),
+        deliveredAt: null,
+        note: 'Bàn giao tại quầy',
+      }],
+      ['order-foreign', {
+        orderId: 'order-foreign',
+        status: 'Delivered',
+        carrierName: 'Foreign Carrier',
+        trackingReference: 'TRACK-FOREIGN',
+      }],
+    ]);
+    orderRepository.listLatestShipmentsByOrders = async (orderIds) => (
+      new Map(orderIds
+        .map((id) => [String(id), shipments.get(String(id))])
+        .filter(([, shipment]) => shipment))
+    );
+
+    const [result] = await orderService.listMyOrders('customer-1');
+
+    assert.equal(result.orderCode, 'ORD-OWNED');
+    assert.equal(result.shippingStatus, 'HandedOff');
+    assert.deepEqual(result.shipping, {
+      providerName: 'Manual Carrier',
+      trackingCode: 'TRACK-001',
+      handedOverAt: '2026-07-25T09:00:00.000Z',
+      deliveredAt: null,
+      note: 'Bàn giao tại quầy',
+    });
+    assert.equal((await orderService.listMyOrders('customer-1')).some((order) => order.orderCode === 'ORD-FOREIGN'), false);
+  });
+
+  it('returns a safe not-found error for an invalid customer order id', async () => {
+    await assert.rejects(
+      () => orderService.getMyOrder('customer-1', 'not-an-object-id'),
+      (error) => error.statusCode === 404 && error.message === 'Order not found',
+    );
+  });
+
   it('AT-227 returns a stable Vietnamese stock error for a final checkout shortage', async () => {
     inventoryRepository.reserve = async () => {
       throw new Error('Insufficient available inventory for checkout');
