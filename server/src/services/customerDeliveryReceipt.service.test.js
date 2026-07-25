@@ -1,14 +1,30 @@
 const assert = require('node:assert/strict');
+const { randomUUID } = require('node:crypto');
+const { spawn } = require('node:child_process');
+const fs = require('node:fs');
+const net = require('node:net');
+const os = require('node:os');
+const path = require('node:path');
 const { describe, it } = require('node:test');
+const mongoose = require('mongoose');
 
+const AuditLog = require('../models/auditLog.model');
+const CustomerDeliveryReceipt = require('../models/customerDeliveryReceipt.model');
 const DomainOutbox = require('../models/domainOutbox.model');
+const Order = require('../models/order.model');
+const Shipment = require('../models/shipment.model');
+const ShipmentEvent = require('../models/shipmentEvent.model');
 const { canonicalNotificationEvent } = require('./notificationOutbox.service');
+const { resolveNotificationChannels } = require('./notificationPolicy.service');
 const {
   createCustomerDeliveryReceiptService,
+  createModelRepository,
 } = require('./customerDeliveryReceipt.service');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const NOW = new Date('2026-07-26T10:30:00.000Z');
+const MONGOD_PATH = 'C:\\Program Files\\MongoDB\\Server\\8.2\\bin\\mongod.exe';
+const MONGOD_AVAILABLE = fs.existsSync(MONGOD_PATH);
 
 function clone(value) {
   return structuredClone(value);
@@ -21,6 +37,7 @@ function createHarness(overrides = {}) {
       orderCode: 'ORD-RECEIPT-001',
       customerId: 'customer-1',
       orderStatus: 'Delivered',
+      __v: 0,
       exchangeDeadlineAt: new Date('2026-07-31T09:00:00.000Z'),
       returnDeadlineAt: new Date('2026-07-31T09:00:00.000Z'),
     }],
@@ -29,6 +46,7 @@ function createHarness(overrides = {}) {
       orderId: 'order-1',
       status: 'Delivered',
       terminalEventId: 'delivery-event-1',
+      customerReceiptGuardVersion: 0,
       createdAt: new Date('2026-07-26T09:00:00.000Z'),
     }],
     shipmentEvents: [{
@@ -106,6 +124,12 @@ function createHarness(overrides = {}) {
         && candidate.status === 'Delivered'
         && candidate.terminalEventId === deliveryEventId
       ));
+      if (shipment) {
+        order.__v = Number(order.__v || 0) + 1;
+        shipment.customerReceiptGuardVersion = Number(
+          shipment.customerReceiptGuardVersion || 0,
+        ) + 1;
+      }
       return { order: clone(order), shipment: clone(shipment || null) };
     },
     async findByCommand(customerId, idempotencyKey, session) {
@@ -193,6 +217,7 @@ function createHarness(overrides = {}) {
 
   return {
     service,
+    repository,
     snapshot: () => clone(state),
   };
 }
@@ -213,7 +238,187 @@ async function rejectsCode(promise, statusCode, errorCode) {
   );
 }
 
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function reservePort() {
+  const server = net.createServer();
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const { port } = server.address();
+  await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+  return port;
+}
+
+async function waitForMongoPort(child, port, timeoutMs = 15_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) throw new Error(`Disposable mongod exited (${child.exitCode})`);
+    const connected = await new Promise((resolve) => {
+      const socket = net.createConnection({ host: '127.0.0.1', port });
+      socket.setTimeout(200);
+      socket.once('connect', () => { socket.destroy(); resolve(true); });
+      const unavailable = () => { socket.destroy(); resolve(false); };
+      socket.once('error', unavailable);
+      socket.once('timeout', unavailable);
+    });
+    if (connected) return;
+    await delay(50);
+  }
+  throw new Error('Disposable mongod did not become ready');
+}
+
+async function waitForPrimary(timeoutMs = 15_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const hello = await mongoose.connection.db.admin().command({ hello: 1 });
+      if (hello.isWritablePrimary) return;
+    } catch (_error) { /* replica-set election is still in progress */ }
+    await delay(100);
+  }
+  throw new Error('Disposable MongoDB replica set did not elect a primary');
+}
+
+async function stopMongo(child) {
+  if (!child || child.exitCode !== null) return;
+  child.kill('SIGTERM');
+  await Promise.race([
+    new Promise((resolve) => child.once('exit', resolve)),
+    delay(5_000),
+  ]);
+  if (child.exitCode === null) child.kill('SIGKILL');
+}
+
+function removeVerifiedMongoDirectory(directory) {
+  if (!directory) return;
+  const resolved = path.resolve(directory);
+  const tempRoot = `${path.resolve(os.tmpdir())}${path.sep}`;
+  if (!resolved.startsWith(tempRoot)
+    || !path.basename(resolved).startsWith('greenhome-customer-receipt-rs-')) {
+    throw new Error(`Refusing to remove unverified Mongo directory: ${resolved}`);
+  }
+  fs.rmSync(resolved, { recursive: true, force: true });
+}
+
 describe('customerDeliveryReceipt service', () => {
+  it('uses technical increment guards and never writes physical delivery fields', async () => {
+    const calls = [];
+    const originalOrderUpdate = Order.findOneAndUpdate;
+    const originalShipmentUpdate = Shipment.findOneAndUpdate;
+    const query = (value) => ({
+      session() { return this; },
+      async lean() { return value; },
+    });
+    Order.findOneAndUpdate = (filter, update, options) => {
+      calls.push({ model: 'Order', filter, update, options });
+      return query({ _id: filter._id, customerId: filter.customerId, orderStatus: 'Delivered' });
+    };
+    Shipment.findOneAndUpdate = (filter, update, options) => {
+      calls.push({ model: 'Shipment', filter, update, options });
+      return query({
+        _id: filter._id,
+        orderId: filter.orderId,
+        status: 'Delivered',
+        terminalEventId: filter.terminalEventId,
+      });
+    };
+
+    try {
+      const repository = createModelRepository();
+      const orderId = new mongoose.Types.ObjectId();
+      const customerId = new mongoose.Types.ObjectId();
+      const shipmentId = new mongoose.Types.ObjectId();
+      const deliveryEventId = new mongoose.Types.ObjectId();
+      const guarded = await repository.guardAuthoritativeDelivery({
+        orderId,
+        customerId,
+        shipmentId,
+        deliveryEventId,
+      }, { id: 'guard-session' });
+
+      assert.ok(guarded.order);
+      assert.ok(guarded.shipment);
+      assert.deepEqual(calls[0].update, { $inc: { __v: 1 } });
+      assert.deepEqual(calls[1].update, { $inc: { customerReceiptGuardVersion: 1 } });
+      assert.equal(calls[0].options.timestamps, false);
+      assert.equal(calls[1].options.timestamps, false);
+      for (const call of calls) {
+        assert.equal(call.update.$set, undefined);
+        assert.equal(call.update.$unset, undefined);
+      }
+      assert.equal(calls[1].filter.status, 'Delivered');
+      assert.equal(String(calls[1].filter.terminalEventId), String(deliveryEventId));
+    } finally {
+      Order.findOneAndUpdate = originalOrderUpdate;
+      Shipment.findOneAndUpdate = originalShipmentUpdate;
+    }
+  });
+
+  it('maps malformed ObjectIds through the default repository without leaking CastError', async () => {
+    const originalOrderFind = Order.findOne;
+    const originalEventFind = ShipmentEvent.findById;
+    Order.findOne = () => { throw new Error('Order query must not receive malformed ObjectId'); };
+    ShipmentEvent.findById = () => {
+      throw new Error('ShipmentEvent query must not receive malformed ObjectId');
+    };
+
+    try {
+      const modelRepository = createModelRepository();
+      const missingOrder = createHarness();
+      missingOrder.repository.findOwnedOrder = modelRepository.findOwnedOrder;
+      await rejectsCode(
+        missingOrder.service.recordDecision(
+          new mongoose.Types.ObjectId().toString(),
+          'not-an-object-id',
+          receivedInput(),
+        ),
+        404,
+        'ORDER_NOT_FOUND',
+      );
+
+      const validOrderId = new mongoose.Types.ObjectId().toString();
+      const validCustomerId = new mongoose.Types.ObjectId().toString();
+      const validShipmentId = new mongoose.Types.ObjectId().toString();
+      const validDeliveryEventId = new mongoose.Types.ObjectId().toString();
+      const staleEvent = createHarness({
+        state: {
+          orders: [{
+            _id: validOrderId,
+            orderCode: 'ORD-VALID-OBJECT-ID',
+            customerId: validCustomerId,
+            orderStatus: 'Delivered',
+          }],
+          shipments: [{
+            _id: validShipmentId,
+            orderId: validOrderId,
+            status: 'Delivered',
+            terminalEventId: validDeliveryEventId,
+            customerReceiptGuardVersion: 0,
+            createdAt: new Date('2026-07-26T09:00:00.000Z'),
+          }],
+          shipmentEvents: [],
+        },
+      });
+      staleEvent.repository.findShipmentEvent = modelRepository.findShipmentEvent;
+      await rejectsCode(
+        staleEvent.service.recordDecision(
+          validCustomerId,
+          validOrderId,
+          receivedInput({ expectedDeliveryEventId: 'not-an-object-id' }),
+        ),
+        409,
+        'DELIVERY_EVENT_STALE',
+      );
+    } finally {
+      Order.findOne = originalOrderFind;
+      ShipmentEvent.findById = originalEventFind;
+    }
+  });
+
   it('returns the same ownership-safe 404 for missing and foreign orders', async () => {
     const { service } = createHarness();
 
@@ -359,7 +564,10 @@ describe('customerDeliveryReceipt service', () => {
     assert.equal(new Date(result.returnDeadlineAt).toISOString(), exactDeadline.toISOString());
     assert.equal(new Date(state.orders[0].exchangeDeadlineAt).toISOString(), exactDeadline.toISOString());
     assert.equal(new Date(state.orders[0].returnDeadlineAt).toISOString(), exactDeadline.toISOString());
-    assert.deepEqual(state.shipments, before.shipments);
+    for (const field of ['_id', 'orderId', 'status', 'terminalEventId', 'deliveredAt']) {
+      assert.deepEqual(state.shipments[0][field], before.shipments[0][field]);
+    }
+    assert.equal(state.shipments[0].customerReceiptGuardVersion, 1);
     assert.deepEqual(state.shipmentEvents, before.shipmentEvents);
     assert.equal(state.receipts.length, 1);
     assert.equal(state.audits.length, 1);
@@ -371,13 +579,22 @@ describe('customerDeliveryReceipt service', () => {
     assert.match(state.outbox[0].eventHash, /^[a-f0-9]{64}$/);
     assert.equal(state.outbox[0].aggregateType, 'Order');
     assert.equal(state.outbox[0].aggregateId, 'order-1');
-    assert.deepEqual(canonicalNotificationEvent(state.outbox[0]), {
+    const completionNotification = canonicalNotificationEvent(state.outbox[0]);
+    assert.deepEqual(completionNotification, {
       businessEventId: state.outbox[0].businessEventId,
       type: 'ORDER_COMPLETED_BY_CUSTOMER',
       displayValues: { orderCode: 'ORD-RECEIPT-001' },
       recipient: { userId: 'customer-1', email: '', role: 'Customer' },
       target: { collection: 'Order', id: 'order-1' },
     });
+    assert.deepEqual(resolveNotificationChannels(
+      completionNotification.type,
+      completionNotification.recipient,
+    ), ['Email', 'InApp']);
+    assert.deepEqual(resolveNotificationChannels(
+      completionNotification.type,
+      { userId: 'staff-1', role: 'Staff' },
+    ), []);
     assert.equal(JSON.stringify(state.outbox[0]).includes('Tôi chưa nhận'), false);
   });
 
@@ -434,13 +651,22 @@ describe('customerDeliveryReceipt service', () => {
     assert.equal(harness.snapshot().receipts.length, 2);
     const disputeEvent = harness.snapshot().outbox[0];
     assert.equal(disputeEvent.eventType, 'CUSTOMER_DELIVERY_DISPUTED');
-    assert.deepEqual(canonicalNotificationEvent(disputeEvent), {
+    const disputeNotification = canonicalNotificationEvent(disputeEvent);
+    assert.deepEqual(disputeNotification, {
       businessEventId: disputeEvent.businessEventId,
       type: 'CUSTOMER_DELIVERY_DISPUTED',
       displayValues: { orderCode: 'ORD-RECEIPT-001' },
-      recipientRole: 'Staff',
+      recipient: { userId: 'customer-1', email: '', role: 'Customer' },
       target: { collection: 'Order', id: 'order-1' },
     });
+    assert.deepEqual(resolveNotificationChannels(
+      disputeNotification.type,
+      disputeNotification.recipient,
+    ), ['Email', 'InApp']);
+    assert.deepEqual(resolveNotificationChannels(
+      disputeNotification.type,
+      { userId: 'staff-1', role: 'Staff' },
+    ), []);
     assert.equal(JSON.stringify(disputeEvent).includes(dispute.reason), false);
   });
 
@@ -639,5 +865,190 @@ describe('customerDeliveryReceipt service', () => {
       /outbox persistence failed/,
     );
     assert.deepEqual(harness.snapshot(), before);
+  });
+
+  it('serializes a real concurrent shipment evidence change for both outcomes', {
+    timeout: 60_000,
+    skip: MONGOD_AVAILABLE ? false : `Disposable MongoDB skipped: ${MONGOD_PATH} is unavailable`,
+  }, async () => {
+    let child;
+    let dbPath;
+    try {
+      dbPath = fs.mkdtempSync(path.join(os.tmpdir(), 'greenhome-customer-receipt-rs-'));
+      const port = await reservePort();
+      child = spawn(MONGOD_PATH, [
+        '--dbpath', dbPath,
+        '--port', String(port),
+        '--bind_ip', '127.0.0.1',
+        '--replSet', 'customer-receipt-rs',
+        '--quiet',
+        '--logpath', path.join(dbPath, 'mongod.log'),
+      ], { windowsHide: true, stdio: 'ignore' });
+      await waitForMongoPort(child, port);
+
+      const database = `greenhome_customer_receipt_${randomUUID().replaceAll('-', '')}`;
+      await mongoose.connect(`mongodb://127.0.0.1:${port}/${database}?directConnection=true`, {
+        serverSelectionTimeoutMS: 5_000,
+      });
+      await mongoose.connection.db.admin().command({
+        replSetInitiate: {
+          _id: 'customer-receipt-rs',
+          members: [{ _id: 0, host: `127.0.0.1:${port}` }],
+        },
+      });
+      await waitForPrimary();
+
+      await Promise.all([
+        Order.createCollection(),
+        Shipment.createCollection(),
+        ShipmentEvent.createCollection(),
+        CustomerDeliveryReceipt.createCollection(),
+        AuditLog.createCollection(),
+        DomainOutbox.createCollection(),
+      ]);
+      await Promise.all([
+        Order.syncIndexes(),
+        Shipment.syncIndexes(),
+        ShipmentEvent.syncIndexes(),
+        CustomerDeliveryReceipt.syncIndexes(),
+        AuditLog.syncIndexes(),
+        DomainOutbox.syncIndexes(),
+      ]);
+
+      const orderId = new mongoose.Types.ObjectId();
+      const customerId = new mongoose.Types.ObjectId();
+      const shipmentId = new mongoose.Types.ObjectId();
+      const deliveredEventId = new mongoose.Types.ObjectId();
+      const changedEventId = new mongoose.Types.ObjectId();
+      await Order.create({
+        _id: orderId,
+        orderCode: 'ORD-REAL-RACE-001',
+        customerId,
+        totalAmount: 100_000,
+        paymentMethod: 'ONLINE',
+        paymentStatus: 'Paid',
+        orderStatus: 'Delivered',
+        shippingAddress: 'Địa chỉ kiểm thử giao dịch',
+      });
+      await Shipment.create({
+        _id: shipmentId,
+        commandKey: 'shipment-real-race',
+        shipmentKey: 'shipment-real-race',
+        orderId,
+        cycleId: new mongoose.Types.ObjectId(),
+        packingRecordId: new mongoose.Types.ObjectId(),
+        carrierName: 'Test Carrier',
+        trackingReference: 'TRACK-REAL-RACE',
+        handedOffAt: new Date('2026-07-26T08:00:00.000Z'),
+        handoffEvidenceReference: 'handoff-real-race',
+        recordedBy: new mongoose.Types.ObjectId(),
+        status: 'Delivered',
+        deliveredAt: new Date('2026-07-26T09:00:00.000Z'),
+        terminalEventId: deliveredEventId,
+      });
+      await ShipmentEvent.create({
+        _id: deliveredEventId,
+        eventKey: 'delivered-real-race',
+        orderId,
+        cycleId: new mongoose.Types.ObjectId(),
+        shipmentId,
+        eventType: 'DELIVERED',
+        source: 'STAFF_EVIDENCE',
+        occurredAt: new Date('2026-07-26T09:00:00.000Z'),
+        evidenceReference: 'delivery-real-race',
+      });
+
+      for (const input of [
+        {
+          outcome: 'RECEIVED',
+          expectedDeliveryEventId: String(deliveredEventId),
+          idempotencyKey: 'real-race-received',
+        },
+        {
+          outcome: 'NOT_RECEIVED',
+          expectedDeliveryEventId: String(deliveredEventId),
+          reason: 'Tôi chưa nhận được kiện hàng kiểm thử.',
+          idempotencyKey: 'real-race-not-received',
+        },
+      ]) {
+        await Promise.all([
+          CustomerDeliveryReceipt.collection.deleteMany({}),
+          AuditLog.collection.deleteMany({}),
+          DomainOutbox.collection.deleteMany({}),
+        ]);
+        await Order.collection.updateOne(
+          { _id: orderId },
+          {
+            $set: {
+              orderStatus: 'Delivered',
+              exchangeDeadlineAt: null,
+              returnDeadlineAt: null,
+            },
+          },
+        );
+        await Shipment.collection.updateOne(
+          { _id: shipmentId },
+          {
+            $set: {
+              status: 'Delivered',
+              terminalEventId: deliveredEventId,
+              deliveredAt: new Date('2026-07-26T09:00:00.000Z'),
+              customerReceiptGuardVersion: 0,
+            },
+          },
+        );
+
+        const baseRepository = createModelRepository();
+        let releaseEvidenceRead;
+        let notifyEvidenceRead;
+        const evidenceRead = new Promise((resolve) => { notifyEvidenceRead = resolve; });
+        const resume = new Promise((resolve) => { releaseEvidenceRead = resolve; });
+        let firstRead = true;
+        const repository = {
+          ...baseRepository,
+          async findShipmentEvent(eventId, session) {
+            const event = await baseRepository.findShipmentEvent(eventId, session);
+            if (firstRead) {
+              firstRead = false;
+              notifyEvidenceRead();
+              await resume;
+            }
+            return event;
+          },
+        };
+        const service = createCustomerDeliveryReceiptService({
+          repository,
+          clock: () => new Date(NOW),
+        });
+        const decision = service.recordDecision(String(customerId), String(orderId), input);
+        await evidenceRead;
+        await Shipment.collection.updateOne(
+          { _id: shipmentId },
+          {
+            $set: {
+              status: 'ReturnedToShop',
+              terminalEventId: changedEventId,
+            },
+          },
+        );
+        releaseEvidenceRead();
+
+        await rejectsCode(decision, 409, 'DELIVERY_EVENT_STALE');
+        assert.equal(await CustomerDeliveryReceipt.countDocuments(), 0);
+        assert.equal(await AuditLog.countDocuments(), 0);
+        assert.equal(await DomainOutbox.countDocuments(), 0);
+        const physical = await Shipment.findById(shipmentId)
+          .select('+customerReceiptGuardVersion')
+          .lean();
+        assert.equal(physical.status, 'ReturnedToShop');
+        assert.equal(String(physical.terminalEventId), String(changedEventId));
+        assert.equal(physical.deliveredAt.toISOString(), '2026-07-26T09:00:00.000Z');
+        assert.equal(physical.customerReceiptGuardVersion, 0);
+      }
+    } finally {
+      await mongoose.disconnect().catch(() => {});
+      await stopMongo(child);
+      removeVerifiedMongoDirectory(dbPath);
+    }
   });
 });

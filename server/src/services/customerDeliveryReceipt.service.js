@@ -141,9 +141,11 @@ function withSession(query, session) {
 function createModelRepository() {
   return {
     async findOwnedOrder(customerId, orderId, session) {
+      if (!mongoose.isValidObjectId(orderId) || !mongoose.isValidObjectId(customerId)) return null;
       return withSession(Order.findOne({ _id: orderId, customerId }), session).lean();
     },
     async findLatestTerminalShipment(orderId, session) {
+      if (!mongoose.isValidObjectId(orderId)) return null;
       return withSession(
         Shipment.findOne({ orderId, status: { $in: TERMINAL_SHIPMENT_STATUSES } })
           .sort({ createdAt: -1, _id: -1 }),
@@ -151,6 +153,7 @@ function createModelRepository() {
       ).lean();
     },
     async findShipmentEvent(eventId, session) {
+      if (!mongoose.isValidObjectId(eventId)) return null;
       return withSession(ShipmentEvent.findById(eventId), session).lean();
     },
     async guardAuthoritativeDelivery({
@@ -162,7 +165,7 @@ function createModelRepository() {
       const guardedOrder = await withSession(
         Order.findOneAndUpdate(
           { _id: orderId, customerId, orderStatus: 'Delivered' },
-          { $set: { orderStatus: 'Delivered' } },
+          { $inc: { __v: 1 } },
           {
             new: true,
             runValidators: true,
@@ -181,7 +184,7 @@ function createModelRepository() {
             status: 'Delivered',
             terminalEventId: deliveryEventId,
           },
-          { $set: { status: 'Delivered', terminalEventId: deliveryEventId } },
+          { $inc: { customerReceiptGuardVersion: 1 } },
           {
             new: true,
             runValidators: true,
@@ -491,9 +494,7 @@ function createCustomerDeliveryReceiptService({
             aggregateType: 'Order',
             aggregateId: String(order._id),
             occurredAt: respondedAt,
-            ...(command.outcome === 'RECEIVED'
-              ? { recipient: { userId: String(customerId), role: 'Customer' } }
-              : { recipientRole: 'Staff' }),
+            recipient: { userId: String(customerId), role: 'Customer' },
             target: { collection: 'Order', id: String(order._id) },
             displayValues: { orderCode: String(order.orderCode || '') },
           });
