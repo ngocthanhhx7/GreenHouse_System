@@ -2,6 +2,12 @@ const assert = require('node:assert/strict');
 const { describe, it } = require('node:test');
 
 const { createReplenishmentService } = require('./replenishment.service');
+const { operationalEvidenceClaim } = require('../utils/operationalEvidenceClaim');
+
+const SIGNED_EVIDENCE = operationalEvidenceClaim.sign(
+  '/api/operational-evidence/11111111-1111-4111-8111-111111111111.jpg',
+  123,
+);
 
 function createRepository() {
   const inventory = {
@@ -86,7 +92,7 @@ describe('replenishment service', () => {
       inventoryId: 'inv-1',
       quantity: 20,
       reason: 'Low stock restock',
-      evidence: [{ file: 'count-sheet.jpg' }],
+      evidence: [SIGNED_EVIDENCE],
       idempotencyKey: 'request-1',
     });
     assert.equal(request.status, 'PendingApproval');
@@ -104,7 +110,7 @@ describe('replenishment service', () => {
       inventoryId: 'inv-1',
       quantity: 5,
       reason: 'Low stock restock',
-      evidence: [{ file: 'count-sheet.jpg' }],
+      evidence: [SIGNED_EVIDENCE],
       idempotencyKey: 'request-2',
     });
     await service.updateRequestStatus('admin-1', request.id, {
@@ -121,7 +127,7 @@ describe('replenishment service', () => {
       rejectedQuantity: 0,
       supplierReference: 'SUP-1',
       deliveryReference: 'DEL-1',
-      evidence: [{ file: 'delivery.jpg' }],
+      evidence: [SIGNED_EVIDENCE],
       idempotencyKey: 'receipt-2',
     });
     assert.equal(result.status, 'Completed');
@@ -152,7 +158,7 @@ describe('replenishment service', () => {
         inventoryId: 'inv-1',
         quantity: 20,
         reason: 'Low stock restock',
-        evidence: [{ file: 'count-sheet.jpg' }],
+        evidence: [SIGNED_EVIDENCE],
         idempotencyKey: 'request-race-1',
       }),
       (error) => error.errorCode === 'ASSIGNMENT_ACTOR_STALE',

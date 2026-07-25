@@ -57,3 +57,24 @@
 - Duplicate-active preflight: blocks before mutation with a Product/request-id report.
 
 This traceability proves local release readiness. It does not prove production migration or deployment.
+
+## Evidence-upload and Vietnamese UI addendum 2026-07-25
+
+| Requirement | Implementation | Evidence |
+|---|---|---|
+| Only managed operational images are accepted | `operationalEvidenceClaim` verification in Inventory and Replenishment command boundaries | `sl005.acceptance.test.js`, replenishment service/hardening tests |
+| 1..5 images, 5 MiB each, 20 MiB aggregate | Shared uploader limits plus server-side signed-size aggregation | canonical-duplicate, count, per-file and aggregate-size acceptance tests |
+| Admin can review evidence before deciding | Safe Replenishment response plus protected Admin preview using `resolveMediaUrl` | `sl005UiContract.test.js`; Admin-only replenishment route contract |
+| Inventory pages are Vietnamese | Warehouse Inventory/Replenishment and Admin Replenishment copy | `sl005UiContract.test.js` |
+| Threshold changes are attributable and replay-safe | `THRESHOLD_OVERRIDE` ledger plus SHA-256 command fingerprint | schema invariant and SL-005 acceptance tests |
+| Repeated UI commands are bounded | Per-request pending locks for receive, withdraw, short closure and correction | `sl005UiContract.test.js` |
+
+The server rejects unsigned/tampered values, more than five images, canonical
+duplicates and aggregate payloads over 20 MiB. It stores the submitted signed
+URLs after verification so later reviewers can reproduce the exact evidence
+reference. Reusing a physical-count or threshold idempotency key with different
+command facts returns `IDEMPOTENCY_KEY_REUSED`.
+
+Refresh evidence: server `1058/1058` across 171 suites; client `260/260` across
+65 suites; production client build passed with only the existing large-chunk
+warning; `git diff --check` passed.

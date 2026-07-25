@@ -8,6 +8,10 @@ const { notificationService } = require('./notification.service');
 const { lowStockAlertLifecycle: defaultLowStockLifecycle } = require('./lowStockAlertLifecycle.service');
 const { logAudit } = require('../utils/auditLogger');
 const {
+  operationalEvidenceClaim,
+  MAX_OPERATIONAL_EVIDENCE_TOTAL_SIZE,
+} = require('../utils/operationalEvidenceClaim');
+const {
   assignmentCoordinator: defaultAssignmentCoordinator,
 } = require('./assignmentCoordination.service');
 
@@ -67,6 +71,7 @@ function toResponse(request, inventory) {
     status: request.status,
     reason: request.reason,
     evidence: request.evidence || [],
+    shortClosureEvidence: request.shortClosureEvidence || [],
     idempotencyKey: request.idempotencyKey || '',
     adminNote: request.adminNote || '',
     decisionReason: request.decisionReason || request.adminNote || '',
@@ -193,7 +198,28 @@ function createReplenishmentService({
   eventPublisher = notificationService,
   lowStockLifecycle = null,
   assignmentCoordinator = defaultAssignmentCoordinator,
+  evidenceClaim = operationalEvidenceClaim,
 } = {}) {
+  function verifyEvidenceImages(evidence, label) {
+    if (!Array.isArray(evidence) || evidence.length < 1) {
+      throw new ApiError(400, `${label} cần ít nhất 1 ảnh dẫn chứng`);
+    }
+    if (evidence.length > 5) throw new ApiError(400, `${label} chỉ được có tối đa 5 ảnh dẫn chứng`);
+    let totalSize = 0;
+    const canonicalUrls = new Set();
+    const verified = evidence.map((signedUrl) => {
+      if (typeof signedUrl !== 'string') throw new ApiError(400, `${label} chứa ảnh dẫn chứng không hợp lệ`);
+      const claim = evidenceClaim.verify(signedUrl);
+      if (canonicalUrls.has(claim.url)) throw new ApiError(400, `${label} không được chứa ảnh dẫn chứng trùng nhau`);
+      canonicalUrls.add(claim.url);
+      totalSize += Number(claim.size || 0);
+      return signedUrl;
+    });
+    if (totalSize > MAX_OPERATIONAL_EVIDENCE_TOTAL_SIZE) {
+      throw new ApiError(413, `${label} vượt quá tổng dung lượng ảnh cho phép`);
+    }
+    return verified;
+  }
   async function writeAudit(userId, action, targetId, description) {
     await auditLogger.log({
       userId,
@@ -249,9 +275,7 @@ function createReplenishmentService({
       }
       const reason = String(input.reason || '').trim();
       if (!reason) throw new ApiError(400, 'Replenishment reason is required');
-      if (!Array.isArray(input.evidence) || input.evidence.length === 0) {
-        throw new ApiError(400, 'Replenishment evidence is required');
-      }
+      const evidence = verifyEvidenceImages(input.evidence, 'Yêu cầu bổ sung hàng');
       const idempotencyKey = String(input.idempotencyKey || '').trim();
       if (!idempotencyKey) throw new ApiError(400, 'Replenishment request idempotencyKey is required');
       const inventory = input.inventoryId
@@ -282,7 +306,7 @@ function createReplenishmentService({
             netAcceptedQuantity: 0,
             status: 'PendingApproval',
             reason,
-            evidence: input.evidence,
+            evidence,
             idempotencyKey,
             receipts: [],
           }, session);
@@ -339,9 +363,7 @@ function createReplenishmentService({
     async requestShortClosure(userId, id, input = {}) {
       const reason = String(input.reason || '').trim();
       if (!reason) throw new ApiError(400, 'Short closure reason is required');
-      if (!Array.isArray(input.evidence) || input.evidence.length === 0) {
-        throw new ApiError(400, 'Short closure evidence is required');
-      }
+      const evidence = verifyEvidenceImages(input.evidence, 'Đề nghị chốt nhận thiếu');
       const request = await repository.findRequestById(id);
       if (!request) throw new ApiError(404, 'Replenishment request not found');
       if (!RECEIVABLE_STATUSES.includes(request.status)) {
@@ -351,7 +373,7 @@ function createReplenishmentService({
         status: 'ShortClosurePending',
         shortClosureBaseStatus: request.status,
         shortClosureReason: reason,
-        shortClosureEvidence: input.evidence,
+        shortClosureEvidence: evidence,
         shortClosureRequestedBy: userId,
       });
       if (!updated) throw new ApiError(409, 'Replenishment request changed while requesting short closure');
@@ -437,9 +459,7 @@ function createReplenishmentService({
       if (rejectedQuantity > 0 && !String(input.rejectedReason || '').trim()) {
         throw new ApiError(400, 'Rejected reason is required when delivered units are rejected');
       }
-      if (!Array.isArray(input.evidence) || input.evidence.length === 0) {
-        throw new ApiError(400, 'Receipt evidence is required');
-      }
+      const evidence = verifyEvidenceImages(input.evidence, 'Phiếu nhận hàng');
       const idempotencyKey = String(input.idempotencyKey || '').trim();
       if (!idempotencyKey) throw new ApiError(400, 'Receipt idempotencyKey is required');
       const receiptKey = `replenishment-receipt:${id}:${idempotencyKey}`;
@@ -480,7 +500,7 @@ function createReplenishmentService({
             rejectedReason: String(input.rejectedReason || '').trim(),
             acceptedQuantityCorrection: 0,
             reason: '',
-            evidence: input.evidence,
+            evidence,
             inspectedBy: userId,
             inspectedAt: new Date(),
             idempotencyKey: receiptKey,
@@ -533,7 +553,7 @@ function createReplenishmentService({
               afterSellableQuantity: afterSellable,
               dimension: 'sellable',
               reason: `Receipt ${String(receipt._id)}`,
-              evidence: input.evidence,
+              evidence,
               idempotencyKey: receiptKey,
               movementKey: receiptKey,
             }, session);
@@ -571,9 +591,7 @@ function createReplenishmentService({
       }
       const reason = String(input.reason || '').trim();
       if (!reason) throw new ApiError(400, 'Receipt correction reason is required');
-      if (!Array.isArray(input.evidence) || input.evidence.length === 0) {
-        throw new ApiError(400, 'Receipt correction evidence is required');
-      }
+      const evidence = verifyEvidenceImages(input.evidence, 'Điều chỉnh phiếu nhận');
       const idempotencyKey = String(input.idempotencyKey || '').trim();
       if (!idempotencyKey) throw new ApiError(400, 'Receipt correction idempotencyKey is required');
       const originalReceiptId = String(input.originalReceiptId || input.correctionOf || '').trim();
@@ -621,7 +639,7 @@ function createReplenishmentService({
             rejectedReason: '',
             acceptedQuantityCorrection: correctionQuantity,
             reason,
-            evidence: input.evidence,
+            evidence,
             inspectedBy: userId,
             inspectedAt: new Date(),
             idempotencyKey: correctionKey,
@@ -665,7 +683,7 @@ function createReplenishmentService({
             afterSellableQuantity: afterSellable,
             dimension: 'sellable',
             reason,
-            evidence: input.evidence,
+            evidence,
             idempotencyKey: correctionKey,
             movementKey: correctionKey,
           }, session);

@@ -30,8 +30,30 @@ function createInventoryRepository() {
       return { ...inventory, beforeSellableQuantity: before };
     },
     async createTransaction(data) { transactions.push(data); return data; },
+    async findTransactionByIdempotencyKey(idempotencyKey) {
+      return transactions.find((entry) => entry.idempotencyKey === idempotencyKey) || null;
+    },
+    async updateInventory(id, patch) {
+      if (id !== inventory._id) return null;
+      Object.assign(inventory, patch);
+      return inventory;
+    },
   };
 }
+
+const evidenceClaim = {
+  verify(value) {
+    if (!String(value).startsWith('signed-evidence:')) throw new Error('invalid signed evidence');
+    const token = String(value);
+    const url = token.startsWith('signed-evidence:canonical-copy-')
+      ? 'canonical-evidence:shared.jpg'
+      : token;
+    const size = token.startsWith('signed-evidence:large-')
+      ? 5 * 1024 * 1024
+      : 123;
+    return { url, size };
+  },
+};
 
 function createDamageRepository() {
   const inventory = {
@@ -147,12 +169,13 @@ describe('SL-005 acceptance contracts', () => {
       auditLogger: { async log() {} },
       assignmentCoordinator: { async coordinate() {} },
       eventPublisher: null,
+      evidenceClaim,
     });
 
     const result = await service.recordPhysicalCount('warehouse-1', 'inv-1', {
       countedSellableQuantity: 7,
       reason: 'Cycle count with evidence',
-      evidence: [{ file: 'count.jpg' }],
+      evidence: ['signed-evidence:count.jpg'],
       idempotencyKey: 'count-1',
     });
 
@@ -160,6 +183,76 @@ describe('SL-005 acceptance contracts', () => {
     assert.equal(result.transaction.quantity, -3);
     assert.equal(result.transaction.beforeSellableQuantity, 10);
     assert.equal(result.transaction.afterSellableQuantity, 7);
+  });
+
+  it('rejects arbitrary count evidence and traces a threshold override without changing stock', async () => {
+    const repository = createInventoryRepository();
+    const service = createInventoryService({
+      repository,
+      transactionManager: { withTransaction: async (work) => work(null) },
+      auditLogger: { async log() {} },
+      assignmentCoordinator: { async coordinate() {} },
+      eventPublisher: null,
+      evidenceClaim,
+    });
+
+    await assert.rejects(
+      () => service.recordPhysicalCount('warehouse-1', 'inv-1', {
+        countedSellableQuantity: 10,
+        reason: 'Invalid evidence',
+        evidence: ['https://example.com/count.jpg'],
+        idempotencyKey: 'count-invalid',
+      }),
+      /invalid signed evidence/,
+    );
+    await assert.rejects(
+      () => service.recordPhysicalCount('warehouse-1', 'inv-1', {
+        countedSellableQuantity: 10,
+        reason: 'Duplicate evidence',
+        evidence: ['signed-evidence:duplicate.jpg', 'signed-evidence:duplicate.jpg'],
+        idempotencyKey: 'count-duplicate',
+      }),
+      /trùng nhau/,
+    );
+
+    const result = await service.setThresholdOverride('warehouse-1', 'inv-1', {
+      threshold: 8,
+      reason: 'Điều chỉnh theo tốc độ bán',
+      evidence: ['signed-evidence:threshold.jpg'],
+      idempotencyKey: 'threshold-1',
+    });
+
+    assert.equal(result.inventory.sellableQuantity, 10);
+    assert.equal(result.transaction.transactionType, 'THRESHOLD_OVERRIDE');
+    assert.equal(result.transaction.beforeSellableQuantity, 10);
+    assert.equal(result.transaction.afterSellableQuantity, 10);
+    assert.deepEqual(result.transaction.evidence, ['signed-evidence:threshold.jpg']);
+
+    await assert.rejects(
+      () => service.setThresholdOverride('warehouse-1', 'inv-1', {
+        threshold: 9,
+        reason: 'Không được dùng lại key cho dữ kiện khác',
+        evidence: ['signed-evidence:threshold-other.jpg'],
+        idempotencyKey: 'threshold-1',
+      }),
+      (error) => error.statusCode === 409 && error.errorCode === 'IDEMPOTENCY_KEY_REUSED',
+    );
+
+    await service.recordPhysicalCount('warehouse-1', 'inv-1', {
+      countedSellableQuantity: 10,
+      reason: 'Kiểm kê trước khi đổi ngưỡng',
+      evidence: ['signed-evidence:count-shared-key.jpg'],
+      idempotencyKey: 'shared-inventory-command-key',
+    });
+    await assert.rejects(
+      () => service.setThresholdOverride('warehouse-1', 'inv-1', {
+        threshold: 7,
+        reason: 'Không được replay command khác loại',
+        evidence: ['signed-evidence:threshold-shared-key.jpg'],
+        idempotencyKey: 'shared-inventory-command-key',
+      }),
+      (error) => error.statusCode === 409 && error.errorCode === 'IDEMPOTENCY_KEY_REUSED',
+    );
   });
 
   it('quarantines damage on report, supports a partial warehouse decision, and is idempotent', async () => {
@@ -204,13 +297,14 @@ describe('SL-005 acceptance contracts', () => {
       auditLogger: { async log() {} },
       eventPublisher: null,
       assignmentCoordinator: { async coordinate() {} },
+      evidenceClaim,
     });
 
     const request = await service.createRequest('warehouse-1', {
       inventoryId: 'inv-1',
       quantity: 5,
       reason: 'Below threshold',
-      evidence: [{ file: 'stock-count.jpg' }],
+      evidence: ['signed-evidence:stock-count.jpg'],
       idempotencyKey: 'request-1',
     });
     const approved = await service.updateRequestStatus('admin-1', request.id, {
@@ -227,11 +321,66 @@ describe('SL-005 acceptance contracts', () => {
       acceptedSellableQuantity: 3,
       rejectedQuantity: 1,
       rejectedReason: 'One dented unit',
-      evidence: [{ file: 'delivery.jpg' }],
+      evidence: ['signed-evidence:delivery.jpg'],
       idempotencyKey: 'receipt-1',
     });
     assert.equal(received.status, 'PartiallyReceived');
     assert.equal(repository.inventory.sellableQuantity, 5);
     assert.equal(repository.transactions[0].transactionType, 'REPLENISHMENT_RECEIVE');
+  });
+
+  it('requires 1..5 verified replenishment images instead of arbitrary evidence values', async () => {
+    const repository = createReplenishmentRepository();
+    const service = createReplenishmentService({
+      repository,
+      transactionManager: { withTransaction: async (work) => work(null) },
+      auditLogger: { async log() {} },
+      eventPublisher: null,
+      assignmentCoordinator: { async coordinate() {} },
+      evidenceClaim,
+    });
+
+    await assert.rejects(
+      () => service.createRequest('warehouse-1', {
+        inventoryId: 'inv-1', quantity: 5, reason: 'Below threshold',
+        evidence: ['https://example.com/request.jpg'], idempotencyKey: 'request-invalid',
+      }),
+      /invalid signed evidence/,
+    );
+    await assert.rejects(
+      () => service.createRequest('warehouse-1', {
+        inventoryId: 'inv-1', quantity: 5, reason: 'Below threshold',
+        evidence: Array.from({ length: 6 }, (_, index) => `signed-evidence:${index}.jpg`),
+        idempotencyKey: 'request-too-many',
+      }),
+      /tối đa 5|at most 5/i,
+    );
+    await assert.rejects(
+      () => service.createRequest('warehouse-1', {
+        inventoryId: 'inv-1', quantity: 5, reason: 'Below threshold',
+        evidence: ['signed-evidence:duplicate.jpg', 'signed-evidence:duplicate.jpg'],
+        idempotencyKey: 'request-duplicate',
+      }),
+      /trùng nhau/,
+    );
+    await assert.rejects(
+      () => service.createRequest('warehouse-1', {
+        inventoryId: 'inv-1', quantity: 5, reason: 'Below threshold',
+        evidence: [
+          'signed-evidence:canonical-copy-a.jpg',
+          'signed-evidence:canonical-copy-b.jpg',
+        ],
+        idempotencyKey: 'request-canonical-duplicate',
+      }),
+      /trùng nhau/,
+    );
+    await assert.rejects(
+      () => service.createRequest('warehouse-1', {
+        inventoryId: 'inv-1', quantity: 5, reason: 'Below threshold',
+        evidence: Array.from({ length: 5 }, (_, index) => `signed-evidence:large-${index}.jpg`),
+        idempotencyKey: 'request-too-large',
+      }),
+      (error) => error.statusCode === 413 && /dung lượng/i.test(error.message),
+    );
   });
 });

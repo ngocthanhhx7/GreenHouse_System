@@ -35,6 +35,7 @@ const inventoryTransactionSchema = new mongoose.Schema(
         'EXCHANGE_RETURN_DAMAGED_IN', 'EXCHANGE_REPLACEMENT_OUT',
         'DAMAGE_QUARANTINED', 'DAMAGE_REJECTED', 'DAMAGE_WITHDRAWN',
         'DAMAGE_DISPOSED', 'DAMAGE_RETURNED_TO_SUPPLIER', 'PHYSICAL_COUNT',
+        'THRESHOLD_OVERRIDE',
         'REPLENISHMENT_RECEIVE_CORRECTION', 'RECONCILIATION',
         'DELIVERY_RETURN_SELLABLE', 'DELIVERY_RETURN_DAMAGED',
       ],
@@ -73,6 +74,12 @@ const inventoryTransactionSchema = new mongoose.Schema(
       default: '',
       trim: true,
       maxlength: 240,
+    },
+    commandFingerprint: {
+      type: String,
+      default: '',
+      trim: true,
+      maxlength: 64,
     },
     dimension: {
       type: String,

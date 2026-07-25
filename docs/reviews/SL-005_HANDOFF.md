@@ -74,3 +74,25 @@ The existing Vite warning for a bundle larger than 500 kB remains and is outside
 - [x] Migration double-run and duplicate preflight verified on disposable `rs0`.
 - [ ] Nguyễn Ngọc Thành completes final review and merge.
 - [ ] Deployment owner executes the production migration.
+
+## Handoff refresh 2026-07-25
+
+The Warehouse evidence/UI extension is ready for Thành's integration review.
+
+- All Inventory/Replenishment mutations that require operational proof now
+  accept only 1..5 verified internal image URLs. The upload boundary limits
+  each file to 5 MiB; command validation caps the group at 20 MiB and rejects
+  duplicate canonical URLs.
+- Admin's protected replenishment queue previews request and short-closure
+  evidence. No evidence route was exposed to anonymous, Customer or Supplier
+  actors.
+- Warehouse Inventory/Replenishment and Admin Replenishment pages are in
+  Vietnamese. Each mutating control is disabled while its own request runs.
+- Physical count and threshold replay compare a durable command fingerprint.
+  Threshold override now appends a zero-quantity `THRESHOLD_OVERRIDE` ledger
+  record instead of leaving only mutable state.
+- Final local evidence: server `1058/1058` (171 suites), client `260/260` (65
+  suites), build pass and `git diff --check` clean.
+
+Deployment still needs the existing backup/migration/browser-walkthrough
+activities. This addendum does not claim production deployment.
