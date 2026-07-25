@@ -20,14 +20,16 @@ describe('customer order history projection', () => {
     assert.equal(orderTabFor({ orderStatus: 'Packed' }), 'processing');
     assert.equal(orderTabFor({ orderStatus: 'Shipped' }), 'shipping');
     assert.equal(orderTabFor({ orderStatus: 'DeliveryFailed' }), 'shipping');
-    assert.equal(orderTabFor({ orderStatus: 'Delivered' }), 'completed');
+    assert.equal(orderTabFor({ orderStatus: 'Delivered', customerOrderStatus: 'AwaitingCustomerConfirmation' }), 'shipping');
+    assert.equal(orderTabFor({ orderStatus: 'Delivered', customerOrderStatus: 'DeliveryDisputed' }), 'shipping');
+    assert.equal(orderTabFor({ orderStatus: 'Delivered', customerOrderStatus: 'Completed' }), 'completed');
     assert.equal(orderTabFor({ orderStatus: 'Cancelled' }), 'cancelled');
   });
 
   it('filters without inventing backend states', () => {
     const orders = [
       { id: 'a', orderStatus: 'Shipped' },
-      { id: 'b', orderStatus: 'Delivered' },
+      { id: 'b', orderStatus: 'Delivered', customerOrderStatus: 'Completed' },
     ];
     assert.deepEqual(filterOrdersByTab(orders, 'shipping').map((order) => order.id), ['a']);
     assert.deepEqual(filterOrdersByTab(orders, 'all').map((order) => order.id), ['a', 'b']);
@@ -50,7 +52,13 @@ describe('customer order history projection', () => {
       paymentStatus: 'Paid',
       paymentMethod: 'ONLINE',
     }).canCancel, true);
-    assert.equal(getOrderActions({ id: 'b', orderStatus: 'Delivered' }).canReview, true);
+    assert.equal(getOrderActions({ id: 'b', orderStatus: 'Delivered', customerOrderStatus: 'AwaitingCustomerConfirmation' }).canReview, false);
+    assert.equal(getOrderActions({
+      id: 'received',
+      orderStatus: 'Delivered',
+      customerOrderStatus: 'Completed',
+      afterSales: { enabled: true, receiptGatePassed: true },
+    }).canReview, true);
   });
 
   it('fails closed unless online payment is retryable before a valid deadline', () => {

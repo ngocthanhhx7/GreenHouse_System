@@ -36,6 +36,8 @@ describe('customer review workspace', () => {
     const workspace = buildReviewWorkspace([{
       id: 'order-1',
       orderStatus: 'Delivered',
+      customerOrderStatus: 'Completed',
+      afterSales: { enabled: true, receiptGatePassed: true },
       details: [{
         id: 'line-old',
         productId: 'old-reviewed-product',
@@ -111,6 +113,8 @@ describe('customer review workspace', () => {
         id: 'order-1',
         orderCode: 'GH-1',
         orderStatus: 'Delivered',
+        customerOrderStatus: 'Completed',
+        afterSales: { enabled: true, receiptGatePassed: true },
         details: [
           { id: 'line-1', productId: 'p1', productNameSnapshot: 'Dao' },
           { id: 'line-2', productId: 'p2', productNameSnapshot: 'Chảo' },
@@ -125,6 +129,8 @@ describe('customer review workspace', () => {
       {
         id: 'order-1',
         orderStatus: 'Delivered',
+        customerOrderStatus: 'Completed',
+        afterSales: { enabled: true, receiptGatePassed: true },
         details: [{ id: 'line-1', productId: 'p1', productNameSnapshot: 'Dao' }],
       },
     ], [{ id: 'review-1', productId: 'p1', rating: 5 }]);
@@ -138,5 +144,25 @@ describe('customer review workspace', () => {
     ], [{ id: 'review-2', productId: 'p2', rating: 4 }]);
     assert.equal(result.pending.length, 0);
     assert.equal(result.completed[0].productName, 'Sản phẩm đã đánh giá');
+  });
+
+  it('does not unlock reviews from physical delivery without the server receipt gate', () => {
+    const result = buildReviewWorkspace([
+      {
+        id: 'legacy-delivered',
+        orderStatus: 'Delivered',
+        customerOrderStatus: 'AwaitingCustomerConfirmation',
+        afterSales: { receiptGatePassed: false, enabled: false },
+        details: [{ id: 'line-1', productId: 'p1' }],
+      },
+      {
+        id: 'disputed-delivery',
+        orderStatus: 'Delivered',
+        customerOrderStatus: 'DeliveryDisputed',
+        afterSales: { receiptGatePassed: false, enabled: false },
+        details: [{ id: 'line-2', productId: 'p2' }],
+      },
+    ], []);
+    assert.equal(result.pending.length, 0);
   });
 });

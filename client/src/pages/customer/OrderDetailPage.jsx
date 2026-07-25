@@ -60,10 +60,15 @@ export default function OrderDetailPage() {
   const [isSubmittingExchange, setIsSubmittingExchange] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
   const [isCancelling, setIsCancelling] = useState(false);
+  const [deliveryReceiptDialog, setDeliveryReceiptDialog] = useState(null);
+  const [notReceivedReason, setNotReceivedReason] = useState('');
+  const [isSubmittingDeliveryReceipt, setIsSubmittingDeliveryReceipt] = useState(false);
   const returnSubmissionInFlight = useRef(false);
   const exchangeSubmissionInFlight = useRef(false);
   const exchangeSubmissionKey = useRef(newKey(`exchange:${id}`));
   const cancelIdempotencyKey = useRef(newKey(`cancel:${id}`));
+  const deliveryReceiptSubmissionInFlight = useRef(false);
+  const deliveryReceiptIdempotencyKey = useRef(newKey(`delivery-receipt:${id}`));
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
@@ -94,8 +99,10 @@ export default function OrderDetailPage() {
         String(item.orderId) === String(id) && ACTIVE_RETURN_STATUSES.has(item.status)
       ));
       setActiveCase(exchange ? { type: 'EXCHANGE', ...exchange } : returnRequest ? { type: 'RETURN', ...returnRequest } : null);
+      return loadedOrder;
     } catch (err) {
       setError(err.message);
+      return null;
     }
   }
 
@@ -191,6 +198,60 @@ export default function OrderDetailPage() {
       setError(err.message);
     } finally {
       setIsSubmittingFulfillment(false);
+    }
+  }
+
+  function openDeliveryReceiptDialog(outcome) {
+    setError('');
+    setMessage('');
+    setDeliveryReceiptDialog({ outcome });
+  }
+
+  function closeDeliveryReceiptDialog() {
+    if (isSubmittingDeliveryReceipt) return;
+    setDeliveryReceiptDialog(null);
+  }
+
+  async function submitDeliveryReceipt(event) {
+    event.preventDefault();
+    if (!deliveryReceiptDialog || deliveryReceiptSubmissionInFlight.current) return;
+
+    const normalizedReason = notReceivedReason.trim().replace(/\s+/g, ' ');
+    if (deliveryReceiptDialog.outcome === 'NOT_RECEIVED' && (
+      normalizedReason.length < 10 || normalizedReason.length > 500
+    )) {
+      setError('Lý do chưa nhận được hàng phải từ 10 đến 500 ký tự.');
+      return;
+    }
+
+    const expectedDeliveryEventId = order?.deliveryReceipt?.expectedDeliveryEventId;
+    if (!expectedDeliveryEventId) {
+      setError('Không tìm thấy bằng chứng giao hàng để xác nhận. Vui lòng tải lại đơn hàng.');
+      return;
+    }
+
+    deliveryReceiptSubmissionInFlight.current = true;
+    setIsSubmittingDeliveryReceipt(true);
+    setError('');
+    try {
+      await orderService.recordDeliveryConfirmation(id, {
+        outcome: deliveryReceiptDialog.outcome,
+        expectedDeliveryEventId,
+        ...(deliveryReceiptDialog.outcome === 'NOT_RECEIVED' ? { reason: normalizedReason } : {}),
+      }, deliveryReceiptIdempotencyKey.current);
+      const canonicalOrder = await loadOrder();
+      if (!canonicalOrder) return;
+      deliveryReceiptIdempotencyKey.current = newKey(`delivery-receipt:${id}`);
+      setNotReceivedReason('');
+      setDeliveryReceiptDialog(null);
+      setMessage(deliveryReceiptDialog.outcome === 'RECEIVED'
+        ? 'Đã ghi nhận bạn đã nhận được hàng. Bạn có thể tiếp tục các dịch vụ sau mua.'
+        : 'Đã ghi nhận báo cáo chưa nhận được hàng. Đơn hàng vẫn đang chờ giao.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      deliveryReceiptSubmissionInFlight.current = false;
+      setIsSubmittingDeliveryReceipt(false);
     }
   }
 
@@ -317,6 +378,9 @@ export default function OrderDetailPage() {
   const exchangeFormAvailable = replacementMode
     ? eligibleReplacementUnits.length > 0
     : !originalExchangeAction.disabled;
+  const availableDeliveryActions = order.availableDeliveryActions || [];
+  const afterSalesEnabled = order.afterSales?.enabled === true
+    && order.afterSales?.receiptGatePassed === true;
 
   return (
     <div className="surface">
@@ -324,8 +388,8 @@ export default function OrderDetailPage() {
         <div><span className="eyebrow">Chi tiết đơn mua</span><h1>{order?.orderCode || 'Đơn hàng'}</h1></div>
         <Link className="btn btn-outline-success" to="/orders">Quay lại đơn mua</Link>
       </div>
-      {message && <div className="alert alert-success">{message}</div>}
-      {error && <div className="alert alert-danger">{error}</div>}
+      {message && <div className="alert alert-success" role="status" aria-live="polite">{message}</div>}
+      {error && <div className="alert alert-danger" role="alert">{error}</div>}
       {order && (
         <>
           <section className="border rounded p-3 mb-4" aria-labelledby="fulfillment-heading">
@@ -396,6 +460,84 @@ export default function OrderDetailPage() {
             ))}
           </section>
           <OrderProgress status={order.orderStatus} />
+          {availableDeliveryActions.length > 0 && (
+            <section className="delivery-receipt-actions mt-3" aria-labelledby="delivery-receipt-heading">
+              <h2 className="h5" id="delivery-receipt-heading">Xác nhận nhận hàng</h2>
+              <p className="text-secondary">Vui lòng chỉ xác nhận sau khi kiểm tra thực tế kiện hàng.</p>
+              {order.customerOrderStatus === 'DeliveryDisputed' && (
+                <p className="alert alert-warning" role="status" aria-live="polite">
+                  Bạn đã báo chưa nhận được hàng. Bạn vẫn có thể xác nhận khi đã nhận được kiện hàng.
+                </p>
+              )}
+              <div className="delivery-receipt-action-row">
+                {availableDeliveryActions.includes('RECEIVED') && (
+                  <button
+                    className="btn btn-success"
+                    type="button"
+                    disabled={isSubmittingDeliveryReceipt}
+                    onClick={() => openDeliveryReceiptDialog('RECEIVED')}
+                  >
+                    {isSubmittingDeliveryReceipt && deliveryReceiptDialog?.outcome === 'RECEIVED'
+                      ? 'Đang ghi nhận…'
+                      : 'Đã nhận được hàng'}
+                  </button>
+                )}
+                {availableDeliveryActions.includes('NOT_RECEIVED') && (
+                  <button
+                    className="btn btn-outline-danger"
+                    type="button"
+                    disabled={isSubmittingDeliveryReceipt}
+                    onClick={() => openDeliveryReceiptDialog('NOT_RECEIVED')}
+                  >
+                    {isSubmittingDeliveryReceipt && deliveryReceiptDialog?.outcome === 'NOT_RECEIVED'
+                      ? 'Đang ghi nhận…'
+                      : 'Chưa nhận được hàng'}
+                  </button>
+                )}
+              </div>
+            </section>
+          )}
+          {deliveryReceiptDialog && (
+            <div className="delivery-receipt-dialog-backdrop" role="presentation">
+              <form
+                className="delivery-receipt-dialog"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="deliveryReceiptDialogTitle"
+                onSubmit={submitDeliveryReceipt}
+              >
+                <h2 className="h5" id="deliveryReceiptDialogTitle">
+                  {deliveryReceiptDialog.outcome === 'RECEIVED' ? 'Xác nhận đã nhận hàng' : 'Báo chưa nhận được hàng'}
+                </h2>
+                {deliveryReceiptDialog.outcome === 'RECEIVED' ? (
+                  <p>Chỉ tiếp tục nếu bạn đã nhận và kiểm tra kiện hàng. Thao tác này sẽ mở quyền đổi, trả và đánh giá theo chính sách.</p>
+                ) : (
+                  <>
+                    <p>Đơn hàng sẽ tiếp tục ở trạng thái đang giao để bộ phận hỗ trợ kiểm tra.</p>
+                    <label className="form-label" htmlFor="notReceivedReason">Lý do chưa nhận được hàng</label>
+                    <textarea
+                      className="form-control"
+                      id="notReceivedReason"
+                      value={notReceivedReason}
+                      onChange={(event) => setNotReceivedReason(event.target.value)}
+                      minLength={10}
+                      maxLength={500}
+                      rows="4"
+                      required
+                      disabled={isSubmittingDeliveryReceipt}
+                    />
+                    <div className="form-text">Từ 10 đến 500 ký tự.</div>
+                  </>
+                )}
+                <div className="delivery-receipt-action-row mt-3">
+                  <button className="btn btn-outline-secondary" type="button" onClick={closeDeliveryReceiptDialog} disabled={isSubmittingDeliveryReceipt}>Quay lại</button>
+                  <button className="btn btn-success" type="submit" disabled={isSubmittingDeliveryReceipt}>
+                    {isSubmittingDeliveryReceipt ? 'Đang ghi nhận…' : 'Xác nhận'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
           <dl className="row">
             <dt className="col-sm-3">Mã đơn</dt><dd className="col-sm-9">{order.orderCode}</dd>
             <dt className="col-sm-3">Trạng thái</dt><dd className="col-sm-9">{translateOrderStatus(order.orderStatus)}</dd>
@@ -467,7 +609,7 @@ export default function OrderDetailPage() {
               </Link>
             </div>
           )}
-          {!activeCase && order.orderStatus === 'Delivered' && (
+          {!activeCase && afterSalesEnabled && (
             <section className="mt-4">
               <h2>Đổi/Trả hàng</h2>
               {originalExchangeAction.deadlineAt && (
