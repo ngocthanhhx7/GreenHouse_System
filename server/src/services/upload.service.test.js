@@ -54,7 +54,16 @@ describe('upload service', () => {
     assert.equal(await service.removeManagedFile(result.url), true);
   });
 
-  it('scans return evidence before storage and rejects a malware result', async () => {
+  it('stores internal operational evidence behind the protected API path', async () => {
+    const buffer = Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
+    const result = await service.storeImage({ buffer, originalname: 'warehouse-proof.jpg', mimetype: 'image/jpeg', size: buffer.length }, 'operational-evidence');
+    assert.match(result.url, /^\/api\/operational-evidence\/[0-9a-f-]{36}\.jpg$/);
+    const managed = service.resolveManagedFile(result.url, 'operational-evidence');
+    assert.equal(managed.mimeType, 'image/jpeg');
+    assert.equal(path.dirname(managed.path), path.join(uploadsRoot, 'operational-evidence'));
+  });
+
+  it('scans all protected evidence before storage and rejects a malware result', async () => {
     const buffer = Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
     const calls = [];
     const cleanService = createUploadService({
@@ -62,7 +71,8 @@ describe('upload service', () => {
       evidenceScanner: { async scan(file) { calls.push(file.originalname); return { clean: true }; } },
     });
     await cleanService.storeImage({ buffer, originalname: 'clean.jpg', mimetype: 'image/jpeg', size: buffer.length }, 'return-evidence');
-    assert.deepEqual(calls, ['clean.jpg']);
+    await cleanService.storeImage({ buffer, originalname: 'operation.jpg', mimetype: 'image/jpeg', size: buffer.length }, 'operational-evidence');
+    assert.deepEqual(calls, ['clean.jpg', 'operation.jpg']);
 
     const rejectedService = createUploadService({
       uploadsRoot,

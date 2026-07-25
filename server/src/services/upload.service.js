@@ -6,7 +6,7 @@ const ApiError = require('../utils/apiError');
 const { MAX_RETURN_EVIDENCE_TOTAL_SIZE } = require('../utils/returnEvidenceClaim');
 
 const DEFAULT_UPLOADS_ROOT = path.resolve(__dirname, '../../uploads');
-const ALLOWED_COLLECTIONS = new Set(['avatars', 'products', 'return-evidence']);
+const ALLOWED_COLLECTIONS = new Set(['avatars', 'products', 'return-evidence', 'operational-evidence']);
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
 const MIME_BY_EXTENSION = { jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp' };
 
@@ -29,9 +29,9 @@ function cleanOriginalName(value) {
 }
 
 function managedUrl(collection, filename) {
-  return collection === 'return-evidence'
-    ? `/api/return-refunds/evidence/${filename}`
-    : `/uploads/${collection}/${filename}`;
+  if (collection === 'return-evidence') return `/api/return-refunds/evidence/${filename}`;
+  if (collection === 'operational-evidence') return `/api/operational-evidence/${filename}`;
+  return `/uploads/${collection}/${filename}`;
 }
 
 function parseManagedUrl(url) {
@@ -40,6 +40,8 @@ function parseManagedUrl(url) {
   if (publicMatch) return { collection: publicMatch[1], filename: `${publicMatch[2]}.${publicMatch[3]}`, extension: publicMatch[3] };
   const privateMatch = /^\/api\/return-refunds\/evidence\/([0-9a-f-]{36})\.(jpg|png|webp)$/.exec(value);
   if (privateMatch) return { collection: 'return-evidence', filename: `${privateMatch[1]}.${privateMatch[2]}`, extension: privateMatch[2] };
+  const operationalMatch = /^\/api\/operational-evidence\/([0-9a-f-]{36})\.(jpg|png|webp)$/.exec(value);
+  if (operationalMatch) return { collection: 'operational-evidence', filename: `${operationalMatch[1]}.${operationalMatch[2]}`, extension: operationalMatch[2] };
   return null;
 }
 
@@ -140,7 +142,7 @@ function createUploadService({ uploadsRoot = DEFAULT_UPLOADS_ROOT, evidenceScann
       if (normalizedMime && normalizedMime !== detected.mimeType) {
         throw new ApiError(400, 'Image content does not match its MIME type');
       }
-      if (collection === 'return-evidence') {
+      if (collection === 'return-evidence' || collection === 'operational-evidence') {
         let verdict;
         try {
           verdict = await evidenceScanner.scan({ ...file, mimetype: detected.mimeType });

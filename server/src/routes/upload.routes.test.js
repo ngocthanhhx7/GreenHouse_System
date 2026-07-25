@@ -22,4 +22,9 @@ describe('upload route authorization contract', () => {
     assert.match(source, /router\.get\([\s\S]*'\/return-refunds\/evidence\/:filename',[\s\S]*authenticate,[\s\S]*authorizeRoles\('Customer', 'Staff', 'WarehouseManager'\)/);
     assert.match(source, /router\.get\([\s\S]*'\/exchanges\/evidence\/:filename',[\s\S]*authenticate,[\s\S]*authorizeRoles\('Customer', 'Staff', 'WarehouseManager'\)/);
   });
+
+  it('allows Staff and Warehouse to upload operational evidence while Admin remains read-only', () => {
+    assert.match(source, /'\/operational-evidence',[\s\S]*authenticate,[\s\S]*authorizeRoles\('Staff', 'WarehouseManager'\)/);
+    assert.match(source, /'\/operational-evidence\/:filename',[\s\S]*authenticate,[\s\S]*authorizeRoles\('Staff', 'WarehouseManager', 'Admin'\)/);
+  });
 });
