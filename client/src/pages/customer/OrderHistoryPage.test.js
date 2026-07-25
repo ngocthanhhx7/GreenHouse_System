@@ -18,4 +18,10 @@ describe('customer order center source contract', () => {
     assert.match(source, /Không thể tải đơn hàng của bạn/);
     assert.match(source, /Chưa có đơn hàng/);
   });
+
+  it('renders persisted shipping status and manual tracking fields', () => {
+    assert.match(source, /shippingStatus/);
+    assert.match(source, /providerName|carrierName/);
+    assert.match(source, /trackingCode|trackingReference/);
+  });
 });

@@ -11,6 +11,7 @@ const Payment = require('../models/payment.model');
 const PaymentAttempt = require('../models/paymentAttempt.model');
 const RefundPending = require('../models/refundPending.model');
 const OrderReservation = require('../models/orderReservation.model');
+const Shipment = require('../models/shipment.model');
 const DomainOutbox = require('../models/domainOutbox.model');
 const ReturnRefundRequest = require('../models/returnRefundRequest.model');
 const UserAddress = require('../models/userAddress.model');
@@ -20,7 +21,22 @@ const { canonicalEnvelope } = require('./domainEventProducer.service');
 const { systemSettingService } = require('./systemSetting.service');
 const { lowStockAlertLifecycle } = require('./lowStockAlertLifecycle.service');
 
-function toOrderResponse(order, details = []) {
+function toShippingResponse(shipment) {
+  if (!shipment) return { shippingStatus: null, shipping: null };
+  const toIso = (value) => (value ? new Date(value).toISOString() : null);
+  return {
+    shippingStatus: shipment.status || null,
+    shipping: {
+      providerName: shipment.carrierName || '',
+      trackingCode: shipment.trackingReference || '',
+      handedOverAt: toIso(shipment.handedOffAt),
+      deliveredAt: toIso(shipment.deliveredAt),
+      note: shipment.note || '',
+    },
+  };
+}
+
+function toOrderResponse(order, details = [], shipment = null) {
   return {
     id: String(order._id),
     orderCode: order.orderCode,
@@ -53,6 +69,7 @@ function toOrderResponse(order, details = []) {
     paymentDeadlineAt: order.paymentDeadlineAt ? new Date(order.paymentDeadlineAt).toISOString() : null,
     details,
     createdAt: order.createdAt,
+    ...toShippingResponse(shipment),
   };
 }
 
@@ -244,6 +261,7 @@ function createModelCartRepository() {
 function createModelProductRepository() {
   return {
     async findSellableById(id, session) {
+      if (!mongoose.isValidObjectId(id)) return null;
       const product = await withOptionalSession(
         Product.findOne({ _id: id, status: 'Active' }).populate('categoryId'),
         session,
@@ -251,6 +269,15 @@ function createModelProductRepository() {
       return product?.categoryId?.status === 'Active' ? product : null;
     },
   };
+}
+
+function createCheckoutStockInsufficientError(productId) {
+  return new ApiError(
+    409,
+    'Sản phẩm không còn đủ số lượng để đặt hàng.',
+    [{ field: `expectedItems.${String(productId)}.quantity`, message: 'Số lượng tồn kho không đủ.' }],
+    'CHECKOUT_STOCK_INSUFFICIENT',
+  );
 }
 
 function createModelInventoryRepository() {
@@ -273,7 +300,7 @@ function createModelInventoryRepository() {
         ),
         session
       ).lean();
-      if (!inventory) throw new ApiError(409, 'Insufficient available inventory for checkout');
+      if (!inventory) throw createCheckoutStockInsufficientError(productId);
       return inventory;
     },
     async release(productId, quantity, session) {
@@ -409,6 +436,24 @@ function createModelOrderRepository() {
     async listByCustomer(customerId) {
       return Order.find({ customerId }).sort({ createdAt: -1 }).lean();
     },
+    async findLatestShipmentByOrder(orderId, session) {
+      return withOptionalSession(
+        Shipment.findOne({ orderId }).sort({ createdAt: -1, _id: -1 }),
+        session,
+      ).lean();
+    },
+    async listLatestShipmentsByOrders(orderIds) {
+      if (!orderIds.length) return new Map();
+      const rows = await Shipment.find({ orderId: { $in: orderIds } })
+        .sort({ createdAt: -1, _id: -1 })
+        .lean();
+      const latest = new Map();
+      for (const row of rows) {
+        const key = String(row.orderId);
+        if (!latest.has(key)) latest.set(key, row);
+      }
+      return latest;
+    },
     async findById(id, session) {
       return withOptionalSession(Order.findById(id), session).lean();
     },
@@ -461,6 +506,12 @@ function createModelOrderRepository() {
           { $setOnInsert: data },
           { new: true, upsert: true, runValidators: true }
         ),
+        session
+      ).lean();
+    },
+    async updateRefundPending(id, data, session) {
+      return withOptionalSession(
+        RefundPending.findByIdAndUpdate(id, { $set: data }, { new: true, runValidators: true }),
         session
       ).lean();
     },
@@ -617,11 +668,23 @@ function createOrderService({
     const expectedByProductId = new Map(expectedItems.map((item) => [item.productId, item]));
     const lines = [];
     for (const item of cartItems) {
+      const quantity = Number(item.quantity);
+      if (!item.productId || !Number.isInteger(quantity) || quantity <= 0) {
+        throw new ApiError(
+          400,
+          'Cart contains an invalid item',
+          [{
+            field: `cartItems.${String(item._id || lines.length)}`,
+            message: 'Product and quantity must be valid',
+          }],
+          'CART_ITEM_INVALID',
+        );
+      }
       const product = await productRepository.findSellableById(item.productId, session);
       if (!product) throw new ApiError(400, `Product is no longer available: ${item.productName}`);
       const productId = String(item.productId);
       const expected = expectedByProductId.get(productId);
-      if (!expected || expected.quantity !== Number(item.quantity)) {
+      if (!expected || expected.quantity !== quantity) {
         throw new ApiError(
           409,
           'Cart contents changed before checkout',
@@ -660,8 +723,8 @@ function createOrderService({
         productImageSnapshot: Array.isArray(product.imageUrls) ? product.imageUrls[0] || '' : '',
         priceSnapshot: product.price,
         priceVersionSnapshot: currentPriceVersion,
-        quantity: item.quantity,
-        subtotal: product.price * item.quantity,
+        quantity,
+        subtotal: product.price * quantity,
       });
       expectedByProductId.delete(productId);
     }
@@ -699,6 +762,51 @@ function createOrderService({
       if (!claimed) return null;
     }
     return inventoryRepository.release(detail.productId, detail.quantity, session);
+  }
+
+  async function buildRefundHandoff(order, reason, session, paymentAttempt) {
+    const attempt = paymentAttempt || await orderRepository.findPrimaryPaidPaymentAttemptByOrder(order._id, session);
+    if (!attempt) {
+      throw new ApiError(409, 'A payment attempt is required before creating a refund hand-off');
+    }
+    const obligationKey = `PAYMENT_REVERSAL:${String(attempt._id)}`;
+    const refund = await orderRepository.upsertRefundPending({
+      orderId: order._id,
+      paymentAttemptId: attempt._id,
+      customerId: order.customerId,
+      amount: order.totalAmount,
+      currency: order.currency || attempt.currency || 'VND',
+      reason,
+      status: 'RefundPending',
+      obligationType: 'PAYMENT_REVERSAL',
+      obligationKey,
+    }, session);
+    if (!refund?.returnRefundRequestId && orderRepository.createRefundRequest) {
+      let request = orderRepository.findRefundRequestByObligationKey
+        ? await orderRepository.findRefundRequestByObligationKey(order._id, obligationKey, session)
+        : null;
+      if (!request) {
+        request = await orderRepository.createRefundRequest({
+          orderId: order._id,
+          requestCode: `CAN-${order.orderCode}-${crypto.createHash('sha256').update(obligationKey).digest('hex').slice(0, 12).toUpperCase()}`,
+          customerId: order.customerId,
+          paymentId: null,
+          obligationKey,
+          reason,
+          status: 'ReadyForRefund',
+          refundAmount: Number(order.totalAmount),
+          requestedAt: new Date(clock()),
+        }, session);
+      }
+      if (orderRepository.updateRefundPending) {
+        await orderRepository.updateRefundPending(refund._id, { returnRefundRequestId: request._id }, session);
+      }
+      if (orderRepository.updateRefundRequest) {
+        await orderRepository.updateRefundRequest(request._id, { refundPendingId: refund._id }, session);
+      }
+      return { ...refund, returnRefundRequestId: request._id };
+    }
+    return refund;
   }
 
   return {
@@ -870,7 +978,14 @@ function createOrderService({
 
           const inventories = [];
           for (const line of lines) {
-            inventories.push(await inventoryRepository.reserve(line.productId, line.quantity, session));
+            try {
+              inventories.push(await inventoryRepository.reserve(line.productId, line.quantity, session));
+            } catch (error) {
+              if (/insufficient available inventory for checkout/i.test(String(error?.message || ''))) {
+                throw createCheckoutStockInsufficientError(line.productId);
+              }
+              throw error;
+            }
             const detail = await orderRepository.createOrderDetail({ orderId: order._id, ...line }, session);
             if (detail?._id && orderRepository.createReservation) {
               await orderRepository.createReservation({
@@ -962,14 +1077,27 @@ function createOrderService({
 
     async listMyOrders(customerId) {
       const orders = await orderRepository.listByCustomer(customerId);
-      return orders.map((order) => toOrderResponse(order));
+      const latestShipments = orderRepository.listLatestShipmentsByOrders
+        ? await orderRepository.listLatestShipmentsByOrders(orders.map((order) => order._id))
+        : new Map();
+      return orders.map((order) => toOrderResponse(
+        order,
+        [],
+        latestShipments.get(String(order._id)),
+      ));
     },
 
     async getMyOrder(customerId, orderId) {
+      if (!mongoose.isValidObjectId(orderId)) {
+        throw new ApiError(404, 'Order not found');
+      }
       const order = await orderRepository.findById(orderId);
       if (!order || String(order.customerId) !== String(customerId)) throw new ApiError(404, 'Order not found');
       const details = orderRepository.listDetails ? await orderRepository.listDetails(orderId) : [];
-      return toOrderResponse(order, details);
+      const shipment = orderRepository.findLatestShipmentByOrder
+        ? await orderRepository.findLatestShipmentByOrder(orderId)
+        : null;
+      return toOrderResponse(order, details, shipment);
     },
 
     async cancelOrder(customerId, orderId, input = {}) {
@@ -991,10 +1119,13 @@ function createOrderService({
             return { cancelled: order, orderCode: order.orderCode, replay: true };
           }
         }
-        if (order.orderStatus !== 'Pending' || !['Unpaid', 'Failed', 'Cancelled'].includes(order.paymentStatus)) {
-          throw new ApiError(409, 'Only Pending orders with Unpaid, Failed, or Cancelled payment can be cancelled by the customer');
+        if (order.orderStatus !== 'Pending' || !['Unpaid', 'Pending', 'Failed', 'Cancelled', 'Paid'].includes(order.paymentStatus)) {
+          throw new ApiError(409, 'Only Pending orders with Unpaid, Pending, Failed, Cancelled, or Paid payment can be cancelled by the customer');
         }
-        const cancelledPaymentStatus = order.paymentMethod === 'COD'
+        const isPaid = order.paymentStatus === 'Paid';
+        const cancelledPaymentStatus = isPaid
+          ? 'Paid'
+          : order.paymentMethod === 'COD'
           ? 'Unpaid'
           : 'Cancelled';
         const cancelData = {
@@ -1003,6 +1134,7 @@ function createOrderService({
           cancelReason,
           cancelIdempotencyKey: idempotencyKey,
           cancelRequestHash: requestHash,
+          ...(isPaid ? { moneyObligationsSettled: false } : {}),
         };
         const cancelled = orderRepository.claimCustomerCancellation
           ? await orderRepository.claimCustomerCancellation(customerId, orderId, order.paymentStatus, cancelData, session)
@@ -1025,10 +1157,10 @@ function createOrderService({
         const payment = orderRepository.findPaymentByOrderId
           ? await orderRepository.findPaymentByOrderId(orderId, session)
           : null;
-        if (payment && orderRepository.updatePayment) {
+        if (payment && orderRepository.updatePayment && !isPaid) {
           await orderRepository.updatePayment(payment._id, { paymentStatus: cancelledPaymentStatus }, session);
         }
-        if (orderRepository.findActivePaymentAttemptByOrder) {
+        if (orderRepository.findActivePaymentAttemptByOrder && !isPaid) {
           const activeAttempt = await orderRepository.findActivePaymentAttemptByOrder(orderId, session);
           if (activeAttempt) {
             await orderRepository.updatePaymentAttempt(activeAttempt._id, {
@@ -1036,6 +1168,12 @@ function createOrderService({
             }, session);
             retiredPaymentLinkId = activeAttempt.paymentLinkId || '';
           }
+        }
+        if (isPaid) {
+          const paidAttempt = orderRepository.findPrimaryPaidPaymentAttemptByOrder
+            ? await orderRepository.findPrimaryPaidPaymentAttemptByOrder(orderId, session)
+            : null;
+          await buildRefundHandoff(cancelled, cancelReason, session, paidAttempt);
         }
         const inventories = [];
         for (const detail of details) {
@@ -1110,6 +1248,7 @@ function createOrderService({
 }
 
 module.exports = {
+  createModelProductRepository,
   createOrderService,
   orderService: createOrderService({
     lowStockLifecycle: lowStockAlertLifecycle,

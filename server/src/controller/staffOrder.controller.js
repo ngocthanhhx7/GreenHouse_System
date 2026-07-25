@@ -22,7 +22,10 @@ async function confirmOrder(req, res, next) {
     return sendSuccess(res, await staffOrderService.confirmOrder(
       req.user.id,
       req.params.id,
-      { ...(req.body || {}), idempotencyKey: req.get('Idempotency-Key') || req.body?.idempotencyKey },
+      {
+        note: req.body?.note,
+        idempotencyKey: req.get('Idempotency-Key'),
+      },
     ), 'Order confirmed');
   } catch (error) {
     return next(error);

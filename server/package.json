@@ -24,6 +24,7 @@
     "verify:sl009": "node src/scripts/migrateSl009CrossCutting.js --verify",
     "ci:actors": "node src/scripts/ciEphemeralActors.js",
     "verify:ephemeral-http": "node src/scripts/verifyEphemeralHttp.js",
+    "verify:phase1-e2e": "node src/scripts/verifyPhase1E2E.js",
     "seed:demo": "node src/demo-data/demoSeedCli.js",
     "start": "node src/server.js"
   },

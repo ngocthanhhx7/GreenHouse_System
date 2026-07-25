@@ -42,8 +42,20 @@ function createHarness({
       { _id: 'detail-2', orderId: 'order-1', productId: 'product-2', quantity: 1 },
     ],
     reservations: [
-      { orderId: 'order-1', orderDetailId: 'detail-1', quantity: 2, status: 'Reserved' },
-      { orderId: 'order-1', orderDetailId: 'detail-2', quantity: 1, status: 'Reserved' },
+      {
+        orderId: 'order-1',
+        orderDetailId: 'detail-1',
+        productId: 'product-1',
+        quantity: 2,
+        status: 'Reserved',
+      },
+      {
+        orderId: 'order-1',
+        orderDetailId: 'detail-2',
+        productId: 'product-2',
+        quantity: 1,
+        status: 'Reserved',
+      },
     ],
     inventories: [
       {
@@ -140,10 +152,15 @@ function createHarness({
     async listOrderDetails() {
       return state.details;
     },
-    async claimOrderReservationConsumption(orderId, orderDetailId) {
+    async listOrderReservations() {
+      return state.reservations;
+    },
+    async claimOrderReservationConsumption(orderId, orderDetailId, productId, quantity) {
       const reservation = state.reservations.find(
         (entry) => entry.orderId === orderId
           && entry.orderDetailId === orderDetailId
+          && entry.productId === productId
+          && entry.quantity === quantity
           && entry.status === 'Reserved',
       );
       if (!reservation) return null;
@@ -157,6 +174,7 @@ function createHarness({
       const inventory = state.inventories.find(
         (entry) => entry.productId === productId
           && entry.inventoryHealth !== 'ReconciliationRequired'
+          && entry.stockQuantity >= quantity
           && entry.sellableQuantity >= quantity
           && entry.reservedQuantity >= quantity,
       );
@@ -244,6 +262,27 @@ describe('SL-004 exact stock export behavior', () => {
     assert.deepEqual(state.transactions, snapshot.transactions);
   });
 
+  it('AT-230 replays a completed Warehouse export without another movement for a different key', async () => {
+    const { service, state } = createHarness();
+    await service.processStockExport('warehouse-1', 'export-1', {
+      idempotencyKey: 'export-001',
+    });
+    const before = structuredClone({
+      inventories: state.inventories,
+      reservations: state.reservations,
+      transactions: state.transactions,
+    });
+
+    const replay = await service.processStockExport('warehouse-2', 'export-1', {
+      idempotencyKey: 'export-002',
+    });
+
+    assert.equal(replay.idempotentReplay, true);
+    assert.deepEqual(state.inventories, before.inventories);
+    assert.deepEqual(state.reservations, before.reservations);
+    assert.deepEqual(state.transactions, before.transactions);
+  });
+
   it('AT-061 rolls back an injected later-line failure and persists only a retryable Failed outcome', async () => {
     const { service, state } = createHarness({ failMovementFor: 'detail-2' });
     assert.equal(typeof service.processStockExport, 'function');
@@ -276,6 +315,98 @@ describe('SL-004 exact stock export behavior', () => {
     assert.equal(state.request.status, 'Failed');
     assert.deepEqual(state.reservations.map((entry) => entry.status), ['Reserved', 'Reserved']);
     assert.equal(state.transactions.length, 0);
+  });
+
+  it('rejects a reservation whose product or quantity does not match the order detail', async () => {
+    const harness = createHarness();
+    harness.state.reservations[0].productId = 'different-product';
+
+    await assert.rejects(
+      () => harness.service.processStockExport('warehouse-1', 'export-1', {
+        idempotencyKey: 'export-mismatch-1',
+      }),
+      (error) => error.errorCode === 'EXPORT_RESERVATION_MISSING',
+    );
+
+    assert.equal(harness.state.inventories[0].sellableQuantity, 10);
+    assert.equal(harness.state.transactions.length, 0);
+  });
+
+  it('rejects zero, negative, and non-integer order quantities before mutation', async () => {
+    for (const invalidQuantity of [0, -1, 1.5]) {
+      const harness = createHarness();
+      harness.state.details[0].quantity = invalidQuantity;
+
+      await assert.rejects(
+        () => harness.service.processStockExport('warehouse-1', 'export-1', {
+          idempotencyKey: `export-invalid-${String(invalidQuantity).replace('.', '-')}`,
+        }),
+        (error) => error.errorCode === 'EXPORT_INVALID_REQUEST',
+      );
+
+      assert.equal(harness.state.inventories[0].sellableQuantity, 10);
+      assert.equal(harness.state.transactions.length, 0);
+    }
+  });
+
+  it('rejects duplicate active reservations for an order line before mutation', async () => {
+    const harness = createHarness();
+    harness.state.reservations.push({
+      orderId: 'order-1',
+      orderDetailId: 'detail-1',
+      productId: 'product-1',
+      quantity: 2,
+      status: 'Reserved',
+    });
+
+    await assert.rejects(
+      () => harness.service.processStockExport('warehouse-1', 'export-1', {
+        idempotencyKey: 'export-duplicate-reservation',
+      }),
+      (error) => error.errorCode === 'EXPORT_RESERVATION_MISSING',
+    );
+
+    assert.deepEqual(harness.state.reservations.map((entry) => entry.status), ['Reserved', 'Reserved', 'Reserved']);
+    assert.equal(harness.state.transactions.length, 0);
+  });
+
+  it('rejects physical stock underflow even when sellable stock is sufficient', async () => {
+    const harness = createHarness();
+    harness.state.inventories[0].stockQuantity = 1;
+
+    await assert.rejects(
+      () => harness.service.processStockExport('warehouse-1', 'export-1', {
+        idempotencyKey: 'export-physical-underflow',
+      }),
+      (error) => error.errorCode === 'EXPORT_STOCK_INSUFFICIENT',
+    );
+
+    assert.equal(harness.state.inventories[0].stockQuantity, 1);
+    assert.equal(harness.state.inventories[0].sellableQuantity, 10);
+    assert.equal(harness.state.transactions.length, 0);
+  });
+
+  it('allows only one concurrent export command to consume the request', async () => {
+    const harness = createHarness();
+    const results = await Promise.allSettled([
+      harness.service.processStockExport('warehouse-1', 'export-1', {
+        idempotencyKey: 'export-concurrent-1',
+      }),
+      harness.service.processStockExport('warehouse-2', 'export-1', {
+        idempotencyKey: 'export-concurrent-2',
+      }),
+    ]);
+
+    assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
+    assert.equal(results.filter((result) => result.status === 'rejected').length, 1);
+    assert.ok(
+      ['EXPORT_ALREADY_PROCESSING', 'EXPORT_STALE_STATE'].includes(
+        results.find((result) => result.status === 'rejected').reason.errorCode,
+      ),
+    );
+    assert.equal(harness.state.request.status, 'Completed');
+    assert.equal(harness.state.transactions.length, 2);
+    assert.deepEqual(harness.state.inventories.map((entry) => [entry.stockQuantity, entry.reservedQuantity]), [[8, 0], [4, 0]]);
   });
 
   it('P1 processes a separately identified resend export while the same Order remains Shipped', async () => {

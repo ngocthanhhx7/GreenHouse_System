@@ -4,7 +4,13 @@ import { Link } from 'react-router-dom';
 import OrderProgress from '../../components/order/OrderProgress.jsx';
 import { resolveMediaUrl } from '../../services/apiClient.js';
 import { orderService } from '../../services/orderService.js';
-import { formatCurrency, translateOrderStatus, translatePaymentMethod, translatePaymentStatus } from '../../utils/formatters.js';
+import {
+  formatCurrency,
+  translateOrderStatus,
+  translatePaymentMethod,
+  translatePaymentStatus,
+  translateShippingStatus,
+} from '../../utils/formatters.js';
 import {
   ORDER_TABS,
   filterOrdersByTab,
@@ -124,6 +130,13 @@ export default function OrderHistoryPage() {
                 <footer className="order-card-footer">
                   <div className="order-payment-summary">
                     <span>{translatePaymentMethod(order.paymentMethod)} · {translatePaymentStatus(order.paymentStatus)}</span>
+                    <span>Giao hàng: {translateShippingStatus(order.shippingStatus)}</span>
+                    {order.shipping?.providerName && (
+                      <span>
+                        {order.shipping.providerName}
+                        {order.shipping.trackingCode ? ` · Mã vận đơn ${order.shipping.trackingCode}` : ''}
+                      </span>
+                    )}
                     <strong>Thành tiền: {formatCurrency(order.totalAmount)}</strong>
                   </div>
                   <div className="order-card-actions">

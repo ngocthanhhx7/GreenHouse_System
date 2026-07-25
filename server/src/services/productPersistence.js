@@ -84,6 +84,7 @@ function createModelProductRepository() {
       return query.lean();
     },
     async findPublicById(id) {
+      if (!mongoose.isValidObjectId(id)) return null;
       return Product.findOne({ _id: id, status: 'Active' }).populate('categoryId').lean();
     },
     async findPublicByIds(ids) {

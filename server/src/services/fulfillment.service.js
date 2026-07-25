@@ -519,6 +519,7 @@ function createFulfillmentService(options = {}) {
           status: shipment.status,
           handedOffAt: shipment.handedOffAt,
           deliveredAt: shipment.deliveredAt,
+          note: shipment.note || '',
         } : null,
         events: events.map((event) => ({
           id: String(event._id),

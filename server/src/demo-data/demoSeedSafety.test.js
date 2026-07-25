@@ -39,9 +39,11 @@ describe('demo seed destructive safety', () => {
 
   it('never exposes a dropDatabase operation and keeps dependency-safe delete order', () => {
     const { DEMO_DELETE_ORDER } = require('./demoSeedSafety');
-    assert.ok(DEMO_DELETE_ORDER.indexOf('returnItems') < DEMO_DELETE_ORDER.indexOf('returnRequests'));
-    assert.ok(DEMO_DELETE_ORDER.indexOf('orderDetails') < DEMO_DELETE_ORDER.indexOf('orders'));
-    assert.ok(!DEMO_DELETE_ORDER.includes('roles'), 'Roles dùng chung không thuộc phạm vi xóa demo');
+    assert.ok(DEMO_DELETE_ORDER.indexOf('ReturnItem') < DEMO_DELETE_ORDER.indexOf('ReturnRefundRequest'));
+    assert.ok(DEMO_DELETE_ORDER.indexOf('OrderDetail') < DEMO_DELETE_ORDER.indexOf('Order'));
+    assert.ok(DEMO_DELETE_ORDER.indexOf('ShipmentEvent') < DEMO_DELETE_ORDER.indexOf('Shipment'));
+    assert.ok(DEMO_DELETE_ORDER.indexOf('InventoryTransaction') < DEMO_DELETE_ORDER.indexOf('Inventory'));
+    assert.ok(!DEMO_DELETE_ORDER.includes('Role'), 'Roles dùng chung không thuộc phạm vi xóa demo');
     assert.ok(!DEMO_DELETE_ORDER.includes('dropDatabase'));
   });
 });
@@ -122,15 +124,66 @@ describe('demo seed CLI parser', () => {
   it('preflights graph/assets/indexes and all reset guards before exposing a writer boundary', async () => {
     const { runDemoSeedCli } = require('./demoSeedCli');
     const calls = [];
-    await assert.rejects(() => runDemoSeedCli({
+    const result = await runDemoSeedCli({
       args: ['--reset', '--confirm=RESET:greenhouse_demo'],
       workspaceRoot: 'D:/fixture-root',
       env: { NODE_ENV: 'development', DEMO_SEED_ALLOW_RESET: 'true', MONGODB_URI: 'mongodb://127.0.0.1/greenhouse_demo' },
       imagePreflight: async () => { calls.push('assets'); return { valid: true, count: 15 }; },
       databaseProbe: async () => { calls.push('database'); return { databaseName: 'greenhouse_demo', supportsTransactions: true, indexesReady: true }; },
+      connect: async () => ({ db: { databaseName: 'greenhouse_demo' } }),
+      disconnect: async () => {},
+      reset: async () => { calls.push('reset'); },
       logger: { log() {}, error() {} },
-    }), /write adapter.*phase 2/i);
-    assert.deepEqual(calls, ['assets', 'database']);
+    });
+    assert.equal(result.mode, 'reset');
+    assert.deepEqual(calls, ['assets', 'database', 'reset']);
+  });
+
+  it('runs the injected seed adapter in default upsert mode', async () => {
+    const { runDemoSeedCli } = require('./demoSeedCli');
+    let seeded = 0;
+    const result = await runDemoSeedCli({
+      args: [],
+      env: {
+        NODE_ENV: 'development',
+        MONGODB_URI: 'mongodb://127.0.0.1:27017/greenhouse_e2e?replicaSet=rs0',
+      },
+      imagePreflight: async () => ({ valid: true, count: 15 }),
+      connect: async () => {},
+      disconnect: async () => {},
+      seed: async () => {
+        seeded += 1;
+        return { demoPassword: 'GreenHome@123' };
+      },
+      logger: { log() {}, error() {} },
+    });
+    assert.equal(seeded, 1);
+    assert.equal(result.mode, 'upsert');
+  });
+
+  it('runs reset only after all disposable-target guards pass', async () => {
+    const { runDemoSeedCli } = require('./demoSeedCli');
+    let reset = 0;
+    const result = await runDemoSeedCli({
+      args: ['--reset', '--confirm=RESET:greenhouse_e2e'],
+      env: {
+        NODE_ENV: 'development',
+        DEMO_SEED_ALLOW_RESET: 'true',
+        MONGODB_URI: 'mongodb://127.0.0.1:27017/greenhouse_e2e?replicaSet=rs0',
+      },
+      imagePreflight: async () => ({ valid: true, count: 15 }),
+      connect: async () => ({ db: { databaseName: 'greenhouse_e2e' } }),
+      disconnect: async () => {},
+      databaseProbe: async () => ({
+        databaseName: 'greenhouse_e2e',
+        indexesReady: true,
+        supportsTransactions: true,
+      }),
+      reset: async () => { reset += 1; },
+      logger: { log() {}, error() {} },
+    });
+    assert.equal(reset, 1);
+    assert.equal(result.mode, 'reset');
   });
 
   it('blocks reset before a database probe when image assets are not ready', async () => {

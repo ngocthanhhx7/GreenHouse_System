@@ -498,6 +498,23 @@ describe('SL-004 packing, shipment and delivery behavior', () => {
     assert.match(shippedEvent.eventHash, /^[a-f0-9]{64}$/);
   });
 
+  it('persists the optional manual handoff note on the single Shipment', async () => {
+    const harness = createHarness({ paymentMethod: 'COD', paymentStatus: 'Unpaid' });
+    await harness.packExact('packing-with-handoff-note');
+
+    const result = await harness.service.recordHandoff('staff-1', 'order-1', {
+      idempotencyKey: 'handoff-with-note',
+      carrierName: 'Manual Carrier',
+      trackingReference: 'TRACK-NOTE-1',
+      handedOffAt: new Date('2026-07-25T10:00:00.000Z'),
+      evidenceReference: 'handoff-evidence',
+      note: 'Bàn giao tại quầy số 2',
+    });
+
+    assert.equal(result.shipment.note, 'Bàn giao tại quầy số 2');
+    assert.equal(harness.state.shipments.length, 1);
+  });
+
   it('AT-064 appends delivery, dispute and correction while never shortening published deadlines', async () => {
     const { service, state, handoff } = createHarness();
     const { shipment } = await handoff();
@@ -943,6 +960,37 @@ describe('SL-004 packing, shipment and delivery behavior', () => {
     }
   });
 
+  it('requires a Staff failure reason when the legacy single evidence field is used', async () => {
+    const harness = createHarness({
+      paymentMethod: 'COD',
+      paymentStatus: 'Unpaid',
+      runtime: 'development',
+    });
+    const { shipment } = await harness.handoff('handoff-failure-with-legacy-evidence');
+
+    await assert.rejects(
+      () => harness.service.recordShipmentEvent(
+        { actorType: 'Staff', actorId: 'staff-1' },
+        shipment._id,
+        {
+          eventKey: 'failed-without-reason',
+          eventType: 'ATTEMPT_FAILED',
+          source: 'STAFF_EVIDENCE',
+          occurredAt: new Date('2026-07-25T12:00:00.000Z'),
+          evidenceReference: 'legacy-single-evidence',
+        },
+      ),
+      (error) => error.errorCode === 'DELIVERY_FAILURE_REASON_INVALID',
+    );
+
+    assert.equal(harness.state.order.orderStatus, 'Shipped');
+    assert.equal(harness.state.order.paymentStatus, 'Unpaid');
+    assert.equal(
+      harness.state.events.filter((event) => event.eventType === 'ATTEMPT_FAILED').length,
+      0,
+    );
+  });
+
   it('P1 rolls back Staff COD collection, payment and delivery evidence when its Audit write fails', async () => {
     const manual = createHarness({ paymentMethod: 'COD', paymentStatus: 'Unpaid', runtime: 'development' });
     const { shipment } = await manual.handoff('handoff-manual-cod-audit');
@@ -985,7 +1033,7 @@ describe('SL-004 packing, shipment and delivery behavior', () => {
       source: 'STAFF_EVIDENCE',
       occurredAt: '2026-07-24T10:00:00.000Z',
       evidenceReference: 'carrier-attempt-proof',
-      reason: 'Receiver unavailable',
+      reason: 'CUSTOMER_UNREACHABLE',
     };
     await service.recordShipmentEvent({ actorType: 'Staff', actorId: 'staff-1' }, shipment._id, input);
     const replay = await service.recordShipmentEvent({ actorType: 'Staff', actorId: 'staff-1' }, shipment._id, input);
@@ -993,6 +1041,36 @@ describe('SL-004 packing, shipment and delivery behavior', () => {
     assert.equal(state.events.filter((entry) => entry.eventType === 'ATTEMPT_FAILED').length, 1);
     assert.equal(state.outbox.filter((entry) => entry.eventType === 'DELIVERY_ATTEMPT_FAILED').length, 1);
     assert.equal(replay.idempotentReplay, true);
+  });
+
+  it('AT-231 rejects delivery from a non-Shipped Order without appending an event', async () => {
+    const { service, state, handoff } = createHarness();
+    const { shipment } = await handoff('invalid-state-delivery');
+    state.order.orderStatus = 'Confirmed';
+    const before = structuredClone({
+      order: state.order,
+      events: state.events,
+      outbox: state.outbox,
+    });
+
+    await assert.rejects(
+      () => service.recordShipmentEvent(
+        { actorType: 'Staff', actorId: 'staff-1' },
+        shipment._id,
+        {
+          eventKey: 'invalid-state-delivery-event',
+          eventType: 'DELIVERED',
+          source: 'STAFF_EVIDENCE',
+          occurredAt: '2026-07-24T10:00:00.000Z',
+          evidenceReference: 'delivery-proof',
+        },
+      ),
+      /requires an active Shipped order|requires a Shipped order/i,
+    );
+
+    assert.deepEqual(state.order, before.order);
+    assert.deepEqual(state.events, before.events);
+    assert.deepEqual(state.outbox, before.outbox);
   });
 
   it('P1 rejects shipment-event key reuse across another shipment, event type or Staff actor', async () => {
@@ -1096,6 +1174,7 @@ describe('SL-004 packing, shipment and delivery behavior', () => {
         source: 'STAFF_EVIDENCE',
         occurredAt: '2026-07-25T10:00:00.000Z',
         evidenceReference: 'carrier-return-proof',
+        reason: 'OTHER_DELIVERY_FAILURE',
       },
     );
     assert.equal(state.order.orderStatus, 'Shipped');
@@ -1172,6 +1251,7 @@ describe('SL-004 packing, shipment and delivery behavior', () => {
         source: 'STAFF_EVIDENCE',
         occurredAt: '2026-07-25T10:00:00.000Z',
         evidenceReference: 'returned-queue-proof',
+        reason: 'OTHER_DELIVERY_FAILURE',
       },
     );
 
@@ -1568,6 +1648,7 @@ describe('SL-004 packing, shipment and delivery behavior', () => {
             source: 'STAFF_EVIDENCE',
             occurredAt: '2026-07-24T11:00:00.000Z',
             evidenceReference: 'invalid-post-delivery-terminal',
+            ...(eventType === 'RETURNED_TO_SHOP' ? { reason: 'OTHER_DELIVERY_FAILURE' } : {}),
             irrecoverable: true,
           },
         ),
@@ -1650,6 +1731,7 @@ describe('SL-004 packing, shipment and delivery behavior', () => {
         source: 'STAFF_EVIDENCE',
         occurredAt: '2026-07-25T10:00:00.000Z',
         evidenceReference: 'receipt-audit-returned-proof',
+        reason: 'OTHER_DELIVERY_FAILURE',
       },
     );
     const receiptInventory = structuredClone(receipt.state.inventories);
@@ -1686,6 +1768,7 @@ describe('SL-004 packing, shipment and delivery behavior', () => {
           source: 'STAFF_EVIDENCE',
           occurredAt: '2026-07-25T10:00:00.000Z',
           evidenceReference: 'event-audit-proof',
+          reason: 'CUSTOMER_UNREACHABLE',
         },
       ),
       /injected audit write failure/,
@@ -1797,6 +1880,7 @@ describe('SL-004 packing, shipment and delivery behavior', () => {
         source: 'STAFF_EVIDENCE',
         occurredAt: '2026-07-25T10:00:00.000Z',
         evidenceReference: 'event-duplicate-proof',
+        reason: 'CUSTOMER_UNREACHABLE',
       },
     );
     assert.equal(event.idempotentReplay, true);
@@ -1814,6 +1898,7 @@ describe('SL-004 packing, shipment and delivery behavior', () => {
         source: 'STAFF_EVIDENCE',
         occurredAt: '2026-07-25T10:00:00.000Z',
         evidenceReference: 'receipt-race-returned-proof',
+        reason: 'OTHER_DELIVERY_FAILURE',
       },
     );
     receipt.raceControl.receipt = true;

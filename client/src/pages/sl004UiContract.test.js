@@ -36,6 +36,9 @@ describe('SL-004 fulfillment and delivery UI contract', () => {
     assert.match(exportQueue, /cycle(Id|Key)|request(Id|Key)/);
     assert.match(exportDetail, /commandStatus|replay|AlreadyProcessed/);
     assert.match(exportDetail, /disabled=\{[^}]*processing/i);
+    assert.match(exportDetail, /processingRef/);
+    assert.match(exportDetail, /if \(processingRef\.current\) return/);
+    assert.match(exportDetail, /processingRef\.current = true/);
     assert.doesNotMatch(exportDetail, /Approved|Rejected|Duyệt xuất kho|Từ chối/);
   });
 
@@ -74,6 +77,7 @@ describe('SL-004 fulfillment and delivery UI contract', () => {
     const handoff = {
       carrierName: 'Carrier A', trackingReference: 'TRK-1',
       handedOffAt: '2026-07-24T10:00:00.000Z', evidenceReference: 'media-1',
+      note: 'Bàn giao tại quầy số 2',
     };
 
     await staff.createShipment('order-1', { ...handoff, idempotencyKey: 'handoff-001' });
@@ -86,6 +90,8 @@ describe('SL-004 fulfillment and delivery UI contract', () => {
     assert.match(staffOrder, /trackingReference/);
     assert.match(staffOrder, /handedOffAt/);
     assert.match(staffOrder, /evidenceReference/);
+    assert.match(staffOrder, /handoff\.note|Ghi chú bàn giao/);
+    assert.equal(JSON.parse(request.options.body).note, 'Bàn giao tại quầy số 2');
   });
 
   it('AT-064/067 uses separate append-only attempt, delivery, correction, and dispute evidence actions', () => {
