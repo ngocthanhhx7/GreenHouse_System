@@ -154,6 +154,19 @@ async function reconcilePayOSPayout(req, res, next) {
   }
 }
 
+async function reconcilePayoutOperation(req, res, next) {
+  try {
+    preventSensitiveCaching(res);
+    return sendSuccess(
+      res,
+      await returnRefundService.reconcilePayoutOperation(req.user.id, req.params.id, req.body),
+      'Refund payout operation reconciled'
+    );
+  } catch (error) {
+    return next(error);
+  }
+}
+
 async function reportPayoutIncident(req, res, next) {
   try {
     preventSensitiveCaching(res);
@@ -181,5 +194,6 @@ module.exports = {
   recordPayoutEvidence,
   startPayOSPayout,
   reconcilePayOSPayout,
+  reconcilePayoutOperation,
   reportPayoutIncident,
 };

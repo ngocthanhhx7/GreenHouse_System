@@ -1,4 +1,6 @@
 const assert = require('node:assert/strict');
+const { readFileSync } = require('node:fs');
+const path = require('node:path');
 const { describe, it } = require('node:test');
 
 const controller = require('./returnRefund.controller');
@@ -53,5 +55,37 @@ describe('return/refund public bank catalog controller', () => {
     }
     assert.equal(listRes.headers['Cache-Control'], 'no-store');
     assert.equal(submitRes.headers['Cache-Control'], 'no-store');
+  });
+
+  it('exposes Staff payout reconciliation, prevents caching, and preserves typed service errors', async () => {
+    const service = require('../services/returnRefund.service').returnRefundService;
+    const saved = service.reconcilePayoutOperation;
+    const typedError = Object.assign(new Error('stale payout operation'), {
+      statusCode: 409,
+      errorCode: 'PAYOUT_OPERATION_STALE',
+    });
+    let nextError;
+    service.reconcilePayoutOperation = async () => { throw typedError; };
+    const res = responseHarness();
+    try {
+      await controller.reconcilePayoutOperation({
+        user: { id: 'staff-1' },
+        params: { id: 'request-1' },
+        body: { operationKey: 'operation-1' },
+      }, res, (error) => { nextError = error; });
+    } finally {
+      service.reconcilePayoutOperation = saved;
+    }
+
+    assert.equal(res.headers['Cache-Control'], 'no-store');
+    assert.equal(nextError, typedError);
+    assert.equal(nextError.statusCode, 409);
+    assert.equal(nextError.errorCode, 'PAYOUT_OPERATION_STALE');
+
+    const routes = readFileSync(path.join(__dirname, '../routes/returnRefund.routes.js'), 'utf8');
+    assert.match(
+      routes,
+      /router\.post\('\/staff\/return-refunds\/:id\/payout-reconciliation', authenticate, authorizeRoles\('Staff'\), returnRefundController\.reconcilePayoutOperation\)/,
+    );
   });
 });

@@ -20,6 +20,7 @@ router.post('/staff/return-refunds/:id/expire', authenticate, authorizeRoles('St
 router.post('/staff/return-refunds/:id/payout-evidence', authenticate, authorizeRoles('Staff'), returnRefundController.recordPayoutEvidence);
 router.post('/staff/return-refunds/:id/payos-payout', authenticate, authorizeRoles('Staff'), returnRefundController.startPayOSPayout);
 router.post('/staff/return-refunds/:id/payos-reconcile', authenticate, authorizeRoles('Staff'), returnRefundController.reconcilePayOSPayout);
+router.post('/staff/return-refunds/:id/payout-reconciliation', authenticate, authorizeRoles('Staff'), returnRefundController.reconcilePayoutOperation);
 router.post('/staff/return-refunds/:id/payout-incident', authenticate, authorizeRoles('Staff'), returnRefundController.reportPayoutIncident);
 // This endpoint is now a guarded reconciliation confirmation. It cannot create
 // a refund without a verified, successful payout-evidence record.
