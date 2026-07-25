@@ -157,6 +157,139 @@ describe('cart service', () => {
     );
   });
 
+  it('rejects zero, negative, and decimal quantities before changing the cart', async () => {
+    for (const [quantity, idempotencyKey] of [
+      [0, 'cart-invalid-zero-001'],
+      [-1, 'cart-invalid-negative-001'],
+      [1.5, 'cart-invalid-decimal-001'],
+    ]) {
+      await assert.rejects(
+        () => cartService.addItem('customer-1', {
+          productId: 'p1',
+          quantity,
+          expectedVersion: 0,
+          idempotencyKey,
+        }),
+        (error) => error.statusCode === 400 && error.errorCode === 'CART_QUANTITY_INVALID',
+      );
+    }
+
+    const cart = await cartService.getCart('customer-1');
+    assert.equal(cart.id, null);
+    assert.deepEqual(cart.items, []);
+  });
+
+  it('updates one owned item quantity and increments the cart version', async () => {
+    const added = await cartService.addItem('customer-1', {
+      productId: 'p1',
+      quantity: 1,
+      expectedVersion: 0,
+      idempotencyKey: 'cart-update-setup-001',
+    });
+
+    const result = await cartService.updateItem('customer-1', added.items[0].id, {
+      quantity: 4,
+      expectedVersion: added.version,
+      idempotencyKey: 'cart-update-owned-001',
+    });
+
+    assert.equal(result.version, 2);
+    assert.equal(result.items.length, 1);
+    assert.equal(result.items[0].quantity, 4);
+    assert.equal(result.totalAmount, 100);
+  });
+
+  it('rejects an update above availability without changing the stored quantity', async () => {
+    const added = await cartService.addItem('customer-1', {
+      productId: 'p1',
+      quantity: 2,
+      expectedVersion: 0,
+      idempotencyKey: 'cart-update-stock-setup-001',
+    });
+
+    await assert.rejects(
+      () => cartService.updateItem('customer-1', added.items[0].id, {
+        quantity: 6,
+        expectedVersion: added.version,
+        idempotencyKey: 'cart-update-too-many-001',
+      }),
+      (error) => (
+        error.statusCode === 409
+        && error.errorCode === 'CART_QUANTITY_EXCEEDS_AVAILABLE'
+        && error.data.maxOrderableQuantity === 5
+      ),
+    );
+
+    const current = await cartService.getCart('customer-1');
+    assert.equal(current.version, 1);
+    assert.equal(current.items[0].quantity, 2);
+  });
+
+  it('removes one owned item without affecting another customer cart', async () => {
+    const customerOne = await cartService.addItem('customer-1', {
+      productId: 'p1',
+      quantity: 1,
+      expectedVersion: 0,
+      idempotencyKey: 'cart-remove-owner-setup-001',
+    });
+    await cartService.addItem('customer-2', {
+      productId: 'p1',
+      quantity: 2,
+      expectedVersion: 0,
+      idempotencyKey: 'cart-remove-other-setup-001',
+    });
+
+    const result = await cartService.removeItem('customer-1', customerOne.items[0].id, {
+      expectedVersion: customerOne.version,
+      idempotencyKey: 'cart-remove-owned-001',
+    });
+
+    assert.equal(result.version, 2);
+    assert.deepEqual(result.items, []);
+    assert.equal((await cartService.getCart('customer-2')).items[0].quantity, 2);
+  });
+
+  it('returns only the authenticated customer cart on read', async () => {
+    await cartService.addItem('customer-1', {
+      productId: 'p1',
+      quantity: 3,
+      expectedVersion: 0,
+      idempotencyKey: 'cart-read-owner-001',
+    });
+
+    const otherCustomerCart = await cartService.getCart('customer-2');
+
+    assert.equal(otherCustomerCart.id, null);
+    assert.deepEqual(otherCustomerCart.items, []);
+    assert.equal(otherCustomerCart.totalAmount, 0);
+  });
+
+  it('rejects updating a cart item outside the customer active cart', async () => {
+    const cartRepository = createCartRepository();
+    const otherCart = await cartRepository.createCart('customer-2');
+    const otherItem = await cartRepository.addItem({
+      cartId: otherCart._id,
+      productId: 'p1',
+      productName: 'Green Pan',
+      quantity: 1,
+      unitPrice: 25,
+    });
+    cartService = createCartService({
+      productRepository: createProductRepository(),
+      cartRepository,
+    });
+
+    await assert.rejects(
+      () => cartService.updateItem('customer-1', otherItem._id, {
+        quantity: 2,
+        expectedVersion: 0,
+        idempotencyKey: 'cart-update-foreign-001',
+      }),
+      (error) => error.statusCode === 404 && error.errorCode === 'CART_ITEM_NOT_FOUND',
+    );
+    assert.equal((await cartService.getCart('customer-2')).items[0].quantity, 1);
+  });
+
   it('rejects removing a cart item outside the customer active cart', async () => {
     const cartRepository = createCartRepository();
     const customerCart = await cartRepository.createCart('customer-1');
