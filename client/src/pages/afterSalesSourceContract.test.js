@@ -43,7 +43,9 @@ describe('after-sales source contract', () => {
     assert.match(orderDetail, /err\.data\?\.action\?\.href/);
     assert.match(orderDetail, /setActiveCase/);
     assert.match(orderDetail, /requestReturnRefund[\s\S]*catch \(err\)[\s\S]*handleAfterSalesConflict\(err\)/);
-    assert.match(orderDetail, /!activeCase && order\.orderStatus === ['"]Delivered['"]/);
+    assert.match(orderDetail, /const afterSalesEnabled = order\.afterSales\?\.enabled === true/);
+    assert.match(orderDetail, /order\.afterSales\?\.receiptGatePassed === true/);
+    assert.match(orderDetail, /!activeCase && afterSalesEnabled/);
   });
 
   it('contains all required staff filter states', () => {

@@ -156,6 +156,43 @@ Current local evidence is summarized in `SL-004_HANDOFF.md` and
 `SL-004_RELEASE_AUDIT.md`. It does not claim provider verification, staging
 actor acceptance, deployment, or a production migration.
 
+## 9. Addendum 2026-07-26 - Customer delivery receipt (supersedes physical-completion shorthand)
+
+| Requirement | Code boundary | Test/migration evidence |
+|---|---|---|
+| Physical delivery is not Customer completion | `Order.orderStatus=Delivered` remains physical; `customerDeliveryReceipt.model.js` is a separate append-only aggregate | Model/schema contract: 11 passing assertions |
+| Customer has exactly two initial choices | Customer order detail receives authoritative `availableDeliveryActions` and posts one idempotent receipt command | API/projection contract: 90 passing assertions; full client gate 357/357 across 79 suites, 0 failed, 0 skipped |
+| Only Customer receipt starts after-sales time | `customerDeliveryReceipt.service.js` snapshots both deadlines at `Received`; exchange/return/review share the receipt policy | Service variants: 46 and 32 passing assertions; direct after-sales gates: 161 passing assertions |
+| Non-receipt remains investigable without fake completion | Immutable `NOT_RECEIVED` row, no Customer `Completed`, and direct after-sales gates return typed refusal | Same service and after-sales evidence above |
+| Legacy Delivered records remain awaiting confirmation | `migrateCustomerDeliveryReceipt.js` creates only receipt indexes and verifies Shipment guard compatibility; it writes no receipt row; dry-run disables `autoIndex` and `autoCreate` before connect | Initial migration RED 0/6 then GREEN 6/6; command-identity P1 RED 6/7 then GREEN 7/7; bounded/read-only expansion RED 5/9 then GREEN 9/9; disposable MongoDB 8.2 collection list `[] -> []` |
+| Exact technical indexes cannot silently drift | Migration preflight uses bounded server-side group counts, rejects duplicate Customer/idempotency command identities with `CUSTOMER_DELIVERY_RECEIPT_COMMAND_AMBIGUOUS`, duplicate terminal/initial receipt identities, unsafe guard types/values with `CUSTOMER_RECEIPT_GUARD_VERSION_AMBIGUOUS`, and same-key index semantic conflicts before every index operation | `migrateCustomerDeliveryReceipt.test.js`; 5,000-row synthetic history asserts no `$push`, reason read, or unbounded diagnostic; BSON guard expansion RED 7/10 then GREEN 10/10 |
+| Shipment receipt guard stays safe for `$inc` | Only finite, integral BSON `int`/`long`/`double` values in `0..9,007,199,254,740,990` pass; Decimal128, strings, negatives, fractions, NaN and Infinity fail closed | Fake boundary matrix plus portable disposable-Mongo positive-Infinity/Decimal128 cases; zero migration mutation |
+
+Operational commands are deliberately explicit:
+
+```powershell
+cd server
+npm run migrate:customer-delivery-receipt
+npm run migrate:customer-delivery-receipt:apply
+npm run verify:customer-delivery-receipt
+```
+
+The first command is dry-run. Apply and verify must be executed against the
+named target database by the deployment owner; no production or target run is
+claimed in this local evidence.
+
+Final local branch evidence on 2026-07-26: full server 1194/1194 across 183
+suites; full client 357/357 across 79 suites; 0 failed and 0 skipped in both;
+receipt migration 10/10 against real MongoDB with 0 skipped; syntax verification
+for 36 files; clean diff/prohibited-file/secret scans; and Vite 6.4.3 build exit
+0 after 169 modules. The build retained a non-blocking 745.88 kB JavaScript
+chunk warning (gzip 216.31 kB), above 500 kB. Production dependency audits
+reported server 0 and client 3 pre-existing high findings in `postcss`,
+`react-router`, and `react-router-dom`; package manifest and lockfile were
+unchanged. The branch was 21 commits ahead and 0 behind at gate time.
+Target-database dry-run/apply/verify and authenticated Customer/Staff
+walkthroughs remain deployment-only.
+
 ## 8. Demo-only Staff delivery/COD reconciliation extension (2026-07-25)
 
 | Invariant | Code boundary | Test evidence |

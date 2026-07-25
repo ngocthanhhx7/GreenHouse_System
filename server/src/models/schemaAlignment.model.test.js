@@ -18,6 +18,7 @@ const CodRecoveryReceipt = require('./codRecoveryReceipt.model');
 const RefundDestination = require('./refundDestination.model');
 const RefundPayoutEvidence = require('./refundPayoutEvidence.model');
 const InventoryTransaction = require('./inventoryTransaction.model');
+const CustomerDeliveryReceipt = require('./customerDeliveryReceipt.model');
 
 function assertPath(model, pathName) {
   assert.ok(model.schema.path(pathName), `${model.modelName}.${pathName} should exist`);
@@ -90,5 +91,14 @@ describe('schema alignment with ERD', () => {
     });
     const eventIndex = Notification.schema.indexes().find(([fields]) => fields.businessEventId === 1 && fields.recipientIdentity === 1 && fields.type === 1 && fields.channel === 1);
     assert.equal(eventIndex[1].unique, true);
+  });
+
+  it('stores immutable customer delivery receipt decisions separately from physical delivery evidence', () => {
+    ['orderId', 'customerId', 'shipmentId', 'deliveryEventId', 'outcome', 'respondedAt', 'idempotencyKey', 'requestHash', 'exchangeDeadlineAt', 'returnDeadlineAt'].forEach((field) => {
+      assertPath(CustomerDeliveryReceipt, field);
+      assert.equal(CustomerDeliveryReceipt.schema.path(field).options.immutable, true);
+    });
+    assert.ok(CustomerDeliveryReceipt.schema.path('outcome').enumValues.includes('RECEIVED'));
+    assert.ok(CustomerDeliveryReceipt.schema.path('outcome').enumValues.includes('NOT_RECEIVED'));
   });
 });

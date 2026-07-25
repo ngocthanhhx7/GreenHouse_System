@@ -66,6 +66,26 @@ function createRepository() {
     payoutEvidence: [],
     payoutIncidents: [],
     inventoryTransactions: [],
+    customerDeliveryReceipts: [
+      {
+        _id: 'customer-receipt-1',
+        orderId: 'order-1',
+        customerId: 'customer-1',
+        outcome: 'RECEIVED',
+        respondedAt: new Date('2026-07-20T10:00:00Z'),
+        exchangeDeadlineAt: new Date('2026-07-25T10:00:00Z'),
+        returnDeadlineAt: new Date('2026-07-25T10:00:00Z'),
+      },
+      {
+        _id: 'customer-receipt-3',
+        orderId: 'order-3',
+        customerId: 'customer-1',
+        outcome: 'RECEIVED',
+        respondedAt: new Date('2026-07-23T10:00:00Z'),
+        exchangeDeadlineAt: new Date('2026-07-28T10:00:00Z'),
+        returnDeadlineAt: new Date('2026-07-28T10:00:00Z'),
+      },
+    ],
     failInventoryTransaction: false,
   };
 
@@ -88,6 +108,11 @@ function createRepository() {
       Object.keys(snapshot).forEach((key) => { state[key] = snapshot[key]; });
     },
     async findOrderById(id) { return state.orders.find((order) => order._id === id) || null; },
+    async findLatestCustomerDeliveryReceiptByOrder(orderId) {
+      return state.customerDeliveryReceipts
+        .filter((item) => item.orderId === orderId)
+        .sort((left, right) => new Date(right.respondedAt) - new Date(left.respondedAt))[0] || null;
+    },
     async ensureReturnDeadline(id, deadlineAt) {
       const order = state.orders.find((entry) => entry._id === id);
       if (!order.returnDeadlineAt) order.returnDeadlineAt = deadlineAt;
@@ -505,6 +530,35 @@ describe('return/refund service', () => {
     repository.state.requests = [];
     now = new Date('2026-07-25T10:00:00.001Z');
     await assert.rejects(() => createRequest(), /five-day.*expired/i);
+  });
+
+  it('requires Customer receipt and blocks an active non-receipt dispute at the direct Return boundary', async () => {
+    repository.state.customerDeliveryReceipts = [];
+    const awaiting = await captureError(() => createRequest());
+    assert.equal(awaiting.errorCode, 'AFTER_SALES_DELIVERY_CONFIRMATION_REQUIRED');
+    assert.equal(repository.requests.length, 0);
+
+    repository.state.customerDeliveryReceipts.push({
+      _id: 'customer-receipt-dispute',
+      orderId: 'order-1',
+      customerId: 'customer-1',
+      outcome: 'NOT_RECEIVED',
+      respondedAt: new Date('2026-07-22T10:00:00Z'),
+    });
+    const disputed = await captureError(() => createRequest());
+    assert.equal(disputed.errorCode, 'AFTER_SALES_DELIVERY_DISPUTED');
+    assert.equal(repository.requests.length, 0);
+  });
+
+  it('uses only the immutable Customer receipt Return deadline', async () => {
+    repository.orders[0].deliveredAt = new Date(now);
+    repository.orders[0].returnDeadlineAt = new Date('2099-01-01T00:00:00Z');
+    repository.state.customerDeliveryReceipts[0].returnDeadlineAt = new Date(
+      now.getTime() - 1,
+    );
+
+    await assert.rejects(() => createRequest(), /five-day return window has expired/i);
+    assert.equal(repository.requests.length, 0);
   });
 
   it('rejects a duplicate active case for the same order', async () => {

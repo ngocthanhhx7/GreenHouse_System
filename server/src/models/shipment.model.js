@@ -25,6 +25,13 @@ const shipmentSchema = new mongoose.Schema(
     },
     deliveredAt: { type: Date, default: null },
     terminalEventId: { type: mongoose.Schema.Types.ObjectId, ref: 'ShipmentEvent', default: null },
+    // Internal write-conflict token for Customer receipt commands. This is not delivery evidence.
+    customerReceiptGuardVersion: {
+      type: Number,
+      default: 0,
+      min: 0,
+      select: false,
+    },
   },
   { timestamps: true },
 );
