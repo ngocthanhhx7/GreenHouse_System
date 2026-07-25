@@ -56,6 +56,7 @@ describe('refund payout evidence model', () => {
     const operationIndex = RefundPayoutEvidence.schema.indexes().find(([fields, options]) => (
       fields.refundPendingId === 1
       && fields.payoutOperationKey === 1
+      && fields.method === 1
       && fields.createdAt === -1
       && options.name === 'refund_payout_by_obligation_operation'
     ));

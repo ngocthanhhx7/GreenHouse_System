@@ -717,11 +717,12 @@ function createModelRepository() {
     async findPayoutEvidenceByIdempotencyKey(idempotencyKey, session) {
       return withOptionalSession(RefundPayoutEvidence.findOne({ idempotencyKey }), session).lean();
     },
-    async findPayoutEvidenceForOperation(refundPendingId, payoutOperationKey, session) {
-      if (!refundPendingId || !payoutOperationKey) return null;
+    async findPayoutEvidenceForOperation(refundPendingId, payoutOperationKey, method, session) {
+      if (!refundPendingId || !payoutOperationKey || !method) return null;
       return withOptionalSession(RefundPayoutEvidence.findOne({
         refundPendingId,
         payoutOperationKey,
+        method,
       }).sort({ createdAt: -1 }), session).lean();
     },
     async createPayoutEvidence(data, session) {
@@ -775,11 +776,18 @@ function createReturnRefundService({
       repository.findLatestPayoutIncident ? repository.findLatestPayoutIncident(request._id, session) : null,
     ]);
     if (!order) throw new ApiError(404, 'Related order not found');
+    const evidenceMethod = refundPending?.payoutMethod === 'PayOS'
+      ? 'PAYOS'
+      : refundPending?.payoutMethod === 'Manual'
+        ? 'MANUAL'
+        : null;
     const payoutEvidence = refundPending?.payoutOperationKey
+      && evidenceMethod
       && repository.findPayoutEvidenceForOperation
       ? await repository.findPayoutEvidenceForOperation(
         refundPending._id,
         refundPending.payoutOperationKey,
+        evidenceMethod,
         session
       )
       : null;
@@ -1024,7 +1032,11 @@ function createReturnRefundService({
     staffId,
     id,
     input = {},
-    { trustedPayOS = false, allowPriorUnresolved = false } = {}
+    {
+      trustedPayOS = false,
+      trustedReconciliation = false,
+      allowPriorUnresolved = false,
+    } = {}
   ) {
     if (Object.prototype.hasOwnProperty.call(input, 'evidenceKind')
       || Object.prototype.hasOwnProperty.call(input, 'reconcilesOperationKey')) {
@@ -1102,8 +1114,8 @@ function createReturnRefundService({
           currency: order.currency || 'VND',
           idempotencyKey,
           payoutOperationKey,
-          evidenceKind: 'PAYOUT_EXECUTION',
-          reconcilesOperationKey: '',
+          evidenceKind: trustedReconciliation ? 'OPERATION_RECONCILIATION' : 'PAYOUT_EXECUTION',
+          reconcilesOperationKey: trustedReconciliation ? payoutOperationKey : '',
           method,
           providerReference,
           status,
@@ -1940,7 +1952,7 @@ function createReturnRefundService({
       });
       return persistPayoutEvidence(staffId, id, {
         idempotencyKey: `payos-reconcile:${outcome.providerEventKey}`,
-        operationKey: latest.idempotencyKey,
+        operationKey: latest.payoutOperationKey,
         method: 'PAYOS',
         providerReference: outcome.providerReference,
         status: outcome.status,
@@ -1949,7 +1961,11 @@ function createReturnRefundService({
         reconciliationNote: `payOS reconciliation ${payout.approvalState || 'UNKNOWN'}`,
         failureReason: outcome.failureReason,
         recoveryIncidentId: loaded.payoutIncident?.status === 'Open' ? loaded.payoutIncident._id : undefined,
-      }, { trustedPayOS: true, allowPriorUnresolved: true });
+      }, {
+        trustedPayOS: true,
+        trustedReconciliation: true,
+        allowPriorUnresolved: true,
+      });
     },
 
     async completeRefund(staffId, id, input = {}) {

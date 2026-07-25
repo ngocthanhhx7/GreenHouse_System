@@ -92,7 +92,7 @@ refundPayoutEvidenceSchema.index({ idempotencyKey: 1 }, { unique: true, name: 'r
 refundPayoutEvidenceSchema.index({ returnRefundRequestId: 1, createdAt: -1 });
 refundPayoutEvidenceSchema.index({ refundPendingId: 1, status: 1, createdAt: -1 });
 refundPayoutEvidenceSchema.index(
-  { refundPendingId: 1, payoutOperationKey: 1, createdAt: -1 },
+  { refundPendingId: 1, payoutOperationKey: 1, method: 1, createdAt: -1 },
   { name: 'refund_payout_by_obligation_operation' }
 );
 refundPayoutEvidenceSchema.index(

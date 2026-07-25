@@ -258,10 +258,11 @@ function createRepository() {
     async findPayoutEvidenceByIdempotencyKey(idempotencyKey) {
       return state.payoutEvidence.find((entry) => entry.idempotencyKey === idempotencyKey) || null;
     },
-    async findPayoutEvidenceForOperation(refundPendingId, payoutOperationKey) {
+    async findPayoutEvidenceForOperation(refundPendingId, payoutOperationKey, method) {
       return state.payoutEvidence.filter((entry) => (
         entry.refundPendingId === refundPendingId
         && entry.payoutOperationKey === payoutOperationKey
+        && entry.method === method
       )).at(-1) || null;
     },
     async createPayoutEvidence(data) {
@@ -486,7 +487,7 @@ describe('return/refund service', () => {
       returnRefundRequestId: requestId,
       refundPendingId: repository.refunds[0]._id,
       payoutOperationKey: 'payos-lost-response-001',
-      method: 'MANUAL',
+      method: 'PAYOS',
       status: 'Failed',
       providerReference: 'SAFE-REFERENCE',
       occurredAt: new Date('2026-07-23T09:58:00Z'),
@@ -505,19 +506,48 @@ describe('return/refund service', () => {
     assert.equal(response.payout.requiresManualPayOSResolution, true);
 
     repository.payoutEvidence.push({
-      _id: 'other-operation-evidence',
+      _id: 'wrong-method-evidence',
       returnRefundRequestId: requestId,
-      refundPendingId: 'another-refund-obligation',
-      payoutOperationKey: 'another-operation',
-      method: 'PAYOS',
+      refundPendingId: repository.refunds[0]._id,
+      payoutOperationKey: 'payos-lost-response-001',
+      method: 'MANUAL',
       status: 'Succeeded',
-      providerReference: 'OTHER-REFERENCE',
+      providerReference: 'WRONG-METHOD-REFERENCE',
       occurredAt: new Date('2026-07-23T10:01:00Z'),
       createdAt: new Date('2026-07-23T10:01:00Z'),
     });
     response = await service.getStaffRequest(requestId);
     assert.equal(response.payout.evidence.id, 'stale-evidence-1');
-    assert.equal(JSON.stringify(response).includes('OTHER-REFERENCE'), false);
+    assert.equal(JSON.stringify(response).includes('WRONG-METHOD-REFERENCE'), false);
+
+    repository.payoutEvidence.push({
+      _id: 'other-operation-evidence',
+      returnRefundRequestId: requestId,
+      refundPendingId: repository.refunds[0]._id,
+      payoutOperationKey: 'another-operation',
+      method: 'PAYOS',
+      status: 'Succeeded',
+      providerReference: 'OTHER-OPERATION-REFERENCE',
+      occurredAt: new Date('2026-07-23T10:02:00Z'),
+      createdAt: new Date('2026-07-23T10:02:00Z'),
+    });
+    response = await service.getStaffRequest(requestId);
+    assert.equal(response.payout.evidence.id, 'stale-evidence-1');
+    assert.equal(JSON.stringify(response).includes('OTHER-OPERATION-REFERENCE'), false);
+
+    repository.payoutEvidence.push({
+      _id: 'newest-matching-evidence',
+      returnRefundRequestId: requestId,
+      refundPendingId: repository.refunds[0]._id,
+      payoutOperationKey: 'payos-lost-response-001',
+      method: 'PAYOS',
+      status: 'Unknown',
+      providerReference: 'CURRENT-REFERENCE',
+      occurredAt: new Date('2026-07-23T10:03:00Z'),
+      createdAt: new Date('2026-07-23T10:03:00Z'),
+    });
+    response = await service.getStaffRequest(requestId);
+    assert.equal(response.payout.evidence.id, 'newest-matching-evidence');
   });
 
   it('derives payout actions from authoritative state, verified destination and server configuration', async () => {
@@ -1271,6 +1301,45 @@ describe('return/refund service', () => {
     assert.equal(repository.refunds[0].status, 'Refunded');
     assert.equal(repository.orders[0].orderStatus, 'Returned');
     assert.equal(repository.payments[0].paymentStatus, 'Paid');
+  });
+
+  it('preserves the original payOS operation identity across repeated Unknown reconciliation evidence', async () => {
+    const requestId = await prepareReceivedRequest({ verifyDestination: true });
+    const originalOperationKey = 'payos-operation-chain-001';
+    await service.startPayOSPayout('staff-1', requestId, {
+      idempotencyKey: originalOperationKey,
+    });
+
+    payosGateway.payout = {
+      id: 'payos-payout-chain', referenceId: repository.requests[0].requestCode, approvalState: 'UNRECOGNIZED',
+      transactions: [{
+        id: 'unknown-event-1', state: 'UNRECOGNIZED', amount: 120,
+        toBin: '970422', toAccountNumber: '0123456789', reference: null,
+      }],
+    };
+    const first = await service.reconcilePayOSPayout('staff-1', requestId);
+    assert.equal(first.status, 'Unknown');
+
+    payosGateway.payout.transactions[0].id = 'unknown-event-2';
+    const second = await service.reconcilePayOSPayout('staff-1', requestId);
+    assert.equal(second.status, 'Unknown');
+    assert.equal(repository.refunds[0].payoutOperationKey, originalOperationKey);
+    assert.equal(repository.payoutEvidence.length, 3);
+    assert.deepEqual(repository.payoutEvidence.map((entry) => entry.payoutOperationKey), [
+      originalOperationKey,
+      originalOperationKey,
+      originalOperationKey,
+    ]);
+    assert.deepEqual(repository.payoutEvidence.map((entry) => entry.evidenceKind), [
+      'PAYOUT_EXECUTION',
+      'OPERATION_RECONCILIATION',
+      'OPERATION_RECONCILIATION',
+    ]);
+    assert.deepEqual(repository.payoutEvidence.map((entry) => entry.reconcilesOperationKey), [
+      '',
+      originalOperationKey,
+      originalOperationKey,
+    ]);
   });
 
   it('blocks false payOS completion when provider amount or destination differs from the verified snapshot', async () => {

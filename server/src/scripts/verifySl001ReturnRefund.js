@@ -23,11 +23,16 @@ const User = require('../models/user.model');
 const { createReturnRefundService } = require('../services/returnRefund.service');
 const { returnEvidenceClaim } = require('../utils/returnEvidenceClaim');
 
-function assertSafeTarget(uri) {
-  if (process.env.NODE_ENV === 'production') throw new Error('SL-001 verification cannot run in production');
+function assertSafeTarget(uri, { nodeEnv = process.env.NODE_ENV } = {}) {
+  if (nodeEnv === 'production') throw new Error('SL-001 verification cannot run in production');
   if (!/^mongodb:\/\/(127\.0\.0\.1|localhost)(:\d+)?\/greenhome_kitchen(?:\?|$)/i.test(String(uri || ''))) {
     throw new Error('SL-001 verification is restricted to the local greenhome_kitchen database');
   }
+}
+
+async function deleteRefundPayoutEvidenceFixture(requestId) {
+  assertSafeTarget(process.env.MONGODB_URI);
+  return RefundPayoutEvidence.collection.deleteMany({ returnRefundRequestId: requestId });
 }
 
 async function loadActor(email) {
@@ -41,7 +46,7 @@ async function cleanup(ids) {
     await AuditLog.deleteMany({ targetEntity: 'ReturnRefundRequest', targetId: String(ids.requestId) });
     await InventoryTransaction.deleteMany({ relatedCollection: 'ReturnRefundRequest', relatedId: ids.requestId });
     await RefundPayoutIncident.deleteMany({ returnRefundRequestId: ids.requestId });
-    await RefundPayoutEvidence.deleteMany({ returnRefundRequestId: ids.requestId });
+    await deleteRefundPayoutEvidenceFixture(ids.requestId);
     await RefundDestination.deleteMany({ returnRefundRequestId: ids.requestId });
     await RefundPending.deleteMany({ returnRefundRequestId: ids.requestId });
     await ReturnItem.deleteMany({ returnRefundRequestId: ids.requestId });
@@ -297,4 +302,8 @@ if (require.main === module) {
     });
 }
 
-module.exports = { assertSafeTarget, verifySl001ReturnRefund };
+module.exports = {
+  assertSafeTarget,
+  deleteRefundPayoutEvidenceFixture,
+  verifySl001ReturnRefund,
+};
