@@ -4224,7 +4224,7 @@ body {
   font-weight: 700;
 }
 
-.notification-delete-button {
+.notification-archive-button {
   background: transparent;
   border: 0;
   color: #a23b32;
@@ -4377,7 +4377,7 @@ body {
     grid-template-columns: 8px minmax(0, 1fr);
   }
 
-  .notification-delete-button {
+  .notification-archive-button {
     grid-column: 2;
     justify-self: start;
     padding: 0;

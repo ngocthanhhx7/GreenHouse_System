@@ -182,8 +182,7 @@ function createOrderPaymentExpiryService({
       return notificationService.createInAppNotification({
         userId,
         type: 'ORDER_PAYMENT_EXPIRED',
-        subject: `Thanh toán đơn ${orderCode} đã hết hạn`,
-        content: `Đơn hàng ${orderCode} đã được hủy vì quá thời hạn thanh toán trực tuyến.`,
+        displayValues: { orderCode },
         eventId: `ORDER_PAYMENT_EXPIRED:${orderId}`,
         targetCollection: 'Order',
         targetId: orderId,

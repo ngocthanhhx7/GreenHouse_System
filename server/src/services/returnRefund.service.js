@@ -604,17 +604,16 @@ function createReturnRefundService({
     });
   }
 
-  async function notifyCustomer(customerId, requestId, type, subject, content, eventIdentity = '') {
+  async function notifyCustomer(request, type, eventIdentity = '') {
     try {
       if (eventPublisher?.createInAppNotification) {
         await eventPublisher.createInAppNotification({
-          userId: customerId,
+          userId: request.customerId,
           type,
-          subject,
-          content,
+          displayValues: { requestCode: request.requestCode || String(request._id) },
           targetCollection: 'ReturnRefundRequest',
-          targetId: requestId,
-          eventId: `${type}:${String(requestId)}${eventIdentity ? `:${String(eventIdentity)}` : ''}`,
+          targetId: request._id,
+          eventId: `${type}:${String(request._id)}${eventIdentity ? `:${String(eventIdentity)}` : ''}`,
         });
       }
     } catch (_) {
@@ -786,13 +785,8 @@ function createReturnRefundService({
 
     await writeAudit(staffId, 'REFUND_PAYOUT_INCIDENT_OPENED', loaded.request._id, `Opened ${cause} payout recovery with ${responsibility} responsibility; destination values redacted`);
     await notifyCustomer(
-      loaded.request.customerId,
-      loaded.request._id,
+      loaded.request,
       'REFUND_PAYOUT_INCIDENT_OPENED',
-      'Hồ sơ hoàn tiền cần đối soát',
-      responsibility === 'Customer'
-        ? 'Giao dịch đã dùng đúng thông tin tài khoản bạn xác nhận; CSKH đã mở hồ sơ hỗ trợ và hệ thống không tự chi lần hai.'
-        : 'Kết quả chi trả không khớp thông tin đã xác minh; bạn không bị quy trách nhiệm và hồ sơ đã được mở lại để xử lý.',
       incident._id
     );
     return toPayoutIncidentResponse(incident);
@@ -913,7 +907,7 @@ function createReturnRefundService({
     }
 
     await writeAudit(staffId, 'REFUND_PAYOUT_EVIDENCE_RECORDED', id, `${trustedPayOS ? 'System reconciled payOS' : 'Staff recorded manual'} payout evidence with ${status} outcome; destination values redacted`);
-    if (status === 'Succeeded') await notifyCustomer(request.customerId, request._id, 'RETURN_REFUND_COMPLETED', 'Đã hoàn tất hoàn tiền', 'Bằng chứng chi trả đã được xác minh và hồ sơ trả hàng đã hoàn tất.', evidence._id);
+    if (status === 'Succeeded') await notifyCustomer(request, 'RETURN_REFUND_COMPLETED', evidence._id);
     return { ...toPayoutResponse(evidence, 'Staff'), request: await respond(id, 'Staff') };
   }
 
@@ -1078,7 +1072,7 @@ function createReturnRefundService({
       });
 
       await writeAudit(staffId, approved ? 'RETURN_REFUND_APPROVED' : 'RETURN_REFUND_REJECTED', id, `Staff ${approved ? 'approved' : 'rejected'} return/refund for ${order.orderCode}`);
-      await notifyCustomer(request.customerId, request._id, approved ? 'RETURN_REFUND_APPROVED' : 'RETURN_REFUND_REJECTED', approved ? 'Yêu cầu trả hàng đã được duyệt' : 'Yêu cầu trả hàng bị từ chối', approved ? 'Vui lòng bàn giao hàng trong thời hạn hiển thị.' : staffNote);
+      await notifyCustomer(request, approved ? 'RETURN_REFUND_APPROVED' : 'RETURN_REFUND_REJECTED');
       return respond(id, 'Staff');
     },
 
@@ -1137,7 +1131,7 @@ function createReturnRefundService({
         return claimed;
       });
       await writeAudit(staffId, 'RETURN_REFUND_EXPIRED', id, 'Approved request expired without timely handoff proof');
-      await notifyCustomer(request.customerId, request._id, 'RETURN_REFUND_EXPIRED', 'Yêu cầu trả hàng đã hết hạn', 'Hệ thống không ghi nhận bằng chứng bàn giao hàng đúng hạn.');
+      await notifyCustomer(request, 'RETURN_REFUND_EXPIRED');
       return respond(id, 'Staff');
     },
 
@@ -1260,7 +1254,7 @@ function createReturnRefundService({
         return decided;
       });
       await writeAudit(staffId, status === 'Verified' ? 'REFUND_DESTINATION_VERIFIED' : 'REFUND_DESTINATION_REJECTED', id, `Staff ${status.toLowerCase()} refund destination version ${updated.version}; sensitive values redacted`);
-      await notifyCustomer(request.customerId, request._id, `REFUND_DESTINATION_${status.toUpperCase()}`, status === 'Verified' ? 'Thông tin nhận hoàn tiền đã được xác minh' : 'Thông tin nhận hoàn tiền cần sửa', status === 'Verified' ? 'Thông tin đã được xác minh.' : rejectionReason);
+      await notifyCustomer(request, `REFUND_DESTINATION_${status.toUpperCase()}`);
       return toDestinationResponse(updated);
     },
 
@@ -1453,7 +1447,7 @@ function createReturnRefundService({
       for (const inventory of result.updatedInventories) {
         await lowStockLifecycle?.evaluate?.(inventory, { eventKey: `return-receipt:${id}` });
       }
-      await notifyCustomer(request.customerId, request._id, 'RETURN_REFUND_RECEIVED', 'Kho đã nhận hàng trả', 'Kho đã nhận đủ hàng và chuyển hồ sơ sang bước đối soát hoàn tiền.');
+      await notifyCustomer(request, 'RETURN_REFUND_RECEIVED');
       return toResponse({ ...loaded, request: result.updated, items: result.createdItems }, 'Warehouse');
     },
 

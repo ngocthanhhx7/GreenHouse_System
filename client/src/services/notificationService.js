@@ -25,13 +25,16 @@ export function createNotificationService({ baseUrl = DEFAULT_BASE_URL, fetcher 
     async getNotification(id) {
       return request(`/notifications/${id}`);
     },
+    async getNotificationTarget(id) {
+      return request(`/notifications/${id}/target`);
+    },
     async markAsRead(id) {
       return request(`/notifications/${id}/read`, {
         method: 'PATCH',
       });
     },
-    async deleteNotification(id) {
-      return request(`/notifications/${id}`, { method: 'DELETE' });
+    async archiveNotification(id) {
+      return request(`/notifications/${id}/archive`, { method: 'PATCH' });
     },
   };
 }

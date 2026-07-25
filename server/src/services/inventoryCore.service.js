@@ -237,7 +237,7 @@ function createInventoryService({
     try {
       if (eventPublisher?.publishDomainEvent) await eventPublisher.publishDomainEvent(event);
       else if (eventPublisher?.createRoleNotifications && event.recipientRole) await eventPublisher.createRoleNotifications(event);
-      else if (event.recipientId && eventPublisher && eventPublisher.createInAppNotification) await eventPublisher.createInAppNotification({ userId: event.recipientId, type: event.type, subject: event.subject, content: event.content, eventId: event.idempotencyKey });
+      else if (event.recipientId && eventPublisher && eventPublisher.createInAppNotification) await eventPublisher.createInAppNotification({ userId: event.recipientId, type: event.type, displayValues: event.displayValues || {}, eventId: event.idempotencyKey, targetCollection: event.targetCollection || '', targetId: event.targetId || null });
     } catch (_) { /* Notification delivery is intentionally outside the inventory transaction. */ }
   }
   async function ensureInventoryRecords() {
@@ -464,7 +464,7 @@ function createInventoryService({
           return { updatedRequest, order };
         });
         await auditLogger.log({ userId, action: `STOCK_EXPORT_${nextStatus.toUpperCase()}`, targetEntity: 'StockExportRequest', targetId: String(id), description: `${nextStatus} stock export request` });
-        await emitEvent({ idempotencyKey: `stock-export-decision:${id}:${nextStatus}`, recipientId: request.requestedBy, type: `STOCK_EXPORT_${nextStatus.toUpperCase()}`, subject: `Phiếu xuất kho đã ${nextStatus === 'Approved' ? 'được duyệt' : 'bị từ chối'}`, content: `Phiếu xuất kho ${id} đã được xử lý.` });
+        await emitEvent({ idempotencyKey: `stock-export-decision:${id}:${nextStatus}`, recipientId: request.requestedBy, type: `STOCK_EXPORT_${nextStatus.toUpperCase()}`, displayValues: { quantity: request.requestedQuantity || 0 }, targetCollection: 'StockExportRequest', targetId: request._id });
         return {
           stockExport: await this.getStockExport(decision.updatedRequest._id),
           order: { id: String(decision.order._id), orderStatus: decision.order.orderStatus },
@@ -521,7 +521,7 @@ function createInventoryService({
       for (const inventory of result.inventories) {
         await lowStockLifecycle?.evaluate(inventory, { eventKey: `stock-export:${id}` });
       }
-      await emitEvent({ idempotencyKey: `stock-export:${id}`, recipientId: result.packed.customerId, type: 'STOCK_EXPORT', subject: 'Đơn hàng đã được xuất kho', content: `Đơn ${result.packed.orderCode} đã được xuất kho.` });
+      await emitEvent({ idempotencyKey: `stock-export:${id}`, recipientId: result.packed.customerId, type: 'STOCK_EXPORT', displayValues: { quantity: result.details.reduce((total, detail) => total + Number(detail.quantity || 0), 0) }, targetCollection: 'StockExportRequest', targetId: result.exported._id });
       const stockExport = toStockExportResponse(result.exported, result.packed, result.details);
       return { stockExport, order: { id: String(result.packed._id), orderStatus: result.packed.orderStatus } };
     },

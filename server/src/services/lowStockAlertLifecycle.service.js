@@ -1,4 +1,5 @@
 const LowStockAlert = require('../models/lowStockAlert.model');
+const Product = require('../models/product.model');
 const SystemSetting = require('../models/systemSetting.model');
 const { notificationService } = require('./notification.service');
 
@@ -14,6 +15,10 @@ function createModelRepository() {
     async findDefaultThreshold() {
       const setting = await SystemSetting.findOne({ key: 'LOW_STOCK_DEFAULT_THRESHOLD' }).lean();
       return setting ? Number(setting.value) : DEFAULT_THRESHOLD;
+    },
+    async findProductName(productId) {
+      const product = await Product.findById(productId).select('name').lean();
+      return product?.name || '';
     },
     async findOpen(productId) {
       return LowStockAlert.findOne({ productId, status: 'Open' }).lean();
@@ -43,22 +48,31 @@ function createLowStockAlertLifecycle({
   eventPublisher = null,
   clock = () => new Date(),
 } = {}) {
-  async function publishCrossing(alert, context) {
-    const event = {
-      idempotencyKey: `low-stock-crossing:${String(alert._id)}`,
-      type: 'LOW_STOCK_OPENED',
-      recipientRole: 'WarehouseManager',
-      targetCollection: 'LowStockAlert',
-      targetId: alert._id,
-      productId: alert.productId,
-      inventoryId: alert.inventoryId,
-      availableQuantity: alert.availableQuantity,
-      effectiveThreshold: alert.effectiveThreshold,
-      sourceEventKey: context.eventKey || '',
-      subject: 'Low stock alert',
-      content: `Product ${String(alert.productId)} has ${alert.availableQuantity} available.`,
-    };
+  async function publishCrossing(alert, context, inventory) {
     try {
+      if (!eventPublisher) return;
+      const populatedName = typeof inventory.productId === 'object' ? inventory.productId?.name : '';
+      const productName = String(
+        populatedName || await repository.findProductName?.(productIdOf(inventory)) || '',
+      ).trim();
+      if (!productName) throw new Error('Low-stock Notification product name is required');
+      const event = {
+        idempotencyKey: `low-stock-crossing:${String(alert._id)}`,
+        type: 'LOW_STOCK_OPENED',
+        recipientRole: 'WarehouseManager',
+        targetCollection: 'LowStockAlert',
+        targetId: alert._id,
+        productId: alert.productId,
+        inventoryId: alert.inventoryId,
+        availableQuantity: alert.availableQuantity,
+        effectiveThreshold: alert.effectiveThreshold,
+        displayValues: {
+          productName,
+          availableQuantity: alert.availableQuantity,
+          effectiveThreshold: alert.effectiveThreshold,
+        },
+        sourceEventKey: context.eventKey || '',
+      };
       if (eventPublisher?.publishDomainEvent) await eventPublisher.publishDomainEvent(event);
       else if (eventPublisher?.createRoleNotifications) await eventPublisher.createRoleNotifications(event);
     } catch (_) {
@@ -123,7 +137,7 @@ function createLowStockAlertLifecycle({
           effectiveThreshold,
         };
       }
-      await publishCrossing(created, context);
+      await publishCrossing(created, context, inventory);
       return {
         alert: created,
         opened: true,

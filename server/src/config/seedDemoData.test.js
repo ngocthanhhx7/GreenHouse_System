@@ -79,6 +79,20 @@ describe('demo data seed config', () => {
     assert.ok(DEMO_NOTIFICATION_SPECS.every((notification) => notification.channel === 'InApp'));
     assert.ok(DEMO_NOTIFICATION_SPECS.every((notification) => notification.subject.trim()));
     assert.ok(DEMO_NOTIFICATION_SPECS.every((notification) => Array.isArray(notification.legacySubjects)));
+    const lowStock = DEMO_NOTIFICATION_SPECS.find((notification) => notification.type === 'LOW_STOCK_OPENED');
+    assert.deepEqual(Object.keys(lowStock.displayValues).sort(), [
+      'availableQuantity', 'effectiveThreshold', 'productName',
+    ]);
+    assert.ok(lowStock.displayValues.productName.trim());
+    assert.equal(lowStock.displayValues.availableQuantity, 0);
+    const scriptSource = readFileSync(path.join(__dirname, 'seedDemoData.js'), 'utf8');
+    const notificationWriter = scriptSource.match(/async function upsertNotifications[\s\S]*?async function upsertAuditLogs/)?.[0] || '';
+    assert.match(notificationWriter, /businessEventId/);
+    assert.match(notificationWriter, /recipientIdentity/);
+    assert.match(notificationWriter, /templateKey/);
+    assert.match(notificationWriter, /displayValues/);
+    assert.match(notificationWriter, /state/);
+    assert.doesNotMatch(notificationWriter, /providerMessageId|deletedAt|subject:|content:/);
   });
 
   it('includes audit demo records for mentor review', () => {

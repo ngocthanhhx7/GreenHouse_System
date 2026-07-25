@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const { describe, it } = require('node:test');
 
 const { createLowStockAlertLifecycle } = require('./lowStockAlertLifecycle.service');
+const { renderNotification } = require('../utils/notificationContract');
 
 function createRepository() {
   const alerts = [];
@@ -79,5 +80,46 @@ describe('low stock alert lifecycle', () => {
 
     assert.equal(result.availableQuantity, 0);
     assert.equal(result.opened, true);
+  });
+
+  it('publishes LOW_STOCK_OPENED with the exact safe facts required by its rendered copy', async () => {
+    const repository = createRepository();
+    repository.findProductName = async (productId) => {
+      assert.equal(productId, 'product-1');
+      return 'Monstera Deliciosa';
+    };
+    const events = [];
+    const lifecycle = createLowStockAlertLifecycle({
+      repository,
+      eventPublisher: { async publishDomainEvent(event) { events.push(event); } },
+    });
+
+    await lifecycle.evaluate({
+      _id: 'inventory-1',
+      productId: 'product-1',
+      sellableQuantity: 2,
+      reservedQuantity: 0,
+      inventoryHealth: 'Normal',
+      lowStockThresholdOverride: 5,
+    }, { eventKey: 'count:product-1' });
+
+    assert.equal(events.length, 1);
+    assert.deepEqual(events[0].displayValues, {
+      productName: 'Monstera Deliciosa',
+      availableQuantity: 2,
+      effectiveThreshold: 5,
+    });
+    assert.deepEqual(Object.keys(events[0].displayValues).sort(), [
+      'availableQuantity', 'effectiveThreshold', 'productName',
+    ]);
+    const rendered = renderNotification(
+      events[0].type,
+      events[0].type,
+      events[0].displayValues,
+    );
+    assert.match(rendered.content, /Monstera Deliciosa/);
+    assert.match(rendered.content, /2/);
+    assert.match(rendered.content, /5/);
+    assert.doesNotMatch(`${rendered.subject} ${rendered.content}`, /\{[A-Za-z]+\}/);
   });
 });

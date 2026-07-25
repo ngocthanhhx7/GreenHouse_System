@@ -24,6 +24,7 @@ const Notification = require('../models/notification.model');
 const AuditLog = require('../models/auditLog.model');
 const UserAddress = require('../models/userAddress.model');
 const { DEMO_IMAGE_MANIFEST } = require('../demo-data/demoImageManifest');
+const { normalizeNotificationType, sanitizeDisplayValues } = require('../utils/notificationContract');
 
 const DEMO_PASSWORD = 'GreenHome@123';
 
@@ -280,7 +281,7 @@ const DEMO_NOTIFICATION_SPECS = [
   },
   {
     roleName: 'Staff',
-    type: 'STAFF_QUEUE',
+    type: 'SUPPORT_CLAIMED',
     channel: 'InApp',
     subject: 'Hàng đợi nhân viên có đơn cần xử lý',
     legacySubjects: ['Demo staff queue has pending work'],
@@ -290,17 +291,22 @@ const DEMO_NOTIFICATION_SPECS = [
   },
   {
     roleName: 'WarehouseManager',
-    type: 'LOW_STOCK',
+    type: 'LOW_STOCK_OPENED',
     channel: 'InApp',
     subject: 'Kho có phiếu xuất đang chờ duyệt',
     legacySubjects: ['Demo warehouse stock export waiting'],
     content: 'Đơn hàng GH-DEMO-1003 có yêu cầu xuất kho đang chờ xác nhận.',
+    displayValues: {
+      productName: 'Chảo gốm chống dính GreenHome',
+      availableQuantity: 0,
+      effectiveThreshold: 5,
+    },
     deliveryStatus: 'Sent',
     isRead: false,
   },
   {
     roleName: 'Admin',
-    type: 'REPORT_READY',
+    type: 'REPLENISHMENT_REQUESTED',
     channel: 'InApp',
     subject: 'Dữ liệu báo cáo quản trị đã sẵn sàng',
     legacySubjects: ['Demo admin report data is available'],
@@ -665,35 +671,30 @@ async function upsertNotifications(userMap, orderMap) {
 
   for (const notificationSpec of DEMO_NOTIFICATION_SPECS) {
     const user = userMap[notificationSpec.roleName];
-    const providerMessageId = `demo-seed:${notificationSpec.roleName}:${notificationSpec.type}`;
-
-    await Notification.deleteMany({
-      userId: user._id,
-      subject: { $in: [notificationSpec.subject, ...(notificationSpec.legacySubjects || [])] },
-      providerMessageId: { $ne: providerMessageId },
-    });
-
-    const notification = await Notification.findOneAndUpdate(
-      { userId: user._id, providerMessageId },
-      {
-        $set: {
-          userId: user._id,
-          type: notificationSpec.type,
-          channel: notificationSpec.channel,
-          subject: notificationSpec.subject,
-          content: notificationSpec.content,
-          deliveryStatus: notificationSpec.deliveryStatus,
-          providerMessageId,
-          isRead: notificationSpec.isRead,
-          readAt: notificationSpec.isRead ? new Date() : null,
-          deletedAt: null,
-          targetCollection: notificationSpec.targetOrderCode ? 'Order' : '',
-          targetId: notificationSpec.targetOrderCode ? orderMap[notificationSpec.targetOrderCode]?._id || null : null,
-          sentAt: new Date(),
-        },
-      },
-      { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
-    );
+    const type = normalizeNotificationType(notificationSpec.type);
+    const businessEventId = `demo-seed:${notificationSpec.roleName}:${type}`;
+    const recipientIdentity = `user:${String(user._id)}`;
+    const tuple = { businessEventId, recipientIdentity, type, channel: 'InApp' };
+    let notification = await Notification.findOne(tuple);
+    if (!notification) {
+      const displayValues = sanitizeDisplayValues(
+        type,
+        notificationSpec.displayValues || (type === 'ORDER_STATUS'
+          ? { orderCode: notificationSpec.targetOrderCode }
+          : {}),
+        { rejectUnknown: true },
+      );
+      notification = await Notification.create({
+        ...tuple,
+        userId: user._id,
+        templateKey: type,
+        displayValues,
+        state: notificationSpec.isRead ? 'Read' : 'Unread',
+        readAt: notificationSpec.isRead ? new Date() : null,
+        targetCollection: notificationSpec.targetOrderCode ? 'Order' : '',
+        targetId: notificationSpec.targetOrderCode ? orderMap[notificationSpec.targetOrderCode]?._id || null : null,
+      });
+    }
     notifications.push(notification);
   }
 

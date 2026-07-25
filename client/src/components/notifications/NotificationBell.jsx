@@ -27,7 +27,7 @@ export default function NotificationBell() {
     setLoading(true);
     setError('');
     try {
-      const result = await notificationService.listMyNotifications({ limit: 5 });
+      const result = await notificationService.listMyNotifications({ status: 'active', limit: 5 });
       setItems(result.items || []);
       setUnreadCount(result.unreadCount || 0);
     } catch (requestError) {
@@ -68,7 +68,7 @@ export default function NotificationBell() {
 
   async function openNotification(notification) {
     try {
-      if (!notification.isRead) {
+      if (notification.state === 'Unread' || !notification.isRead) {
         await notificationService.markAsRead(notification.id);
         setUnreadCount((count) => Math.max(0, count - 1));
       }
@@ -109,7 +109,7 @@ export default function NotificationBell() {
           {!loading && !error && items.length === 0 && <p className="notification-dropdown-state">Bạn chưa có thông báo.</p>}
           {!loading && !error && items.map((notification) => (
             <button
-              className={`notification-preview ${notification.isRead ? '' : 'unread'}`}
+              className={`notification-preview ${notification.state === 'Unread' || !notification.isRead ? 'unread' : ''}`}
               key={notification.id}
               type="button"
               onClick={() => openNotification(notification)}

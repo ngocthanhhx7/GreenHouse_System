@@ -450,11 +450,10 @@ function createExchangeService({
   lowStockLifecycle = null,
   auditLogger = { log: logAudit },
   notifier = {
-    notify: async ({ userId, type, subject, content, caseId }, session) => notificationService.createInAppNotification({
+    notify: async ({ userId, type, caseId, caseCode }, session) => notificationService.createInAppNotification({
       userId,
       type,
-      subject,
-      content,
+      displayValues: { caseCode },
       targetCollection: 'ExchangeCase',
       targetId: caseId,
       eventId: `${type}:${caseId}`,
@@ -1204,9 +1203,8 @@ function createExchangeService({
           await notifier.notify({
             userId: exchangeCase.customerId,
             type: 'EXCHANGE_REJECTED',
-            subject: 'Yêu cầu đổi hàng bị từ chối',
-            content: reason,
             caseId: id,
+            caseCode: exchangeCase.requestCode,
           }, session);
           return rejected;
         });
@@ -1943,13 +1941,8 @@ function createExchangeService({
             await notifier.notify({
               userId: completedCase.customerId,
               type: 'EXCHANGE_COMPLETED',
-              subject: completedCase.status === 'ClosedNoExchange'
-                ? 'Yêu cầu đổi hàng đã đóng'
-                : 'Yêu cầu đổi hàng đã hoàn tất',
-              content: completedCase.status === 'ClosedNoExchange'
-                ? 'Mọi sản phẩm bị từ chối đã được giao trả.'
-                : 'Mọi nghĩa vụ giao sản phẩm thay thế và trả hàng bị từ chối đã hoàn tất.',
               caseId: outcomeShipment.exchangeCaseId,
+              caseCode: completedCase.requestCode,
             }, session);
           }
         });
