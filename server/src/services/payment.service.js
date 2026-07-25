@@ -49,6 +49,22 @@ function isReusablePayOSAttempt(attempt, now = new Date()) {
   return new Date(attempt.expiresAt).getTime() > new Date(now).getTime() + 30_000;
 }
 
+function isPayOSLinkCreationInProgress(attempt, now = new Date()) {
+  if (
+    !attempt
+    || attempt.paymentProvider !== 'PAYOS'
+    || attempt.paymentStatus !== 'Pending'
+    || attempt.checkoutUrl
+  ) return false;
+  const startedAt = attempt.linkCreationStartedAt || attempt.updatedAt || attempt.createdAt;
+  const startedAtMs = startedAt ? new Date(startedAt).getTime() : NaN;
+  const leaseMs = Number(process.env.PAYMENT_LINK_CREATION_LEASE_MS || 120_000);
+  return Number.isFinite(startedAtMs)
+    && Number.isFinite(leaseMs)
+    && leaseMs > 0
+    && new Date(now).getTime() - startedAtMs < leaseMs;
+}
+
 function parsePayOSTransactionTime(value) {
   const normalized = String(value || '').trim();
   if (!normalized) return null;
@@ -814,6 +830,9 @@ function createPaymentService({
   return {
     drainPostCommitWork,
     async createOnlinePaymentRequest(customerId, orderId) {
+      if (paymentRepository.usesMongooseTransactions && !mongoose.isValidObjectId(orderId)) {
+        throw new ApiError(404, 'Order not found');
+      }
       const order = await paymentRepository.findOrderById(orderId);
       if (!order || String(order.customerId) !== String(customerId)) throw new ApiError(404, 'Order not found');
       if (order.paymentMethod !== 'ONLINE') throw new ApiError(400, 'Order is not an online payment order');
@@ -833,6 +852,14 @@ function createPaymentService({
 
       const latestAttempt = await paymentRepository.findLatestAttemptByOrder(order._id);
       if (isReusablePayOSAttempt(latestAttempt, now)) return toPaymentResponse(order, latestAttempt, { reused: true });
+      if (isPayOSLinkCreationInProgress(latestAttempt, now)) {
+        throw new ApiError(
+          409,
+          'Một link thanh toán PayOS đang được tạo, vui lòng thử lại sau.',
+          [],
+          'PAYMENT_LINK_CREATION_IN_PROGRESS',
+        );
+      }
       if (!payosGateway.isConfigured({ requireRedirectUrls: true })) {
         throw new ApiError(503, 'payOS chưa được cấu hình trên máy chủ', [], 'PAYOS_NOT_CONFIGURED');
       }
@@ -864,6 +891,7 @@ function createPaymentService({
           amount: Number(order.totalAmount),
           currency: 'VND',
           paymentStatus: 'Pending',
+          linkCreationStartedAt: now,
         });
       } catch (error) {
         if (error?.code === 11000) {
@@ -874,13 +902,18 @@ function createPaymentService({
         throw error;
       }
 
+      let paymentLink = null;
       try {
-        const paymentLink = await payosGateway.createPaymentLink({ order, providerOrderCode });
+        paymentLink = await payosGateway.createPaymentLink({ order, providerOrderCode });
         const currentOrder = await paymentRepository.findOrderById(order._id);
+        const currentAttempt = paymentRepository.findPaymentAttemptById
+          ? await paymentRepository.findPaymentAttemptById(attempt._id)
+          : attempt;
         const orderStillAcceptsPayment = currentOrder
           && currentOrder.orderStatus === 'Pending'
           && ['Unpaid', 'Pending', 'Failed'].includes(currentOrder.paymentStatus);
-        if (!orderStillAcceptsPayment) {
+        const attemptStillAcceptsLink = currentAttempt && currentAttempt.paymentStatus === 'Pending';
+        if (!orderStillAcceptsPayment || !attemptStillAcceptsLink) {
           if (paymentLink.paymentLinkId && payosGateway.cancelPaymentLink) {
             try {
               await payosGateway.cancelPaymentLink(paymentLink.paymentLinkId, 'Order state changed before payment link was persisted');
@@ -889,16 +922,27 @@ function createPaymentService({
               // still closed below.
             }
           }
-          await paymentRepository.updatePaymentAttempt(attempt._id, {
-            paymentStatus: 'Cancelled',
-            gatewayMessage: 'Order state changed before payment link was persisted',
-          });
-          throw new ApiError(409, 'Order is no longer pending payment', [], 'PAYMENT_ORDER_STATE_CHANGED');
+          if (attemptStillAcceptsLink) {
+            await paymentRepository.updatePaymentAttempt(attempt._id, {
+              paymentStatus: 'Cancelled',
+              linkCreationStartedAt: null,
+              gatewayMessage: 'Order state changed before payment link was persisted',
+            });
+          }
+          throw new ApiError(
+            409,
+            orderStillAcceptsPayment
+              ? 'Payment link creation was superseded by another request'
+              : 'Order is no longer pending payment',
+            [],
+            orderStillAcceptsPayment ? 'PAYMENT_LINK_CREATION_STATE_CHANGED' : 'PAYMENT_ORDER_STATE_CHANGED',
+          );
         }
         const updatedAttempt = await paymentRepository.updatePaymentAttempt(attempt._id, {
           paymentLinkId: paymentLink.paymentLinkId,
           checkoutUrl: paymentLink.checkoutUrl,
           qrCode: paymentLink.qrCode,
+          linkCreationStartedAt: null,
           expiresAt: paymentLink.expiredAt ? new Date(paymentLink.expiredAt * 1000) : null,
           rawResponse: paymentLink,
         });
@@ -913,9 +957,23 @@ function createPaymentService({
         }
         return toPaymentResponse(currentOrder, updatedAttempt);
       } catch (error) {
-        if (error?.errorCode === 'PAYMENT_ORDER_STATE_CHANGED') throw error;
+        if (['PAYMENT_ORDER_STATE_CHANGED', 'PAYMENT_LINK_CREATION_STATE_CHANGED'].includes(error?.errorCode)) {
+          throw error;
+        }
+        if (paymentLink?.paymentLinkId && payosGateway.cancelPaymentLink) {
+          try {
+            await payosGateway.cancelPaymentLink(
+              paymentLink.paymentLinkId,
+              'Local payment persistence failed after provider link creation',
+            );
+          } catch {
+            // The local attempt is still closed below; a late callback remains
+            // idempotent and is converted to a refund obligation if necessary.
+          }
+        }
         await paymentRepository.updatePaymentAttempt(attempt._id, {
           paymentStatus: 'Failed',
+          linkCreationStartedAt: null,
           gatewayMessage: String(error?.message || 'Không thể tạo link thanh toán payOS'),
         });
         if (error instanceof ApiError) throw error;
