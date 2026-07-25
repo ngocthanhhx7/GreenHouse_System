@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
 import { supportService } from '../../services/supportService.js';
-import { translateRequestStatus } from '../../utils/formatters.js';
+import { translateRequestStatus, translateRole, translateSupportType } from '../../utils/formatters.js';
+import { translateApiError } from '../../utils/errorMessages.js';
 
 const SUPPORT_TYPES = ['Order', 'Payment', 'ReturnRefund', 'Exchange', 'Product', 'Account', 'Other'];
 const ORDER_REQUIRED_TYPES = ['Order', 'Payment', 'ReturnRefund', 'Exchange'];
@@ -102,7 +103,7 @@ export default function SupportPage() {
 
   function showCommandError(commandError) {
     setFieldErrors(safeFieldErrors(commandError));
-    setError(commandError?.message || 'Không thể hoàn tất yêu cầu hỗ trợ. Vui lòng thử lại.');
+    setError(translateApiError(commandError));
   }
 
   async function loadRequests() {
@@ -111,7 +112,7 @@ export default function SupportPage() {
       setRequests(result?.items || []);
       setTicketPage({ ...DEFAULT_PAGE, ...(result || {}) });
     } catch (loadError) {
-      setError(loadError?.message || 'Không thể tải các yêu cầu hỗ trợ của bạn.');
+      setError(translateApiError(loadError));
     }
   }
 
@@ -124,7 +125,7 @@ export default function SupportPage() {
       setEligibleOrders(asItems(orders));
       setActiveProducts(asItems(products));
     } catch (loadError) {
-      setError(loadError?.message || 'Không thể tải các lựa chọn tham chiếu được phép.');
+      setError(translateApiError(loadError));
     }
   }
 
@@ -138,7 +139,7 @@ export default function SupportPage() {
       );
       setDetailTicket(result || null);
     } catch (loadError) {
-      setError(loadError?.message || 'Không thể tải chi tiết yêu cầu hỗ trợ.');
+      setError(translateApiError(loadError));
     }
   }
 
@@ -278,7 +279,7 @@ export default function SupportPage() {
       <section className="surface mb-4" aria-labelledby="new-support-request">
         <h2 id="new-support-request">Gửi yêu cầu mới</h2>
         <p className="text-secondary small">
-          Privacy: do not include sensitive personal information. Vui lòng không đưa thông tin cá nhân hoặc thông tin nhạy cảm vào nội dung hỗ trợ.
+          Vui lòng không đưa thông tin cá nhân hoặc thông tin nhạy cảm vào nội dung hỗ trợ.
         </p>
         <form className="row g-3" data-sl008-action="createRequest" disabled={isPending('createRequest')} onSubmit={submitRequest}>
           <div className="col-md-4">
@@ -296,7 +297,7 @@ export default function SupportPage() {
               }))}
               required
             >
-              {SUPPORT_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
+              {SUPPORT_TYPES.map((type) => <option key={type} value={type}>{translateSupportType(type)}</option>)}
             </select>
             {fieldErrors.type && <div className="invalid-feedback">{fieldErrors.type}</div>}
           </div>
@@ -406,7 +407,7 @@ export default function SupportPage() {
             <article className="border-bottom py-4" key={ticket.id}>
               <div className="d-flex flex-wrap justify-content-between gap-2">
                 <div>
-                  <div className="small text-secondary">{ticket.ticketCode || 'Yêu cầu hỗ trợ'} · {ticket.type}</div>
+                  <div className="small text-secondary">{ticket.ticketCode || 'Yêu cầu hỗ trợ'} · {translateSupportType(ticket.type)}</div>
                   <h3 className="h5 mb-1">{ticket.subject || 'Yêu cầu hỗ trợ'}</h3>
                   <span className="badge text-bg-light">{translateRequestStatus(ticket.status)}</span>
                 </div>
@@ -429,7 +430,7 @@ export default function SupportPage() {
                 <h4 className="h6">Tin nhắn</h4>
                 {messages.map((message) => (
                   <div className="border rounded p-2 mb-2" key={message.id || `${message.createdAt}-${message.content}`}>
-                    <div className="small text-secondary">{message.actorRole || message.role} · {formatDate(message.createdAt)}</div>
+                    <div className="small text-secondary">{translateRole(message.actorRole || message.role)} · {formatDate(message.createdAt)}</div>
                     <p className="mb-0">{message.content}</p>
                   </div>
                 ))}

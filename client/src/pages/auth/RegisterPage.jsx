@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 
 import useAuth from '../../hooks/useAuth.js';
 import { safeReturnPath } from '../../utils/authNavigation.js';
+import { translateApiError } from '../../utils/errorMessages.js';
 
 const INITIAL_FORM = {
   fullName: '',
@@ -48,7 +49,7 @@ export default function RegisterPage() {
       setResendSeconds(60);
       setMessage('Mã xác minh đã được gửi nếu email đủ điều kiện. Kiểm tra hộp thư để tiếp tục.');
     } catch (err) {
-      setError(err.message);
+      setError(translateApiError(err));
     } finally {
       setSubmitting(false);
     }
@@ -64,7 +65,7 @@ export default function RegisterPage() {
       setResendSeconds(60);
       setMessage('Đã yêu cầu gửi mã xác minh mới. Vui lòng kiểm tra hộp thư.');
     } catch (err) {
-      setError(err.message);
+      setError(translateApiError(err));
     } finally {
       setSubmitting(false);
     }
@@ -102,7 +103,7 @@ export default function RegisterPage() {
         },
       });
     } catch (err) {
-      setError(err.message);
+      setError(translateApiError(err));
     } finally {
       setSubmitting(false);
     }

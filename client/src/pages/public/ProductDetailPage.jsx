@@ -8,6 +8,7 @@ import { createCartCommandRetryStore } from '../../services/cartCommandRetry.js'
 import { resolveMediaUrl } from '../../services/apiClient.js';
 import { productService } from '../../services/productService.js';
 import { formatProductCurrency, formatProductSku } from '../../utils/formatters.js';
+import { translateApiError } from '../../utils/errorMessages.js';
 import ProductReviewPanel from '../../components/review/ProductReviewPanel.jsx';
 
 export default function ProductDetailPage() {
@@ -28,7 +29,7 @@ export default function ProductDetailPage() {
     productService
       .getProduct(id)
       .then((data) => { if (!cancelled) setProduct(data); })
-      .catch((err) => { if (!cancelled) setError(err.message); });
+      .catch((err) => { if (!cancelled) setError(translateApiError(err)); });
     return () => { cancelled = true; };
   }, [id]);
 
@@ -72,7 +73,7 @@ export default function ProductDetailPage() {
       });
       setMessage('Đã thêm sản phẩm vào giỏ hàng.');
     } catch (err) {
-      setError(err.message);
+      setError(translateApiError(err));
     }
   }
 
@@ -114,7 +115,7 @@ export default function ProductDetailPage() {
               </Link>
             )}
             <Link className="btn btn-outline-success" to="/products">
-              Quay lại catalog
+              Quay lại danh sách sản phẩm
             </Link>
           </div>
         </div>

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 
 import { exchangeService } from '../../services/exchangeService.js';
 import { translateExchangeStatus } from '../../utils/afterSalesLabels.js';
+import { translateApiError } from '../../utils/errorMessages.js';
 
 export default function ExchangeListPage() {
   const [items, setItems] = useState([]);
@@ -11,7 +12,7 @@ export default function ExchangeListPage() {
   useEffect(() => {
     exchangeService.listMyRequests()
       .then((result) => setItems(result.items || []))
-      .catch((err) => setError(err.message));
+      .catch((err) => setError(translateApiError(err)));
   }, []);
 
   return (

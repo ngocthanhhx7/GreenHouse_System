@@ -5,7 +5,19 @@ import OrderProgress from '../../components/order/OrderProgress.jsx';
 import { exchangeService } from '../../services/exchangeService.js';
 import { orderService } from '../../services/orderService.js';
 import { returnRefundService } from '../../services/returnRefundService.js';
-import { formatCurrency, translateOrderStatus, translatePaymentMethod, translatePaymentStatus } from '../../utils/formatters.js';
+import {
+  formatCurrency,
+  translateDeliveryChoice,
+  translateDeliveryIncidentStatus,
+  translateDeliveryIncidentType,
+  translateFulfillmentCycleStatus,
+  translateFulfillmentCycleType,
+  translateOrderStatus,
+  translatePaymentMethod,
+  translatePaymentStatus,
+} from '../../utils/formatters.js';
+import { translateShipmentEventType } from '../../utils/afterSalesLabels.js';
+import { translateApiError } from '../../utils/errorMessages.js';
 import {
   classifyReplacementExchangeUnits,
   getExchangeSubmissionGuard,
@@ -28,6 +40,13 @@ function newKey(prefix) {
   const random = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   return `${prefix}:${random}`;
 }
+
+const DESTINATION_FIELD_LABELS = {
+  receiverName: 'Tên người nhận',
+  receiverPhone: 'Số điện thoại',
+  shippingAddress: 'Địa chỉ giao hàng',
+  customerConfirmationReference: 'Mã xác nhận của khách',
+};
 
 export default function OrderDetailPage() {
   const { id } = useParams();
@@ -91,7 +110,7 @@ export default function OrderDetailPage() {
       setActiveCase(exchange ? { type: 'EXCHANGE', ...exchange } : returnRequest ? { type: 'RETURN', ...returnRequest } : null);
     } catch (err) {
       if (signal?.aborted) return;
-      setError(err.message);
+      setError(translateApiError(err));
     }
   }
 
@@ -149,7 +168,7 @@ export default function OrderDetailPage() {
         : 'Đơn hàng đã được hủy.');
       await loadOrder();
     } catch (err) {
-      setError(err.message);
+      setError(translateApiError(err));
     } finally {
       setIsCancelling(false);
     }
@@ -165,11 +184,11 @@ export default function OrderDetailPage() {
         idempotencyKey: newKey(`destination-correction:${id}`),
       });
       setMessage(result.idempotentReplay
-        ? 'Destination correction này đã được ghi nhận trước đó.'
-        : 'Đã thêm ShipmentDestinationVersion mới; địa chỉ checkout không bị ghi đè.');
+        ? 'Yêu cầu đính chính địa chỉ đã được ghi nhận trước đó.'
+        : 'Đã ghi nhận địa chỉ giao hàng mới; địa chỉ đặt hàng ban đầu được giữ nguyên.');
       await loadOrder();
     } catch (err) {
-      setError(err.message);
+      setError(translateApiError(err));
     } finally {
       setIsSubmittingFulfillment(false);
     }
@@ -184,11 +203,11 @@ export default function OrderDetailPage() {
         idempotencyKey: newKey(`delivery-incident:${deliveryIncident.id}:${choice}`),
       });
       setMessage(result.idempotentReplay
-        ? 'Lựa chọn incident đã được ghi nhận trước đó.'
-        : 'Đã ghi nhận lựa chọn cho delivery incident trên cùng đơn hàng.');
+        ? 'Lựa chọn của bạn đã được ghi nhận trước đó.'
+        : 'Đã ghi nhận lựa chọn xử lý sự cố giao hàng cho đơn hàng này.');
       await loadOrder();
     } catch (err) {
-      setError(err.message);
+      setError(translateApiError(err));
     } finally {
       setIsSubmittingFulfillment(false);
     }
@@ -230,7 +249,7 @@ export default function OrderDetailPage() {
       setMessage('Đã ghi nhận yêu cầu trả hàng/hoàn tiền.');
     } catch (err) {
       handleAfterSalesConflict(err);
-      setError(err.message);
+      setError(translateApiError(err));
     } finally {
       returnSubmissionInFlight.current = false;
       setIsSubmittingReturn(false);
@@ -280,7 +299,7 @@ export default function OrderDetailPage() {
       setMessage(created.idempotentReplay ? 'Yêu cầu đổi hàng đã được ghi nhận.' : 'Đã ghi nhận yêu cầu đổi hàng.');
     } catch (err) {
       handleAfterSalesConflict(err);
-      setError(err.message);
+      setError(translateApiError(err));
     } finally {
       exchangeSubmissionInFlight.current = false;
       setIsSubmittingExchange(false);
@@ -323,10 +342,10 @@ export default function OrderDetailPage() {
         <>
           <section className="border rounded p-3 mb-4" aria-labelledby="fulfillment-heading">
             <h2 className="h5" id="fulfillment-heading">Xử lý &amp; Giao hàng</h2>
-            <p className="text-secondary">Không có bản đồ hoặc theo dõi trực tiếp; đây là lịch sử bằng chứng Carrier đã ghi nhận.</p>
+            <p className="text-secondary">Không có bản đồ hoặc theo dõi trực tiếp; đây là lịch sử bằng chứng đơn vị vận chuyển đã ghi nhận.</p>
             {(fulfillment.cycles || []).map((cycle) => (
               <article className="border-top py-3" key={cycle.id}>
-                <h3 className="h6">Lượt giao {cycle.cycleNumber} · {cycle.cycleType} · {cycle.status}</h3>
+                <h3 className="h6">Lượt giao {cycle.cycleNumber} · {translateFulfillmentCycleType(cycle.cycleType)} · {translateFulfillmentCycleStatus(cycle.status)}</h3>
                 {cycle.shipment && (
                   <p>
                     <strong>{cycle.shipment.carrierName}</strong> · Mã vận đơn {cycle.shipment.trackingReference}
@@ -334,7 +353,7 @@ export default function OrderDetailPage() {
                 )}
                 <h4 className="h6">Lịch sử giao hàng</h4>
                 <ul>{(cycle.events || []).map((shipmentEvent) => (
-                  <li key={shipmentEvent.id}>{shipmentEvent.eventType} · {shipmentEvent.occurredAt}</li>
+                  <li key={shipmentEvent.id}>{translateShipmentEventType(shipmentEvent.eventType)} · {shipmentEvent.occurredAt}</li>
                 ))}</ul>
                 <h4 className="h6">Lịch sử địa chỉ giao hàng</h4>
                 <ol>{(cycle.destinations || []).map((destinationVersion) => (
@@ -354,7 +373,7 @@ export default function OrderDetailPage() {
                 <p>Nhân viên/Đơn vị vận chuyển sẽ xác thực địa chỉ mới; lịch sử địa chỉ trước đó luôn được giữ nguyên.</p>
                 <div className="row g-2">
                   {Object.keys(destinationCorrection).map((field) => (
-                    <label className="col-md-6" key={field}>{field}
+                    <label className="col-md-6" key={field}>{DESTINATION_FIELD_LABELS[field] || field}
                       <input className="form-control" value={destinationCorrection[field]} onChange={(event) => setDestinationCorrection({ ...destinationCorrection, [field]: event.target.value })} required />
                     </label>
                   ))}
@@ -367,21 +386,21 @@ export default function OrderDetailPage() {
 
             {(fulfillment.incidents || []).map((deliveryIncident) => (
               <div className="border-top pt-3 mt-3" key={deliveryIncident.id}>
-                <h3 className="h6">Delivery incident · {deliveryIncident.incidentType}</h3>
-                <p>{deliveryIncident.status}</p>
+                <h3 className="h6">Sự cố giao hàng · {translateDeliveryIncidentType(deliveryIncident.incidentType)}</h3>
+                <p>{translateDeliveryIncidentStatus(deliveryIncident.status)}</p>
                 {deliveryIncident.status === 'AwaitingWarehouseReceipt' && (
-                  <p className="text-muted">Đang chờ Warehouse nhận và phân loại đầy đủ kiện hàng trước khi chọn hướng xử lý.</p>
+                  <p className="text-muted">Đang chờ kho nhận và phân loại đầy đủ kiện hàng trước khi chọn hướng xử lý.</p>
                 )}
                 {(deliveryIncident.availableChoices || []).length > 0 && (
                   <div className="action-row">
                     {deliveryIncident.availableChoices.includes('Resend') && (
-                      <button className="btn btn-outline-success" type="button" disabled={isSubmittingFulfillment} onClick={() => chooseDeliveryIncident(deliveryIncident, 'Resend')}>Resend · gửi lại</button>
+                      <button className="btn btn-outline-success" type="button" disabled={isSubmittingFulfillment} onClick={() => chooseDeliveryIncident(deliveryIncident, 'Resend')}>{translateDeliveryChoice('Resend')}</button>
                     )}
                     {deliveryIncident.availableChoices.includes('Wait') && (
-                      <button className="btn btn-outline-secondary" type="button" disabled={isSubmittingFulfillment} onClick={() => chooseDeliveryIncident(deliveryIncident, 'Wait')}>Wait · chờ hàng</button>
+                      <button className="btn btn-outline-secondary" type="button" disabled={isSubmittingFulfillment} onClick={() => chooseDeliveryIncident(deliveryIncident, 'Wait')}>{translateDeliveryChoice('Wait')}</button>
                     )}
                     {deliveryIncident.availableChoices.includes('TerminalRefund') && (
-                      <button className="btn btn-outline-danger" type="button" disabled={isSubmittingFulfillment} onClick={() => chooseDeliveryIncident(deliveryIncident, 'TerminalRefund')}>TerminalRefund · hoàn tiền toàn bộ</button>
+                      <button className="btn btn-outline-danger" type="button" disabled={isSubmittingFulfillment} onClick={() => chooseDeliveryIncident(deliveryIncident, 'TerminalRefund')}>{translateDeliveryChoice('TerminalRefund')}</button>
                     )}
                   </div>
                 )}

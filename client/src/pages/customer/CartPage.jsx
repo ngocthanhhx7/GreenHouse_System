@@ -5,6 +5,7 @@ import { cartService } from '../../services/cartService.js';
 import { createCartCommandRetryStore } from '../../services/cartCommandRetry.js';
 import { useCart } from '../../contexts/CartContext.jsx';
 import { formatCurrency } from '../../utils/formatters.js';
+import { translateApiError } from '../../utils/errorMessages.js';
 
 const ISSUE_LABELS = {
   PriceChanged: 'Giá đã thay đổi; vui lòng kiểm tra giá hiện tại.',
@@ -26,7 +27,7 @@ export default function CartPage() {
     try {
       await refreshCart();
     } catch (err) {
-      setError(err.message);
+      setError(translateApiError(err));
     } finally {
       setIsLoading(false);
     }
@@ -64,7 +65,7 @@ export default function CartPage() {
           });
       });
     } catch (err) {
-      setError(err.message);
+      setError(translateApiError(err));
       if (err.errorCode === 'CART_VERSION_CONFLICT') await refreshCart().catch(() => {});
     } finally {
       setPendingItemId('');
@@ -87,7 +88,7 @@ export default function CartPage() {
           });
       });
     } catch (err) {
-      setError(err.message);
+      setError(translateApiError(err));
       if (err.errorCode === 'CART_VERSION_CONFLICT') await refreshCart().catch(() => {});
     } finally {
       setPendingItemId('');
