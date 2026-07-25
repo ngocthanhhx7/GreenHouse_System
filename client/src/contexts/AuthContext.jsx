@@ -1,6 +1,11 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 import { authService } from '../services/authService.js';
+import {
+  clearCsrfToken,
+  subscribeToSessionExpiration,
+} from '../services/apiClient.js';
 
 const AuthContext = createContext(null);
 
@@ -13,6 +18,8 @@ function normalizeUser(user) {
 }
 
 export function AuthProvider({ children }) {
+  const location = useLocation();
+  const navigate = useNavigate();
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -36,6 +43,21 @@ export function AuthProvider({ children }) {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    return subscribeToSessionExpiration(() => {
+      if (!user) return;
+      clearCsrfToken();
+      setUser(null);
+      navigate('/login', {
+        replace: true,
+        state: {
+          from: location.pathname,
+          message: 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.',
+        },
+      });
+    });
+  }, [location.pathname, navigate, user]);
 
   const login = useCallback(async (credentials) => {
     const result = await authService.login(credentials);

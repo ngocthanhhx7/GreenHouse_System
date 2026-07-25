@@ -21,6 +21,29 @@ describe('client product service', () => {
     assert.equal(result.items[0].name, 'Green Pan');
   });
 
+  it('keeps the typed 404 contract when a public product does not exist', async () => {
+    const service = createProductService({
+      baseUrl: 'http://api.test/api',
+      fetcher: async (url) => {
+        assert.equal(url, 'http://api.test/api/products/not-an-object-id');
+        return {
+          ok: false,
+          status: 404,
+          json: async () => ({
+            success: false,
+            message: 'Product not found',
+            errorCode: 'PRODUCT_NOT_FOUND',
+          }),
+        };
+      },
+    });
+
+    await assert.rejects(
+      () => service.getProduct('not-an-object-id'),
+      (error) => error.statusCode === 404 && error.errorCode === 'PRODUCT_NOT_FOUND',
+    );
+  });
+
   it('creates products through the admin endpoint', async () => {
     const service = createProductService({
       baseUrl: 'http://api.test/api',

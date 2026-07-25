@@ -1,16 +1,12 @@
 import {
   DEFAULT_BASE_URL,
   apiRequest,
-  createApiError,
   getCsrfToken,
+  parseApiResponse,
 } from './apiClient.js';
 
 async function parseResponse(response) {
-  const payload = await response.json();
-  if (!response.ok || payload.success === false) {
-    throw createApiError(payload, 'Product request failed');
-  }
-  return payload.data;
+  return parseApiResponse(response, 'Product request failed');
 }
 
 function buildQuery(params = {}) {
