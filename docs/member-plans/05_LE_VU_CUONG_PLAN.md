@@ -431,3 +431,17 @@ default.
 - The focused Review client set passed `54/54`; the production client build
   exited `0` with the existing Vite chunk-size warning.
 - This focused relocation verification does not claim a new full regression.
+
+## Inventory Compatibility Fix 2026-07-25
+
+- Root cause: legacy Inventory documents retained `stockQuantity` but did not
+  yet contain `sellableQuantity` or `inventoryHealth`; catalog and Cart
+  projections therefore disagreed with the Inventory model's normalization
+  rule and failed closed as if stock were unavailable.
+- Catalog and Cart now share one compatibility projection: a present legacy
+  record is `Normal` only when its quantities are valid and reserved stock does
+  not exceed sellable stock. Missing or inconsistent Inventory still fails
+  closed as reconciliation work.
+- Regression evidence: focused server tests `10/10`, full server `1061/1061`,
+  and a read-only query against the local legacy dataset projects all eight
+  positive-stock demo products as `InStock`.

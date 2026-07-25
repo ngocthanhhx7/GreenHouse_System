@@ -4,6 +4,7 @@ const {
   buildProductSearchText,
   normalizeSearchText,
 } = require('../utils/catalogNormalization');
+const { availabilityStatusOf } = require('./inventoryAvailability');
 
 const DEFAULT_PAGE_SIZE = 12;
 const MAX_PAGE_SIZE = 50;
@@ -24,19 +25,6 @@ function hasActivePopulatedCategory(product) {
       && typeof product.categoryId === 'object'
       && product.categoryId.status === 'Active',
   );
-}
-
-function availableQuantityOf(inventory) {
-  if (!inventory || inventory.inventoryHealth !== 'Normal') return 0;
-  return Math.max(
-    0,
-    Number(inventory.sellableQuantity ?? inventory.stockQuantity ?? 0)
-      - Number(inventory.reservedQuantity || 0),
-  );
-}
-
-function availabilityStatusOf(inventory) {
-  return availableQuantityOf(inventory) > 0 ? 'InStock' : 'OutOfStock';
 }
 
 function categoryProjection(category) {
