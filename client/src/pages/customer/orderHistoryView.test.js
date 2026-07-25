@@ -52,4 +52,22 @@ describe('customer order history projection', () => {
     }).canCancel, true);
     assert.equal(getOrderActions({ id: 'b', orderStatus: 'Delivered' }).canReview, true);
   });
+
+  it('fails closed unless online payment is retryable before a valid deadline', () => {
+    const now = new Date('2026-07-25T00:00:00.000Z');
+    const eligible = {
+      orderStatus: 'Pending',
+      paymentMethod: 'ONLINE',
+      paymentDeadlineAt: '2026-07-25T00:01:00.000Z',
+    };
+
+    for (const paymentStatus of ['Unpaid', 'Pending', 'Failed']) {
+      assert.equal(getOrderActions({ ...eligible, paymentStatus }, now).canPay, true);
+    }
+
+    assert.equal(getOrderActions({ ...eligible, paymentDeadlineAt: undefined, paymentStatus: 'Pending' }, now).canPay, false);
+    assert.equal(getOrderActions({ ...eligible, paymentDeadlineAt: 'invalid', paymentStatus: 'Pending' }, now).canPay, false);
+    assert.equal(getOrderActions({ ...eligible, paymentDeadlineAt: '2026-07-25T00:00:00.000Z', paymentStatus: 'Pending' }, now).canPay, false);
+    assert.equal(getOrderActions({ ...eligible, paymentStatus: 'Cancelled' }, now).canPay, false);
+  });
 });

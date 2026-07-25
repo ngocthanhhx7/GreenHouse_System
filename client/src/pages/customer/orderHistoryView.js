@@ -27,11 +27,13 @@ export function filterOrdersByTab(orders = [], tab = 'all') {
 
 export function getOrderActions(order = {}, now = new Date()) {
   const deadline = order.paymentDeadlineAt ? new Date(order.paymentDeadlineAt) : null;
-  const beforeDeadline = !deadline || Number.isNaN(deadline.getTime()) || now < deadline;
+  const beforeDeadline = Boolean(deadline)
+    && !Number.isNaN(deadline.getTime())
+    && now.getTime() < deadline.getTime();
   return {
     canPay: order.orderStatus === 'Pending'
       && order.paymentMethod === 'ONLINE'
-      && order.paymentStatus !== 'Paid'
+      && ['Unpaid', 'Pending', 'Failed'].includes(order.paymentStatus)
       && beforeDeadline,
     canCancel: order.orderStatus === 'Pending'
       && ['Unpaid', 'Pending', 'Failed', 'Paid'].includes(order.paymentStatus),
