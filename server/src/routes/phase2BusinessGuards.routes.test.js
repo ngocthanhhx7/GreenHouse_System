@@ -40,7 +40,9 @@ describe('Phase 2 business guard route matrix', () => {
     const deniedCases = [
       ['Customer', '/api/staff/orders/order-1/confirm', 'POST'],
       ['WarehouseManager', '/api/staff/orders/order-1/confirm', 'POST'],
+      ['Customer', '/api/warehouse/stock-exports/export-1/process', 'POST'],
       ['Staff', '/api/warehouse/stock-exports/export-1/process', 'POST'],
+      ['Admin', '/api/warehouse/stock-exports/export-1/process', 'POST'],
       ['Customer', '/api/staff/shipments/shipment-1/events', 'POST'],
       ['Staff', '/api/orders/order-1/cancel', 'PATCH'],
     ];
