@@ -10,6 +10,7 @@ const paymentAttemptSchema = new mongoose.Schema(
     paymentLinkId: { type: String, default: '', trim: true },
     checkoutUrl: { type: String, default: '', trim: true },
     qrCode: { type: String, default: '', trim: true },
+    linkCreationStartedAt: { type: Date, default: null },
     expiresAt: { type: Date, default: null },
     amount: { type: Number, required: true, min: 0, immutable: true },
     currency: { type: String, default: 'VND', trim: true, immutable: true },

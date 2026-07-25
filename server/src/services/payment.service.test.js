@@ -211,6 +211,104 @@ describe('payment service', () => {
     assert.equal(paymentRepository.attempts.length, 2);
   });
 
+  it('does not create a second provider link while the first link is still being created', async () => {
+    const originalCreatePaymentAttempt = paymentRepository.createPaymentAttempt.bind(paymentRepository);
+    paymentRepository.createPaymentAttempt = async (data) => {
+      if (paymentRepository.attempts.some((attempt) => (
+        attempt.paymentProvider === 'PAYOS' && attempt.paymentStatus === 'Pending'
+      ))) {
+        const error = new Error('duplicate pending payOS attempt');
+        error.code = 11000;
+        throw error;
+      }
+      return originalCreatePaymentAttempt(data);
+    };
+
+    let providerCalls = 0;
+    let releaseFirstProviderCall;
+    const firstProviderCallStarted = new Promise((resolve) => {
+      payosGateway.createPaymentLink = async ({ providerOrderCode }) => {
+        providerCalls += 1;
+        if (providerCalls === 1) {
+          resolve();
+          await new Promise((release) => { releaseFirstProviderCall = release; });
+        }
+        return {
+          paymentLinkId: `link-${providerOrderCode}`,
+          checkoutUrl: `https://pay.payos.vn/web/${providerOrderCode}`,
+          qrCode: 'payos-qr-payload',
+          expiredAt: Math.floor(Date.now() / 1000) + 900,
+        };
+      };
+    });
+
+    const firstRequest = paymentService.createOnlinePaymentRequest('customer-1', 'order-online');
+    await firstProviderCallStarted;
+
+    const secondService = createPaymentService({
+      paymentRepository,
+      auditLogger,
+      notificationService,
+      callbackSecret: 'test-callback-secret',
+      payosGateway,
+    });
+    const secondRequest = secondService.createOnlinePaymentRequest('customer-1', 'order-online');
+
+    await assert.rejects(
+      secondRequest,
+      (error) => error.errorCode === 'PAYMENT_LINK_CREATION_IN_PROGRESS',
+    );
+
+    releaseFirstProviderCall();
+    const firstResult = await firstRequest;
+    assert.equal(firstResult.paymentStatus, 'Pending');
+    assert.equal(providerCalls, 1);
+    assert.equal(paymentRepository.attempts.filter((attempt) => attempt.paymentProvider === 'PAYOS').length, 1);
+  });
+
+  it('cancels a provider link when local payment persistence fails after link creation', async () => {
+    let updateCalls = 0;
+    const originalUpdatePaymentAttempt = paymentRepository.updatePaymentAttempt.bind(paymentRepository);
+    paymentRepository.updatePaymentAttempt = async (...args) => {
+      updateCalls += 1;
+      if (updateCalls === 1) throw new Error('simulated payment attempt persistence failure');
+      return originalUpdatePaymentAttempt(...args);
+    };
+
+    await assert.rejects(
+      () => paymentService.createOnlinePaymentRequest('customer-1', 'order-online'),
+      (error) => error.errorCode === 'PAYOS_CREATE_PAYMENT_FAILED',
+    );
+
+    assert.equal(payosGateway.cancelledLinks.length, 1);
+    assert.equal(payosGateway.cancelledLinks[0].reason, 'Local payment persistence failed after provider link creation');
+    assert.equal(paymentRepository.attempts.at(-1).paymentStatus, 'Failed');
+  });
+
+  it('returns a safe not-found error before querying an invalid order id', async () => {
+    const invalidIdRepository = {
+      ...paymentRepository,
+      usesMongooseTransactions: true,
+      async findOrderById() {
+        const error = new Error('Cast to ObjectId failed');
+        error.name = 'CastError';
+        throw error;
+      },
+    };
+    const invalidIdService = createPaymentService({
+      paymentRepository: invalidIdRepository,
+      auditLogger,
+      notificationService,
+      callbackSecret: 'test-callback-secret',
+      payosGateway,
+    });
+
+    await assert.rejects(
+      () => invalidIdService.createOnlinePaymentRequest('customer-1', 'not-an-object-id'),
+      (error) => error.statusCode === 404 && error.message === 'Order not found',
+    );
+  });
+
   it('rejects a non-integer VND amount before creating a payOS link', async () => {
     paymentRepository.orders[0].totalAmount = 50.5;
     await assert.rejects(

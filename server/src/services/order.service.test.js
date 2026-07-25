@@ -371,6 +371,84 @@ describe('order service', () => {
     assert.equal((await orderService.listMyOrders('customer-1')).some((order) => order.orderCode === 'ORD-FOREIGN'), false);
   });
 
+  it('batch-loads deterministic latest receipt decisions for Customer order history', async () => {
+    orderRepository.orders.push(
+      {
+        _id: 'order-awaiting',
+        customerId: 'customer-1',
+        orderCode: 'ORD-AWAITING',
+        totalAmount: 50,
+        paymentMethod: 'COD',
+        paymentStatus: 'Paid',
+        orderStatus: 'Delivered',
+        createdAt: new Date('2026-07-25T08:00:00.000Z'),
+      },
+      {
+        _id: 'order-received',
+        customerId: 'customer-1',
+        orderCode: 'ORD-RECEIVED',
+        totalAmount: 75,
+        paymentMethod: 'ONLINE',
+        paymentStatus: 'Paid',
+        orderStatus: 'Delivered',
+        createdAt: new Date('2026-07-25T07:00:00.000Z'),
+      },
+    );
+    orderRepository.listLatestShipmentsByOrders = async () => new Map([
+      ['order-awaiting', { orderId: 'order-awaiting', status: 'Delivered', terminalEventId: 'event-awaiting' }],
+      ['order-received', { orderId: 'order-received', status: 'Delivered', terminalEventId: 'event-received' }],
+    ]);
+    let receiptQueryCount = 0;
+    orderRepository.listLatestDeliveryReceiptsByOrders = async (orderIds) => {
+      receiptQueryCount += 1;
+      assert.deepEqual(orderIds, ['order-awaiting', 'order-received']);
+      return new Map([['order-received', {
+        orderId: 'order-received',
+        outcome: 'RECEIVED',
+        deliveryEventId: 'event-received',
+        respondedAt: new Date('2026-07-26T10:00:00.000Z'),
+      }]]);
+    };
+
+    const results = await orderService.listMyOrders('customer-1');
+
+    assert.equal(receiptQueryCount, 1);
+    assert.equal(results[0].customerOrderStatus, 'AwaitingCustomerConfirmation');
+    assert.deepEqual(results[0].availableDeliveryActions, ['RECEIVED', 'NOT_RECEIVED']);
+    assert.equal(results[1].customerOrderStatus, 'Completed');
+    assert.equal(results[1].afterSales.enabled, true);
+  });
+
+  it('projects a delivery dispute on owned order detail without enabling after-sales', async () => {
+    orderRepository.orders.push({
+      _id: '507f1f77bcf86cd799439011',
+      customerId: 'customer-1',
+      orderCode: 'ORD-DISPUTED',
+      totalAmount: 50,
+      paymentMethod: 'COD',
+      paymentStatus: 'Paid',
+      orderStatus: 'Delivered',
+      createdAt: new Date('2026-07-25T08:00:00.000Z'),
+    });
+    orderRepository.findLatestShipmentByOrder = async () => ({
+      status: 'Delivered',
+      terminalEventId: 'event-disputed',
+    });
+    orderRepository.findLatestDeliveryReceiptByOrder = async () => ({
+      outcome: 'NOT_RECEIVED',
+      reason: 'Parcel was not handed to me',
+      respondedAt: new Date('2026-07-26T10:00:00.000Z'),
+      deliveryEventId: 'event-disputed',
+    });
+
+    const result = await orderService.getMyOrder('customer-1', '507f1f77bcf86cd799439011');
+
+    assert.equal(result.customerOrderStatus, 'DeliveryDisputed');
+    assert.equal(result.deliveryReceipt.status, 'Disputed');
+    assert.deepEqual(result.availableDeliveryActions, ['RECEIVED']);
+    assert.equal(result.afterSales.enabled, false);
+  });
+
   it('returns a safe not-found error for an invalid customer order id', async () => {
     await assert.rejects(
       () => orderService.getMyOrder('customer-1', 'not-an-object-id'),

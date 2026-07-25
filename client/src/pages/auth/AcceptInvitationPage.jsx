@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 
 import { authService } from '../../services/authService.js';
+import { translateApiError } from '../../utils/errorMessages.js';
 
 export default function AcceptInvitationPage() {
   const navigate = useNavigate();
@@ -30,7 +31,7 @@ export default function AcceptInvitationPage() {
       await authService.acceptInvitation(form);
       navigate('/login', { replace: true, state: { message: 'Lời mời đã được chấp nhận. Vui lòng đăng nhập.' } });
     } catch (requestError) {
-      setError(requestError.message);
+      setError(translateApiError(requestError));
     } finally {
       setBusy(false);
     }

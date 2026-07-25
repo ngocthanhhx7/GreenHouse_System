@@ -117,6 +117,63 @@ Supplemental verification result: focused server `41/41`, focused client
 with 158 transformed modules. `git diff --check` is recorded separately in the
 handoff review. The known client chunk-size warning is unchanged.
 
+## Addendum 2026-07-26 - Customer receipt completion boundary
+
+### Release decision for this addendum
+
+- Owner: Nguyen Huu Anh Nhat.
+- Scope: Customer receipt confirmation, Customer order projection, direct
+  after-sales receipt gates, and index-only rollout support.
+- Rule: physical `Delivered` is not Customer `Completed`; only Customer
+  `Received` starts the exact five-day after-sales snapshots.
+- No live payment, target database, or production deployment is claimed.
+
+### Factual local evidence recorded so far
+
+| Gate | Result |
+|---|---|
+| Receipt model/schema | 11 passing assertions |
+| Transactional service variants | 46 and 32 passing assertions |
+| API/projection | 90 passing assertions |
+| Direct Review/Exchange/Return receipt gates | 161 passing assertions |
+| Receipt migration | Initial RED 0/6 then GREEN 6/6; command-identity P1 RED 6/7 then GREEN 7/7; bounded/read-only expansion RED 5/9 then GREEN 9/9 |
+| Disposable MongoDB 8.2 dry-run | Empty collection list remained `[] -> []` |
+| Receipt guard BSON compatibility | RED 7/10 then GREEN 10/10; real Infinity and Decimal128 rejected with zero mutation |
+| Current combined server receipt-targeted command | 270/270 |
+| Full server regression | `npm test`: 1194/1194 across 183 suites, 0 failed, 0 skipped |
+| Full client regression | `npm test`: 357/357 across 79 suites, 0 failed, 0 skipped |
+| Receipt migration | 10/10 against real MongoDB, 0 skipped |
+| Production build | Vite 6.4.3 exit 0, 169 modules; non-blocking JavaScript chunk warning 745.88 kB (gzip 216.31 kB), above 500 kB |
+| Syntax verification | 36 files |
+| Diff/scope/security scans | Diff, prohibited-file, and secret scans clean |
+| Production dependency audit | Server: 0; client: 3 high in `postcss`, `react-router`, and `react-router-dom`, pre-existing with package manifest and lockfile unchanged |
+| Branch divergence at gate time | 21 commits ahead, 0 behind |
+
+### Migration audit
+
+`migrateCustomerDeliveryReceipt.js` has explicit dry-run, apply, and verify
+modes. It reads receipt/shipment technical state, fails closed for duplicate
+Customer/idempotency command identities
+(`CUSTOMER_DELIVERY_RECEIPT_COMMAND_AMBIGUOUS`), duplicate receipt identities,
+unsafe guard types, or index-definition drift, and creates
+only the five exact `CustomerDeliveryReceipt` indexes. It does not backfill or
+rewrite legacy `Delivered` Orders, does not create `Received` rows, and reports
+only safe counts. A second apply performs zero business writes by contract.
+Dry-run disables Mongoose `autoIndex` and `autoCreate` before connection.
+Conflict discovery uses server-side grouped counts with a one-row result, not
+full document reads or unbounded ID arrays.
+Shipment guard compatibility accepts only finite integral BSON
+int/long/double values in `0..9,007,199,254,740,990`. All other BSON
+types/values fail with `CUSTOMER_RECEIPT_GUARD_VERSION_AMBIGUOUS`. Integration
+tests resolve mongod from `MONGOD_BINARY`, PATH, or shared platform fallbacks.
+
+The target deployment remains responsible for database identity/backup,
+dry-run/apply/verify execution, a recorded second zero-write apply, and
+authenticated Customer and Staff walkthroughs. The current branch production
+build passed with the non-blocking 745.88 kB JavaScript chunk warning recorded
+above. No target migration, authenticated target walkthrough, deployment, or
+production result is claimed.
+
 ## Main integration gate 2026-07-25
 
 Thành merged the reviewed Nhật COD branch with `--no-ff`, preserved the newer

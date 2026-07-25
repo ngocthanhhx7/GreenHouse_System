@@ -260,7 +260,7 @@ export default function HomePage() {
           <div className="premium-deal-card">
             <img src="/assets/background/cookware.png" alt="Bộ nồi chảo GreenHome" />
             <div>
-              <span>Deal của hôm nay</span>
+              <span>Ưu đãi hôm nay</span>
               <strong>Giảm 30% cho Bộ nồi sứ cao cấp</strong>
             </div>
           </div>
@@ -316,7 +316,7 @@ export default function HomePage() {
           <div className="featured-empty home-reveal">
             <h3>Chưa có sản phẩm hiển thị</h3>
             <p>Hãy seed dữ liệu mẫu hoặc thêm sản phẩm trong khu vực quản trị để Home hiển thị đầy đủ.</p>
-            <Link className="btn btn-outline-success" to="/products">Đi tới catalog</Link>
+            <Link className="btn btn-outline-success" to="/products">Xem tất cả sản phẩm</Link>
           </div>
         )}
       </section>

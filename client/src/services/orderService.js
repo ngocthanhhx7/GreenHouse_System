@@ -103,6 +103,25 @@ export function createOrderService({
         })
       );
     },
+    async recordDeliveryConfirmation(id, {
+      outcome,
+      expectedDeliveryEventId,
+      reason,
+    } = {}, idempotencyKey = createCheckoutIdempotencyKey()) {
+      const payload = {
+        outcome,
+        expectedDeliveryEventId,
+        ...(reason ? { reason } : {}),
+      };
+      return parseResponse(
+        await fetcher(`${baseUrl}/orders/${encodeURIComponent(String(id))}/delivery-confirmation`, {
+          method: 'POST',
+          headers: { ...authHeaders(), 'Idempotency-Key': idempotencyKey },
+          body: JSON.stringify(payload),
+          credentials: 'include',
+        })
+      );
+    },
   };
 }
 

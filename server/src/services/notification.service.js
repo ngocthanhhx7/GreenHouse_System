@@ -11,6 +11,7 @@ const {
   sanitizeDisplayValues,
 } = require('../utils/notificationContract');
 const { createNotificationEventConsumer } = require('./notificationEventConsumer.service');
+const { assertNotificationRecipientSelector } = require('./notificationPolicy.service');
 const { createNotificationTargetResolver } = require('./notificationTargetResolver.service');
 
 const DEFAULT_LIMIT = 20;
@@ -221,6 +222,7 @@ function createNotificationService({
         emailOutbox: emailOutboxService,
       });
       const type = normalizeNotificationType(input.type || input.eventType);
+      assertNotificationRecipientSelector(type, input);
       const businessEventId = String(input.businessEventId || input.eventId || input.idempotencyKey || '').trim();
       if (!businessEventId) throw new Error('Notification businessEventId is required');
       const hasDirectRecipient = Boolean(input.recipient || input.recipientId || input.userId);

@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 
 import useAuth from '../../hooks/useAuth.js';
 import { safeReturnPath, safeRoleReturnPath } from '../../utils/authNavigation.js';
+import { translateApiError } from '../../utils/errorMessages.js';
 
 export default function LoginPage() {
   const location = useLocation();
@@ -26,7 +27,7 @@ export default function LoginPage() {
     try {
       await login(form);
     } catch (err) {
-      setError(err.message);
+      setError(translateApiError(err));
     } finally {
       setSubmitting(false);
     }

@@ -93,7 +93,11 @@ export async function loadAllOwnReviews(
 
 export function buildReviewWorkspace(orders = [], ownReviews = []) {
   const deliveredLines = orders
-    .filter((order) => order?.orderStatus === 'Delivered')
+    .filter((order) => (
+      order?.customerOrderStatus === 'Completed'
+      && order?.afterSales?.enabled === true
+      && order?.afterSales?.receiptGatePassed === true
+    ))
     .flatMap((order) => (order.details || []).map((detail) => normalizeDetail(order, detail)))
     .filter((item) => item.orderDetailId && item.productId)
     .sort((left, right) => toTime(right.deliveredAt) - toTime(left.deliveredAt));
