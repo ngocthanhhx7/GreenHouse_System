@@ -1,5 +1,13 @@
 const mongoose = require('mongoose');
 
+const APPEND_ONLY_MUTATION_ERROR = 'CUSTOMER_DELIVERY_RECEIPT_APPEND_ONLY';
+
+function appendOnlyMutationError(operation) {
+  const error = new Error(`Customer delivery receipt is append-only and cannot be changed by ${operation}`);
+  error.code = APPEND_ONLY_MUTATION_ERROR;
+  return error;
+}
+
 // Customer acknowledgement is distinct from the Carrier/Staff physical delivery evidence.
 // Each decision is append-only so a later terminal receipt can retain its dispute history.
 const customerDeliveryReceiptSchema = new mongoose.Schema(
@@ -37,13 +45,44 @@ customerDeliveryReceiptSchema.index(
     name: 'customer_receipt_terminal_unique',
   },
 );
+customerDeliveryReceiptSchema.index(
+  { orderId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { supersedesId: null },
+    name: 'customer_receipt_initial_decision_unique',
+  },
+);
 customerDeliveryReceiptSchema.index({ orderId: 1, createdAt: -1 }, { name: 'customer_receipt_history' });
 customerDeliveryReceiptSchema.index(
   { outcome: 1, createdAt: 1 },
   {
     partialFilterExpression: { outcome: 'NOT_RECEIVED' },
-    name: 'customer_receipt_dispute_queue',
+    name: 'customer_receipt_not_received_history',
   },
 );
+
+customerDeliveryReceiptSchema.pre('save', function rejectPersistedSave() {
+  if (!this.isNew) throw appendOnlyMutationError('save');
+});
+customerDeliveryReceiptSchema.pre(
+  [
+    'updateOne', 'updateMany', 'findOneAndUpdate', 'replaceOne', 'findOneAndReplace',
+    'deleteOne', 'deleteMany', 'findOneAndDelete',
+  ],
+  function rejectQueryMutation() {
+    throw appendOnlyMutationError(this.op);
+  },
+);
+customerDeliveryReceiptSchema.pre('bulkWrite', function rejectBulkMutations(next, operations) {
+  try {
+    if ((operations || []).some((operation) => !operation.insertOne)) {
+      throw appendOnlyMutationError('bulkWrite');
+    }
+    next();
+  } catch (error) {
+    next(error);
+  }
+});
 
 module.exports = mongoose.model('CustomerDeliveryReceipt', customerDeliveryReceiptSchema);

@@ -30,9 +30,11 @@ describe('customer delivery receipt model', () => {
     assert.equal(CustomerDeliveryReceipt.schema.path('reason').options.required, undefined);
     assert.equal(CustomerDeliveryReceipt.schema.path('reason').options.maxlength, 500);
     assert.equal(CustomerDeliveryReceipt.schema.path('supersedesId').options.required, undefined);
+    assert.equal(CustomerDeliveryReceipt.schema.path('reason').options.immutable, true);
+    assert.equal(CustomerDeliveryReceipt.schema.path('supersedesId').options.immutable, true);
   });
 
-  it('enforces customer command identity, one terminal receipt, and searchable history', () => {
+  it('enforces one initial decision, terminal receipt identity, and searchable NOT_RECEIVED history', () => {
     const indexes = CustomerDeliveryReceipt.schema.indexes();
     assert.ok(indexes.some(([fields, options]) => (
       fields.customerId === 1 && fields.idempotencyKey === 1 && options.unique === true
@@ -41,10 +43,47 @@ describe('customer delivery receipt model', () => {
       fields.orderId === 1 && fields.outcome === 1 && options.unique === true
       && options.partialFilterExpression?.outcome === 'RECEIVED'
     )), 'only one terminal RECEIVED receipt should exist per order');
+    assert.ok(indexes.some(([fields, options]) => (
+      fields.orderId === 1 && options.unique === true
+      && options.partialFilterExpression?.supersedesId === null
+    )), 'only one initial decision should exist per order');
     assert.ok(indexes.some(([fields]) => fields.orderId === 1 && fields.createdAt === -1), 'order receipt history should be indexed by creation time');
     assert.ok(indexes.some(([fields, options]) => (
       fields.outcome === 1 && fields.createdAt === 1
       && options.partialFilterExpression?.outcome === 'NOT_RECEIVED'
-    )), 'unresolved NOT_RECEIVED disputes should be indexed as an operational queue');
+      && options.name === 'customer_receipt_not_received_history'
+    )), 'NOT_RECEIVED receipt history should be indexed without claiming unresolved queue semantics');
+  });
+
+  it('rejects every post-create mutation path', async () => {
+    const persisted = CustomerDeliveryReceipt.hydrate({
+      _id: '507f1f77bcf86cd799439012',
+      orderId: '507f1f77bcf86cd799439013',
+      customerId: '507f1f77bcf86cd799439014',
+      shipmentId: '507f1f77bcf86cd799439015',
+      deliveryEventId: '507f1f77bcf86cd799439016',
+      outcome: 'NOT_RECEIVED',
+      respondedAt: new Date(),
+      idempotencyKey: 'receipt-command-001',
+      requestHash: 'a'.repeat(64),
+    });
+    await assert.rejects(() => persisted.save(), /append-only/i);
+
+    const queryMutationAttempts = {
+      updateOne: () => CustomerDeliveryReceipt.updateOne({}, { $set: { reason: 'changed' } }),
+      updateMany: () => CustomerDeliveryReceipt.updateMany({}, { $set: { reason: 'changed' } }),
+      findOneAndUpdate: () => CustomerDeliveryReceipt.findOneAndUpdate({}, { $set: { reason: 'changed' } }),
+      replaceOne: () => CustomerDeliveryReceipt.replaceOne({}, { outcome: 'RECEIVED' }),
+      findOneAndReplace: () => CustomerDeliveryReceipt.findOneAndReplace({}, { outcome: 'RECEIVED' }),
+      deleteOne: () => CustomerDeliveryReceipt.deleteOne({}),
+      deleteMany: () => CustomerDeliveryReceipt.deleteMany({}),
+      findOneAndDelete: () => CustomerDeliveryReceipt.findOneAndDelete({}),
+    };
+    for (const [operation, attempt] of Object.entries(queryMutationAttempts)) {
+      await assert.rejects(attempt, /append-only/i, `${operation} should reject post-create mutations`);
+    }
+    await assert.rejects(() => CustomerDeliveryReceipt.bulkWrite([
+      { updateOne: { filter: {}, update: { $set: { reason: 'changed' } } } },
+    ]), /append-only/i);
   });
 });
