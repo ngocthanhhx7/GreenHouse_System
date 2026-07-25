@@ -347,6 +347,20 @@ Nguyễn Ngọc Thành phụ trách triển khai và tích hợp SL-007 trên br
 Release evidence được ghi tại `docs/reviews/SL-007_RELEASE_AUDIT.md`,
 `docs/reviews/SL-007_G3_TRACEABILITY.md` và `docs/reviews/SL-007_HANDOFF.md`.
 
+## Implementation Addendum 2026-07-25 - Header/Auth polish
+
+Nguyễn Ngọc Thành reconciles the remaining local storefront header/auth polish
+against the merged SL-009 baseline on `feature/thanh-header-auth-polish`:
+
+- Customer authentication now lands on the canonical Home storefront.
+- Storefront and operational account controls keep their accessible expanded
+  state and dropdown behavior without rendering the redundant chevron glyph.
+- The SL-007 OTP registration and server-validated password confirmation flow
+  remain unchanged; the stale local registration implementation is not copied
+  over the merged contract.
+- `.claude`, generated presentation output, and unrelated local documentation
+  remain outside the feature commit.
+
 ## Implementation Addendum 2026-07-25 - SL-009 integration
 
 Nguyễn Ngọc Thành hoàn tất Audit, DomainOutbox, EmailOutbox, migration và final

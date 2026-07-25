@@ -6,7 +6,7 @@ import {
 } from './apiClient.js';
 
 const DASHBOARD_BY_ROLE = {
-  Customer: '/orders',
+  Customer: '/',
   Staff: '/staff',
   WarehouseManager: '/warehouse',
   Admin: '/admin',

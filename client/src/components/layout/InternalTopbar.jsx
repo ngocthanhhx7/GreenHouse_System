@@ -95,7 +95,6 @@ export default function InternalTopbar({ backgroundInert = false, onMenuToggle, 
             <span className="avatar-circle">
               {user?.avatarUrl ? <img src={resolveMediaUrl(user.avatarUrl)} alt="" /> : getInitials(user)}
             </span>
-            <span aria-hidden="true">⌄</span>
           </button>
 
           {accountOpen && (

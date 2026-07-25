@@ -66,6 +66,7 @@ describe('shared header design contract', () => {
     assert.match(header, /avatar-dropdown/);
     assert.match(header, /roleMenuLinks/);
     assert.doesNotMatch(header, /role="menu"|role="menuitem"/);
+    assert.doesNotMatch(header, /<span aria-hidden="true">⌄<\/span>/);
   });
 
   it('closes the modal drawer when the viewport returns to desktop', () => {
