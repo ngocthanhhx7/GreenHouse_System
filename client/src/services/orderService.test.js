@@ -4,6 +4,37 @@ import { describe, it } from 'node:test';
 import { createOrderService } from './orderService.js';
 
 describe('client order service', () => {
+  it('hydrates each owned order with its detail snapshot', async () => {
+    const calls = [];
+    const service = createOrderService({
+      apiRequester: async (path) => {
+        calls.push(path);
+        if (path === '/orders/my') return [{ id: 'order-1' }, { id: 'order-2' }];
+        return { id: path.split('/').at(-1), details: [{ id: `line-${calls.length}` }] };
+      },
+    });
+
+    const result = await service.listMyOrdersWithDetails();
+
+    assert.deepEqual(calls, ['/orders/my', '/orders/order-1', '/orders/order-2']);
+    assert.equal(result.length, 2);
+    assert.equal(result[0].details.length, 1);
+  });
+
+  it('keeps other owned orders visible when one detail request fails', async () => {
+    const service = createOrderService({
+      apiRequester: async (path) => {
+        if (path === '/orders/my') return [{ id: 'order-1' }, { id: 'order-2', details: [{ id: 'line-2' }] }];
+        throw new Error('detail unavailable');
+      },
+    });
+
+    const result = await service.listMyOrdersWithDetails();
+
+    assert.equal(result[0].detailLoadError, 'detail unavailable');
+    assert.deepEqual(result[1].details, [{ id: 'line-2' }]);
+  });
+
   it('places customer order through order endpoint', async () => {
     const service = createOrderService({
       baseUrl: 'http://api.test/api',
