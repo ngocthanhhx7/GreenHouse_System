@@ -63,6 +63,36 @@ describe('order controller checkout boundary', () => {
     }
   });
 
+  it('allows ONLINE while preserving the authenticated Customer identity', async () => {
+    const originalPlaceOrder = orderService.placeOrder;
+    let captured;
+    orderService.placeOrder = async (customerId, input) => {
+      captured = { customerId, input };
+      return { id: 'online-order-1', orderStatus: 'Pending', paymentStatus: 'Pending' };
+    };
+
+    try {
+      const response = createResponse();
+      await orderController.placeOrder(
+        requestOf({
+          paymentMethod: 'ONLINE',
+          customerId: 'attacker-supplied',
+          role: 'Admin',
+        }),
+        response,
+        (error) => { throw error; },
+      );
+
+      assert.equal(captured.customerId, 'customer-from-session');
+      assert.equal(captured.input.paymentMethod, 'ONLINE');
+      assert.equal(captured.input.customerId, undefined);
+      assert.equal(captured.input.role, undefined);
+      assert.equal(response.statusCode, 201);
+    } finally {
+      orderService.placeOrder = originalPlaceOrder;
+    }
+  });
+
   it('rejects an explicit non-COD method before invoking the order service', async () => {
     const originalPlaceOrder = orderService.placeOrder;
     let serviceCalled = false;
@@ -74,7 +104,7 @@ describe('order controller checkout boundary', () => {
 
     try {
       await orderController.placeOrder(
-        requestOf({ paymentMethod: 'ONLINE' }),
+        requestOf({ paymentMethod: 'BANK_TRANSFER' }),
         createResponse(),
         (error) => { nextError = error; },
       );
@@ -84,7 +114,7 @@ describe('order controller checkout boundary', () => {
 
     assert.equal(serviceCalled, false);
     assert.equal(nextError?.statusCode, 400);
-    assert.equal(nextError?.errorCode, 'CHECKOUT_COD_ONLY');
+    assert.equal(nextError?.errorCode, 'CHECKOUT_PAYMENT_METHOD_INVALID');
   });
 
   it('uses the authenticated Customer identity when loading an order detail', async () => {
