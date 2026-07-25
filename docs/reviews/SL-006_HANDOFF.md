@@ -135,3 +135,9 @@ The installed Vite entry point built successfully with exit code `0`; the existi
 - [ ] Integration owner stages/commits and merges through the approved repository workflow.
 - [ ] Deployment owner backs up the intended database, confirms replica-set/mongos transaction support, runs and records `npm run migrate:sl006`, then reruns it and confirms zero business-data writes.
 - [ ] Deployment owner verifies target-environment indexes/invariants and completes authenticated Admin/Customer plus public browser walkthroughs.
+
+## 2026-07-25 handoff — Product media preview
+
+An Admin Product is initially `Inactive`, so the previous public-only media lookup caused its just-attached image to return 404 in the Admin dashboard. `server/src/services/productMedia.service.js` now accepts an authenticated `Admin` for `Attached` and `Retained` media only after confirming the exact Product still contains the exact URL. The anonymous path is unchanged: Product and Category must both be `Active`.
+
+Review evidence: RED was recorded as `404 Product media not found` for the inactive Admin preview test. GREEN commands: `node --test src/services/productMedia.service.test.js` (`9/9`) and `node --test src/controller/upload.controller.test.js` (`1/1`). No anonymous permission, upload foundation, COD, inventory/replenishment, or Home/layout ownership changed.

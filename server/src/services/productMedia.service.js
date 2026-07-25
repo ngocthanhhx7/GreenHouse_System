@@ -17,6 +17,10 @@ function createProductMediaService({
       }).populate('categoryId').lean();
       return product?.categoryId?.status === 'Active' ? product : null;
     },
+    findByIdAndImageUrl: (productId, url) => Product.findOne({
+      _id: productId,
+      imageUrls: url,
+    }).lean(),
   },
   orderDetailRepository = {
     existsByImageSnapshot: (url) => OrderDetail.exists({ productImageSnapshot: url }),
@@ -119,6 +123,13 @@ function createProductMediaService({
       }
       if (!['Attached', 'Retained'].includes(asset.status)) {
         throw new ApiError(404, 'Product media not found');
+      }
+      if (actor?.role === 'Admin') {
+        const product = productRepository.findByIdAndImageUrl
+          ? await productRepository.findByIdAndImageUrl(asset.productId, normalizedUrl)
+          : null;
+        if (!product) throw new ApiError(404, 'Product media not found');
+        return asset;
       }
       const product = productRepository.findPublicByIdAndImageUrl
         ? await productRepository.findPublicByIdAndImageUrl(asset.productId, normalizedUrl)
