@@ -2,20 +2,20 @@ const { orderService } = require('../services/order.service');
 const { sendSuccess } = require('../utils/apiResponse');
 const ApiError = require('../utils/apiError');
 
-function normalizeCodCheckoutInput(body = {}) {
+function normalizeCheckoutInput(body = {}) {
   const paymentMethod = String(body.paymentMethod || 'COD').trim().toUpperCase();
-  if (paymentMethod !== 'COD') {
+  if (!['COD', 'ONLINE'].includes(paymentMethod)) {
     throw new ApiError(
       400,
-      'Checkout hiện chỉ hỗ trợ thanh toán khi nhận hàng (COD).',
-      [{ field: 'paymentMethod', message: 'Chọn phương thức COD' }],
-      'CHECKOUT_COD_ONLY',
+      'Phương thức thanh toán không được hỗ trợ.',
+      [{ field: 'paymentMethod', message: 'Chọn COD hoặc thanh toán trực tuyến' }],
+      'CHECKOUT_PAYMENT_METHOD_INVALID',
     );
   }
   return {
     cartId: body.cartId,
     cartVersion: body.cartVersion,
-    paymentMethod: 'COD',
+    paymentMethod,
     ...(body.savedAddressId !== undefined ? { savedAddressId: body.savedAddressId } : {}),
     ...(body.deliveryAddress !== undefined ? { deliveryAddress: body.deliveryAddress } : {}),
     customerNote: body.customerNote,
@@ -26,7 +26,7 @@ function normalizeCodCheckoutInput(body = {}) {
 
 async function placeOrder(req, res, next) {
   try {
-    const body = normalizeCodCheckoutInput(req.body || {});
+    const body = normalizeCheckoutInput(req.body || {});
     return sendSuccess(
       res,
       await orderService.placeOrder(req.user.id, {
