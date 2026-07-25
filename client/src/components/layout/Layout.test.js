@@ -39,6 +39,7 @@ describe('role layout separation contract', () => {
     assert.doesNotMatch(internalTopbar, /Trang chủ|Sản phẩm|Về GreenHome/);
     assert.doesNotMatch(internalTopbar, /to="\/"/);
     assert.doesNotMatch(internalTopbar, /role="menu"|role="menuitem"/);
+    assert.doesNotMatch(internalTopbar, /<span aria-hidden="true">⌄<\/span>/);
   });
 
   it('selects navigation only from the signed-in role group', () => {

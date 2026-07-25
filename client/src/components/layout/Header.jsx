@@ -260,7 +260,6 @@ export default function Header({ showCart = true }) {
                     <strong>{user?.fullName || user?.email}</strong>
                     <small>{translateRole(userRole)}</small>
                   </span>
-                  <span aria-hidden="true">⌄</span>
                 </button>
                 {profileOpen && (
                   <nav className="avatar-dropdown" ref={profileMenuRef} aria-label="Điều hướng tài khoản">
