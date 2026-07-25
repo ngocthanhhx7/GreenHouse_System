@@ -41,7 +41,10 @@ describe('customer delivery receipt model', () => {
       fields.orderId === 1 && fields.outcome === 1 && options.unique === true
       && options.partialFilterExpression?.outcome === 'RECEIVED'
     )), 'only one terminal RECEIVED receipt should exist per order');
-    assert.ok(indexes.some(([fields]) => fields.customerId === 1 && fields.respondedAt === -1), 'customer receipt history should be indexed');
-    assert.ok(indexes.some(([fields]) => fields.orderId === 1 && fields.outcome === 1 && fields.respondedAt === -1), 'order disputes should be indexed');
+    assert.ok(indexes.some(([fields]) => fields.orderId === 1 && fields.createdAt === -1), 'order receipt history should be indexed by creation time');
+    assert.ok(indexes.some(([fields, options]) => (
+      fields.outcome === 1 && fields.createdAt === 1
+      && options.partialFilterExpression?.outcome === 'NOT_RECEIVED'
+    )), 'unresolved NOT_RECEIVED disputes should be indexed as an operational queue');
   });
 });

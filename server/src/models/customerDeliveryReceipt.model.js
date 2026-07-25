@@ -37,7 +37,13 @@ customerDeliveryReceiptSchema.index(
     name: 'customer_receipt_terminal_unique',
   },
 );
-customerDeliveryReceiptSchema.index({ customerId: 1, respondedAt: -1 }, { name: 'customer_receipt_history' });
-customerDeliveryReceiptSchema.index({ orderId: 1, outcome: 1, respondedAt: -1 }, { name: 'customer_receipt_dispute_history' });
+customerDeliveryReceiptSchema.index({ orderId: 1, createdAt: -1 }, { name: 'customer_receipt_history' });
+customerDeliveryReceiptSchema.index(
+  { outcome: 1, createdAt: 1 },
+  {
+    partialFilterExpression: { outcome: 'NOT_RECEIVED' },
+    name: 'customer_receipt_dispute_queue',
+  },
+);
 
 module.exports = mongoose.model('CustomerDeliveryReceipt', customerDeliveryReceiptSchema);
