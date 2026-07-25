@@ -28,6 +28,8 @@ describe('customer review workspace', () => {
     assert.deepEqual(calls, [
       { page: 1, pageSize: 50 },
       { page: 2, pageSize: 50 },
+      { page: 1, pageSize: 50 },
+      { page: 2, pageSize: 50 },
     ]);
     assert.equal(result.length, 51);
     assert.equal(result.at(-1).id, 'review-51');
@@ -44,19 +46,47 @@ describe('customer review workspace', () => {
     assert.equal(workspace.completed.length, 51);
   });
 
-  it('keeps the first page count stable when later metadata changes', async () => {
-    assert.equal(typeof reviewWorkspace.loadAllOwnReviews, 'function');
-    const pages = [];
-    const result = await reviewWorkspace.loadAllOwnReviews(async ({ page }) => {
-      pages.push(page);
+  it('retries an offset-shifted insert until two unique snapshots stabilize', async () => {
+    let request = 0;
+    const calls = [];
+    const stableItems = [
+      { id: 'review-new' },
+      ...Array.from({ length: 51 }, (_, index) => ({ id: `review-${index + 1}` })),
+    ];
+    const result = await reviewWorkspace.loadAllOwnReviews(async ({ page, pageSize }) => {
+      request += 1;
+      calls.push({ page, pageSize });
+      if (request === 1) {
+        return {
+          items: stableItems.slice(1, 51),
+          total: 51,
+          totalPages: 2,
+        };
+      }
+      if (request === 2) {
+        return {
+          items: stableItems.slice(50),
+          total: 52,
+          totalPages: 2,
+        };
+      }
       return {
-        items: [{ id: `review-${page}` }],
-        totalPages: page === 1 ? 3 : 1,
+        items: page === 1 ? stableItems.slice(0, 50) : stableItems.slice(50),
+        total: 52,
+        totalPages: 2,
       };
-    }, { maxPages: 3 });
+    }, { maxAttempts: 3 });
 
-    assert.deepEqual(pages, [1, 2, 3]);
-    assert.deepEqual(result.map((review) => review.id), ['review-1', 'review-2', 'review-3']);
+    assert.equal(result.length, 52);
+    assert.equal(new Set(result.map((review) => review.id)).size, 52);
+    assert.deepEqual(calls, [
+      { page: 1, pageSize: 50 },
+      { page: 2, pageSize: 50 },
+      { page: 1, pageSize: 50 },
+      { page: 2, pageSize: 50 },
+      { page: 1, pageSize: 50 },
+      { page: 2, pageSize: 50 },
+    ]);
   });
 
   it('fails closed instead of returning an incomplete workspace above the page bound', async () => {
@@ -66,7 +96,11 @@ describe('customer review workspace', () => {
         pages.push(page);
         return { items: [], totalPages: 4 };
       }, { maxPages: 3 }),
-      /page bound/i,
+      (error) => {
+        assert.equal(error.code, 'REVIEW_SNAPSHOT_UNSTABLE');
+        assert.doesNotMatch(error.message, /Review page bound/i);
+        return true;
+      },
     );
     assert.deepEqual(pages, [1]);
   });

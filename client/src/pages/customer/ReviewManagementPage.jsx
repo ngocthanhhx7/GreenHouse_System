@@ -116,7 +116,14 @@ export default function ReviewManagementPage() {
     setPending((current) => ({ ...current, [key]: false }));
   }
 
-  async function refreshAfterFailure(error) {
+  async function refreshAfterFailure(error, reviewId) {
+    if (reviewId) {
+      setEditForms((current) => {
+        const next = { ...current };
+        delete next[reviewId];
+        return next;
+      });
+    }
     try {
       await loadWorkspace();
     } catch (_refreshError) {
@@ -163,7 +170,7 @@ export default function ReviewManagementPage() {
       await loadWorkspace();
     } catch (error) {
       setErrors((current) => ({ ...current, [key]: errorFields(error) }));
-      await refreshAfterFailure(error);
+      await refreshAfterFailure(error, review.id);
     } finally {
       finish(key);
     }
@@ -179,7 +186,7 @@ export default function ReviewManagementPage() {
       }, { idempotencyKey: commandKey('review-publication') });
       await loadWorkspace();
     } catch (error) {
-      await refreshAfterFailure(error);
+      await refreshAfterFailure(error, review.id);
     } finally {
       finish(key);
     }
@@ -267,6 +274,7 @@ export default function ReviewManagementPage() {
           {activeTab === 'completed' && items.map((review) => {
             const edit = editForms[review.id] || { rating: review.rating, content: review.content || '' };
             const reviewPending = Boolean(pending[`review:${review.id}`]);
+            const fieldErrors = errors[`review:${review.id}`] || {};
             return (
               <article className="review-purchase-card" key={review.id}>
                 <div className="review-product-summary">
@@ -289,6 +297,7 @@ export default function ReviewManagementPage() {
                       [review.id]: { ...edit, rating },
                     }))}
                   />
+                  {fieldErrors.rating && <small className="text-danger">{fieldErrors.rating}</small>}
                   <label htmlFor={`edit-content-${review.id}`}>Nội dung</label>
                   <textarea
                     id={`edit-content-${review.id}`}
@@ -300,6 +309,7 @@ export default function ReviewManagementPage() {
                       [review.id]: { ...edit, content: event.target.value.slice(0, 1000) },
                     }))}
                   />
+                  {fieldErrors.content && <small className="text-danger">{fieldErrors.content}</small>}
                   <div className="review-editor-footer">
                     <small>{edit.content.length} / 1000</small>
                     <div>

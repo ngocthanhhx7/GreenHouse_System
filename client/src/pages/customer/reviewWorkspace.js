@@ -21,24 +21,74 @@ function normalizeDetail(order, detail) {
   };
 }
 
-export async function loadAllOwnReviews(fetchPage, { maxPages = 100 } = {}) {
-  const pageSize = 50;
-  const boundedMaxPages = Math.max(1, Math.floor(Number(maxPages) || 1));
+function snapshotError() {
+  const error = new Error('Kh\u00f4ng th\u1ec3 \u0111\u1ed3ng b\u1ed9 danh s\u00e1ch \u0111\u00e1nh gi\u00e1. Vui l\u00f2ng th\u1eed l\u1ea1i.');
+  error.code = 'REVIEW_SNAPSHOT_UNSTABLE';
+  return error;
+}
+
+async function loadOwnReviewSnapshot(fetchPage, { pageSize, maxPages }) {
   const first = await fetchPage({ page: 1, pageSize });
-  const reviews = [...(first?.items || [])];
+  const firstItems = first?.items || [];
   const reportedPages = Number(first?.totalPages)
-    || Math.ceil((Number(first?.total) || reviews.length) / pageSize)
+    || Math.ceil((Number(first?.total) || firstItems.length) / pageSize)
     || 1;
   const totalPages = Math.max(1, Math.floor(reportedPages));
-  if (totalPages > boundedMaxPages) {
-    throw new Error(`Review page bound exceeded (${totalPages} > ${boundedMaxPages})`);
+  if (totalPages > maxPages) throw snapshotError();
+
+  const expectedTotal = Number(first?.total);
+  const pages = [first];
+  for (let page = 2; page <= totalPages; page += 1) {
+    pages.push(await fetchPage({ page, pageSize }));
   }
 
-  for (let page = 2; page <= totalPages; page += 1) {
-    const result = await fetchPage({ page, pageSize });
-    reviews.push(...(result?.items || []));
+  const metadataStable = pages.every((result) => (
+    Number(result?.total) === expectedTotal
+    && Math.max(1, Math.floor(Number(result?.totalPages) || 1)) === totalPages
+  ));
+  const unique = new Map();
+  let identitiesValid = true;
+  for (const review of pages.flatMap((result) => result?.items || [])) {
+    const id = valueId(review);
+    if (!id || unique.has(String(id))) identitiesValid = false;
+    else unique.set(String(id), review);
   }
-  return reviews;
+  const countStable = Number.isInteger(expectedTotal)
+    && expectedTotal >= 0
+    && unique.size === expectedTotal;
+  if (!metadataStable || !identitiesValid || !countStable) return null;
+
+  return {
+    identities: [...unique.keys()],
+    items: [...unique.values()],
+  };
+}
+
+export async function loadAllOwnReviews(
+  fetchPage,
+  { maxPages = 100, maxAttempts = 3 } = {},
+) {
+  const pageSize = 50;
+  const boundedMaxPages = Math.min(100, Math.max(1, Math.floor(Number(maxPages) || 1)));
+  const boundedAttempts = Math.min(5, Math.max(2, Math.floor(Number(maxAttempts) || 2)));
+  let previous = null;
+
+  for (let attempt = 0; attempt < boundedAttempts; attempt += 1) {
+    const snapshot = await loadOwnReviewSnapshot(fetchPage, {
+      pageSize,
+      maxPages: boundedMaxPages,
+    });
+    if (
+      snapshot
+      && previous
+      && snapshot.identities.length === previous.identities.length
+      && snapshot.identities.every((id, index) => id === previous.identities[index])
+    ) {
+      return snapshot.items;
+    }
+    previous = snapshot;
+  }
+  throw snapshotError();
 }
 
 export function buildReviewWorkspace(orders = [], ownReviews = []) {
