@@ -54,6 +54,18 @@ export function translatePaymentMethod(method) {
   return labels[method] || method || 'Chưa chọn';
 }
 
+export function translateShippingStatus(status) {
+  const labels = {
+    HandedOff: 'Đã bàn giao vận chuyển',
+    AttemptFailed: 'Giao thất bại',
+    Delivered: 'Đã giao thành công',
+    ReturnedToShop: 'Đã trả về cửa hàng',
+    Lost: 'Thất lạc',
+    Damaged: 'Hư hỏng',
+  };
+  return labels[status] || status || 'Chưa bàn giao';
+}
+
 export function translateRequestStatus(status) {
   const labels = {
     Pending: 'Chờ xử lý',

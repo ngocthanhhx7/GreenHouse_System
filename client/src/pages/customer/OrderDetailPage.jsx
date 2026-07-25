@@ -5,7 +5,13 @@ import OrderProgress from '../../components/order/OrderProgress.jsx';
 import { exchangeService } from '../../services/exchangeService.js';
 import { orderService } from '../../services/orderService.js';
 import { returnRefundService } from '../../services/returnRefundService.js';
-import { formatCurrency, translateOrderStatus, translatePaymentMethod, translatePaymentStatus } from '../../utils/formatters.js';
+import {
+  formatCurrency,
+  translateOrderStatus,
+  translatePaymentMethod,
+  translatePaymentStatus,
+  translateShippingStatus,
+} from '../../utils/formatters.js';
 import {
   classifyReplacementExchangeUnits,
   getExchangeSubmissionGuard,
@@ -292,6 +298,13 @@ export default function OrderDetailPage() {
   }
 
   if (!order && !error) return <div className="page-center">Đang tải đơn hàng...</div>;
+  if (!order && error) {
+    return (
+      <div className="surface">
+        <div className="alert alert-danger" role="alert">{error}</div>
+      </div>
+    );
+  }
   const originalExchangeAction = getOriginalExchangeAction(order, deadlineNow);
   const returnAction = getReturnAction(order, deadlineNow);
   const currentReplacementExchangeUnits = classifyReplacementExchangeUnits(
@@ -387,6 +400,16 @@ export default function OrderDetailPage() {
             <dt className="col-sm-3">Mã đơn</dt><dd className="col-sm-9">{order.orderCode}</dd>
             <dt className="col-sm-3">Trạng thái</dt><dd className="col-sm-9">{translateOrderStatus(order.orderStatus)}</dd>
             <dt className="col-sm-3">Thanh toán</dt><dd className="col-sm-9">{translatePaymentMethod(order.paymentMethod)} / {translatePaymentStatus(order.paymentStatus)}</dd>
+            <dt className="col-sm-3">Giao hàng</dt><dd className="col-sm-9">{translateShippingStatus(order.shippingStatus)}</dd>
+            {order.shipping?.providerName && (
+              <>
+                <dt className="col-sm-3">Đơn vị vận chuyển</dt>
+                <dd className="col-sm-9">
+                  {order.shipping.providerName}
+                  {order.shipping.trackingCode ? ` · Mã vận đơn ${order.shipping.trackingCode}` : ''}
+                </dd>
+              </>
+            )}
             <dt className="col-sm-3">Địa chỉ giao hàng</dt><dd className="col-sm-9">{order.shippingAddress}</dd>
             <dt className="col-sm-3">Người nhận</dt><dd className="col-sm-9">{order.receiverName || '-'} · {order.receiverPhone || '-'}</dd>
             {order.customerNote && <><dt className="col-sm-3">Ghi chú</dt><dd className="col-sm-9">{order.customerNote}</dd></>}
