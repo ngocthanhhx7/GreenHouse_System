@@ -63,6 +63,17 @@ export function createRefundPayoutController({
     isCurrentLoad(load) {
       return Boolean(alive && load && load.epoch === loadEpoch);
     },
+    beginAction(requestId) {
+      return begin('ACTION', requestId);
+    },
+    isCurrentCommand(command, requestId) {
+      return Boolean(
+        alive
+        && command
+        && command === activeCommand
+        && command.requestId === requestId
+      );
+    },
     beginPayOS(requestId) {
       return begin('PAYOS', requestId);
     },

@@ -75,4 +75,45 @@ describe('staff refund payout controller', () => {
     assert.equal(controller.isCurrentLoad(currentLoad), false);
     assert.equal(controller.settle(command, { succeeded: true }), false);
   });
+
+  it('invalidates a deferred route-A command before route B can receive its feedback', async () => {
+    const controllerA = createRefundPayoutController({ createKey: () => 'route-a-key' });
+    const commandA = controllerA.beginPayOS('refund-a');
+    let release;
+    const deferred = new Promise((resolve) => { release = resolve; });
+    const writes = [];
+    const completion = (async () => {
+      await deferred;
+      if (controllerA.isCurrentCommand(commandA, 'refund-a')) writes.push('route-a-feedback');
+    })();
+
+    controllerA.dispose();
+    const controllerB = createRefundPayoutController({ createKey: () => 'route-b-key' });
+    const commandB = controllerB.beginPayOS('refund-b');
+    release();
+    await completion;
+
+    assert.deepEqual(writes, []);
+    assert.equal(controllerB.isCurrentCommand(commandB, 'refund-b'), true);
+  });
+
+  it('invalidates every deferred state write after unmount', async () => {
+    const controller = createRefundPayoutController({ createKey: () => 'unmount-key' });
+    const command = controller.beginAction('refund-1');
+    let release;
+    const deferred = new Promise((resolve) => { release = resolve; });
+    const writes = [];
+    const completion = (async () => {
+      await deferred;
+      if (controller.isCurrentCommand(command, 'refund-1')) writes.push('message');
+      if (controller.isCurrentCommand(command, 'refund-1')) writes.push('busy');
+    })();
+
+    controller.dispose();
+    release();
+    await completion;
+
+    assert.deepEqual(writes, []);
+    assert.equal(controller.isCurrentCommand(command, 'refund-1'), false);
+  });
 });

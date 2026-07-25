@@ -40,7 +40,7 @@ function conflictGuidance(error) {
 export default function ReturnRefundDetailPage() {
   const { id } = useParams();
   const [request, setRequest] = useState(null);
-  const [form, setForm] = useState({ staffNote: '', destinationReason: '', incidentReason: '' });
+  const [form, setForm] = useState({ staffNote: '', destinationReason: '' });
   const [payoutMethod, setPayoutMethod] = useState('Manual');
   const [manualPayout, setManualPayout] = useState(blankPayoutForm);
   const [reconciliation, setReconciliation] = useState({ outcome: 'Unknown', ...blankPayoutForm() });
@@ -72,6 +72,9 @@ export default function ReturnRefundDetailPage() {
     setError('');
     setMessage('');
     setFieldErrors({});
+    setBusy(false);
+    setManualPayout(blankPayoutForm());
+    setReconciliation({ outcome: 'Unknown', ...blankPayoutForm() });
     loadRequest(controller);
     return () => {
       controller.dispose();
@@ -79,31 +82,44 @@ export default function ReturnRefundDetailPage() {
     };
   }, [id, loadRequest]);
 
-  async function runAction(action, successMessage, { resetPayout = false } = {}) {
-    if (busy) return null;
+  async function runAction(action, successMessage) {
+    const controller = controllerRef.current;
+    const command = controller?.beginAction(id);
+    if (!controller || !command) return null;
+    const isCurrent = () => controllerRef.current === controller
+      && controller.isCurrentCommand(command, id);
+    let canonicalSuccess = false;
     setBusy(true);
     setError('');
     setMessage('');
     setFieldErrors({});
     try {
       const result = await action();
-      const reloaded = await loadRequest();
+      const reloaded = await loadRequest(controller);
+      if (!isCurrent()) return null;
       if (!reloaded) throw new Error('Không thể tải lại trạng thái chính thức sau thao tác. Vui lòng thử lại với cùng mã lệnh.');
-      if (resetPayout) setManualPayout(blankPayoutForm());
+      canonicalSuccess = true;
       setMessage(result?.idempotentReplay ? 'Thao tác này đã được hệ thống ghi nhận trước đó.' : successMessage);
       return result;
     } catch (err) {
-      await loadRequest();
-      setError(conflictGuidance(err));
+      await loadRequest(controller);
+      if (isCurrent()) setError(conflictGuidance(err));
       return null;
     } finally {
-      setBusy(false);
+      if (isCurrent()) {
+        controller.settle(command, { succeeded: canonicalSuccess });
+        setBusy(false);
+      } else {
+        controller.settle(command, { succeeded: canonicalSuccess });
+      }
     }
   }
 
   async function runPayoutCommand(command, execute, successMessage, { resetPayout = false } = {}) {
     const controller = controllerRef.current;
     if (!command || !controller) return null;
+    const isCurrent = () => controllerRef.current === controller
+      && controller.isCurrentCommand(command, id);
     let canonicalSuccess = false;
     setBusy(true);
     setError('');
@@ -112,6 +128,7 @@ export default function ReturnRefundDetailPage() {
     try {
       const result = await execute(command.payload);
       const reloaded = await loadRequest(controller);
+      if (!isCurrent()) return null;
       if (!reloaded) throw new Error('Không thể tải lại trạng thái chính thức sau thao tác. Vui lòng thử lại với cùng mã lệnh.');
       canonicalSuccess = true;
       if (resetPayout) setManualPayout(blankPayoutForm());
@@ -119,11 +136,15 @@ export default function ReturnRefundDetailPage() {
       return result;
     } catch (err) {
       await loadRequest(controller);
-      setError(conflictGuidance(err));
+      if (isCurrent()) setError(conflictGuidance(err));
       return null;
     } finally {
-      controller.settle(command, { succeeded: canonicalSuccess });
-      setBusy(false);
+      if (isCurrent()) {
+        controller.settle(command, { succeeded: canonicalSuccess });
+        setBusy(false);
+      } else {
+        controller.settle(command, { succeeded: canonicalSuccess });
+      }
     }
   }
 
@@ -196,7 +217,7 @@ export default function ReturnRefundDetailPage() {
         </div>}
       </section>}
       {request.payoutIncident && <div className={`alert ${request.payoutIncident.status === 'Open' ? 'alert-danger' : 'alert-secondary'} mt-3`}><strong>Hồ sơ recovery chi trả: {request.payoutIncident.status === 'Open' ? 'Đang mở' : 'Đã xử lý'}</strong><br />Trách nhiệm: {request.payoutIncident.responsibility === 'Customer' ? 'Customer — hệ thống không tự chi lần hai' : 'Shop/đơn vị chi trả — Customer không chịu trách nhiệm'}<br />Lý do: {request.payoutIncident.reportReason}</div>}
-      {request.status === 'Received' && request.destination?.status === 'Verified' && <section className="border rounded p-3 mt-3 refund-payout-panel" aria-labelledby="payoutHeading">
+      {['Received', 'Completed'].includes(request.status) && request.destination?.status === 'Verified' && <section className="border rounded p-3 mt-3 refund-payout-panel" aria-labelledby="payoutHeading">
         <h2 id="payoutHeading" className="h5">Chi trả hoàn tiền</h2>
         <p className="alert alert-info">Hệ thống tự tính giá trị hoàn tiền từ đơn hàng. Staff không nhập hoặc sửa số tiền.</p>
         {!request.payoutDestinationReady && <div className="alert alert-warning" role="status">Không thể dùng PayOS cho thông tin nhận tiền hiện tại{request.payoutDestinationIssueCode ? ` (${request.payoutDestinationIssueCode})` : ''}. Bạn vẫn có thể ghi nhận chuyển khoản thủ công đã đối soát.</div>}
@@ -239,7 +260,6 @@ export default function ReturnRefundDetailPage() {
       </section>}
       {request.status === 'Received' && request.destination?.status !== 'Verified' && <div className="alert alert-warning mt-3">Chưa thể chi trả: cần thông tin nhận hoàn tiền đã được xác minh.</div>}
       {request.status === 'Completed' && <div className="alert alert-success mt-3">Hồ sơ đã hoàn tất từ bằng chứng chi trả được xác minh.</div>}
-      {request.status === 'Completed' && request.payoutEvidence?.status === 'Succeeded' && request.payoutIncident?.status !== 'Open' && <section className="border rounded p-3 mt-3"><h2 className="h5">Báo cáo chi trả sai đích</h2><label className="form-label" htmlFor="incidentReason">Kết quả đối soát / lý do</label><textarea id="incidentReason" className="form-control" value={form.incidentReason} onChange={(event) => setForm((current) => ({ ...current, incidentReason: event.target.value }))} required /><div className="d-flex flex-wrap gap-2 mt-2"><button className="btn btn-outline-warning" type="button" disabled={busy || !form.incidentReason.trim()} onClick={() => runAction(() => returnRefundService.reportPayoutIncident(id, { idempotencyKey: `incident:customer:${request.payoutEvidence.id}`, cause: 'CUSTOMER_CONFIRMED_DESTINATION', reason: form.incidentReason }), 'Đã mở hồ sơ hỗ trợ; hệ thống không tự chi lần hai.')}>Customer đã xác nhận sai tài khoản</button><button className="btn btn-outline-danger" type="button" disabled={busy || !form.incidentReason.trim()} onClick={() => runAction(() => returnRefundService.reportPayoutIncident(id, { idempotencyKey: `incident:internal:${request.payoutEvidence.id}`, cause: 'STAFF_SYSTEM_PROVIDER_MISMATCH', reason: form.incidentReason }), 'Đã mở lại hồ sơ; Customer không chịu trách nhiệm.')}>Shop/PayOS chuyển sai đích</button></div></section>}
     </>}
   </div>;
 }

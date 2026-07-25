@@ -39,4 +39,17 @@ describe('staff refund payout UI contract', () => {
     assert.match(page, /Tôi xác nhận kết quả đối soát này thuộc đúng mã lệnh/);
     assert.match(page, /Hệ thống tự tính giá trị hoàn tiền/);
   });
+
+  it('renders a Completed successful refund as read-only with no incident mutation control', () => {
+    assert.match(page, /\['Received', 'Completed'\]\.includes\(request\.status\)/);
+    assert.match(page, /payoutUi\.readOnly/);
+    assert.doesNotMatch(page, /reportPayoutIncident|incidentReason|Báo cáo chi trả sai đích/);
+  });
+
+  it('guards every post-await task state write with the captured route command', () => {
+    assert.match(page, /const isCurrent = \(\) => controllerRef\.current === controller/);
+    assert.match(page, /if \(!isCurrent\(\)\) return null;[\s\S]*setMessage/);
+    assert.match(page, /await loadRequest\(controller\);[\s\S]*if \(isCurrent\(\)\) setError/);
+    assert.match(page, /if \(isCurrent\(\)\) \{[\s\S]*setBusy\(false\)/);
+  });
 });
