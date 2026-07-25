@@ -415,3 +415,14 @@ deadline thiếu, không hợp lệ hoặc hết hạn, và chỉ mở cho Order
 `ONLINE` có payment status `Unpaid`, `Pending` hoặc `Failed`. Focused evidence
 sau remediation: `12/12` tests pass trong đúng ba file trên; không phải kết quả
 full regression.
+## Legacy Cart Version Compatibility 2026-07-25
+
+- Root cause: legacy Active Cart documents without a persisted `version` were
+  read as version `0`, but the atomic compare-and-set update matched only an
+  explicit `{ version: 0 }`. The command therefore failed after the client sent
+  the correct `expectedVersion: 0`.
+- The persistence filter now permits a missing version only for the one-time
+  transition from legacy version `0`; every later command still requires the
+  exact persisted version.
+- Regression coverage verifies both the legacy promotion and strict
+  post-promotion compare-and-set behavior.
