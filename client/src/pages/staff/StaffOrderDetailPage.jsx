@@ -134,9 +134,9 @@ export default function StaffOrderDetailPage() {
           </div>
 
           <div className="row g-3">
-            <div className="col-md-6"><strong>Checkout address:</strong> {order.shippingAddress}</div>
-            <div className="col-md-3"><strong>ShippingFee:</strong> {formatCurrency(order.shippingFee)}</div>
-            <div className="col-md-3"><strong>MoneyObligationsSettled:</strong> {String(order.moneyObligationsSettled ?? true)}</div>
+            <div className="col-md-6"><strong>Địa chỉ nhận hàng:</strong> {order.shippingAddress}</div>
+            <div className="col-md-3"><strong>Phí vận chuyển:</strong> {formatCurrency(order.shippingFee)}</div>
+            <div className="col-md-3"><strong>Đã quyết toán nghĩa vụ tài chính:</strong> {String(order.moneyObligationsSettled ?? true)}</div>
           </div>
 
           <div className="action-row mt-3">
@@ -148,14 +148,14 @@ export default function StaffOrderDetailPage() {
             )}
             {order.stockExportRequest && (
               <span className="badge text-bg-info align-self-center">
-                Export cycle {order.stockExportRequest.cycleId || 'initial'}: {order.stockExportRequest.status}
+                Lượt xuất kho {order.stockExportRequest.cycleId || 'ban đầu'}: {order.stockExportRequest.status}
               </span>
             )}
           </div>
 
           {order.orderStatus === 'Confirmed' && order.stockExportRequest?.status === 'Completed' && (
             <section className="border rounded p-3 mt-4">
-              <h2 className="h5">Packing checklist · PackingRecord</h2>
+              <h2 className="h5">Danh mục đóng gói (Packing Record)</h2>
               {checklist.map((line, index) => (
                 <label className="d-flex gap-2 align-items-center mb-2" key={line.orderDetailId}>
                   <input
@@ -183,10 +183,10 @@ export default function StaffOrderDetailPage() {
               <h2 className="h5">Bàn giao Carrier</h2>
               <div className="row g-2">
                 {[
-                  ['carrierName', 'Carrier name', 'text'],
-                  ['trackingReference', 'Tracking reference', 'text'],
-                  ['handedOffAt', 'Handed off at', 'datetime-local'],
-                  ['evidenceReference', 'Evidence reference', 'text'],
+                  ['carrierName', 'Tên đơn vị vận chuyển', 'text'],
+                  ['trackingReference', 'Mã vận đơn', 'text'],
+                  ['handedOffAt', 'Thời gian bàn giao', 'datetime-local'],
+                  ['evidenceReference', 'Mã dẫn chứng', 'text'],
                 ].map(([field, label, type]) => (
                   <label className="col-md-6" key={field}>
                     <span className="form-label">{label}</span>
@@ -208,32 +208,32 @@ export default function StaffOrderDetailPage() {
 
           {shipment && (
             <section className="border rounded p-3 mt-4">
-              <h2 className="h5">Shipment history</h2>
+              <h2 className="h5">Lịch sử giao hàng</h2>
               <p><strong>{shipment.carrierName}</strong> · {shipment.trackingReference}</p>
               <ul>{shipmentHistory.map((entry) => <li key={entry.id}>{entry.eventType} · {entry.occurredAt}</li>)}</ul>
               <div className="row g-2">
-                <label className="col-md-4">Action
+                <label className="col-md-4">Hành động
                   <select className="form-select" value={shipmentEvent.eventType} onChange={(event) => setShipmentEvent({ ...shipmentEvent, eventType: event.target.value })}>
-                    <option value="ATTEMPT_FAILED">AttemptFailed</option>
-                    <option value="RESCHEDULED">Rescheduled</option>
-                    <option value="DELIVERED">Delivered delivery</option>
-                    <option value="RETURNED_TO_SHOP">ReturnedToShop</option>
-                    <option value="LOST">Lost</option>
-                    <option value="DAMAGED">Damaged</option>
-                    <option value="CORRECTION">Correction</option>
-                    <option value="DISPUTED">Dispute</option>
+                    <option value="ATTEMPT_FAILED">Giao thất bại</option>
+                    <option value="RESCHEDULED">Hẹn lại lịch giao</option>
+                    <option value="DELIVERED">Giao hàng thành công</option>
+                    <option value="RETURNED_TO_SHOP">Đã trả về cửa hàng</option>
+                    <option value="LOST">Thất lạc</option>
+                    <option value="DAMAGED">Hư hỏng</option>
+                    <option value="CORRECTION">Đính chính</option>
+                    <option value="DISPUTED">Khiếu nại</option>
                   </select>
                 </label>
-                <label className="col-md-4">Occurred at
+                <label className="col-md-4">Thời gian ghi nhận
                   <input className="form-control" type="datetime-local" value={shipmentEvent.occurredAt} onChange={(event) => setShipmentEvent({ ...shipmentEvent, occurredAt: event.target.value })} />
                 </label>
-                <label className="col-md-4">Evidence
+                <label className="col-md-4">Mã dẫn chứng
                   <input className="form-control" value={shipmentEvent.evidenceReference} onChange={(event) => setShipmentEvent({ ...shipmentEvent, evidenceReference: event.target.value })} />
                 </label>
-                <label className="col-md-6">Reason
+                <label className="col-md-6">Lý do
                   <input className="form-control" value={shipmentEvent.reason} onChange={(event) => setShipmentEvent({ ...shipmentEvent, reason: event.target.value })} />
                 </label>
-                <label className="col-md-6">Replaces event (Correction / Dispute)
+                <label className="col-md-6">Thay thế sự kiện (Đính chính / Khiếu nại)
                   <input className="form-control" value={shipmentEvent.replacesEventId} onChange={(event) => setShipmentEvent({ ...shipmentEvent, replacesEventId: event.target.value })} />
                 </label>
               </div>
@@ -249,8 +249,8 @@ export default function StaffOrderDetailPage() {
           )}
 
           <section className="border rounded p-3 mt-4">
-            <h2 className="h5">Shipment destination version</h2>
-            <p>Carrier evidence / carrier accept là bắt buộc sau khi đã bàn giao.</p>
+            <h2 className="h5">Phiên bản địa chỉ giao hàng</h2>
+            <p>Bằng chứng ĐVVC / chấp nhận từ ĐVVC là bắt buộc sau khi đã bàn giao.</p>
             <div className="row g-2">
               {Object.keys(destination).map((field) => (
                 <label className="col-md-6" key={field}>{field}
@@ -263,25 +263,29 @@ export default function StaffOrderDetailPage() {
                 ...destination,
                 idempotencyKey: idempotencyKey(`destination:${activeCycle?.id || order.id}`),
               }),
-              'Đã thêm destination version bất biến.',
-            )}>Thêm destination correction</button>
+              'Đã thêm địa chỉ giao hàng mới.',
+            )}>Thêm đính chính địa chỉ</button>
           </section>
 
           {order.paymentMethod === 'COD' && (
             <div className={`alert mt-4 ${order.codDiscrepancyStatus === 'Open' ? 'alert-warning' : 'alert-secondary'}`}>
-              <strong>CODExpectedAmount:</strong> {formatCurrency(order.codExpectedAmount)}
-              {' · '}<strong>CustomerCollectedAmount:</strong> {formatCurrency(order.customerCollectedAmount)}
-              {' · '}<strong>CarrierSettlementAmount:</strong> {formatCurrency(order.carrierSettlementAmount)}
-              <div>codDiscrepancyStatus: {order.codDiscrepancyStatus}; settlementReconciliationStatus: {order.settlementReconciliationStatus}</div>
-              {order.codRecoveryReceiptId && <div>codRecoveryReceiptId: {order.codRecoveryReceiptId}</div>}
+              <strong>Số tiền COD dự kiến:</strong> {formatCurrency(order.codExpectedAmount)}
+              {' · '}<strong>Số tiền đã thu từ khách:</strong> {formatCurrency(order.customerCollectedAmount)}
+              {' · '}<strong>Số tiền ĐVVC đã đối soát:</strong> {formatCurrency(order.carrierSettlementAmount)}
+              <div>Trạng thái lệch tiền COD: {order.codDiscrepancyStatus}; Trạng thái đối soát: {order.settlementReconciliationStatus}</div>
+              {order.codRecoveryReceiptId && <div>Mã phiếu nhận hàng hoàn COD: {order.codRecoveryReceiptId}</div>}
             </div>
           )}
 
           {fulfillment.incidents?.length > 0 && (
             <section className="border rounded p-3 mt-4">
-              <h2 className="h5">DeliveryFailed terminal resolution</h2>
+              <h2 className="h5">Xử lý kết thúc giao hàng thất bại</h2>
               <select className="form-select" value={resolutionIncidentId} onChange={(event) => setResolutionIncidentId(event.target.value)}>
-                <option value="">Chọn delivery incident</option>
+                <option value="">Chọn sự cố giao hàng</option>
+                {fulfillment.incidents
+                  .filter((incident) => incident.customerChoice === 'TerminalRefund')
+                  .map((incident) => <option key={incident.id} value={incident.id}>{incident.incidentType} · {incident.customerChoice || incident.status}</option>)}
+              </select>
                 {fulfillment.incidents
                   .filter((incident) => incident.customerChoice === 'TerminalRefund')
                   .map((incident) => <option key={incident.id} value={incident.id}>{incident.incidentType} · {incident.customerChoice || incident.status}</option>)}
