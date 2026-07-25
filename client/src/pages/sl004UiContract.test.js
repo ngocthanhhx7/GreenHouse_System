@@ -36,6 +36,9 @@ describe('SL-004 fulfillment and delivery UI contract', () => {
     assert.match(exportQueue, /cycle(Id|Key)|request(Id|Key)/);
     assert.match(exportDetail, /commandStatus|replay|AlreadyProcessed/);
     assert.match(exportDetail, /disabled=\{[^}]*processing/i);
+    assert.match(exportDetail, /processingRef/);
+    assert.match(exportDetail, /if \(processingRef\.current\) return/);
+    assert.match(exportDetail, /processingRef\.current = true/);
     assert.doesNotMatch(exportDetail, /Approved|Rejected|Duyệt xuất kho|Từ chối/);
   });
 

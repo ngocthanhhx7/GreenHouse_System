@@ -1,16 +1,8 @@
 import {
   DEFAULT_BASE_URL,
-  createApiError,
   getCsrfToken,
+  parseApiResponse,
 } from './apiClient.js';
-
-async function parseResponse(response) {
-  const payload = await response.json();
-  if (!response.ok || payload.success === false) {
-    throw createApiError(payload, 'Cart request failed');
-  }
-  return payload.data;
-}
 
 function authHeaders(idempotencyKey) {
   return {
@@ -27,21 +19,25 @@ export function createCartIdempotencyKey(command = 'cart') {
 
 export function createCartService({ baseUrl = DEFAULT_BASE_URL, fetcher = fetch } = {}) {
   async function commandRequest(path, method, input, idempotencyKey) {
-    return parseResponse(
+    return parseApiResponse(
       await fetcher(`${baseUrl}${path}`, {
         method,
         headers: authHeaders(idempotencyKey),
         credentials: 'include',
         body: JSON.stringify(input || {}),
-      })
+      }),
+      'Cart request failed',
     );
   }
 
   return {
     async getCart() {
-      return parseResponse(await fetcher(`${baseUrl}/cart`, {
-        credentials: 'include',
-      }));
+      return parseApiResponse(
+        await fetcher(`${baseUrl}/cart`, {
+          credentials: 'include',
+        }),
+        'Cart request failed',
+      );
     },
     async addItem(input, {
       idempotencyKey = createCartIdempotencyKey('cart-add'),

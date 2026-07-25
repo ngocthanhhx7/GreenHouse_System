@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const { describe, it, beforeEach } = require('node:test');
 
-const { createOrderService } = require('./order.service');
+const { createModelProductRepository, createOrderService } = require('./order.service');
 
 function checkoutInput(overrides = {}) {
   const { deliveryAddress, ...inputOverrides } = overrides;
@@ -170,6 +170,11 @@ function createOrderRepository() {
       refunds.push(refund);
       return refund;
     },
+    async updateRefundPending(id, data) {
+      const refund = refunds.find((entry) => entry._id === id);
+      Object.assign(refund, data);
+      return refund;
+    },
     async findRefundRequestByObligationKey(orderId, obligationKey) {
       return refundRequests.find((request) => (
         request.orderId === orderId && request.obligationKey === obligationKey
@@ -302,6 +307,45 @@ describe('order service', () => {
     assert.equal(orderRepository.reservations[0].status, 'Reserved');
     assert.equal(cartRepository.items.length, 1);
     assert.equal(auditLogger.entries[0].action, 'ORDER_CREATE');
+  });
+
+  it('AT-227 returns a stable Vietnamese stock error for a final checkout shortage', async () => {
+    inventoryRepository.reserve = async () => {
+      throw new Error('Insufficient available inventory for checkout');
+    };
+
+    await assert.rejects(
+      () => orderService.placeOrder('customer-1', checkoutInput({ idempotencyKey: 'stock-short-001' })),
+      (error) => {
+        assert.equal(error.statusCode, 409);
+        assert.equal(error.errorCode, 'CHECKOUT_STOCK_INSUFFICIENT');
+        assert.match(error.message, /không còn đủ số lượng/i);
+        return true;
+      },
+    );
+    assert.equal(cartRepository.carts[0].status, 'Active');
+  });
+
+  it('rejects a persisted Cart item with a non-positive quantity before creating an Order', async () => {
+    cartRepository.items[0].quantity = 0;
+
+    await assert.rejects(
+      () => orderService.placeOrder('customer-1', checkoutInput({
+        idempotencyKey: 'invalid-cart-quantity-001',
+      })),
+      (error) => error.statusCode === 400 && error.errorCode === 'CART_ITEM_INVALID',
+    );
+
+    assert.equal(orderRepository.orders.length, 0);
+    assert.equal(orderRepository.details.length, 0);
+    assert.equal(inventoryRepository.reservedQuantity, 0);
+    assert.equal(cartRepository.carts[0].status, 'Active');
+  });
+
+  it('returns no sellable Product for a malformed MongoDB ObjectId', async () => {
+    const repository = createModelProductRepository();
+
+    assert.equal(await repository.findSellableById('not-a-mongo-id'), null);
   });
 
   it('creates an online checkout as Pending without creating a synthetic provider attempt', async () => {
@@ -736,7 +780,7 @@ describe('order service', () => {
     );
   });
 
-  it('rejects customer cancellation of a paid order per SRS UC-CS-10', async () => {
+  it('cancels a paid online Pending order and creates one refund hand-off', async () => {
     const order = await orderService.placeOrder('customer-1', checkoutInput({
       paymentMethod: 'ONLINE',
       idempotencyKey: 'cancel-paid-checkout-001',
@@ -751,18 +795,59 @@ describe('order service', () => {
       currency: 'VND',
     });
 
-    await assert.rejects(
-      () => orderService.cancelOrder('customer-1', order.id, {
-        cancelReason: 'Customer requested cancellation',
-        idempotencyKey: 'cancel-paid-command-001',
-      }),
-      (error) => {
-        assert.equal(error.statusCode, 409);
-        assert.match(error.message, /Unpaid, Failed, or Cancelled/);
-        return true;
-      }
-    );
-    assert.equal(orderRepository.orders[0].orderStatus, 'Pending');
+    const input = {
+      cancelReason: 'Customer requested cancellation',
+      idempotencyKey: 'cancel-paid-command-001',
+    };
+    const cancelled = await orderService.cancelOrder('customer-1', order.id, input);
+
+    assert.equal(cancelled.orderStatus, 'Cancelled');
+    assert.equal(cancelled.paymentStatus, 'Paid');
+    assert.equal(cancelled.moneyObligationsSettled, false);
+    assert.equal(orderRepository.orders[0].orderStatus, 'Cancelled');
+    assert.equal(orderRepository.payments[0].paymentStatus, 'Paid');
+    assert.equal(orderRepository.attempts[0].paymentStatus, 'Paid');
+    assert.equal(orderRepository.refunds.length, 1);
+    assert.equal(orderRepository.refunds[0].status, 'RefundPending');
+    assert.equal(orderRepository.refunds[0].obligationKey, 'PAYMENT_REVERSAL:attempt-paid');
+    assert.equal(orderRepository.refunds[0].returnRefundRequestId, 'refund-request-1');
+    assert.equal(orderRepository.refundRequests.length, 1);
+    assert.equal(orderRepository.refundRequests[0].status, 'ReadyForRefund');
+    assert.equal(orderRepository.refundRequests[0].refundPendingId, 'refund-1');
+
+    const replay = await orderService.cancelOrder('customer-1', order.id, input);
+    assert.equal(replay.idempotentReplay, true);
+    assert.equal(orderRepository.refunds.length, 1);
+    assert.equal(orderRepository.refundRequests.length, 1);
+  });
+
+  it('cancels an online Pending payment before provider settlement and retires its active link', async () => {
+    const order = await orderService.placeOrder('customer-1', checkoutInput({
+      paymentMethod: 'ONLINE',
+      idempotencyKey: 'cancel-pending-checkout-001',
+    }));
+    orderRepository.attempts.push({
+      _id: 'attempt-pending',
+      orderId: order.id,
+      paymentStatus: 'Pending',
+      amount: 50,
+      currency: 'VND',
+      paymentLinkId: 'payos-link-pending',
+    });
+
+    const cancelled = await orderService.cancelOrder('customer-1', order.id, {
+      cancelReason: 'Customer requested cancellation before payment',
+      idempotencyKey: 'cancel-pending-command-001',
+    });
+
+    assert.equal(cancelled.orderStatus, 'Cancelled');
+    assert.equal(cancelled.paymentStatus, 'Cancelled');
+    assert.equal(orderRepository.payments[0].paymentStatus, 'Cancelled');
+    assert.equal(orderRepository.attempts[0].paymentStatus, 'Cancelled');
+    assert.deepEqual(retiredPaymentLinks, [{
+      paymentLinkId: 'payos-link-pending',
+      reason: 'Customer cancelled order',
+    }]);
     assert.equal(orderRepository.refunds.length, 0);
   });
 

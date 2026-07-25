@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 
 import { cartService } from '../../services/cartService.js';
@@ -25,9 +25,11 @@ export function formatShippingAddress(address) {
     .join(', ');
 }
 
-function toFieldErrors(errors) {
+function toFieldErrors(errors, errorCode) {
   return (Array.isArray(errors) ? errors : []).reduce((result, entry) => {
-    const field = String(entry?.field || '').startsWith('expectedItems.')
+    const field = errorCode === 'CHECKOUT_STOCK_INSUFFICIENT'
+      ? 'checkoutStock'
+      : String(entry?.field || '').startsWith('expectedItems.')
       ? 'checkoutPrice'
       : entry?.field === 'savedAddressId' || entry?.field === 'deliveryAddress'
       ? 'addressSource'
@@ -54,13 +56,14 @@ export default function CheckoutPage() {
   const [addressMode, setAddressMode] = useState('new');
   const [newAddress, setNewAddress] = useState(EMPTY_ADDRESS);
   const [saveAddress, setSaveAddress] = useState(false);
-  const [paymentMethod, setPaymentMethod] = useState('COD');
+  const paymentMethod = 'COD';
   const [customerNote, setCustomerNote] = useState('');
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [fieldErrors, setFieldErrors] = useState({});
   const [checkoutIdempotencyKey] = useState(() => createCheckoutIdempotencyKey());
+  const submittingRef = useRef(false);
 
   useEffect(() => {
     let active = true;
@@ -109,6 +112,8 @@ export default function CheckoutPage() {
 
   async function handleSubmit(event) {
     event.preventDefault();
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setSubmitting(true);
     setError('');
     setFieldErrors({});
@@ -150,11 +155,12 @@ export default function CheckoutPage() {
       resetCart();
       navigate(`/orders/${order.id}`, { replace: true });
     } catch (requestError) {
-      const nextFieldErrors = toFieldErrors(requestError.errors);
+      const nextFieldErrors = toFieldErrors(requestError.errors, requestError.errorCode);
       setFieldErrors(nextFieldErrors);
       setError(Object.keys(nextFieldErrors).length ? '' : requestError.message);
       if (requestError.data?.cart) setCart(requestError.data.cart);
     } finally {
+      submittingRef.current = false;
       setSubmitting(false);
     }
   }
@@ -174,6 +180,7 @@ export default function CheckoutPage() {
 
       {error && <div className="alert alert-danger" role="alert">{error}</div>}
       {fieldErrors.checkoutPrice && <div className="alert alert-warning" role="alert">{fieldErrors.checkoutPrice}</div>}
+      {fieldErrors.checkoutStock && <div className="alert alert-warning" role="alert">{fieldErrors.checkoutStock}</div>}
       {!cart.canCheckout && cart.items.length > 0 && (
         <div className="alert alert-warning" role="alert">
           Giỏ hàng đã thay đổi hoặc có sản phẩm chưa thể mua. Vui lòng quay lại giỏ hàng để xử lý.
@@ -216,8 +223,7 @@ export default function CheckoutPage() {
           <section className="checkout-panel">
             <div className="checkout-panel-heading"><div><span>02</span><h2>Phương thức thanh toán</h2></div></div>
             <div className="checkout-payment-options">
-              <label className={paymentMethod === 'COD' ? 'selected' : ''}><input type="radio" name="paymentMethod" value="COD" checked={paymentMethod === 'COD'} onChange={(event) => setPaymentMethod(event.target.value)} /><span><strong>Thanh toán khi nhận hàng</strong><small>Thanh toán cho đơn vị giao hàng khi nhận sản phẩm.</small></span></label>
-              <label className={paymentMethod === 'ONLINE' ? 'selected' : ''}><input type="radio" name="paymentMethod" value="ONLINE" checked={paymentMethod === 'ONLINE'} onChange={(event) => setPaymentMethod(event.target.value)} /><span><strong>Thanh toán trực tuyến</strong><small>Chuyển sang bước thanh toán online sau khi tạo đơn.</small></span></label>
+              <label className="selected"><input type="radio" name="paymentMethod" value="COD" checked readOnly /><span><strong>Thanh toán khi nhận hàng</strong><small>Thanh toán cho đơn vị giao hàng khi nhận sản phẩm.</small></span></label>
             </div>
             <label className="checkout-note">Ghi chú cho đơn hàng<textarea name="customerNote" rows="3" maxLength="500" value={customerNote} placeholder="Ví dụ: Giao giờ hành chính, gọi trước khi giao..." onChange={(event) => { setCustomerNote(event.target.value); clearFieldError('customerNote'); }} />{fieldErrors.customerNote && <small className="field-error" role="alert">{fieldErrors.customerNote}</small>}</label>
           </section>

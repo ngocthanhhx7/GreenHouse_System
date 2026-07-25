@@ -1,6 +1,11 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 import { authService } from '../services/authService.js';
+import {
+  clearCsrfToken,
+  subscribeToSessionExpiration,
+} from '../services/apiClient.js';
 
 const AuthContext = createContext(null);
 
@@ -13,8 +18,11 @@ function normalizeUser(user) {
 }
 
 export function AuthProvider({ children }) {
+  const location = useLocation();
+  const navigate = useNavigate();
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [sessionNotice, setSessionNotice] = useState('');
 
   useEffect(() => {
     let active = true;
@@ -37,8 +45,26 @@ export function AuthProvider({ children }) {
     };
   }, []);
 
+  useEffect(() => {
+    return subscribeToSessionExpiration(() => {
+      if (!user) return;
+      const message = 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.';
+      setSessionNotice(message);
+      clearCsrfToken();
+      setUser(null);
+      navigate('/login', {
+        replace: true,
+        state: {
+          from: location.pathname,
+          message,
+        },
+      });
+    });
+  }, [location.pathname, navigate, user]);
+
   const login = useCallback(async (credentials) => {
     const result = await authService.login(credentials);
+    setSessionNotice('');
     setUser(normalizeUser(result.user));
     return result;
   }, []);
@@ -48,6 +74,7 @@ export function AuthProvider({ children }) {
 
   const logout = useCallback(async () => {
     const result = await authService.logout();
+    setSessionNotice('');
     setUser(null);
     return result;
   }, []);
@@ -67,6 +94,7 @@ export function AuthProvider({ children }) {
     () => ({
       user,
       loading,
+      sessionNotice,
       isAuthenticated: Boolean(user),
       login,
       requestRegistrationChallenge,
@@ -76,7 +104,7 @@ export function AuthProvider({ children }) {
       refreshUser,
       getDashboardPath: authService.getDashboardPath,
     }),
-    [completeRegistration, loading, login, logout, refreshUser, requestRegistrationChallenge, updateUser, user]
+    [completeRegistration, loading, login, logout, refreshUser, requestRegistrationChallenge, sessionNotice, updateUser, user]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -189,6 +189,18 @@ describe('staff order service', () => {
     assert.equal(orderRepository.exports.length, 1);
   });
 
+  it('AT-229 rejects a second Staff confirmation with a new key and keeps one export request', async () => {
+    await service.confirmOrder('staff-1', 'order-1', { idempotencyKey: 'confirm-001' });
+
+    await assert.rejects(
+      () => service.confirmOrder('staff-1', 'order-1', { idempotencyKey: 'confirm-002' }),
+      /Only Pending orders can be confirmed/,
+    );
+
+    assert.equal(orderRepository.orders[0].orderStatus, 'Confirmed');
+    assert.equal(orderRepository.exports.length, 1);
+  });
+
   it('does not create a stock export request for a stale confirmation', async () => {
     orderRepository.orders[0].orderStatus = 'Confirmed';
 
