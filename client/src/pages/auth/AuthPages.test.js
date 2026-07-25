@@ -48,7 +48,9 @@ describe('public authentication responsive contract', () => {
   });
 
   it('sends an unauthenticated protected-route visit to the login form', () => {
-    assert.match(protectedRoute, /<Navigate to="\/login" replace state=\{\{ from: location\.pathname \}\} \/>/);
+    assert.match(protectedRoute, /sessionNotice/);
+    assert.match(protectedRoute, /message: sessionNotice \|\| location\.state\.message/);
+    assert.match(protectedRoute, /<Navigate to="\/login" replace state=\{redirectState\} \/>/);
   });
 
   it('supports OTP resend after 60 seconds and changing the email', () => {
