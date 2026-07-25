@@ -30,33 +30,33 @@ function toPlainAddress(address) {
 function validateAddress(input, { partial = false } = {}) {
   const keys = Object.keys(input || {});
   if (keys.some((key) => !EDITABLE_FIELDS.has(key))) {
-    throw new ApiError(400, 'Address contains fields that cannot be updated');
+    throw new ApiError(400, 'Địa chỉ chứa các trường không thể cập nhật.');
   }
   const errors = [];
   const data = {};
   for (const field of ADDRESS_FIELDS) {
     if (!partial || Object.hasOwn(input, field)) {
       const value = String(input[field] || '').trim();
-      if (!value) errors.push({ field, message: `${field} is required` });
+      if (!value) errors.push({ field, message: `Vui lòng nhập ${field}` });
       data[field] = value;
     }
   }
   if (data.phoneNumber) {
     data.phoneNumber = normalizePhone(data.phoneNumber);
     if (!VIETNAMESE_PHONE.test(data.phoneNumber)) {
-      errors.push({ field: 'phoneNumber', message: 'Valid Vietnamese phone number is required' });
+      errors.push({ field: 'phoneNumber', message: 'Vui lòng nhập số điện thoại Việt Nam hợp lệ.' });
     }
   }
-  if (data.label && data.label.length > 50) errors.push({ field: 'label', message: 'Label must not exceed 50 characters' });
-  if (data.receiverName && data.receiverName.length > 120) errors.push({ field: 'receiverName', message: 'Receiver name must not exceed 120 characters' });
+  if (data.label && data.label.length > 50) errors.push({ field: 'label', message: 'Nhãn địa chỉ không được vượt quá 50 ký tự.' });
+  if (data.receiverName && data.receiverName.length > 120) errors.push({ field: 'receiverName', message: 'Tên người nhận không được vượt quá 120 ký tự.' });
   for (const field of ['province', 'district', 'ward']) {
     if (data[field] && data[field].length > 100) {
-      errors.push({ field, message: `${field} must not exceed 100 characters` });
+      errors.push({ field, message: `Thông tin địa chỉ không được vượt quá 100 ký tự.` });
     }
   }
-  if (data.addressLine && data.addressLine.length > 300) errors.push({ field: 'addressLine', message: 'Address line must not exceed 300 characters' });
+  if (data.addressLine && data.addressLine.length > 300) errors.push({ field: 'addressLine', message: 'Địa chỉ chi tiết không được vượt quá 300 ký tự.' });
   if (Object.hasOwn(input, 'isDefault')) data.isDefault = Boolean(input.isDefault);
-  if (errors.length) throw new ApiError(400, 'Invalid address data', errors, 'VALIDATION_ERROR');
+  if (errors.length) throw new ApiError(400, 'Dữ liệu địa chỉ không hợp lệ.', errors, 'VALIDATION_ERROR');
   return data;
 }
 
@@ -94,7 +94,7 @@ function createModelAddressRepository() {
         { $inc: { addressBookVersion: 1 } },
         { new: false },
       ).select('_id').session(session).lean();
-      if (!locked) throw new ApiError(404, 'User not found');
+      if (!locked) throw new ApiError(404, 'Không tìm thấy thông tin người dùng.');
       return locked;
     },
     async unsetDefault(userId, session) {
@@ -127,7 +127,7 @@ function createModelAddressRepository() {
 function createUserAddressService({ addressRepository = createModelAddressRepository() } = {}) {
   async function requireAddress(userId, id, session) {
     const address = await addressRepository.findByIdForUser(userId, id, session);
-    if (!address) throw new ApiError(404, 'Address not found');
+    if (!address) throw new ApiError(404, 'Không tìm thấy địa chỉ.');
     return address;
   }
 
@@ -159,20 +159,20 @@ function createUserAddressService({ addressRepository = createModelAddressReposi
         if (changes.isDefault) {
           await addressRepository.unsetDefault(userId, session);
           const updated = await addressRepository.updateForUser(userId, id, changes, session);
-          if (!updated) throw new ApiError(404, 'Address not found');
+          if (!updated) throw new ApiError(404, 'Không tìm thấy địa chỉ.');
           return toPlainAddress(updated);
         }
 
         if (changes.isDefault === false) {
           if (existing.isDefault) {
-            throw new ApiError(409, 'A customer must keep one default address', [], 'DEFAULT_ADDRESS_REQUIRED');
+            throw new ApiError(409, 'Khách hàng phải giữ ít nhất một địa chỉ mặc định.', [], 'DEFAULT_ADDRESS_REQUIRED');
           }
           delete changes.isDefault;
         }
         if (!Object.keys(changes).length) return toPlainAddress(existing);
 
         const updated = await addressRepository.updateForUser(userId, id, changes, session);
-        if (!updated) throw new ApiError(404, 'Address not found');
+        if (!updated) throw new ApiError(404, 'Không tìm thấy địa chỉ.');
         return toPlainAddress(updated);
       });
     },

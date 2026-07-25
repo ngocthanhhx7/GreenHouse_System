@@ -72,7 +72,7 @@ export default function InternalTopbar({ backgroundInert = false, onMenuToggle, 
           </button>
         )}
         <div className="internal-brand">
-          <span className="internal-brand-icon" aria-hidden="true">⌁</span>
+          <img className="internal-brand-logo" src="/assets/icon/favicon.png" alt="" aria-hidden="true" />
           <span><strong>GreenHome Kitchen</strong><small>Không gian vận hành</small></span>
         </div>
       </div>

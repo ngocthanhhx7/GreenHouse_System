@@ -29,6 +29,13 @@ const ACTIVE_DELIVERY_EVENT_TYPES = new Set([
   'DAMAGED',
 ]);
 const ACTIVE_SHIPMENT_STATUSES = new Set(['HandedOff', 'AttemptFailed']);
+const STAFF_DELIVERY_FAILURE_REASONS = new Set([
+  'CUSTOMER_UNREACHABLE',
+  'CUSTOMER_REFUSED',
+  'ADDRESS_UNDELIVERABLE',
+  'OTHER_DELIVERY_FAILURE',
+]);
+const STAFF_EVENTS_REQUIRING_FAILURE_REASON = new Set(['ATTEMPT_FAILED', 'RETURNED_TO_SHOP']);
 
 function customerNotificationOutbox({
   identityKey,
@@ -58,6 +65,69 @@ function isDuplicateKey(error) {
 
 function addDays(value, numberOfDays) {
   return new Date(value.getTime() + numberOfDays * 24 * 60 * 60 * 1000);
+}
+
+function normalizeOperationalEvidence(input, verifier, { required = false } = {}) {
+  const validationError = (
+    statusCode,
+    message,
+    errorCode = 'OPERATIONAL_EVIDENCE_INVALID',
+  ) => new ApiError(
+    statusCode,
+    message,
+    [{ field: 'evidenceReferences', message }],
+    errorCode,
+  );
+  if (!hasOwn(input, 'evidenceReferences')) {
+    if (required) {
+      throw validationError(400, 'Cần ít nhất 1 ảnh dẫn chứng vận hành đã ký');
+    }
+    return [];
+  }
+  if (!Array.isArray(input.evidenceReferences)) {
+    throw validationError(400, 'Ảnh dẫn chứng phải là một danh sách URL đã ký');
+  }
+  const submitted = input.evidenceReferences
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
+  if (!submitted.length) {
+    throw validationError(400, 'Cần ít nhất 1 ảnh dẫn chứng vận hành đã ký');
+  }
+  if (submitted.length > 5) {
+    throw validationError(400, 'Chỉ được tải tối đa 5 ảnh dẫn chứng');
+  }
+  const claim = verifier || require('../utils/operationalEvidenceClaim').operationalEvidenceClaim;
+  let verified;
+  try {
+    verified = submitted.map((value) => claim.verify(value));
+  } catch {
+    throw validationError(400, 'Ảnh dẫn chứng không hợp lệ hoặc chữ ký đã bị thay đổi');
+  }
+  const sizes = verified.map((item) => Number(item?.size));
+  if (sizes.some((size) => !Number.isSafeInteger(size) || size < 1)) {
+    throw validationError(400, 'Dung lượng ảnh dẫn chứng trong chữ ký không hợp lệ');
+  }
+  const totalSize = sizes.reduce((sum, size) => sum + size, 0);
+  if (totalSize > 20 * 1024 * 1024) {
+    throw validationError(
+      413,
+      'Tổng dung lượng ảnh dẫn chứng không được vượt quá 20 MiB',
+      'OPERATIONAL_EVIDENCE_BATCH_TOO_LARGE',
+    );
+  }
+  const canonicalUrls = verified.map((item) => String(item?.url || '').trim());
+  if (canonicalUrls.some((url) => !url)) {
+    throw validationError(400, 'URL chuẩn của ảnh dẫn chứng không hợp lệ');
+  }
+  if (new Set(canonicalUrls).size !== canonicalUrls.length) {
+    throw validationError(400, 'Không được gửi trùng ảnh dẫn chứng');
+  }
+  return submitted.map((value) => {
+    if (value.length > 256) {
+      throw validationError(400, 'URL ảnh dẫn chứng không được vượt quá 256 ký tự');
+    }
+    return value;
+  });
 }
 
 function exactPackingItems(details, rawItems) {
@@ -138,6 +208,8 @@ function createFulfillmentCommandService({
   auditLogger,
   assignmentCoordinator,
   clock,
+  runtime,
+  operationalEvidenceClaim,
 }) {
   async function confirmPacking(staffId, orderId, input = {}) {
     const commandKey = normalizeIdentity(input.idempotencyKey);
@@ -357,15 +429,77 @@ function createFulfillmentCommandService({
     if (!['Staff', 'Carrier'].includes(actor.actorType)) {
       throw new ApiError(403, 'Only Staff or signed Carrier may record Shipment events');
     }
+    const assertReplayIdentity = (event) => {
+      if (
+        !sameId(event.shipmentId, shipmentId)
+        || event.eventType !== eventType
+        || event.source !== source
+        || !sameId(event.actorId, actor.actorId)
+      ) {
+        throw new ApiError(
+          409,
+          'Shipment event key was already used for different command facts',
+          [],
+          'SHIPMENT_EVENT_KEY_REUSED',
+        );
+      }
+    };
     const existing = await repository.findEventByKey(eventKey);
     if (existing) {
+      assertReplayIdentity(existing);
       const incident = await repository.findIncidentBySourceEvent(existing._id);
       return { event: existing, incident, idempotentReplay: true };
     }
     const occurredAt = requiredDate(input.occurredAt, 'occurredAt');
-    const evidenceReference = requiredText(input.evidenceReference, 'evidenceReference');
-    if (hasOwn(input, 'amount') || hasOwn(input, 'codExpectedAmount')) {
+    if (
+      hasOwn(input, 'amount')
+      || hasOwn(input, 'codExpectedAmount')
+      || hasOwn(input, 'customerCollectedAmount')
+      || hasOwn(input, 'carrierSettlementAmount')
+    ) {
       throw new ApiError(400, 'COD amounts are established only by attributable collection evidence');
+    }
+    const codCollectionResult = String(input.codCollectionResult || '').trim().toUpperCase();
+    if (codCollectionResult && !['COLLECTED', 'NOT_COLLECTED'].includes(codCollectionResult)) {
+      throw new ApiError(400, 'codCollectionResult must be COLLECTED or NOT_COLLECTED');
+    }
+    if (codCollectionResult && eventType !== 'DELIVERED') {
+      throw new ApiError(409, 'COD reconciliation is allowed only with a Delivered result');
+    }
+    if (codCollectionResult && actor.actorType !== 'Staff') {
+      throw new ApiError(403, 'codCollectionResult is reserved for non-production Staff reconciliation');
+    }
+    if (codCollectionResult && runtime === 'production') {
+      throw new ApiError(
+        403,
+        'Production COD collection requires signed Carrier evidence',
+        [],
+        'COD_COLLECTION_CARRIER_SIGNATURE_REQUIRED',
+      );
+    }
+    const evidenceReferences = normalizeOperationalEvidence(
+      input,
+      operationalEvidenceClaim,
+      { required: Boolean(codCollectionResult) },
+    );
+    const evidenceReference = evidenceReferences[0]
+      || requiredText(input.evidenceReference, 'evidenceReference');
+    const reason = optionalText(input.reason);
+    if (
+      actor.actorType === 'Staff'
+      && evidenceReferences.length > 0
+      && STAFF_EVENTS_REQUIRING_FAILURE_REASON.has(eventType)
+      && !STAFF_DELIVERY_FAILURE_REASONS.has(reason)
+    ) {
+      throw new ApiError(
+        400,
+        'Cần chọn lý do không giao được hợp lệ',
+        [{
+          field: 'reason',
+          message: 'Chọn một lý do không giao được trong danh sách',
+        }],
+        'DELIVERY_FAILURE_REASON_INVALID',
+      );
     }
 
     try {
@@ -374,6 +508,33 @@ function createFulfillmentCommandService({
       if (!shipment) throw new ApiError(404, 'Shipment not found');
       const order = await repository.findOrderById(shipment.orderId, session);
       if (!order) throw new ApiError(404, 'Order not found');
+      const isStaffCodDelivery = (
+        actor.actorType === 'Staff'
+        && eventType === 'DELIVERED'
+        && order.paymentMethod === 'COD'
+      );
+      if (isStaffCodDelivery && runtime === 'production') {
+        throw new ApiError(
+          403,
+          'Production COD collection requires signed Carrier evidence',
+          [],
+          'COD_COLLECTION_CARRIER_SIGNATURE_REQUIRED',
+        );
+      }
+      if (isStaffCodDelivery && !codCollectionResult && !input.customerCollectionEvidence) {
+        throw new ApiError(
+          400,
+          'codCollectionResult is required for Staff COD delivery',
+          [{
+            field: 'codCollectionResult',
+            message: 'Chọn đã thu hoặc chưa thu COD',
+          }],
+          'COD_COLLECTION_RESULT_REQUIRED',
+        );
+      }
+      if (codCollectionResult && order.paymentMethod !== 'COD') {
+        throw new ApiError(409, 'COD reconciliation is available only for COD orders');
+      }
       if (
         ACTIVE_DELIVERY_EVENT_TYPES.has(eventType)
         && (
@@ -409,9 +570,10 @@ function createFulfillmentCommandService({
         occurredAt,
         recordedAt: clock(),
         evidenceReference,
+        evidenceReferences,
         actorId: actor.actorId,
         replacesEventId: input.replacesEventId || null,
-        reason: optionalText(input.reason),
+        reason,
       }, session);
 
       let updatedOrder = order;
@@ -459,21 +621,36 @@ function createFulfillmentCommandService({
               'COD_COLLECTION_CARRIER_SIGNATURE_REQUIRED',
             );
           }
-          const collected = collection ? Number(collection.customerCollectedAmount) : null;
-          const timing = collection ? String(collection.collectionTiming || '') : '';
-          const isFullCollection = collection
+          if (codCollectionResult && collection) {
+            throw new ApiError(400, 'Use either Staff reconciliation or Carrier collection evidence, not both');
+          }
+          const staffCollection = codCollectionResult === 'COLLECTED'
+            ? {
+              eventId: `staff-reconciliation:${String(event._id)}`,
+              customerCollectedAmount: expected,
+              collectionTiming: 'AT_DELIVERY',
+              occurredAt,
+              evidenceReference,
+              evidenceReferences,
+              source: 'STAFF_RECONCILIATION',
+            }
+            : null;
+          const effectiveCollection = collection || staffCollection;
+          const collected = effectiveCollection ? Number(effectiveCollection.customerCollectedAmount) : null;
+          const timing = effectiveCollection ? String(effectiveCollection.collectionTiming || '') : '';
+          const isFullCollection = effectiveCollection
             && Number.isSafeInteger(collected)
             && collected === expected
             && ['AT_DELIVERY', 'AFTER_DELIVERY'].includes(timing);
-          if (collection && (!Number.isSafeInteger(collected) || collected < 0 || collected > expected)) {
+          if (effectiveCollection && (!Number.isSafeInteger(collected) || collected < 0 || collected > expected)) {
             throw new ApiError(400, 'customerCollectedAmount must be between zero and the fixed COD expected amount');
           }
           let collectionOccurredAt = null;
-          if (collection) {
+          if (effectiveCollection) {
             collectionOccurredAt = timing === 'AT_DELIVERY'
               ? occurredAt
               : requiredDate(
-                collection.occurredAt,
+                effectiveCollection.occurredAt,
                 'customerCollectionEvidence.occurredAt',
               );
             if (timing === 'AFTER_DELIVERY' && collectionOccurredAt <= occurredAt) {
@@ -484,14 +661,15 @@ function createFulfillmentCommandService({
             }
             await repository.createCodEvidence({
               orderId: order._id,
-              eventId: normalizeIdentity(collection.eventId, 'customerCollectionEvidence.eventId'),
+              eventId: normalizeIdentity(effectiveCollection.eventId, 'customerCollectionEvidence.eventId'),
               eventType: 'COLLECTION',
-              source: 'CARRIER',
+              source: effectiveCollection.source || 'CARRIER',
               customerCollectedAmount: collected,
               carrierSettlementAmount: null,
               collectionTiming: timing || null,
               occurredAt: collectionOccurredAt,
-              evidenceReference: requiredText(collection.evidenceReference, 'customerCollectionEvidence.evidenceReference'),
+              evidenceReference: requiredText(effectiveCollection.evidenceReference, 'customerCollectionEvidence.evidenceReference'),
+              evidenceReferences: effectiveCollection.evidenceReferences || [],
             }, session);
           }
           if (isFullCollection) {
@@ -505,7 +683,7 @@ function createFulfillmentCommandService({
               paymentStatus: 'Paid',
               customerCollectedAmount: collected,
               customerCollectedAt: completedSaleAt,
-              customerCollectionEvidenceId: collection.eventId,
+              customerCollectionEvidenceId: effectiveCollection.eventId,
               completedSaleAt,
               codDiscrepancyStatus: 'None',
             });
@@ -515,12 +693,22 @@ function createFulfillmentCommandService({
               codDiscrepancyStatus: 'Open',
               codDiscrepancyOpenedAt: clock(),
             });
+            if (codCollectionResult === 'NOT_COLLECTED') {
+              orderPatch.customerCollectedAmount = null;
+            }
+            if (effectiveCollection) {
+              Object.assign(orderPatch, {
+                customerCollectedAmount: collected,
+                customerCollectedAt: collectionOccurredAt,
+                customerCollectionEvidenceId: effectiveCollection.eventId,
+              });
+            }
             await repository.upsertCodDiscrepancy({
               orderId: order._id,
               shipmentId: shipment._id,
               deliveryEventId: event._id,
               expectedAmount: expected,
-              customerCollectedAmount: collection ? collected : null,
+              customerCollectedAmount: effectiveCollection ? collected : null,
               carrierSettlementAmount: 0,
               status: 'Open',
               openedAt: clock(),
@@ -600,6 +788,7 @@ function createFulfillmentCommandService({
       if (isDuplicateKey(error)) {
         const winner = await repository.findEventByKey(eventKey);
         if (winner) {
+          assertReplayIdentity(winner);
           const incident = await repository.findIncidentBySourceEvent(winner._id);
           return { event: winner, incident, idempotentReplay: true };
         }

@@ -2,6 +2,11 @@ const assert = require('node:assert/strict');
 const { describe, it } = require('node:test');
 
 const Product = require('../models/product.model');
+const {
+  availableQuantityOf,
+  inventoryHealthOf,
+} = require('./cartProjection');
+const { availabilityStatusOf } = require('./catalogQuery');
 const { createProductService } = require('./product.service');
 
 describe('Inventory-only Product quantity authority', () => {
@@ -56,5 +61,27 @@ describe('Inventory-only Product quantity authority', () => {
     assert.equal(detail.stockQuantity, undefined);
     assert.equal(listItem.availableQuantity, undefined);
     assert.equal(detail.inventoryHealth, undefined);
+  });
+
+  it('keeps coherent legacy Inventory records sellable when health fields are absent', () => {
+    const legacyInventory = {
+      stockQuantity: 25,
+      reservedQuantity: 2,
+    };
+
+    assert.equal(availabilityStatusOf(legacyInventory), 'InStock');
+    assert.equal(inventoryHealthOf({ inventory: legacyInventory }), 'Normal');
+    assert.equal(availableQuantityOf({ inventory: legacyInventory }), 23);
+  });
+
+  it('fails closed for missing or inconsistent legacy Inventory records', () => {
+    const inconsistentInventory = {
+      stockQuantity: 2,
+      reservedQuantity: 3,
+    };
+
+    assert.equal(availabilityStatusOf(null), 'OutOfStock');
+    assert.equal(inventoryHealthOf({ inventory: inconsistentInventory }), 'ReconciliationRequired');
+    assert.equal(availableQuantityOf({ inventory: inconsistentInventory }), 0);
   });
 });

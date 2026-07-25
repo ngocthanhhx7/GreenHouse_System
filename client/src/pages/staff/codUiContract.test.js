@@ -10,9 +10,38 @@ describe('Staff COD and refund UI contract', () => {
     assert.match(staffOrderSource, /markCodCollected/);
     assert.match(staffOrderSource, /Ghi nhận.*COD|thu đủ COD/i);
     assert.match(staffOrderSource, /CODExpectedAmount|codExpectedAmount/);
+  });
+
+  it('allows evidence-backed demo COD reconciliation and keeps full collection amount fixed', () => {
+    assert.match(staffOrderSource, /OperationalEvidenceUploader/);
+    assert.match(staffOrderSource, /codCollectionResult/);
+    assert.match(staffOrderSource, /COLLECTED/);
+    assert.match(staffOrderSource, /NOT_COLLECTED/);
+    assert.match(staffOrderSource, /fulfillment\.capabilities\?\.manualCodReconciliation\s*===\s*true/);
+    assert.doesNotMatch(staffOrderSource, /import\.meta\.env\.(?:MODE|PROD)/);
+    assert.match(staffOrderSource, /Ghi nhận thu đủ COD \(\{formatCurrency\(order\.codExpectedAmount\)\}/);
     assert.doesNotMatch(staffOrderSource, /goodsRecoveryEvidenceId/);
     assert.match(staffOrderSource, /codDiscrepancyStatus/);
     assert.match(staffOrderSource, /codRecoveryReceiptId/);
+  });
+
+  it('uses Vietnamese delivery/COD labels and sends at most five uploaded evidence images', () => {
+    assert.match(staffOrderSource, /Giao thành công/);
+    assert.match(staffOrderSource, /Không thể giao/);
+    assert.match(staffOrderSource, /Thử giao thất bại/);
+    assert.match(staffOrderSource, /Đã thu đủ COD/);
+    assert.match(staffOrderSource, /Chưa thu được COD/);
+    assert.match(staffOrderSource, /evidenceReferences/);
+    assert.match(staffOrderSource, /slice\(0,\s*5\)/);
+  });
+
+  it('shows saved signed evidence previews and field-specific delivery validation', () => {
+    assert.match(staffOrderSource, /entry\.evidenceReferences/);
+    assert.match(staffOrderSource, /resolveMediaUrl/);
+    for (const field of ['occurredAt', 'evidenceReferences', 'codCollectionResult', 'reason']) {
+      assert.match(staffOrderSource, new RegExp(`fieldErrors\\.${field}|fieldErrors\\[['"]${field}['"]\\]`));
+    }
+    assert.match(staffOrderSource, /CUSTOMER_UNREACHABLE|CUSTOMER_REFUSED/);
   });
 
   it('does not render or send an editable refund amount', () => {
@@ -24,5 +53,10 @@ describe('Staff COD and refund UI contract', () => {
     assert.match(staffOrderSource, /idempotencyKey/);
     assert.match(staffOrderSource, /disabled=\{.*submitting/s);
     assert.match(staffOrderSource, /submittingRef\.current/);
+    assert.match(staffOrderSource, /commandKeys\.current\.delete/);
+    assert.match(
+      staffOrderSource,
+      /const reloaded = await loadOrder\(\);[\s\S]*if \(reloaded\) onSuccess\?\.\(result\)/,
+    );
   });
 });

@@ -35,3 +35,13 @@ Status: `READY_FOR_REVIEW`
 The release audit at `5ef56cf` is retained in
 `docs/reviews/SL-003_RELEASE_AUDIT.md`; its B1–B9 findings are closed by this
 branch and its RED→GREEN evidence.
+
+## Post-review evidence — 2026-07-25
+
+- P1 Customer Order Center `canPay` remediation closed at `f0b14b6`.
+- The client action now fails closed unless the Order is `Pending`, uses
+  `ONLINE`, has payment status `Unpaid`, `Pending`, or `Failed`, and has a valid
+  future `paymentDeadlineAt`.
+- Focused evidence only: **12/12 tests passed** across
+  `orderHistoryView.test.js`, `OrderHistoryPage.test.js`, and
+  `orderService.test.js`. This is not a full regression result.

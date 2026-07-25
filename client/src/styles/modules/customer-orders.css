@@ -1,0 +1,208 @@
+.customer-order-center {
+  display: grid;
+  gap: 20px;
+  width: min(1180px, 100%);
+  margin-inline: auto;
+}
+
+.customer-order-heading {
+  align-items: end;
+  padding: clamp(20px, 3vw, 32px);
+  border: 1px solid var(--gh-border, var(--line));
+  border-radius: var(--gh-radius-card, 18px);
+  background: var(--gh-paper, var(--paper));
+}
+
+.customer-order-heading h1 {
+  margin: 4px 0 6px;
+  color: var(--gh-forest, var(--green-950));
+}
+
+.customer-order-heading p {
+  margin: 0;
+  color: var(--gh-text-muted, var(--muted));
+}
+
+.order-status-tabs {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(110px, 1fr));
+  overflow-x: auto;
+  border: 1px solid var(--gh-border, var(--line));
+  border-radius: var(--gh-radius-card, 18px);
+  background: var(--gh-paper, var(--paper));
+  scrollbar-width: thin;
+}
+
+.order-status-tabs button {
+  display: flex;
+  justify-content: center;
+  gap: 7px;
+  min-height: 58px;
+  padding: 12px 10px;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  background: transparent;
+  color: var(--gh-text, var(--green-950));
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.order-status-tabs button span {
+  color: var(--gh-text-muted, var(--muted));
+  font-size: 0.78rem;
+}
+
+.order-status-tabs button.active {
+  border-bottom-color: var(--gh-green, var(--green-700));
+  color: var(--gh-green, var(--green-700));
+}
+
+.order-status-tabs button:focus-visible,
+.order-card a:focus-visible {
+  outline: 3px solid var(--gh-gold, #d8a75b);
+  outline-offset: 2px;
+}
+
+.order-card-list {
+  display: grid;
+  gap: 16px;
+}
+
+.order-card,
+.order-state-card {
+  overflow: hidden;
+  border: 1px solid var(--gh-border, var(--line));
+  border-radius: var(--gh-radius-card, 18px);
+  background: var(--gh-paper, var(--paper));
+  box-shadow: var(--gh-shadow, 0 12px 32px rgba(23, 40, 29, 0.08));
+}
+
+.order-card-header,
+.order-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px 22px;
+}
+
+.order-card-header {
+  border-bottom: 1px solid var(--gh-border, var(--line));
+}
+
+.order-card-header > div {
+  display: grid;
+  gap: 2px;
+}
+
+.order-card-header span,
+.order-card-header small,
+.order-payment-summary span,
+.order-product-copy span {
+  color: var(--gh-text-muted, var(--muted));
+}
+
+.order-status {
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--green-100);
+  color: var(--green-700);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.order-status--cancelled {
+  background: #f8e7e4;
+  color: #a33a2a;
+}
+
+.order-product-list {
+  display: grid;
+}
+
+.order-product-row {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  padding: 18px 22px;
+  border-bottom: 1px solid var(--gh-border, var(--line));
+}
+
+.order-product-image {
+  display: grid;
+  place-items: center;
+  width: 76px;
+  height: 76px;
+  overflow: hidden;
+  border-radius: 12px;
+  background: var(--green-50);
+  color: var(--green-700);
+  font-weight: 800;
+}
+
+.order-product-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.order-product-copy,
+.order-payment-summary {
+  display: grid;
+  gap: 4px;
+}
+
+.order-product-price,
+.order-payment-summary strong {
+  color: var(--gh-forest, var(--green-950));
+}
+
+.order-card-footer {
+  align-items: end;
+  background: var(--green-50);
+}
+
+.order-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.order-state-card,
+.order-detail-warning {
+  padding: 32px;
+  text-align: center;
+}
+
+.order-state-card p {
+  color: var(--gh-text-muted, var(--muted));
+}
+
+@media (max-width: 720px) {
+  .customer-order-heading,
+  .order-card-header,
+  .order-card-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .order-product-row {
+    grid-template-columns: 64px minmax(0, 1fr);
+    padding: 16px;
+  }
+
+  .order-product-price {
+    grid-column: 2;
+  }
+
+  .order-card-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .order-card-actions .btn {
+    width: 100%;
+  }
+}

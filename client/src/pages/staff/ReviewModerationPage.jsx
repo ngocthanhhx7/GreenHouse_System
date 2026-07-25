@@ -71,7 +71,7 @@ export default function ReviewModerationPage() {
     <div className="page-shell">
       <div className="page-heading">
         <div>
-          <span className="eyebrow">Staff moderation</span>
+          <span className="eyebrow">Kiểm duyệt nhân viên</span>
           <h1>Kiểm duyệt đánh giá</h1>
         </div>
         <span className="text-secondary">{Number(reviewPage.total || reviews.length)} đánh giá</span>
@@ -88,20 +88,20 @@ export default function ReviewModerationPage() {
           />
         </div>
         <div className="col-md-4">
-          <label htmlFor="moderationPublicationStatus">Publication</label>
+          <label htmlFor="moderationPublicationStatus">Trạng thái xuất bản</label>
           <select
             id="moderationPublicationStatus"
             name="publicationStatus"
             value={filters.publicationStatus}
             onChange={(event) => { setFilters((value) => ({ ...value, publicationStatus: event.target.value })); setPage(1); }}
           >
-            <option value="">Tất cả publication</option>
-            <option value="Published">Published</option>
-            <option value="Withdrawn">Withdrawn</option>
+            <option value="">Tất cả trạng thái hiển thị</option>
+            <option value="Published">Đã xuất bản</option>
+            <option value="Withdrawn">Đã gỡ</option>
           </select>
         </div>
         <div className="col-md-4">
-          <label htmlFor="moderationState">Moderation</label>
+          <label htmlFor="moderationState">Trạng thái kiểm duyệt</label>
           <select
             id="moderationState"
             name="moderationStatus"
@@ -109,8 +109,8 @@ export default function ReviewModerationPage() {
             onChange={(event) => { setFilters((value) => ({ ...value, moderationStatus: event.target.value })); setPage(1); }}
           >
             <option value="">Tất cả quyết định</option>
-            <option value="Allowed">Allowed</option>
-            <option value="HiddenByStaff">HiddenByStaff</option>
+            <option value="Allowed">Cho phép</option>
+            <option value="HiddenByStaff">Ẩn bởi nhân viên</option>
           </select>
         </div>
       </form>
@@ -124,21 +124,21 @@ export default function ReviewModerationPage() {
             <article className="border-bottom py-3" key={review.id}>
               <div className="d-flex justify-content-between">
                 <strong>{review.rating}/5</strong>
-                <span>{review.moderationStatus || 'Allowed'}</span>
+                <span>{review.moderationStatus === 'HiddenByStaff' ? 'Ẩn bởi nhân viên' : 'Cho phép'}</span>
               </div>
               <p>{review.content || 'Không có nội dung'}</p>
               <form data-review-id={review.id} onSubmit={(event) => submitModeration(event, review)}>
-                <label htmlFor={`moderationStatus-${review.id}`}>Staff moderation</label>
+                <label htmlFor={`moderationStatus-${review.id}`}>Quyết định kiểm duyệt</label>
                 <select
                   id={`moderationStatus-${review.id}`}
                   name="moderationStatus"
                   value={decision.moderationStatus}
                   onChange={(event) => setDecisions((value) => ({ ...value, [review.id]: { ...decision, moderationStatus: event.target.value } }))}
                 >
-                  {review.moderationStatus !== 'Allowed' && <option value="Allowed">Allowed</option>}
-                  {review.moderationStatus !== 'HiddenByStaff' && <option value="HiddenByStaff">HiddenByStaff</option>}
+                  {review.moderationStatus !== 'Allowed' && <option value="Allowed">Cho phép</option>}
+                  {review.moderationStatus !== 'HiddenByStaff' && <option value="HiddenByStaff">Ẩn bởi nhân viên</option>}
                 </select>
-                <label htmlFor={`reason-${review.id}`}>Reason</label>
+                <label htmlFor={`reason-${review.id}`}>Lý do</label>
                 <textarea
                   id={`reason-${review.id}`}
                   name="reason"

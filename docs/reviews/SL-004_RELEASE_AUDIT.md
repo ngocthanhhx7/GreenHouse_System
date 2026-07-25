@@ -96,3 +96,32 @@ No target deployment or production database execution is claimed.
 - Decide whether to code-split the existing large client bundle warning; it is not an SL-004 correctness blocker.
 
 These are deployment/evidence gates. They must not be represented as complete.
+
+## Supplemental audit 2026-07-25 - Staff demo COD evidence
+
+| Finding | Closure evidence |
+|---|---|
+| Demo could not complete a delivery/COD walkthrough without a live Carrier callback | Non-production Staff may submit a protected delivery outcome plus signed operational images through the existing Staff shipment-event command. |
+| A manual demo could invent a COD amount | All amount-bearing Staff fields are rejected; successful collection is exactly `codExpectedAmount`, and the UI exposes no amount control. |
+| A Staff-delivered COD order could become Paid without attributable evidence | Manual reconciliation requires 1-5 verified operational URLs and creates append-only `CodEvidence` with source `STAFF_RECONCILIATION`. |
+| A zero-value Staff COLLECTION could block later valid Carrier collection evidence | Explicit `NOT_COLLECTED` stores images on ShipmentEvent only, keeps actual collected `null`, creates no CodEvidence/customerCollectionEvidenceId, leaves Unpaid, and opens one discrepancy. |
+| Demo escape hatch could leak into production | Runtime guard rejects every Staff COD delivery in production, including omission of `codCollectionResult`; Carrier signature remains required, and the UI consumes a server-projected capability instead of client build mode. |
+| A failed delivery could accidentally settle COD | Reconciliation is rejected unless the shipment event is `DELIVERED`; rejection is transaction-safe and leaves Order Shipped/Unpaid. |
+| Signed URLs could be canonicalized away or disclosed to Customers | Canonical `claim.url` is used only for dedupe and `claim.size` for the 20 MiB batch; persisted signed URLs are included only in Staff projection for authenticated preview. |
+| Repeated failed attempts could replay the previous UI event key or disclose a foreign key winner | The UI retains the key through uncertain failures/reload, then deletes it only after a confirmed projection reload; server replay binds the key to the same shipment/type/source/actor. |
+| A failed delivery could be recorded without an actionable reason | Operational Staff failed-attempt/return evidence requires one allowlisted reason and returns field-specific errors rendered by the Vietnamese form. |
+| A maximum-length valid event key could overflow `CodEvidence.eventId` after prefixing | Staff collection evidence derives its bounded identity from the durable ShipmentEvent ID; a 160-character event key and replay are covered by behavior tests. |
+
+Supplemental verification result: focused server `41/41`, focused client
+`16/16`, full server `1066/1066`, full client `262/262`, production build PASS
+with 158 transformed modules. `git diff --check` is recorded separately in the
+handoff review. The known client chunk-size warning is unchanged.
+
+## Main integration gate 2026-07-25
+
+Thành merged the reviewed Nhật COD branch with `--no-ff`, preserved the newer
+Vietnamese Staff-order copy, and then integrated the Warehouse evidence branch.
+The final combined tree passed server `1075/1075` across 172 suites, client
+`281/281` across 69 suites, and the 162-module production build. The only build
+notice is the existing non-blocking 714.34 kB Vite chunk warning. No production
+carrier, migration, or deployment claim is made.

@@ -2,6 +2,12 @@ const assert = require('node:assert/strict');
 const { describe, it } = require('node:test');
 
 const { createReplenishmentService } = require('./replenishment.service');
+const { operationalEvidenceClaim } = require('../utils/operationalEvidenceClaim');
+
+const SIGNED_EVIDENCE = operationalEvidenceClaim.sign(
+  '/api/operational-evidence/22222222-2222-4222-8222-222222222222.jpg',
+  123,
+);
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -27,7 +33,7 @@ function createRepository() {
     deliveredQuantity: 5,
     acceptedSellableQuantity: 5,
     rejectedQuantity: 0,
-    evidence: [{ file: 'original.jpg' }],
+    evidence: [SIGNED_EVIDENCE],
     idempotencyKey: 'receipt-original',
   };
   const requests = [{
@@ -42,7 +48,7 @@ function createRepository() {
     netAcceptedQuantity: 5,
     status: 'Completed',
     reason: 'Restock',
-    evidence: [{ file: 'request.jpg' }],
+    evidence: [SIGNED_EVIDENCE],
     idempotencyKey: 'request-existing',
     receipts: [{ ...originalReceipt }],
   }];
@@ -197,14 +203,14 @@ describe('replenishment hardening', () => {
         reason: 'Restock',
         idempotencyKey: 'request-1',
       }),
-      /Replenishment evidence is required/,
+      /ảnh dẫn chứng|evidence/i,
     );
     await assert.rejects(
       () => service.createRequest('warehouse-1', {
         inventoryId: 'inv-1',
         quantity: 5,
         reason: 'Restock',
-        evidence: [{ file: 'request.jpg' }],
+        evidence: [SIGNED_EVIDENCE],
       }),
       /Replenishment request idempotencyKey is required/,
     );
@@ -244,7 +250,7 @@ describe('replenishment hardening', () => {
         originalReceiptId: 'receipt-1',
         acceptedQuantityCorrection: -2,
         reason: 'Two accepted units were counted in error',
-        evidence: [{ file: 'correction.jpg' }],
+        evidence: [SIGNED_EVIDENCE],
         idempotencyKey: 'correction-rollback',
       }),
       /ledger unavailable/,
@@ -265,7 +271,7 @@ describe('replenishment hardening', () => {
       originalReceiptId: 'receipt-1',
       acceptedQuantityCorrection: -2,
       reason: 'Two accepted units were counted in error',
-      evidence: [{ file: 'correction.jpg' }],
+      evidence: [SIGNED_EVIDENCE],
       idempotencyKey: 'correction-once',
     };
 
@@ -309,14 +315,14 @@ describe('replenishment hardening', () => {
         originalReceiptId: 'receipt-1',
         acceptedQuantityCorrection: -1,
         reason: 'First correction',
-        evidence: [{ file: 'one.jpg' }],
+        evidence: [SIGNED_EVIDENCE],
         idempotencyKey: 'correction-race-1',
       }),
       service.correctReceipt('warehouse-2', 'rep-1', {
         originalReceiptId: 'receipt-1',
         acceptedQuantityCorrection: -1,
         reason: 'Second correction',
-        evidence: [{ file: 'two.jpg' }],
+        evidence: [SIGNED_EVIDENCE],
         idempotencyKey: 'correction-race-2',
       }),
     ]);
@@ -343,7 +349,7 @@ describe('replenishment hardening', () => {
       acceptedSellableQuantity: 0,
       rejectedQuantity: 3,
       rejectedReason: 'All units damaged',
-      evidence: [{ file: 'rejected.jpg' }],
+      evidence: [SIGNED_EVIDENCE],
       idempotencyKey: 'receipt-rejected-only',
     });
 
@@ -369,7 +375,7 @@ describe('replenishment hardening', () => {
     repository.requests[0].status = 'Approved';
     const pending = await service.requestShortClosure('warehouse-1', 'rep-1', {
       reason: 'Supplier cannot fulfill',
-      evidence: [{ file: 'short.jpg' }],
+      evidence: [SIGNED_EVIDENCE],
     });
     assert.equal(pending.status, 'ShortClosurePending');
 
@@ -390,7 +396,7 @@ describe('replenishment hardening', () => {
       inventoryId: 'inv-1',
       quantity: 5,
       reason: 'Restock',
-      evidence: [{ file: 'request.jpg' }],
+      evidence: [SIGNED_EVIDENCE],
       idempotencyKey: 'request-event-1',
     });
 

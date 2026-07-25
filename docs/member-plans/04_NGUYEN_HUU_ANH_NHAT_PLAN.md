@@ -219,6 +219,39 @@
 | Duplicate export requests | Warehouse confusion | Unique open request per order |
 | Refund update conflicts with payment | Wrong refund status | Coordinate with Huy's Payment model |
 
+## 18. Addendum 2026-07-25 - Đối soát COD thủ công cho dữ liệu demo
+
+Nguyễn Hữu Anh Nhật bổ sung đường vận hành dành riêng cho môi trường
+`development`/`test`, phục vụ demo khi chưa có Carrier thật:
+
+- Staff ghi nhận `Giao thành công`, `Không thể giao` hoặc `Thử giao thất bại`
+  bằng tối đa 5 ảnh dẫn chứng vận hành đã ký.
+- Với đơn COD giao thành công, Staff chỉ chọn `Đã thu đủ COD` hoặc
+  `Chưa thu được COD`; giao diện và API không có trường nhập số tiền.
+- Server luôn suy ra số tiền thu thành công từ `codExpectedAmount`, tạo
+  `CodEvidence.source=STAFF_RECONCILIATION`, và lấy `paidAt` /
+  `completedSaleAt` từ thời điểm chứng cứ giao hàng.
+- Nếu chưa thu được COD, kết quả là `Delivered + Unpaid + Open discrepancy`;
+  actual collected giữ `null`, ảnh nằm trên ShipmentEvent và không tạo một
+  COLLECTION 0 đồng có thể khóa chứng cứ Carrier hợp lệ về sau. Nếu không thể
+  giao thì không được chuyển Order sang `Delivered` hoặc `Paid`.
+- Kết quả thử giao thất bại/không thể giao dùng danh sách lý do được server
+  allowlist; lỗi ảnh, thời điểm, COD và lý do được trả về đúng trường. Staff
+  projection giữ nguyên signed URL để xem lại ảnh, còn Customer projection
+  không nhận các URL vận hành nội bộ.
+- Khóa idempotency của sự kiện được giữ qua lỗi/response không chắc chắn, chỉ
+  xoay sau khi server trả kết quả và projection tải lại thành công.
+- `NODE_ENV=production` từ chối mọi kết quả giao COD do Staff ghi nhận, kể cả
+  payload bỏ trống `codCollectionResult`; ngoài production, Staff phải chọn rõ
+  `COLLECTED` hoặc `NOT_COLLECTED`. UI chỉ hiện thao tác khi projection Staff
+  trả capability `manualCodReconciliation=true`.
+- ID của `CodEvidence` do Staff tạo được dẫn xuất từ ShipmentEvent bền vững,
+  không nối trực tiếp event key 160 ký tự nên luôn nằm trong giới hạn persistence.
+
+Kết quả kiểm thử local ngày 2026-07-25: server `1066/1066`, client
+`262/262`, nhóm focused server `41/41`, nhóm focused client `16/16`, và
+`npm run build` PASS (158 modules; chỉ còn cảnh báo kích thước chunk đã biết).
+
 ## 17. Final Checklist
 
 - [ ] Staff queue complete.

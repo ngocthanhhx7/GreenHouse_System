@@ -236,3 +236,10 @@ Chung phụ trách **Product Media integration**, không còn ownership Homepage
 - Migration `server/src/scripts/migrateSl006CatalogCart.js` có test `5/5`, preflight trước mutation, xóa vật lý legacy `Product.stockQuantity`, không copy stock sang Product, tạo/verify đủ 7 model index set (gồm ProductCommand) và không invent command legacy. Disposable `rs0` rehearsal độc lập ghi nhận data apply `businessWrites=5`; hai lần chạy final sau hardening đều `businessWrites=0`, `indexes=7`.
 - Chi tiết traceability/handoff/audit: `docs/reviews/SL-006_G3_TRACEABILITY.md`, `docs/reviews/SL-006_HANDOFF.md`, `docs/reviews/SL-006_RELEASE_AUDIT.md`.
 - Trạng thái: implementation và local verification hoàn tất, đang chờ independent re-review. Chưa claim merge, production deployment, production migration hoặc target-environment actor walkthrough.
+
+## Product media read correction — 2026-07-25
+
+- Owner: Phạm Thành Chung <chungthanhpham2112@gmail.com>.
+- Admin Product creation deliberately starts a Product as `Inactive`. An attached or retained managed image may therefore be previewed by an authenticated `Admin` while that Product is inactive.
+- The media read boundary still requires the asset to be `Attached` or `Retained` and verifies that the exact Product still references the exact managed URL. Anonymous/public reads still use the separate publication query and require both Product and Category to be `Active`.
+- Evidence: the focused service regression was RED before the change (`allows an authenticated Admin to preview attached media for an inactive Product`: `404 Product media not found`) and GREEN after it (`9/9`); upload controller regression is `1/1` GREEN. No upload custody, inventory, replenishment, COD, or Home/layout ownership was changed.

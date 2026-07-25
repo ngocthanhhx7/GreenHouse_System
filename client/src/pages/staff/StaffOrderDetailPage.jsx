@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
 import OrderProgress from '../../components/order/OrderProgress.jsx';
+import OperationalEvidenceUploader from '../../components/common/OperationalEvidenceUploader.jsx';
+import { resolveMediaUrl } from '../../services/apiClient.js';
 import { staffOrderService } from '../../services/staffOrderService.js';
 import {
   formatCurrency,
@@ -18,6 +20,14 @@ function toLocalDateTimeValue(value = new Date()) {
     .slice(0, 16);
 }
 
+const DELIVERY_FAILURE_REASONS = [
+  ['CUSTOMER_UNREACHABLE', 'Không liên hệ được khách hàng'],
+  ['CUSTOMER_REFUSED', 'Khách hàng từ chối nhận'],
+  ['ADDRESS_UNDELIVERABLE', 'Địa chỉ không thể giao'],
+  ['OTHER_DELIVERY_FAILURE', 'Lý do không giao khác'],
+];
+const DELIVERY_OUTCOMES_REQUIRING_REASON = new Set(['ATTEMPT_FAILED', 'RETURNED_TO_SHOP']);
+
 function blankHandoff() {
   return {
     carrierName: '',
@@ -32,7 +42,8 @@ function blankEvent() {
     eventType: 'DELIVERED',
     source: 'STAFF_EVIDENCE',
     occurredAt: toLocalDateTimeValue(),
-    evidenceReference: '',
+    evidenceReferences: [],
+    codCollectionResult: '',
     reason: '',
     replacesEventId: '',
   };
@@ -156,14 +167,16 @@ export default function StaffOrderDetailPage() {
         receiverPhone: current.receiverPhone || loadedOrder.receiverPhone || '',
         shippingAddress: current.shippingAddress || loadedOrder.shippingAddress || '',
       }));
+      return true;
     } catch (err) {
       setError(err.message);
+      return false;
     }
   }
 
   useEffect(() => { loadOrder(); }, [id]);
 
-  async function runAction(action, successMessage) {
+  async function runAction(action, successMessage, onSuccess) {
     if (submittingRef.current) return;
     submittingRef.current = true;
     setError('');
@@ -175,7 +188,8 @@ export default function StaffOrderDetailPage() {
       setMessage(result?.idempotentReplay
         ? 'AlreadyProcessed: thao tác này đã được ghi nhận trước đó.'
         : successMessage);
-      await loadOrder();
+      const reloaded = await loadOrder();
+      if (reloaded) onSuccess?.(result);
       return result;
     } catch (err) {
       setError(err.message);
@@ -220,28 +234,6 @@ export default function StaffOrderDetailPage() {
       }),
       'Đã bàn giao cho đơn vị vận chuyển; đơn hàng chuyển sang Đang giao.',
     );
-  }
-
-  async function submitShipmentEvent() {
-    const errors = validateShipmentEventDraft(shipmentEvent);
-    if (Object.keys(errors).length) {
-      setFieldErrors(errors);
-      setError('Vui lòng kiểm tra thời gian và bằng chứng giao hàng.');
-      return;
-    }
-    const result = await runAction(
-      () => staffOrderService.recordShipmentEvent(shipment.id, {
-        ...shipmentEvent,
-        eventKey: idempotencyKey(
-          `event:${shipment.id}:${shipmentEvent.eventType}:${shipmentEvent.occurredAt}`,
-        ),
-        occurredAt: new Date(shipmentEvent.occurredAt).toISOString(),
-      }),
-      shipmentEvent.eventType === 'DELIVERED'
-        ? 'Đã xác nhận giao thành công; đơn hàng chuyển sang Đã giao.'
-        : 'Đã thêm sự kiện vào lịch sử vận chuyển.',
-    );
-    if (result) setShipmentEvent(blankEvent());
   }
 
   function submitFullCodCollection() {
@@ -297,6 +289,52 @@ export default function StaffOrderDetailPage() {
     });
   }
 
+  const manualCodAllowed = fulfillment.capabilities?.manualCodReconciliation === true;
+
+  async function submitShipmentEvent() {
+    const validationErrors = {};
+    if (!shipmentEvent.occurredAt) {
+      validationErrors.occurredAt = 'Vui lòng chọn thời điểm xảy ra.';
+    }
+    if (!shipmentEvent.evidenceReferences.length) {
+      validationErrors.evidenceReferences = 'Vui lòng tải ít nhất 1 ảnh dẫn chứng.';
+    }
+    if (
+      manualCodAllowed
+      && order.paymentMethod === 'COD'
+      && shipmentEvent.eventType === 'DELIVERED'
+      && !shipmentEvent.codCollectionResult
+    ) {
+      validationErrors.codCollectionResult = 'Vui lòng chọn kết quả thu COD.';
+    }
+    if (
+      DELIVERY_OUTCOMES_REQUIRING_REASON.has(shipmentEvent.eventType)
+      && !shipmentEvent.reason
+    ) {
+      validationErrors.reason = 'Vui lòng chọn lý do không giao được.';
+    }
+    if (Object.keys(validationErrors).length) {
+      setFieldErrors(validationErrors);
+      setError('Vui lòng kiểm tra các trường kết quả giao hàng.');
+      return;
+    }
+
+    const command = `event:${shipment.id}:${shipmentEvent.eventType}`;
+    await runAction(
+      () => staffOrderService.recordShipmentEvent(shipment.id, {
+        ...shipmentEvent,
+        evidenceReferences: shipmentEvent.evidenceReferences.slice(0, 5),
+        eventKey: idempotencyKey(command),
+        occurredAt: new Date(shipmentEvent.occurredAt).toISOString(),
+      }),
+      'Đã ghi nhận kết quả giao hàng và chứng cứ.',
+      () => {
+        commandKeys.current.delete(command);
+        setShipmentEvent(blankEvent());
+      },
+    );
+  }
+
   if (!order && !error) return <div className="page-center">Đang tải đơn hàng...</div>;
 
   return (
@@ -319,9 +357,9 @@ export default function StaffOrderDetailPage() {
           <OrderProgress status={order.orderStatus} />
 
           <div className="row g-3">
-            <div className="col-md-6"><strong>Checkout address:</strong> {order.shippingAddress}</div>
-            <div className="col-md-3"><strong>ShippingFee:</strong> {formatCurrency(order.shippingFee)}</div>
-            <div className="col-md-3"><strong>MoneyObligationsSettled:</strong> {String(order.moneyObligationsSettled ?? true)}</div>
+            <div className="col-md-6"><strong>Địa chỉ nhận hàng:</strong> {order.shippingAddress}</div>
+            <div className="col-md-3"><strong>Phí vận chuyển:</strong> {formatCurrency(order.shippingFee)}</div>
+            <div className="col-md-3"><strong>Đã quyết toán nghĩa vụ tài chính:</strong> {String(order.moneyObligationsSettled ?? true)}</div>
           </div>
 
           <div className="action-row mt-3">
@@ -333,7 +371,7 @@ export default function StaffOrderDetailPage() {
             )}
             {order.stockExportRequest && (
               <span className="badge text-bg-info align-self-center">
-                Export cycle {order.stockExportRequest.cycleId || 'initial'}: {order.stockExportRequest.status}
+                Lượt xuất kho {order.stockExportRequest.cycleId || 'ban đầu'}: {order.stockExportRequest.status}
               </span>
             )}
           </div>
@@ -380,10 +418,10 @@ export default function StaffOrderDetailPage() {
               </p>
               <div className="row g-2">
                 {[
-                  ['carrierName', 'Đơn vị vận chuyển', 'text'],
+                  ['carrierName', 'Tên đơn vị vận chuyển', 'text'],
                   ['trackingReference', 'Mã vận đơn', 'text'],
-                  ['handedOffAt', 'Thời điểm bàn giao', 'datetime-local'],
-                  ['evidenceReference', 'Bằng chứng bàn giao', 'text'],
+                  ['handedOffAt', 'Thời gian bàn giao', 'datetime-local'],
+                  ['evidenceReference', 'Mã dẫn chứng', 'text'],
                 ].map(([field, label, type]) => (
                   <label className="col-md-6" key={field}>
                     <span className="form-label">{label}</span>
@@ -400,56 +438,98 @@ export default function StaffOrderDetailPage() {
 
           {shipment && (
             <section className="border rounded p-3 mt-4">
-              <h2 className="h5">Lịch sử vận chuyển</h2>
-              <p><strong>{shipment.carrierName}</strong> · Mã vận đơn {shipment.trackingReference}</p>
+              <h2 className="h5">Lịch sử giao hàng</h2>
+              <p><strong>{shipment.carrierName}</strong> · {shipment.trackingReference}</p>
               <ul>{shipmentHistory.map((entry) => (
-                <li key={entry.id}>
-                  {translateFulfillmentEventType(entry.eventType)}
-                  {' · '}
-                  {new Date(entry.occurredAt).toLocaleString('vi-VN')}
+                <li className="mb-2" key={entry.id}>
+                  <span>{entry.eventType} · {entry.occurredAt}{entry.reason ? ` · ${entry.reason}` : ''}</span>
+                  {entry.evidenceReferences?.length > 0 && (
+                    <div className="d-flex flex-wrap gap-2 mt-1">
+                      {entry.evidenceReferences.map((url, index) => (
+                        <a href={resolveMediaUrl(url)} key={url} target="_blank" rel="noreferrer">
+                          <img
+                            src={resolveMediaUrl(url)}
+                            alt={`Dẫn chứng đã lưu ${index + 1}`}
+                            width="88"
+                            height="72"
+                            style={{ objectFit: 'cover', borderRadius: 8 }}
+                          />
+                        </a>
+                      ))}
+                    </div>
+                  )}
                 </li>
               ))}</ul>
-
               {order.orderStatus === 'Shipped' && (
-                <>
-                  <h3 className="h6 mt-4">Ghi nhận sự kiện giao hàng</h3>
-                  <div className="row g-2">
-                    <label className="col-md-4">Loại sự kiện
-                      <select className="form-select" value={shipmentEvent.eventType} onChange={(event) => setShipmentEvent({ ...shipmentEvent, eventType: event.target.value })}>
-                        <option value="DELIVERED">Giao thành công</option>
-                        <option value="ATTEMPT_FAILED">Giao không thành công</option>
-                        <option value="RESCHEDULED">Hẹn giao lại</option>
-                        <option value="RETURNED_TO_SHOP">Hoàn về cửa hàng</option>
-                        <option value="LOST">Thất lạc</option>
-                        <option value="DAMAGED">Hư hỏng</option>
-                        <option value="CORRECTION">Điều chỉnh bằng chứng</option>
-                        <option value="DISPUTED">Tranh chấp bằng chứng</option>
-                      </select>
-                    </label>
-                    <label className="col-md-4">Thời điểm xảy ra
-                      <input className={`form-control ${fieldErrors.occurredAt ? 'is-invalid' : ''}`} type="datetime-local" value={shipmentEvent.occurredAt} onChange={(event) => setShipmentEvent({ ...shipmentEvent, occurredAt: event.target.value })} required />
-                      {fieldErrors.occurredAt && <span className="invalid-feedback">{fieldErrors.occurredAt}</span>}
-                    </label>
-                    <label className="col-md-4">Bằng chứng giao hàng
-                      <input className={`form-control ${fieldErrors.evidenceReference ? 'is-invalid' : ''}`} value={shipmentEvent.evidenceReference} onChange={(event) => setShipmentEvent({ ...shipmentEvent, evidenceReference: event.target.value })} required />
-                      {fieldErrors.evidenceReference && <span className="invalid-feedback">{fieldErrors.evidenceReference}</span>}
-                    </label>
-                    <label className="col-md-6">Ghi chú
-                      <input className="form-control" value={shipmentEvent.reason} onChange={(event) => setShipmentEvent({ ...shipmentEvent, reason: event.target.value })} />
-                    </label>
-                    {['CORRECTION', 'DISPUTED'].includes(shipmentEvent.eventType) && (
-                      <label className="col-md-6">Mã sự kiện được thay thế
-                        <input className={`form-control ${fieldErrors.replacesEventId ? 'is-invalid' : ''}`} value={shipmentEvent.replacesEventId} onChange={(event) => setShipmentEvent({ ...shipmentEvent, replacesEventId: event.target.value })} required />
-                        {fieldErrors.replacesEventId && <span className="invalid-feedback">{fieldErrors.replacesEventId}</span>}
-                      </label>
-                    )}
-                  </div>
-                  <button className="btn btn-success mt-3" type="button" disabled={submitting} onClick={submitShipmentEvent}>
-                    {shipmentEvent.eventType === 'DELIVERED' ? 'Xác nhận đã giao hàng' : 'Ghi nhận sự kiện'}
-                  </button>
-                </>
+                <div className="row g-2">
+                <label className="col-md-6">Kết quả giao hàng
+                  <select className="form-select" value={shipmentEvent.eventType} onChange={(event) => setShipmentEvent({
+                    ...shipmentEvent,
+                    eventType: event.target.value,
+                    codCollectionResult: event.target.value === 'DELIVERED' ? shipmentEvent.codCollectionResult : '',
+                    reason: DELIVERY_OUTCOMES_REQUIRING_REASON.has(event.target.value)
+                      ? shipmentEvent.reason
+                      : '',
+                  })}>
+                    <option value="ATTEMPT_FAILED">Thử giao thất bại</option>
+                    <option value="RESCHEDULED">Hẹn lại lịch giao</option>
+                    <option value="DELIVERED">Giao thành công</option>
+                    <option value="RETURNED_TO_SHOP">Không thể giao · hàng đã hoàn về</option>
+                    <option value="LOST">Thất lạc</option>
+                    <option value="DAMAGED">Hư hỏng</option>
+                    <option value="CORRECTION">Đính chính chứng cứ</option>
+                    <option value="DISPUTED">Tranh chấp kết quả</option>
+                  </select>
+                </label>
+                <label className="col-md-6">Thời điểm xảy ra
+                  <input className={`form-control ${fieldErrors.occurredAt ? 'is-invalid' : ''}`} type="datetime-local" value={shipmentEvent.occurredAt} onChange={(event) => setShipmentEvent({ ...shipmentEvent, occurredAt: event.target.value })} />
+                  {fieldErrors.occurredAt && <span className="invalid-feedback">{fieldErrors.occurredAt}</span>}
+                </label>
+                {manualCodAllowed && order.paymentMethod === 'COD' && shipmentEvent.eventType === 'DELIVERED' && (
+                  <label className="col-md-6">Kết quả đối soát COD
+                    <select className={`form-select ${fieldErrors.codCollectionResult ? 'is-invalid' : ''}`} value={shipmentEvent.codCollectionResult} onChange={(event) => setShipmentEvent({ ...shipmentEvent, codCollectionResult: event.target.value })}>
+                      <option value="">Chọn kết quả thu tiền</option>
+                      <option value="COLLECTED">Đã thu đủ COD</option>
+                      <option value="NOT_COLLECTED">Chưa thu được COD</option>
+                    </select>
+                    {fieldErrors.codCollectionResult && <span className="invalid-feedback">{fieldErrors.codCollectionResult}</span>}
+                    <span className="form-text">Số tiền do hệ thống suy ra từ COD dự kiến, nhân viên không nhập thủ công.</span>
+                  </label>
+                )}
+                <div className="col-12">
+                  <OperationalEvidenceUploader
+                    images={shipmentEvent.evidenceReferences}
+                    onChange={(nextUrls) => setShipmentEvent({
+                      ...shipmentEvent,
+                      evidenceReferences: nextUrls.slice(0, 5),
+                    })}
+                    label="Ảnh dẫn chứng giao hàng / COD (tối đa 5 ảnh)"
+                    disabled={submitting}
+                  />
+                  {fieldErrors.evidenceReferences && <div className="text-danger small mt-1">{fieldErrors.evidenceReferences}</div>}
+                </div>
+                {DELIVERY_OUTCOMES_REQUIRING_REASON.has(shipmentEvent.eventType) ? (
+                  <label className="col-md-6">Lý do không giao được
+                    <select className={`form-select ${fieldErrors.reason ? 'is-invalid' : ''}`} value={shipmentEvent.reason} onChange={(event) => setShipmentEvent({ ...shipmentEvent, reason: event.target.value })}>
+                      <option value="">Chọn lý do</option>
+                      {DELIVERY_FAILURE_REASONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                    </select>
+                    {fieldErrors.reason && <span className="invalid-feedback">{fieldErrors.reason}</span>}
+                  </label>
+                ) : (
+                  <label className="col-md-6">Ghi chú
+                    <input className={`form-control ${fieldErrors.reason ? 'is-invalid' : ''}`} value={shipmentEvent.reason} onChange={(event) => setShipmentEvent({ ...shipmentEvent, reason: event.target.value })} />
+                    {fieldErrors.reason && <span className="invalid-feedback">{fieldErrors.reason}</span>}
+                  </label>
+                )}
+                <label className="col-md-6">Sự kiện được thay thế (đính chính / tranh chấp)
+                  <input className="form-control" value={shipmentEvent.replacesEventId} onChange={(event) => setShipmentEvent({ ...shipmentEvent, replacesEventId: event.target.value })} />
+                </label>
+                </div>
               )}
-
+              {order.orderStatus === 'Shipped' && (
+                <button className="btn btn-outline-success mt-3" type="button" disabled={submitting} onClick={submitShipmentEvent}>Ghi nhận kết quả</button>
+              )}
               {order.orderStatus === 'Delivered' && (
                 <div className="alert alert-success mt-3 mb-0">
                   <strong>Đơn hàng đã giao thành công.</strong> Customer hiện có thể xem trạng thái Đã giao trong lịch sử mua hàng.
@@ -459,8 +539,8 @@ export default function StaffOrderDetailPage() {
           )}
 
           <section className="border rounded p-3 mt-4">
-            <h2 className="h5">Shipment destination version</h2>
-            <p>Carrier evidence / carrier accept là bắt buộc sau khi đã bàn giao.</p>
+            <h2 className="h5">Phiên bản địa chỉ giao hàng</h2>
+            <p>Bằng chứng ĐVVC / chấp nhận từ ĐVVC là bắt buộc sau khi đã bàn giao.</p>
             <div className="row g-2">
               {Object.keys(destination).map((field) => (
                 <label className="col-md-6" key={field}>{field}
@@ -473,17 +553,17 @@ export default function StaffOrderDetailPage() {
                 ...destination,
                 idempotencyKey: idempotencyKey(`destination:${activeCycle?.id || order.id}`),
               }),
-              'Đã thêm destination version bất biến.',
-            )}>Thêm destination correction</button>
+              'Đã thêm địa chỉ giao hàng mới.',
+            )}>Thêm đính chính địa chỉ</button>
           </section>
 
           {order.paymentMethod === 'COD' && (
             <div className={`alert mt-4 ${order.codDiscrepancyStatus === 'Open' ? 'alert-warning' : 'alert-secondary'}`}>
-              <strong>CODExpectedAmount:</strong> {formatCurrency(order.codExpectedAmount)}
-              {' · '}<strong>CustomerCollectedAmount:</strong> {formatCurrency(order.customerCollectedAmount)}
-              {' · '}<strong>CarrierSettlementAmount:</strong> {formatCurrency(order.carrierSettlementAmount)}
-              <div>codDiscrepancyStatus: {order.codDiscrepancyStatus}; settlementReconciliationStatus: {order.settlementReconciliationStatus}</div>
-              {order.codRecoveryReceiptId && <div>codRecoveryReceiptId: {order.codRecoveryReceiptId}</div>}
+              <strong>Số tiền COD dự kiến:</strong> {formatCurrency(order.codExpectedAmount)}
+              {' · '}<strong>Số tiền đã thu từ khách:</strong> {formatCurrency(order.customerCollectedAmount)}
+              {' · '}<strong>Số tiền ĐVVC đã đối soát:</strong> {formatCurrency(order.carrierSettlementAmount)}
+              <div>Trạng thái lệch tiền COD: {order.codDiscrepancyStatus}; Trạng thái đối soát: {order.settlementReconciliationStatus}</div>
+              {order.codRecoveryReceiptId && <div>Mã phiếu nhận hàng hoàn COD: {order.codRecoveryReceiptId}</div>}
             </div>
           )}
 
@@ -580,9 +660,9 @@ export default function StaffOrderDetailPage() {
 
           {fulfillment.incidents?.length > 0 && (
             <section className="border rounded p-3 mt-4">
-              <h2 className="h5">DeliveryFailed terminal resolution</h2>
+              <h2 className="h5">Xử lý kết thúc giao hàng thất bại</h2>
               <select className="form-select" value={resolutionIncidentId} onChange={(event) => setResolutionIncidentId(event.target.value)}>
-                <option value="">Chọn delivery incident</option>
+                <option value="">Chọn sự cố giao hàng</option>
                 {fulfillment.incidents
                   .filter((incident) => incident.customerChoice === 'TerminalRefund')
                   .map((incident) => <option key={incident.id} value={incident.id}>{incident.incidentType} · {incident.customerChoice || incident.status}</option>)}

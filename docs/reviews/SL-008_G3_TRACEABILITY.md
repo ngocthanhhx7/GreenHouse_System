@@ -295,3 +295,12 @@ history/state proof. The final pass also locks unique outbox identity across
 repeated disable/reassign/disable, exact System attribution on inactive-assignee
 reopen, and retained resolver/assignee proof; independent review reported no
 remaining Critical, Important, or Minor findings.
+
+## Customer Review UX relocation evidence - 2026-07-25
+
+- Product Detail is public-only for Reviews.
+- Protected `/reviews` owns pending and completed per-product Review work from
+  delivered purchases.
+- Focused client verification passed `54/54`; the production client build
+  exited `0` with the existing Vite chunk-size warning.
+- No new full-regression result is claimed for this relocation.

@@ -82,7 +82,7 @@ describe('error middleware', () => {
     assert.equal(res.statusCode, 500);
     assert.deepEqual(res.body, {
       success: false,
-      message: 'Internal server error',
+      message: 'Đã xảy ra lỗi hệ thống. Vui lòng thử lại sau.',
       data: null,
       errors: [],
       errorCode: 'INTERNAL_ERROR',

@@ -421,3 +421,48 @@ current snapshot. Settings chỉ cho phép `PAYMENT_TIMEOUT_MINUTES` và
 Audit + reevaluation outbox atomically. `RETURN_WINDOW_DAYS` không còn là
 setting hợp lệ; Product threshold override của Warehouse vẫn thắng global
 default.
+
+## UX Relocation Evidence 2026-07-25 - Customer Reviews
+
+- Product Detail now renders public Review content only; Customer Review
+  mutations are no longer hosted there.
+- The protected `/reviews` purchase center separates pending and completed
+  per-product Reviews derived from delivered purchases.
+- The focused Review client set passed `54/54`; the production client build
+  exited `0` with the existing Vite chunk-size warning.
+- This focused relocation verification does not claim a new full regression.
+
+## Inventory Compatibility Fix 2026-07-25
+
+- Root cause: legacy Inventory documents retained `stockQuantity` but did not
+  yet contain `sellableQuantity` or `inventoryHealth`; catalog and Cart
+  projections therefore disagreed with the Inventory model's normalization
+  rule and failed closed as if stock were unavailable.
+- Catalog and Cart now share one compatibility projection: a present legacy
+  record is `Normal` only when its quantities are valid and reserved stock does
+  not exceed sellable stock. Missing or inconsistent Inventory still fails
+  closed as reconciliation work.
+- Regression evidence: focused server tests `10/10`, full server `1061/1061`,
+  and a read-only query against the local legacy dataset projects all eight
+  positive-stock demo products as `InStock`.
+
+## Addendum 2026-07-25 - Ảnh dẫn chứng và giao diện tiếng Việt
+
+Lê Vũ Cường hoàn tất phần mở rộng SL-005 trên
+`feature/cuong-inventory-evidence-i18n`.
+
+- Kiểm kê, đổi ngưỡng, tạo yêu cầu bổ sung, nhận hàng, chốt nhận thiếu và điều
+  chỉnh phiếu nhận đều dùng ảnh đã tải lên kho dẫn chứng nội bộ; không nhận
+  chuỗi tham chiếu tùy ý.
+- Mỗi lệnh cần từ 1 đến 5 ảnh, tối đa 5 MiB mỗi ảnh và 20 MiB cho cả nhóm.
+  Server xác minh chữ ký, khử trùng theo URL chuẩn nhưng giữ nguyên URL đã ký
+  để phục vụ truy vết.
+- Admin xem được ảnh của yêu cầu và ảnh chốt nhận thiếu trước khi quyết định.
+- Các trang Tồn kho, Bổ sung hàng và Duyệt bổ sung hàng đã chuyển sang tiếng
+  Việt; các thao tác bất đồng bộ khóa riêng để tránh gửi lặp.
+- Đổi ngưỡng ghi một ledger `THRESHOLD_OVERRIDE`. Kiểm kê và đổi ngưỡng ràng
+  buộc idempotency key với dấu vân tay lệnh, trả `IDEMPOTENCY_KEY_REUSED` khi
+  cùng khóa được dùng cho dữ kiện khác.
+- Xác minh cục bộ: server `1058/1058` (171 suites), client `260/260` (65
+  suites), production build đạt; `git diff --check` sạch. Cảnh báo Vite về
+  chunk lớn hơn 500 kB vẫn là cảnh báo không chặn.

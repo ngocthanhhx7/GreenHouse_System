@@ -12,6 +12,8 @@ describe('COD evidence model', () => {
     assert.ok(CodEvidence.schema.path('source').enumValues.includes('STAFF_EVIDENCE'));
     assert.ok(CodEvidence.schema.path('customerCollectedAmount'));
     assert.ok(CodEvidence.schema.path('carrierSettlementAmount'));
+    assert.ok(CodEvidence.schema.path('evidenceReferences'));
+    assert.ok(CodEvidence.schema.path('source').enumValues.includes('STAFF_RECONCILIATION'));
     const uniqueEventIndex = CodEvidence.schema.indexes().find(([fields, options]) => fields.eventId === 1 && options.unique === true);
     assert.ok(uniqueEventIndex);
     const uniqueCollectionIndex = CodEvidence.schema.indexes().find(([fields, options]) => fields.orderId === 1 && options.unique === true && options.partialFilterExpression?.eventType === 'COLLECTION');

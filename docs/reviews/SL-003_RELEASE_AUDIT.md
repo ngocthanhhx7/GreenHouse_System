@@ -36,6 +36,18 @@ Fresh verification:
 Review/deployment gates còn lại không chặn code review: actor browser walkthrough
 trên môi trường staging và live payOS network/provider evidence.
 
+## Hậu kiểm P1 Customer Order Center — 2026-07-25
+
+P1 `canPay` đã đóng tại `f0b14b6`. Predicate phía client fail-closed khi thiếu
+deadline, deadline không hợp lệ/đã hết hạn, payment state đã đóng, hoặc Order
+không còn là `Pending` ONLINE; chỉ `Unpaid`, `Pending`, `Failed` với deadline
+hợp lệ trong tương lai mới hiển thị thao tác thanh toán.
+
+Bằng chứng focused: **12/12 tests passed** trong
+`orderHistoryView.test.js`, `OrderHistoryPage.test.js` và
+`orderService.test.js`. Đây không phải kết quả full regression và không thay
+thế baseline closure ngày 2026-07-24.
+
 ## Phạm vi và bằng chứng
 
 - Worktree audit: `D:\WW\GreenHouse_System\.worktrees\sl-003-audit`

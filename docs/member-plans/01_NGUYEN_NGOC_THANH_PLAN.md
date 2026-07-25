@@ -370,3 +370,58 @@ fencing, tối đa năm attempt và không rollback business truth. Thành revie
 Notification của Huy, Reports/Settings của Cường, chạy full regression và quản
 lý handoff/merge. Evidence nằm tại `docs/reviews/SL-009_G3_TRACEABILITY.md`,
 `docs/reviews/SL-009_RELEASE_AUDIT.md` và `docs/reviews/SL-009_HANDOFF.md`.
+
+## Implementation Addendum 2026-07-25 - Operational Evidence Upload Foundation
+
+Nguyễn Ngọc Thành bổ sung upload foundation dùng chung cho dẫn chứng nội bộ của
+Staff và WarehouseManager. API nhận tối đa 5 ảnh JPEG/PNG/WebP, 5 MB mỗi ảnh,
+quét malware trước khi lưu, trả URL capability đã ký và chỉ cho Staff,
+WarehouseManager hoặc Admin đọc sau khi xác thực. Admin giữ quyền đọc để duyệt
+dẫn chứng nhưng không có quyền tải ảnh qua endpoint này. Production bắt buộc cấu
+hình `OPERATIONAL_EVIDENCE_CLAIM_SECRET`; secret thật không được commit.
+
+Traceability, handoff và release evidence được ghi tại
+`docs/reviews/OPERATIONAL_EVIDENCE_G3_TRACEABILITY.md`,
+`OPERATIONAL_EVIDENCE_HANDOFF.md` và `OPERATIONAL_EVIDENCE_RELEASE_AUDIT.md`.
+
+## UI Addendum 2026-07-25 - Dashboard Brand Mark
+
+Operational dashboards now use the approved local GreenHome favicon asset in
+the internal topbar instead of the placeholder `⌁` glyph. The image remains
+visible and correctly sized on desktop and mobile; no remote asset or generated
+logo is introduced. Evidence is recorded in the dashboard-logo review artifacts.
+
+## Integration Addendum 2026-07-25 - Customer Order and Review UX
+
+Nguyễn Ngọc Thành sở hữu Header seam và final integration cho khu vực hậu mua
+hàng:
+
+- Dropdown avatar và mobile account navigation chỉ thêm `Đơn hàng của tôi` và
+  `Đánh giá của tôi` cho Customer; role khác giữ nguyên menu hiện có.
+- Order center của Nguyễn Quang Huy và Review center của Lê Vũ Cường được giữ
+  trong commit/branch owner riêng trước khi merge `--no-ff`.
+- Product Detail chỉ còn aggregate và danh sách Review công khai; mọi Customer
+  Review mutation nằm trên route Customer-protected `/reviews`.
+- Focused integration verification sau hai owner merge và remediation đạt
+  `76/76` test; client production build exit `0` với warning chunk lớn đã tồn
+  tại từ baseline.
+- Full regression sau remediation đạt server `1052/1052` và client `276/276`.
+  Ba P1 do independent review phát hiện đã được đúng owner đóng bằng regression
+  test: payment action fail-closed, Review pagination vượt 50 mục và aggregate
+  mutation lock kèm refresh sau lỗi.
+- Remote-main verification được ghi sau gate cuối; addendum này không tự nhận
+  deployment hoặc migration production.
+
+## Final Integration Addendum 2026-07-25 - COD và dẫn chứng kho
+
+Nguyễn Ngọc Thành đã review và merge `--no-ff` hai nhánh owner:
+`feature/nhat-cod-reconciliation` và
+`feature/cuong-inventory-evidence-i18n`.
+
+- Xung đột với bản dịch tiếng Việt mới trên `main` được hợp nhất theo ngữ nghĩa:
+  giữ toàn bộ ảnh dẫn chứng/COD và giữ nội dung tiếng Việt hiện hành.
+- Gate sau merge đạt server `1075/1075` (172 suites), client `281/281` (69
+  suites) và production build 162 modules.
+- Cảnh báo không chặn còn lại là Vite chunk 714.34 kB lớn hơn 500 kB.
+- Việc triển khai production, migration dữ liệu đích và walkthrough có xác thực
+  không thuộc tuyên bố tích hợp cục bộ này.

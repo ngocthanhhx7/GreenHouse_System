@@ -54,6 +54,14 @@ describe('role layout separation contract', () => {
     );
   });
 
+  it('uses the approved GreenHome image mark in the dashboard at desktop and mobile sizes', () => {
+    assert.match(internalTopbar, /src="\/assets\/icon\/favicon\.png"/);
+    assert.match(internalTopbar, /className="internal-brand-logo"/);
+    assert.doesNotMatch(internalTopbar, />⌁</);
+    assert.match(sharedShell, /\.internal-topbar \.internal-brand-logo\s*\{/);
+    assert.doesNotMatch(sharedShell, /\.internal-topbar \.internal-brand-logo,[\s\S]*display:\s*none/);
+  });
+
   it('selects navigation only from the signed-in role group', () => {
     assert.match(sidebar, /const links = ROLE_LINKS\[user\?\.role\] \|\| ROLE_LINKS\.Customer/);
     assert.match(sidebar, /links\.map/);

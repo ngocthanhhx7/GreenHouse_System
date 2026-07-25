@@ -11,8 +11,8 @@ describe('return evidence owner claim', () => {
     const signed = claim.sign('customer-1', baseUrl, 4096);
     assert.match(signed, /^\/api\/return-refunds\/evidence\/[0-9a-f-]{36}\.jpg\?size=4096&claim=[0-9a-f]{64}$/);
     assert.deepEqual(claim.verify('customer-1', signed), { url: baseUrl, size: 4096 });
-    assert.throws(() => claim.verify('customer-2', signed), /not owned/i);
-    assert.throws(() => claim.verify('customer-1', signed.replace('size=4096', 'size=1')), /not owned/i);
+    assert.throws(() => claim.verify('customer-2', signed), /không thuộc quyền sở hữu/i);
+    assert.throws(() => claim.verify('customer-1', signed.replace('size=4096', 'size=1')), /không thuộc quyền sở hữu/i);
   });
 
   it('requires an explicit production secret', () => {

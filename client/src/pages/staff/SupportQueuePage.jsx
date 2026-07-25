@@ -130,7 +130,11 @@ export default function SupportQueuePage() {
         <div className="col-md-2">
           <label className="form-label" htmlFor="supportPriorityFilter">Ưu tiên</label>
           <select id="supportPriorityFilter" className="form-select" value={filters.priority} onChange={(event) => changeFilter('priority', event.target.value)}>
-            {PRIORITY_OPTIONS.map((priority) => <option key={priority || 'all'} value={priority}>{priority || 'Tất cả ưu tiên'}</option>)}
+            {PRIORITY_OPTIONS.map((priority) => (
+              <option key={priority || 'all'} value={priority}>
+                {priority === 'Low' ? 'Thấp' : priority === 'Normal' ? 'Bình thường' : priority === 'High' ? 'Cao' : priority === 'Urgent' ? 'Khẩn cấp' : 'Tất cả ưu tiên'}
+              </option>
+            ))}
           </select>
         </div>
         <div className="col-md-2">

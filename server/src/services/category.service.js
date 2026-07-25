@@ -13,16 +13,16 @@ function normalizeStatus(status, { required = false } = {}) {
   if (required && !normalized) {
     throw new ApiError(
       400,
-      'Category status is required',
-      [{ field: 'status', message: 'Select Active or Inactive' }],
+      'Vui lòng chọn trạng thái danh mục.',
+      [{ field: 'status', message: 'Vui lòng chọn Hoạt động hoặc Ngừng hoạt động' }],
       'CATEGORY_STATUS_REQUIRED',
     );
   }
   if (!['Active', 'Inactive'].includes(normalized)) {
     throw new ApiError(
       400,
-      'Category status is invalid',
-      [{ field: 'status', message: 'Status must be Active or Inactive' }],
+      'Trạng thái danh mục không hợp lệ.',
+      [{ field: 'status', message: 'Trạng thái phải là Hoạt động hoặc Ngừng hoạt động' }],
       'CATEGORY_STATUS_INVALID',
     );
   }
@@ -114,8 +114,8 @@ function createCategoryService({
   function activeProductsConflict(activeProducts) {
     return new ApiError(
       409,
-      'Category cannot be deactivated while Active Products reference it',
-      [{ field: 'status', message: 'Reassign or deactivate every Active Product first' }],
+      'Không thể ngừng hoạt động danh mục khi còn sản phẩm đang bán.',
+      [{ field: 'status', message: 'Vui lòng chuyển danh mục hoặc ngừng bán các sản phẩm thuộc danh mục này trước' }],
       'CATEGORY_ACTIVE_PRODUCTS',
       {
         activeProductIds: activeProducts.map((product) => String(product._id)),
@@ -142,8 +142,8 @@ function createCategoryService({
     if (existing && String(existing._id) !== String(excludeId || '')) {
       throw new ApiError(
         409,
-        'Category name already exists',
-        [{ field: 'name', message: 'Category name conflicts after Unicode, case, and whitespace normalization' }],
+        'Tên danh mục đã tồn tại.',
+        [{ field: 'name', message: 'Tên danh mục bị trùng sau khi chuẩn hóa' }],
         'CATEGORY_NAME_CONFLICT',
       );
     }
@@ -163,7 +163,7 @@ function createCategoryService({
 
     async createCategory(input, actor = {}) {
       const name = collapseWhitespace(input.name);
-      if (!name) throw new ApiError(400, 'Category name is required');
+      if (!name) throw new ApiError(400, 'Tên danh mục không được để trống.');
       const status = normalizeStatus(input.status, { required: true });
       const normalizedName = await findDuplicate(name);
 
@@ -179,8 +179,8 @@ function createCategoryService({
         if (error?.code === 11000) {
           throw new ApiError(
             409,
-            'Category name already exists',
-            [{ field: 'name', message: 'Category name already exists' }],
+            'Tên danh mục đã tồn tại.',
+            [{ field: 'name', message: 'Tên danh mục đã tồn tại.' }],
             'CATEGORY_NAME_CONFLICT',
           );
         }
@@ -203,7 +203,7 @@ function createCategoryService({
       const existing = categoryRepository.findById
         ? await categoryRepository.findById(id, session)
         : null;
-      if (!existing) throw new ApiError(404, 'Category not found');
+      if (!existing) throw new ApiError(404, 'Không tìm thấy danh mục.');
 
       const data = {};
       if (input.name !== undefined) {
@@ -211,8 +211,8 @@ function createCategoryService({
         if (!data.name) {
           throw new ApiError(
             400,
-            'Category name is required',
-            [{ field: 'name', message: 'Category name is required' }],
+            'Tên danh mục không được để trống.',
+            [{ field: 'name', message: 'Tên danh mục không được để trống.' }],
             'CATEGORY_NAME_REQUIRED',
           );
         }
@@ -244,8 +244,8 @@ function createCategoryService({
             if (activeProducts.length) throw activeProductsConflict(activeProducts);
             throw new ApiError(
               409,
-              'Category lifecycle changed concurrently; retry the command',
-              [{ field: 'status', message: 'Category lifecycle changed concurrently' }],
+              'Trạng thái danh mục đã thay đổi; vui lòng thử lại.',
+              [{ field: 'status', message: 'Trạng thái danh mục đã thay đổi' }],
               'CATEGORY_LIFECYCLE_CONFLICT',
             );
           }
@@ -256,14 +256,14 @@ function createCategoryService({
         if (error?.code === 11000) {
           throw new ApiError(
             409,
-            'Category name already exists',
-            [{ field: 'name', message: 'Category name already exists' }],
+            'Tên danh mục đã tồn tại.',
+            [{ field: 'name', message: 'Tên danh mục đã tồn tại.' }],
             'CATEGORY_NAME_CONFLICT',
           );
         }
         throw error;
       }
-      if (!category) throw new ApiError(404, 'Category not found');
+      if (!category) throw new ApiError(404, 'Không tìm thấy danh mục.');
 
       await auditLogger.log({
         userId: actor.id,

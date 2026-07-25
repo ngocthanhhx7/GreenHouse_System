@@ -94,3 +94,12 @@ transactions and durable replay.
 Nguyen Ngoc Thanh must review the complete feature diff against the latest
 `main`. Merge is authorized only when no P0/P1 finding remains and all current
 regressions stay green; use `merge --no-ff` as required by the team workflow.
+
+## Customer Review UX relocation evidence - 2026-07-25
+
+- Product Detail is public-only for Reviews.
+- Protected `/reviews` owns pending and completed per-product Review work from
+  delivered purchases.
+- Focused client verification passed `54/54`; the production client build
+  exited `0` with the existing Vite chunk-size warning.
+- No new full-regression result is claimed for this relocation.

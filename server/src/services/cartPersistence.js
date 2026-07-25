@@ -10,6 +10,20 @@ function withOptionalSession(query, session) {
   return session ? query.session(session) : query;
 }
 
+function cartVersionFilter(cartId, expectedVersion) {
+  const filter = { _id: cartId, status: 'Active' };
+  if (expectedVersion === 0) {
+    return {
+      ...filter,
+      $or: [
+        { version: 0 },
+        { version: { $exists: false } },
+      ],
+    };
+  }
+  return { ...filter, version: expectedVersion };
+}
+
 function createModelProductRepository() {
   return {
     async findCurrentById(id, session) {
@@ -65,7 +79,7 @@ function createModelCartRepository() {
     async incrementVersion(cartId, expectedVersion, session) {
       return withOptionalSession(
         Cart.findOneAndUpdate(
-          { _id: cartId, status: 'Active', version: expectedVersion },
+          cartVersionFilter(cartId, expectedVersion),
           { $inc: { version: 1 } },
           { new: true, runValidators: true },
         ),
@@ -106,6 +120,7 @@ function createModelTransactionManager() {
 }
 
 module.exports = {
+  cartVersionFilter,
   createModelCartRepository,
   createModelProductRepository,
   createModelTransactionManager,
