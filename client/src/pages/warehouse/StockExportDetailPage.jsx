@@ -15,6 +15,7 @@ export default function StockExportDetailPage() {
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [processing, setProcessing] = useState(false);
+  const processingRef = useRef(false);
   const commandKey = useRef(key());
 
   async function loadItem() {
@@ -29,7 +30,8 @@ export default function StockExportDetailPage() {
   useEffect(() => { loadItem(); }, [id]);
 
   async function processExactExport() {
-    if (processing) return;
+    if (processingRef.current) return;
+    processingRef.current = true;
     setProcessing(true);
     setError('');
     setMessage('');
@@ -46,6 +48,7 @@ export default function StockExportDetailPage() {
       setError(err.message);
       await loadItem();
     } finally {
+      processingRef.current = false;
       setProcessing(false);
     }
   }
