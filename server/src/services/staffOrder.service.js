@@ -12,7 +12,9 @@ const ReturnRefundRequest = require('../models/returnRefundRequest.model');
 const OrderReservation = require('../models/orderReservation.model');
 const FulfillmentCycle = require('../models/fulfillmentCycle.model');
 const Invoice = require('../models/invoice.model');
+const DomainOutbox = require('../models/domainOutbox.model');
 const { logAudit } = require('../utils/auditLogger');
+const { canonicalEnvelope } = require('./domainEventProducer.service');
 const {
   assignmentCoordinator: defaultAssignmentCoordinator,
 } = require('./assignmentCoordination.service');
@@ -320,6 +322,16 @@ function createModelOrderRepository() {
     },
     async findInvoiceByOrderId(orderId) { return Invoice.findOne({ orderId }).lean(); },
     async createInvoice(data) { return Invoice.create(data); },
+    async enqueuePostCommitWork(data, session) {
+      return withOptionalSession(
+        DomainOutbox.findOneAndUpdate(
+          { identityKey: data.identityKey },
+          { $setOnInsert: data },
+          { upsert: true, new: true, runValidators: true },
+        ),
+        session,
+      ).lean();
+    },
   };
 }
 
@@ -359,14 +371,34 @@ function createStaffOrderService({
     }, session);
   }
 
-  async function writeAudit(staffId, action, order, description) {
+  async function writeCancellationAudit(
+    staffId,
+    order,
+    previousState,
+    cancelReason,
+    businessEventId,
+    correlationId,
+    timestamp,
+    session,
+  ) {
     await auditLogger.log({
-      userId: staffId,
-      action,
-      targetEntity: 'Order',
+      actorType: 'User',
+      actorId: String(staffId),
+      actorRole: 'Staff',
+      source: 'Application',
+      action: 'STAFF_ORDER_CANCEL',
+      targetType: 'Order',
       targetId: String(order._id),
-      description,
-    });
+      outcome: 'Success',
+      businessEventId,
+      correlationId,
+      previousState,
+      newState: 'Cancelled',
+      reasonCode: 'STAFF_ORDER_CANCELLED',
+      reason: cancelReason,
+      safeFacts: { orderCode: order.orderCode },
+      timestamp,
+    }, session);
   }
 
   async function assertExactReservation(details, session) {
@@ -694,6 +726,11 @@ function createStaffOrderService({
       const idempotencyKey = normalizeIdempotencyKey(input.idempotencyKey);
       const requestHash = hashCommand({ cancelReason });
       const result = await transactionManager.withTransaction(async (session) => {
+        await assignmentCoordinator.coordinate({
+          userId: staffId,
+          expectedRole: 'Staff',
+          session,
+        });
         const order = await getOrderOrThrow(orderId, session);
         if (idempotencyKey && order.staffCancelIdempotencyKey) {
           if (order.staffCancelIdempotencyKey !== idempotencyKey || order.staffCancelRequestHash !== requestHash) {
@@ -752,11 +789,36 @@ function createStaffOrderService({
           }
           if (!released) throw new ApiError(409, 'Order reservation could not be released');
         }
-        return { updated, details };
+        if (!orderRepository.enqueuePostCommitWork) {
+          throw new Error('Canonical DomainOutbox repository is required for Staff cancellation');
+        }
+        const cancelledAt = new Date();
+        const businessEventId = `order:${String(orderId)}:staff-cancelled`;
+        const correlationId = idempotencyKey || businessEventId;
+        await writeCancellationAudit(
+          staffId,
+          updated,
+          order.orderStatus,
+          cancelReason,
+          businessEventId,
+          correlationId,
+          cancelledAt,
+          session,
+        );
+        await orderRepository.enqueuePostCommitWork(canonicalEnvelope({
+          identityKey: `notification:${businessEventId}:customer`,
+          businessEventId,
+          eventType: 'ORDER_CANCELLED',
+          aggregateType: 'Order',
+          aggregateId: String(orderId),
+          occurredAt: cancelledAt,
+          recipientId: String(order.customerId),
+          targetCollection: 'Order',
+          targetId: String(orderId),
+          displayValues: { orderCode: order.orderCode },
+        }, () => cancelledAt), session);
+        return { updated, details, idempotentReplay: false };
       });
-      if (!result.idempotentReplay) {
-        await writeAudit(staffId, 'STAFF_ORDER_CANCEL', result.updated, `Staff cancelled ${result.updated.orderCode}: ${cancelReason}`);
-      }
       return { ...toOrderDetail(result.updated, result.details), idempotentReplay: Boolean(result.idempotentReplay) };
     },
 

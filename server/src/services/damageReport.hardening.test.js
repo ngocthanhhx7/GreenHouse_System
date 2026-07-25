@@ -17,10 +17,22 @@ function createRepository() {
   };
   const reports = [];
   const transactions = [];
+  const outbox = [];
   return {
     inventory,
     reports,
     transactions,
+    outbox,
+    snapshot() {
+      return structuredClone({ inventory, reports, transactions, outbox });
+    },
+    restore(snapshot) {
+      for (const key of Object.keys(inventory)) delete inventory[key];
+      Object.assign(inventory, snapshot.inventory);
+      reports.splice(0, reports.length, ...snapshot.reports);
+      transactions.splice(0, transactions.length, ...snapshot.transactions);
+      outbox.splice(0, outbox.length, ...snapshot.outbox);
+    },
     async findInventoryById(id) { return String(id) === inventory._id ? inventory : null; },
     async findInventoryByProductId(productId) { return String(productId) === inventory.productId ? inventory : null; },
     async findAffectedOrderIds() { return ['order-1']; },
@@ -71,15 +83,36 @@ function createRepository() {
       transactions.push(transaction);
       return transaction;
     },
+    async enqueuePostCommitWork(data) {
+      const existing = outbox.find((item) => item.identityKey === data.identityKey);
+      if (existing) return existing;
+      const item = { _id: `outbox-${outbox.length + 1}`, ...data };
+      outbox.push(item);
+      return item;
+    },
   };
 }
 
-function createService(repository, events = []) {
+function createService(repository, events = [], overrides = {}) {
   return createDamageReportService({
     repository,
-    transactionManager: { withTransaction: async (work) => work(null) },
-    auditLogger: { async log() {} },
-    eventPublisher: { async publishDomainEvent(event) { events.push(event); } },
+    transactionManager: overrides.transactionManager || {
+      async withTransaction(work) {
+        const snapshot = repository.snapshot();
+        try {
+          return await work({ id: 'damage-session' });
+        } catch (error) {
+          repository.restore(snapshot);
+          throw error;
+        }
+      },
+    },
+    auditLogger: overrides.auditLogger || { async log() {} },
+    eventPublisher: overrides.eventPublisher || {
+      async publishDomainEvent(event) {
+        events.push(event);
+      },
+    },
     lowStockLifecycle: { async evaluate() {} },
     assignmentCoordinator: { async coordinate() {} },
   });
@@ -149,6 +182,82 @@ describe('damage report hardening', () => {
     assert.deepEqual(repository.inventory.affectedOrderIds, ['order-1']);
   });
 
+  it('rolls a Staff damage report back when the required audit cannot be persisted', async () => {
+    const repository = createRepository();
+    const before = repository.snapshot();
+    const service = createService(repository, [], {
+      auditLogger: {
+        async log() {
+          throw new Error('damage create audit unavailable');
+        },
+      },
+    });
+
+    await assert.rejects(
+      () => service.createStaffReport('staff-1', {
+        inventoryId: 'inv-1',
+        quantity: 2,
+        reason: 'Cracked',
+        evidence: [{ file: 'damage.jpg' }],
+        idempotencyKey: 'damage-audit-rollback-1',
+      }),
+      /damage create audit unavailable/,
+    );
+
+    assert.deepEqual(repository.snapshot(), before);
+  });
+
+  it('rolls a Staff damage report back when the Warehouse notification outbox cannot be persisted', async () => {
+    const repository = createRepository();
+    const before = repository.snapshot();
+    repository.enqueuePostCommitWork = async () => {
+      throw new Error('damage outbox unavailable');
+    };
+    const service = createService(repository);
+
+    await assert.rejects(
+      () => service.createStaffReport('staff-1', {
+        inventoryId: 'inv-1',
+        quantity: 2,
+        reason: 'Cracked',
+        evidence: [{ file: 'damage.jpg' }],
+        idempotencyKey: 'damage-outbox-rollback-1',
+      }),
+      /damage outbox unavailable/,
+    );
+
+    assert.deepEqual(repository.snapshot(), before);
+  });
+
+  it('rolls a Staff damage withdrawal back when the required audit cannot be persisted', async () => {
+    const repository = createRepository();
+    const service = createService(repository);
+    const report = await service.createStaffReport('staff-1', {
+      inventoryId: 'inv-1',
+      quantity: 2,
+      reason: 'Cracked',
+      evidence: [{ file: 'damage.jpg' }],
+      idempotencyKey: 'damage-withdraw-audit-source',
+    });
+    const before = repository.snapshot();
+    const atomicService = createService(repository, [], {
+      auditLogger: {
+        async log() {
+          throw new Error('damage withdrawal audit unavailable');
+        },
+      },
+    });
+
+    await assert.rejects(
+      () => atomicService.withdrawStaffReport('staff-1', report.id, {
+        reason: 'Báo nhầm sản phẩm',
+      }),
+      /damage withdrawal audit unavailable/,
+    );
+
+    assert.deepEqual(repository.snapshot(), before);
+  });
+
   it('requires an evidence-backed idempotent warehouse decision and replays it once', async () => {
     const repository = createRepository();
     const service = createService(repository);
@@ -203,7 +312,7 @@ describe('damage report hardening', () => {
     assert.equal(repository.transactions.filter((entry) => entry.transactionType === 'DAMAGE_CONFIRMED').length, 1);
   });
 
-  it('emits the post-commit handoff to Warehouse rather than back to Staff', async () => {
+  it('persists the Warehouse handoff in the canonical outbox rather than notifying Staff inline', async () => {
     const repository = createRepository();
     const events = [];
     const service = createService(repository, events);
@@ -216,8 +325,10 @@ describe('damage report hardening', () => {
       idempotencyKey: 'damage-event-1',
     });
 
-    assert.equal(events.length, 1);
-    assert.equal(events[0].recipientRole, 'WarehouseManager');
-    assert.equal(events[0].targetCollection, 'DamageReport');
+    assert.equal(events.length, 0);
+    assert.equal(repository.outbox.length, 1);
+    assert.equal(repository.outbox[0].eventType, 'DAMAGE_REPORTED');
+    assert.equal(repository.outbox[0].payload.recipientRole, 'WarehouseManager');
+    assert.equal(repository.outbox[0].payload.targetCollection, 'DamageReport');
   });
 });

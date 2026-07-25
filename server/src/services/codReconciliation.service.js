@@ -207,14 +207,14 @@ function createCodReconciliationService({
   afterSalesLockService = modelAfterSalesLockService,
   clock = () => new Date(),
 } = {}) {
-  async function writeAudit(userId, action, order, description) {
+  async function writeAudit(userId, action, order, description, session) {
     await auditLogger.log({
       userId: userId || null,
       action,
       targetEntity: 'Order',
       targetId: String(order._id),
       description,
-    });
+    }, session);
   }
 
   async function loadOrder(orderId, session) {
@@ -303,75 +303,88 @@ function createCodReconciliationService({
     if (!['AT_DELIVERY', 'AFTER_DELIVERY'].includes(collectionTiming)) throw new ApiError(400, 'collectionTiming must be AT_DELIVERY or AFTER_DELIVERY');
     const occurredAt = normalizeDate(input.occurredAt, 'occurredAt', clock);
     const evidenceReference = normalizeEvidenceReference(input.evidenceReference);
+    const auditAction = source === STAFF_RECORDED_CARRIER_EVIDENCE_SOURCE
+      ? 'STAFF_COD_COLLECTION_RECORDED'
+      : 'CARRIER_COD_COLLECTION_RECORDED';
+    const sourceLabel = source === STAFF_RECORDED_CARRIER_EVIDENCE_SOURCE
+      ? 'Staff-recorded Carrier'
+      : 'Carrier';
 
     let result;
     try {
       result = await transactionManager.withTransaction(async (session) => {
-      const existing = await repository.findEvidenceByEventId(eventId, session);
-      const replay = checkReplay(existing, orderId, 'COLLECTION', amount);
-      if (replay) {
-        const replayOrder = await loadOrder(orderId, session);
-        await syncCollectionDiscrepancy(replayOrder, existing, session);
-        return { ...replay, order: replayOrder };
-      }
+        const existing = await repository.findEvidenceByEventId(eventId, session);
+        const replay = checkReplay(existing, orderId, 'COLLECTION', amount);
+        if (replay) {
+          const replayOrder = await loadOrder(orderId, session);
+          await syncCollectionDiscrepancy(replayOrder, existing, session);
+          return { ...replay, order: replayOrder };
+        }
 
-      const order = await loadOrder(orderId, session);
-      const expected = expectedAmount(order);
-      if (order.orderStatus !== 'Delivered') throw new ApiError(409, 'COD collection evidence requires a Delivered order');
-      if (amount > expected) throw new ApiError(400, 'Customer collection cannot exceed fixed COD expected amount');
-      const priorCollection = await repository.findCollectionEvidenceByOrder(order._id, session);
-      if (priorCollection) throw new ApiError(409, 'Only one COD collection evidence is allowed; split COD is not supported');
-      if (order.paymentStatus === 'Paid' && amount < expected) throw new ApiError(409, 'A Paid COD order cannot be replaced by partial collection evidence');
+        const order = await loadOrder(orderId, session);
+        const expected = expectedAmount(order);
+        if (order.orderStatus !== 'Delivered') throw new ApiError(409, 'COD collection evidence requires a Delivered order');
+        if (amount > expected) throw new ApiError(400, 'Customer collection cannot exceed fixed COD expected amount');
+        const priorCollection = await repository.findCollectionEvidenceByOrder(order._id, session);
+        if (priorCollection) throw new ApiError(409, 'Only one COD collection evidence is allowed; split COD is not supported');
+        if (order.paymentStatus === 'Paid' && amount < expected) throw new ApiError(409, 'A Paid COD order cannot be replaced by partial collection evidence');
 
-      const event = await repository.createEvidence({
-        orderId: order._id,
-        eventId,
-        eventType: 'COLLECTION',
-        source,
-        customerCollectedAmount: amount,
-        collectionTiming,
-        occurredAt,
-        evidenceReference,
-        providerMessageId: String(input.providerMessageId || '').trim(),
-      }, session);
-
-      const fullCollection = amount === expected;
-      const paidAt = fullCollection && collectionTiming === 'AT_DELIVERY' && order.deliveredAt
-        ? new Date(order.deliveredAt)
-        : occurredAt;
-      const orderData = {
-        codExpectedAmount: expected,
-        customerCollectedAmount: amount,
-        customerCollectedAt: occurredAt,
-        customerCollectionEvidenceId: eventId,
-        paymentStatus: fullCollection ? 'Paid' : 'Unpaid',
-        codDiscrepancyStatus: fullCollection ? 'Resolved' : 'Open',
-        ...(fullCollection ? { completedSaleAt: paidAt } : {}),
-      };
-      const payment = await repository.findPaymentByOrderId(order._id, session);
-      const attempt = await repository.findLatestPaymentAttemptByOrder(order._id, session);
-      if (fullCollection && !payment && !attempt) throw new ApiError(409, 'COD payment records are missing');
-      if (fullCollection) {
-        if (payment) await repository.updatePayment(payment._id, { paymentStatus: 'Paid', paidAt }, session);
-        if (attempt) await repository.updatePaymentAttempt(attempt._id, { paymentStatus: 'Paid', paidAt }, session);
-      }
-      const updatedOrder = await repository.updateOrder(order._id, orderData, session);
-      await syncCollectionDiscrepancy(updatedOrder, event, session);
-      const heldRequest = await repository.findHeldRequestByOrder(order._id, session);
-      if (fullCollection && heldRequest) {
-        await repository.updateRequest(heldRequest._id, {
-          status: heldRequest._caseType === 'EXCHANGE' ? 'Submitted' : 'Pending',
-          holdReason: '',
-          paymentId: payment?._id || null,
-          handledAt: new Date(clock()),
+        const event = await repository.createEvidence({
+          orderId: order._id,
+          eventId,
+          eventType: 'COLLECTION',
+          source,
+          customerCollectedAmount: amount,
+          collectionTiming,
+          occurredAt,
+          evidenceReference,
+          providerMessageId: String(input.providerMessageId || '').trim(),
         }, session);
-      } else if (!fullCollection && heldRequest) {
-        await repository.updateRequest(heldRequest._id, {
-          status: 'CODRecoveryInProgress',
-          holdReason: 'Customer under-collection evidence confirmed; waiting for complete Warehouse goods recovery.',
-          handledAt: new Date(clock()),
-        }, session);
-      }
+
+        const fullCollection = amount === expected;
+        const paidAt = fullCollection && collectionTiming === 'AT_DELIVERY' && order.deliveredAt
+          ? new Date(order.deliveredAt)
+          : occurredAt;
+        const orderData = {
+          codExpectedAmount: expected,
+          customerCollectedAmount: amount,
+          customerCollectedAt: occurredAt,
+          customerCollectionEvidenceId: eventId,
+          paymentStatus: fullCollection ? 'Paid' : 'Unpaid',
+          codDiscrepancyStatus: fullCollection ? 'Resolved' : 'Open',
+          ...(fullCollection ? { completedSaleAt: paidAt } : {}),
+        };
+        const payment = await repository.findPaymentByOrderId(order._id, session);
+        const attempt = await repository.findLatestPaymentAttemptByOrder(order._id, session);
+        if (fullCollection && !payment && !attempt) throw new ApiError(409, 'COD payment records are missing');
+        if (fullCollection) {
+          if (payment) await repository.updatePayment(payment._id, { paymentStatus: 'Paid', paidAt }, session);
+          if (attempt) await repository.updatePaymentAttempt(attempt._id, { paymentStatus: 'Paid', paidAt }, session);
+        }
+        const updatedOrder = await repository.updateOrder(order._id, orderData, session);
+        await syncCollectionDiscrepancy(updatedOrder, event, session);
+        const heldRequest = await repository.findHeldRequestByOrder(order._id, session);
+        if (fullCollection && heldRequest) {
+          await repository.updateRequest(heldRequest._id, {
+            status: heldRequest._caseType === 'EXCHANGE' ? 'Submitted' : 'Pending',
+            holdReason: '',
+            paymentId: payment?._id || null,
+            handledAt: new Date(clock()),
+          }, session);
+        } else if (!fullCollection && heldRequest) {
+          await repository.updateRequest(heldRequest._id, {
+            status: 'CODRecoveryInProgress',
+            holdReason: 'Customer under-collection evidence confirmed; waiting for complete Warehouse goods recovery.',
+            handledAt: new Date(clock()),
+          }, session);
+        }
+        await writeAudit(
+          actorId,
+          auditAction,
+          updatedOrder,
+          `Recorded ${sourceLabel} Customer-collection evidence ${eventId}`,
+          session,
+        );
         return { event, order: updatedOrder, idempotentReplay: false };
       });
     } catch (error) {
@@ -388,15 +401,6 @@ function createCodReconciliationService({
       if (!result) throw error;
     }
 
-    if (!result.idempotentReplay) {
-      const auditAction = source === STAFF_RECORDED_CARRIER_EVIDENCE_SOURCE
-        ? 'STAFF_COD_COLLECTION_RECORDED'
-        : 'CARRIER_COD_COLLECTION_RECORDED';
-      const sourceLabel = source === STAFF_RECORDED_CARRIER_EVIDENCE_SOURCE
-        ? 'Staff-recorded Carrier'
-        : 'Carrier';
-      await writeAudit(actorId, auditAction, result.order, `Recorded ${sourceLabel} Customer-collection evidence ${eventId}`);
-    }
     return result;
   }
 
@@ -455,6 +459,13 @@ function createCodReconciliationService({
             throw new ApiError(409, 'COD discrepancy changed during settlement reconciliation');
           }
         }
+        await writeAudit(
+          null,
+          'CARRIER_COD_SETTLEMENT_RECORDED',
+          updatedOrder,
+          `Recorded Carrier settlement evidence ${eventId}`,
+          session,
+        );
         return { event, order: updatedOrder, idempotentReplay: false };
       });
     } catch (error) {
@@ -468,7 +479,6 @@ function createCodReconciliationService({
       if (!result) throw error;
     }
 
-    if (!result.idempotentReplay) await writeAudit(null, 'CARRIER_COD_SETTLEMENT_RECORDED', result.order, `Recorded Carrier settlement evidence ${eventId}`);
     return result;
   }
 
@@ -544,6 +554,13 @@ function createCodReconciliationService({
             handledAt: new Date(clock()),
           }, session);
         }
+        await writeAudit(
+          warehouseId,
+          'WAREHOUSE_COD_GOODS_RECOVERED',
+          updatedOrder,
+          `Warehouse recorded complete COD recovery receipt ${receiptId}`,
+          session,
+        );
         return { receipt, order: updatedOrder, idempotentReplay: false };
       });
     } catch (error) {
@@ -559,7 +576,6 @@ function createCodReconciliationService({
       if (!result) throw error;
     }
 
-    if (!result.idempotentReplay) await writeAudit(warehouseId, 'WAREHOUSE_COD_GOODS_RECOVERED', result.order, `Warehouse recorded complete COD recovery receipt ${receiptId}`);
     return result;
   }
 
@@ -724,10 +740,16 @@ function createCodReconciliationService({
           ? new Date(clock())
           : null,
       }, session);
+      await writeAudit(
+        staffId,
+        'STAFF_COD_RECOVERY_FINALIZED',
+        claimedOrder,
+        `Finalized COD recovery for ${claimedOrder.orderCode}`,
+        session,
+      );
       return { order: claimedOrder, refund, idempotentReplay: false, note };
     });
 
-    if (!result.idempotentReplay) await writeAudit(staffId, 'STAFF_COD_RECOVERY_FINALIZED', result.order, `Finalized COD recovery for ${result.order.orderCode}`);
     return result;
   }
 

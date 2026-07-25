@@ -5,8 +5,10 @@ const Inventory = require('../models/inventory.model');
 const InventoryTransaction = require('../models/inventoryTransaction.model');
 const Order = require('../models/order.model');
 const OrderDetail = require('../models/orderDetail.model');
+const DomainOutbox = require('../models/domainOutbox.model');
 const { logAudit } = require('../utils/auditLogger');
 const { notificationService } = require('./notification.service');
+const { canonicalEnvelope } = require('./domainEventProducer.service');
 const { lowStockAlertLifecycle: defaultLowStockLifecycle } = require('./lowStockAlertLifecycle.service');
 const {
   assignmentCoordinator: defaultAssignmentCoordinator,
@@ -84,6 +86,16 @@ function createModelRepository() { return {
       orderStatus: { $nin: ['Delivered', 'Cancelled', 'Returned'] },
     }).select('_id'), session).lean();
     return orders.map((order) => order._id);
+  },
+  async enqueuePostCommitWork(data, session) {
+    return withOptionalSession(
+      DomainOutbox.findOneAndUpdate(
+        { identityKey: data.identityKey },
+        { $setOnInsert: data },
+        { upsert: true, new: true, runValidators: true },
+      ),
+      session,
+    ).lean();
   },
 }; }
 function createDamageReportService({
@@ -208,6 +220,30 @@ function createDamageReportService({
             evidence: input.evidence,
             idempotencyKey: `damage-quarantine:${idempotencyKey}`,
           }, session);
+          if (!repository.enqueuePostCommitWork) {
+            throw new Error('Canonical DomainOutbox repository is required for damage reporting');
+          }
+          const occurredAt = new Date();
+          const businessEventId = `damage-report:${idempotencyKey}:created`;
+          await auditLogger.log({
+            userId: staffId,
+            action: 'DAMAGE_REPORT_CREATE',
+            targetEntity: 'DamageReport',
+            targetId: String(report._id),
+            description: `Quarantined ${quantity} item(s)`,
+          }, session);
+          await repository.enqueuePostCommitWork(canonicalEnvelope({
+            identityKey: `notification:${businessEventId}:warehouse`,
+            businessEventId,
+            eventType: 'DAMAGE_REPORTED',
+            aggregateType: 'DamageReport',
+            aggregateId: String(report._id),
+            occurredAt,
+            recipientRole: 'WarehouseManager',
+            targetCollection: 'DamageReport',
+            targetId: String(report._id),
+            displayValues: { quantity: Number(report.quantity) },
+          }, () => occurredAt), session);
           return { report, updated, transaction };
         });
       } catch (error) {
@@ -216,16 +252,7 @@ function createDamageReportService({
         if (!existing) throw error;
         return { ...toResponse(existing), replay: true };
       }
-      await auditLogger.log({ userId: staffId, action: 'DAMAGE_REPORT_CREATE', targetEntity: 'DamageReport', targetId: String(result.report._id), description: `Quarantined ${quantity} item(s)` });
       await lowStockLifecycle?.evaluate(result.updated, { eventKey: `damage-quarantine:${idempotencyKey}` });
-      await emitEvent({
-        idempotencyKey: `damage-report:${idempotencyKey}`,
-        recipientRole: 'WarehouseManager',
-        targetCollection: 'DamageReport',
-        targetId: result.report._id,
-        type: 'DAMAGE_REPORTED',
-        displayValues: { quantity: result.report.quantity },
-      });
       return toResponse(result.report);
     },
     async resolveWarehouseReport(warehouseId, id, input = {}) {
@@ -382,9 +409,15 @@ function createDamageReportService({
           dimension: 'sellable',
           reason,
         }, session);
+        await auditLogger.log({
+          userId: staffId,
+          action: 'DAMAGE_REPORT_WITHDRAW',
+          targetEntity: 'DamageReport',
+          targetId: String(id),
+          description: reason,
+        }, session);
         return { withdrawn, updated };
       });
-      await auditLogger.log({ userId: staffId, action: 'DAMAGE_REPORT_WITHDRAW', targetEntity: 'DamageReport', targetId: String(id), description: reason });
       await lowStockLifecycle?.evaluate(result.updated, { eventKey: `damage-withdrawal:${id}` });
       return toResponse(result.withdrawn);
     },

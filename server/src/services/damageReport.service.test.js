@@ -16,10 +16,12 @@ function createRepository() {
   };
   const reports = [];
   const transactions = [];
+  const outbox = [];
   return {
     inventory,
     reports,
     transactions,
+    outbox,
     async listReports(query = {}) {
       return reports.filter((report) => !query.status || report.status === query.status);
     },
@@ -58,6 +60,12 @@ function createRepository() {
     },
     async createTransaction(data) {
       transactions.push(data);
+      return data;
+    },
+    async enqueuePostCommitWork(data) {
+      const existing = outbox.find((entry) => entry.identityKey === data.identityKey);
+      if (existing) return existing;
+      outbox.push(data);
       return data;
     },
   };

@@ -1434,11 +1434,16 @@ function createExchangeService({
         await repository.updateCase(id, {
           convertedReturnRefundRequestId: returnRequest._id,
         }, session);
+        await writeAudit(
+          customerId,
+          'EXCHANGE_CONVERTED_TO_RETURN',
+          id,
+          `Converted to Return ${returnRequest.requestCode}`,
+          session,
+        );
         return { returnRequest, releasedInventories };
       });
       await evaluateInventoryLifecycles(convertedResult.releasedInventories);
-      const converted = convertedResult.returnRequest;
-      await writeAudit(customerId, 'EXCHANGE_CONVERTED_TO_RETURN', id, `Converted to Return ${converted.requestCode}`);
       return load(id);
     },
 
@@ -1486,10 +1491,16 @@ function createExchangeService({
         const releasedInventories = await releaseReservations(id, customerId, 'Customer cancelled before handoff', session);
         await repository.releaseUnitClaims(id, session);
         await repository.releaseOrderLock(exchangeCase.orderId, exchangeCase._id, 'Cancelled', false, session);
+        await writeAudit(
+          customerId,
+          'EXCHANGE_CANCELLED',
+          id,
+          'Customer cancelled before Carrier handoff',
+          session,
+        );
         return { releasedInventories };
       });
       await evaluateInventoryLifecycles(cancellationResult.releasedInventories);
-      await writeAudit(customerId, 'EXCHANGE_CANCELLED', id, 'Customer cancelled before Carrier handoff');
       return load(id);
     },
 

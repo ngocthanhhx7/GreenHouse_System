@@ -39,6 +39,36 @@ function createRepository() {
 
   return {
     orders, payments, attempts, discrepancies, evidence, details, recoveryReceipts, requestUpdates, requests, refunds,
+    snapshot() {
+      return structuredClone({
+        orders,
+        payments,
+        attempts,
+        discrepancies,
+        evidence,
+        details,
+        recoveryReceipts,
+        requestUpdates,
+        requests,
+        refunds,
+      });
+    },
+    restore(snapshot) {
+      for (const [key, target] of Object.entries({
+        orders,
+        payments,
+        attempts,
+        discrepancies,
+        evidence,
+        details,
+        recoveryReceipts,
+        requestUpdates,
+        requests,
+        refunds,
+      })) {
+        target.splice(0, target.length, ...snapshot[key]);
+      }
+    },
     async findOrderById(id) { return orders.find((entry) => entry._id === id) || null; },
     async findEvidenceByEventId(eventId) { return evidence.find((entry) => entry.eventId === eventId) || null; },
     async findCollectionEvidenceByOrder(orderId) { return evidence.find((entry) => entry.orderId === orderId && entry.eventType === 'COLLECTION') || null; },
@@ -96,6 +126,7 @@ describe('COD reconciliation service', () => {
   let lockFinds;
   let lockFindResult;
   let auditEntries;
+  let auditFailure;
 
   beforeEach(() => {
     repository = createRepository();
@@ -104,11 +135,27 @@ describe('COD reconciliation service', () => {
     lockFinds = [];
     lockFindResult = null;
     auditEntries = [];
+    auditFailure = null;
     service = createCodReconciliationService({
       repository,
-      transactionManager: { async withTransaction(work) { return work({ id: 'session-1' }); } },
+      transactionManager: {
+        async withTransaction(work) {
+          const snapshot = repository.snapshot();
+          try {
+            return await work({ id: 'session-1' });
+          } catch (error) {
+            repository.restore(snapshot);
+            throw error;
+          }
+        },
+      },
       clock: () => new Date('2026-07-23T12:00:00.000Z'),
-      auditLogger: { async log(entry) { auditEntries.push(entry); } },
+      auditLogger: {
+        async log(entry, session) {
+          if (auditFailure) throw auditFailure;
+          auditEntries.push({ ...entry, session });
+        },
+      },
       afterSalesLockService: {
         async release(payload, session) {
           lockReleases.push({ payload, session });
@@ -135,6 +182,25 @@ describe('COD reconciliation service', () => {
     assert.equal(result.order.paymentStatus, 'Paid');
     assert.equal(auditEntries[0].userId, 'staff-1');
     assert.equal(auditEntries[0].action, 'STAFF_COD_COLLECTION_RECORDED');
+    assert.deepEqual(auditEntries[0].session, { id: 'session-1' });
+  });
+
+  it('rolls COD collection evidence and payment projections back when audit persistence fails', async () => {
+    const before = repository.snapshot();
+    auditFailure = new Error('COD collection audit unavailable');
+
+    await assert.rejects(
+      () => service.recordStaffCollectionEvidence('staff-1', 'order-1', {
+        eventId: 'staff-collection-audit-failure',
+        customerCollectedAmount: 100,
+        collectionTiming: 'AT_DELIVERY',
+        occurredAt: '2026-07-23T10:01:00.000Z',
+        evidenceReference: 'staff-pod-audit-failure',
+      }),
+      /COD collection audit unavailable/,
+    );
+
+    assert.deepEqual(repository.snapshot(), before);
   });
 
   it('marks a full at-delivery Customer collection as Paid at DeliveredAt and releases a held request', async () => {
@@ -334,6 +400,34 @@ describe('COD reconciliation service', () => {
       },
       session: { id: 'session-1' },
     }]);
+  });
+
+  it('rolls COD recovery closure back when its audit cannot be persisted', async () => {
+    await service.recordCollectionEvidence('order-1', {
+      eventId: 'collection-for-audit-rollback',
+      customerCollectedAmount: 40,
+      collectionTiming: 'AFTER_DELIVERY',
+      occurredAt: '2026-07-23T11:00:00.000Z',
+      evidenceReference: 'pod-audit-rollback',
+    });
+    const receipt = await service.recordGoodsRecovery('warehouse-1', 'order-1', {
+      receiptId: 'warehouse-audit-rollback',
+      evidenceReference: 'warehouse-photo-audit-rollback',
+      items: [{ orderDetailId: 'detail-1', receivedQuantity: 2 }],
+    });
+    const before = repository.snapshot();
+    auditFailure = new Error('COD recovery audit unavailable');
+
+    await assert.rejects(
+      () => service.finalizeRecovery('staff-1', 'order-1', {
+        goodsRecoveryReceiptId: receipt.receipt.receiptId,
+        destinationVerified: true,
+        destinationReference: 'destination-audit-rollback',
+      }),
+      /COD recovery audit unavailable/,
+    );
+
+    assert.deepEqual(repository.snapshot(), before);
   });
 
   it('does not finalize recovery when another Staff worker already claimed the closure', async () => {

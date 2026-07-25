@@ -944,6 +944,35 @@ describe('SL-002 Exchange service', () => {
     assert.equal(harness.state.reservations[0].status, 'Released');
   });
 
+  it('rolls Exchange cancellation back when its audit cannot be persisted', async () => {
+    const request = await harness.service.createCustomerRequest('customer-1', validRequest({
+      idempotencyKey: 'exchange-cancel-audit-0001',
+    }));
+    await harness.service.decideRequest('staff-1', request.id, {
+      idempotencyKey: 'decision-cancel-audit-0001',
+      decision: 'APPROVE',
+      responsibility: 'SHOP_FAULT',
+      reason: 'Lỗi Shop',
+    });
+    const before = structuredClone(harness.state);
+    const atomicService = harness.createService({
+      auditLogger: {
+        async log() {
+          throw new Error('exchange cancel audit unavailable');
+        },
+      },
+    });
+
+    await assert.rejects(
+      atomicService.cancelRequest('customer-1', request.id, {
+        idempotencyKey: 'cancel-exchange-audit-0001',
+      }),
+      /exchange cancel audit unavailable/,
+    );
+
+    assert.deepEqual(harness.state, before);
+  });
+
   it('converts an initial exact-stock failure into a normal paid Return with payment lineage', async () => {
     const request = await harness.service.createCustomerRequest('customer-1', validRequest({
       idempotencyKey: 'exchange-convert-paid-0001',
@@ -968,6 +997,37 @@ describe('SL-002 Exchange service', () => {
     assert.equal(harness.state.returnRequests[0].paymentId, 'payment-1');
     assert.equal(harness.state.locks[0].caseType, 'RETURN_REFUND');
     assert.equal(harness.state.locks[0].caseId, harness.state.returnRequests[0]._id);
+  });
+
+  it('rolls Exchange-to-Return conversion back when its audit cannot be persisted', async () => {
+    const request = await harness.service.createCustomerRequest('customer-1', validRequest({
+      idempotencyKey: 'exchange-convert-audit-0001',
+    }));
+    harness.state.inventories[0].stockQuantity = 0;
+    harness.state.products[0].stockQuantity = 0;
+    await harness.service.decideRequest('staff-1', request.id, {
+      idempotencyKey: 'decision-convert-audit-0001',
+      decision: 'APPROVE',
+      responsibility: 'SHOP_FAULT',
+      reason: 'Đủ điều kiện nhưng hết đúng SKU',
+    });
+    const before = structuredClone(harness.state);
+    const atomicService = harness.createService({
+      auditLogger: {
+        async log() {
+          throw new Error('exchange conversion audit unavailable');
+        },
+      },
+    });
+
+    await assert.rejects(
+      atomicService.convertToReturn('customer-1', request.id, {
+        idempotencyKey: 'choice-convert-audit-0001',
+      }),
+      /exchange conversion audit unavailable/,
+    );
+
+    assert.deepEqual(harness.state, before);
   });
 
   it('keeps an unpaid COD Exchange conversion on reconciliation hold', async () => {
