@@ -16,7 +16,7 @@ function createModelRepository() {
   return {
     async findLatestCustomerDeliveryReceiptByOrder(orderId, session) {
       const query = CustomerDeliveryReceipt.findOne({ orderId })
-        .sort({ respondedAt: -1, _id: -1 });
+        .sort({ createdAt: -1, _id: -1 });
       return (session ? query.session(session) : query).lean();
     },
   };
@@ -34,14 +34,17 @@ function createCustomerDeliveryReceiptPolicy({ repository } = {}) {
       customerId,
       deadlineField = null,
       session = null,
+      receipt: suppliedReceipt,
     }) {
       const orderId = order?._id || order?.id;
-      const receipt = orderId
-        ? await receiptRepository.findLatestCustomerDeliveryReceiptByOrder(
+      let receipt = suppliedReceipt;
+      if (receipt === undefined && orderId) {
+        receipt = await receiptRepository.findLatestCustomerDeliveryReceiptByOrder(
           orderId,
           session,
-        )
-        : null;
+        );
+      }
+      receipt ||= null;
       const matchesBoundary = receipt
         && sameId(receipt.orderId, orderId)
         && sameId(receipt.customerId, customerId)

@@ -234,10 +234,9 @@ function createReviewService(options = {}) {
         return { product, detail, order };
       }
 
-      const eligible = await repository.findOwnedDeliveredOrderDetail(
-        customerId,
-        productId,
-      );
+      const eligible = repository.findOwnedReceivedOrderDetail
+        ? await repository.findOwnedReceivedOrderDetail(customerId, productId)
+        : await repository.findOwnedDeliveredOrderDetail(customerId, productId);
       if (
         !eligible
         || valueId(eligible.productId) !== String(productId)
@@ -249,6 +248,7 @@ function createReviewService(options = {}) {
       await deliveryReceiptPolicy.requireReceived({
         order: eligible.order,
         customerId,
+        receipt: eligible.deliveryReceipt,
       });
       return {
         product,

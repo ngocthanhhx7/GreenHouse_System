@@ -76,6 +76,8 @@ function createRepository() {
   return {
     reviews,
     customerDeliveryReceipts,
+    orders,
+    details,
     publicationHistory,
     async findProductById(id) {
       return products.find((product) => product._id === id) || null;
@@ -114,6 +116,35 @@ function createRepository() {
     },
     async findOwnedDeliveredOrderDetail(customerId, productId) {
       return (await this.listOwnedDeliveredOrderDetails(customerId, productId))
+        .sort((left, right) => {
+          const deliveredDifference = new Date(right.order.deliveredAt).getTime()
+            - new Date(left.order.deliveredAt).getTime();
+          return deliveredDifference
+            || String(right._id).localeCompare(String(left._id), 'en');
+        })[0] || null;
+    },
+    async findOwnedReceivedOrderDetail(customerId, productId) {
+      return details
+        .filter((detail) => detail.productId === productId)
+        .map((detail) => ({
+          ...detail,
+          order: orders.find((order) => order._id === detail.orderId),
+        }))
+        .map((detail) => ({
+          ...detail,
+          deliveryReceipt: customerDeliveryReceipts
+            .filter((receipt) => receipt.orderId === detail.orderId)
+            .sort((left, right) => (
+              new Date(right.createdAt || right.respondedAt).getTime()
+                - new Date(left.createdAt || left.respondedAt).getTime()
+            ))[0] || null,
+        }))
+        .filter((detail) => (
+          detail.order?.customerId === customerId
+          && detail.order.deliveredAt
+          && detail.deliveryReceipt?.outcome === 'RECEIVED'
+          && detail.deliveryReceipt.customerId === customerId
+        ))
         .sort((left, right) => {
           const deliveredDifference = new Date(right.order.deliveredAt).getTime()
             - new Date(left.order.deliveredAt).getTime();
@@ -335,6 +366,46 @@ describe('review service', () => {
       }),
     );
     assert.equal(disputed.errorCode, 'AFTER_SALES_DELIVERY_DISPUTED');
+    assert.equal(repository.reviews.length, 0);
+  });
+
+  it('fallback skips a newer unconfirmed purchase and uses the newest older RECEIVED purchase', async () => {
+    const newer = repository.orders.find((order) => order._id === 'order-2');
+    Object.assign(newer, {
+      orderStatus: 'Delivered',
+      deliveredAt: new Date('2026-07-22T08:00:00.000Z'),
+    });
+
+    const result = await service.createReview(
+      { id: 'customer-1', role: 'Customer', status: 'Active' },
+      'product-1',
+      {
+        rating: 5,
+        content: 'Uses the older confirmed purchase.',
+        expectedVersion: 0,
+      },
+      { idempotencyKey: 'review-fallback-received-0001' },
+    );
+
+    assert.equal(result.orderDetailId, 'detail-1');
+  });
+
+  it('fallback rejects when every delivered purchase lacks terminal RECEIVED evidence', async () => {
+    repository.customerDeliveryReceipts.length = 0;
+
+    await assert.rejects(
+      () => service.createReview(
+        { id: 'customer-1', role: 'Customer', status: 'Active' },
+        'product-1',
+        {
+          rating: 5,
+          content: 'No confirmed purchase exists.',
+          expectedVersion: 0,
+        },
+        { idempotencyKey: 'review-fallback-no-received-0001' },
+      ),
+      (error) => error.errorCode === 'REVIEW_NOT_ELIGIBLE',
+    );
     assert.equal(repository.reviews.length, 0);
   });
 

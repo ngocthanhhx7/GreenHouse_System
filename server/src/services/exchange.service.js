@@ -929,16 +929,16 @@ function createExchangeService({
       const order = await repository.findOrderById(input.orderId);
       if (!order || String(order.customerId) !== String(customerId)) throw new ApiError(404, 'Order not found');
       if (order.orderStatus !== 'Delivered') throw new ApiError(409, 'Only Delivered orders can be exchanged');
-      const receiptEligibility = await deliveryReceiptPolicy.requireReceived({
-        order,
-        customerId,
-        deadlineField: 'exchangeDeadlineAt',
-      });
       const replacementUnitIds = [...new Set(
         (Array.isArray(input.replacementUnitIds) ? input.replacementUnitIds : [])
           .map((value) => String(value || '').trim())
           .filter(Boolean)
       )];
+      const receiptEligibility = await deliveryReceiptPolicy.requireReceived({
+        order,
+        customerId,
+        deadlineField: replacementUnitIds.length ? null : 'exchangeDeadlineAt',
+      });
       let replacementUnits = [];
       if (replacementUnitIds.length) {
         if (!repository.findUnitsByIds) throw new ApiError(409, 'Replacement lineage lookup is unavailable');
@@ -953,7 +953,11 @@ function createExchangeService({
           }
         }
       }
-      const deadlineAt = receiptEligibility.deadlineAt;
+      const deadlineAt = replacementUnits.length
+        ? new Date(Math.min(...replacementUnits.map(
+          (unit) => new Date(unit.exchangeDeadlineAt).getTime(),
+        )))
+        : receiptEligibility.deadlineAt;
       if (Number.isNaN(deadlineAt.getTime())) throw new ApiError(409, 'The stored Exchange deadline is invalid');
       if (new Date(clock()).getTime() > deadlineAt.getTime()) throw new ApiError(409, 'The five-day Exchange window has expired');
 

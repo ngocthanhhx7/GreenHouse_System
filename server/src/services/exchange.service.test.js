@@ -521,6 +521,9 @@ describe('SL-002 Exchange service', () => {
 
   it('allows a delivered replacement unit to start a new traced cycle without reopening the original deadline', async () => {
     harness.state.orders[0].exchangeDeadlineAt = new Date(harness.now.getTime() - 1);
+    harness.state.customerDeliveryReceipts[0].exchangeDeadlineAt = new Date(
+      harness.now.getTime() - 1,
+    );
     harness.state.units.push({
       _id: 'replacement-unit-1',
       unitKey: 'prior-case:line-1:1',
@@ -547,6 +550,44 @@ describe('SL-002 Exchange service', () => {
     assert.equal(createdUnit.parentUnitId, 'replacement-unit-1');
     assert.equal(createdUnit.cycle, 2);
     assert.equal(createdUnit.originalUnitOrdinal, 2);
+  });
+
+  it('blocks a replacement cycle when any selected replacement unit deadline expired', async () => {
+    harness.state.customerDeliveryReceipts[0].exchangeDeadlineAt = new Date(
+      harness.now.getTime() - DAY,
+    );
+    harness.state.units.push(
+      {
+        _id: 'replacement-unit-current',
+        orderId: 'order-1',
+        orderDetailId: 'line-1',
+        productId: 'product-1',
+        originalUnitOrdinal: 1,
+        cycle: 1,
+        outcome: 'ReplacementDelivered',
+        exchangeDeadlineAt: new Date(harness.now.getTime() + DAY),
+      },
+      {
+        _id: 'replacement-unit-expired',
+        orderId: 'order-1',
+        orderDetailId: 'line-1',
+        productId: 'product-1',
+        originalUnitOrdinal: 2,
+        cycle: 1,
+        outcome: 'ReplacementDelivered',
+        exchangeDeadlineAt: new Date(harness.now.getTime() - 1),
+      },
+    );
+
+    await assert.rejects(
+      () => harness.service.createCustomerRequest('customer-1', validRequest({
+        idempotencyKey: 'exchange-replacement-expired-unit-0001',
+        lines: undefined,
+        replacementUnitIds: ['replacement-unit-current', 'replacement-unit-expired'],
+      })),
+      /replacement unit Exchange window has expired/i,
+    );
+    assert.equal(harness.state.cases.length, 0);
   });
 
   it('blocks a second after-sales case through the shared order lock', async () => {

@@ -467,6 +467,7 @@ function buildReviewFixture({ now = '2026-07-24T12:00:00.000Z' } = {}) {
         orderId: 'order-old',
         customerId: 'customer-1',
         outcome: 'RECEIVED',
+        createdAt: new Date('2026-07-20T09:00:00.000Z'),
         respondedAt: new Date('2026-07-20T09:00:00.000Z'),
       },
       {
@@ -474,6 +475,7 @@ function buildReviewFixture({ now = '2026-07-24T12:00:00.000Z' } = {}) {
         orderId: 'order-new',
         customerId: 'customer-1',
         outcome: 'RECEIVED',
+        createdAt: new Date('2026-07-22T09:00:00.000Z'),
         respondedAt: new Date('2026-07-22T09:00:00.000Z'),
       },
       {
@@ -481,6 +483,7 @@ function buildReviewFixture({ now = '2026-07-24T12:00:00.000Z' } = {}) {
         orderId: 'order-tie',
         customerId: 'customer-1',
         outcome: 'RECEIVED',
+        createdAt: new Date('2026-07-22T09:00:00.000Z'),
         respondedAt: new Date('2026-07-22T09:00:00.000Z'),
       },
       {
@@ -488,6 +491,7 @@ function buildReviewFixture({ now = '2026-07-24T12:00:00.000Z' } = {}) {
         orderId: 'order-foreign',
         customerId: 'customer-2',
         outcome: 'RECEIVED',
+        createdAt: new Date('2026-07-23T09:00:00.000Z'),
         respondedAt: new Date('2026-07-23T09:00:00.000Z'),
       },
     ],
@@ -552,6 +556,35 @@ function buildReviewFixture({ now = '2026-07-24T12:00:00.000Z' } = {}) {
         .filter((detail) => (
           detail.order?.customerId === String(customerId)
           && detail.order.deliveredAt
+        ))
+        .sort((left, right) => {
+          const deliveredDifference = new Date(right.order.deliveredAt).getTime()
+            - new Date(left.order.deliveredAt).getTime();
+          return deliveredDifference
+            || String(right.id).localeCompare(String(left.id), 'en');
+        })[0] || null;
+    },
+    async findOwnedReceivedOrderDetail(customerId, productId) {
+      return state.orderDetails
+        .filter((detail) => detail.productId === String(productId))
+        .map((detail) => ({
+          ...detail,
+          order: state.orders.find((order) => order.id === detail.orderId),
+        }))
+        .map((detail) => ({
+          ...detail,
+          deliveryReceipt: state.customerDeliveryReceipts
+            .filter((receipt) => receipt.orderId === detail.orderId)
+            .sort((left, right) => (
+              new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+              || String(right.id).localeCompare(String(left.id), 'en')
+            ))[0] || null,
+        }))
+        .filter((detail) => (
+          detail.order?.customerId === String(customerId)
+          && detail.order.deliveredAt
+          && detail.deliveryReceipt?.outcome === 'RECEIVED'
+          && detail.deliveryReceipt.customerId === String(customerId)
         ))
         .sort((left, right) => {
           const deliveredDifference = new Date(right.order.deliveredAt).getTime()
@@ -1935,6 +1968,22 @@ describe('SL-008 Review behavioral acceptance', () => {
       'review-fallback-tie-0001',
     );
     assert.equal(tieResult.orderDetailId, 'detail-011');
+
+    const awaitingNewestFixture = buildReviewFixture();
+    awaitingNewestFixture.state.customerDeliveryReceipts.find(
+      (receipt) => receipt.orderId === 'order-tie',
+    ).outcome = 'NOT_RECEIVED';
+    const createWithAwaitingNewest = requiredMethod(
+      awaitingNewestFixture.service,
+      'createReview',
+    );
+    const receivedFallback = await runMutation(
+      createWithAwaitingNewest,
+      [actors.customer, 'product-1'],
+      reviewCommand({ orderDetailId: undefined }),
+      'review-fallback-received-before-dispute-0001',
+    );
+    assert.equal(receivedFallback.orderDetailId, 'detail-010');
 
     const deliveredAtFixture = buildReviewFixture();
     deliveredAtFixture.state.orderDetails = deliveredAtFixture.state.orderDetails.filter(

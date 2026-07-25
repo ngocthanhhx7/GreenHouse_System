@@ -4,6 +4,7 @@ const { describe, it } = require('node:test');
 const {
   createCustomerDeliveryReceiptPolicy,
 } = require('./customerDeliveryReceiptPolicy');
+const CustomerDeliveryReceipt = require('../models/customerDeliveryReceipt.model');
 
 function repositoryWith(receipt) {
   return {
@@ -111,5 +112,98 @@ describe('customer delivery receipt after-sales policy', () => {
         (error) => error.errorCode === 'AFTER_SALES_DELIVERY_CONFIRMATION_REQUIRED',
       );
     }
+  });
+
+  it('queries the canonical latest decision by createdAt then id, never respondedAt', async () => {
+    const originalFindOne = CustomerDeliveryReceipt.findOne;
+    let observedSort = null;
+    CustomerDeliveryReceipt.findOne = () => ({
+      sort(specification) {
+        observedSort = specification;
+        return {
+          async lean() {
+            return {
+              _id: 'receipt-latest',
+              orderId: 'order-1',
+              customerId: 'customer-1',
+              outcome: 'RECEIVED',
+            };
+          },
+        };
+      },
+    });
+
+    try {
+      const policy = createCustomerDeliveryReceiptPolicy();
+      await policy.requireReceived({ order, customerId: 'customer-1' });
+      assert.deepEqual(observedSort, { createdAt: -1, _id: -1 });
+    } finally {
+      CustomerDeliveryReceipt.findOne = originalFindOne;
+    }
+  });
+
+  it('treats a later-created RECEIVED decision as effective despite clock skew', async () => {
+    const history = [
+      {
+        _id: 'receipt-a',
+        orderId: 'order-1',
+        customerId: 'customer-1',
+        outcome: 'NOT_RECEIVED',
+        createdAt: new Date('2026-07-20T10:00:00.000Z'),
+        respondedAt: new Date('2026-07-20T12:00:00.000Z'),
+      },
+      {
+        _id: 'receipt-b',
+        orderId: 'order-1',
+        customerId: 'customer-1',
+        outcome: 'RECEIVED',
+        createdAt: new Date('2026-07-20T11:00:00.000Z'),
+        respondedAt: new Date('2026-07-20T09:00:00.000Z'),
+      },
+    ];
+    const repository = {
+      async findLatestCustomerDeliveryReceiptByOrder() {
+        return history.slice().sort((left, right) => (
+          new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+          || String(right._id).localeCompare(String(left._id), 'en')
+        ))[0];
+      },
+    };
+
+    const result = await createCustomerDeliveryReceiptPolicy({ repository })
+      .requireReceived({ order, customerId: 'customer-1' });
+    assert.equal(result.receipt._id, 'receipt-b');
+  });
+
+  it('uses descending id as the deterministic tie-break for equal createdAt values', async () => {
+    const createdAt = new Date('2026-07-20T10:00:00.000Z');
+    const history = [
+      {
+        _id: 'receipt-a',
+        orderId: 'order-1',
+        customerId: 'customer-1',
+        outcome: 'NOT_RECEIVED',
+        createdAt,
+      },
+      {
+        _id: 'receipt-b',
+        orderId: 'order-1',
+        customerId: 'customer-1',
+        outcome: 'RECEIVED',
+        createdAt,
+      },
+    ];
+    const repository = {
+      async findLatestCustomerDeliveryReceiptByOrder() {
+        return history.slice().sort((left, right) => (
+          new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+          || String(right._id).localeCompare(String(left._id), 'en')
+        ))[0];
+      },
+    };
+
+    const result = await createCustomerDeliveryReceiptPolicy({ repository })
+      .requireReceived({ order, customerId: 'customer-1' });
+    assert.equal(result.receipt._id, 'receipt-b');
   });
 });
