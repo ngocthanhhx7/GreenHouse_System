@@ -1,6 +1,8 @@
 const assert = require('node:assert/strict');
 const { describe, it } = require('node:test');
 
+const DomainOutbox = require('../models/domainOutbox.model');
+const { canonicalNotificationEvent } = require('./notificationOutbox.service');
 const {
   createCustomerDeliveryReceiptService,
 } = require('./customerDeliveryReceipt.service');
@@ -16,6 +18,7 @@ function createHarness(overrides = {}) {
   const initial = {
     orders: [{
       _id: 'order-1',
+      orderCode: 'ORD-RECEIPT-001',
       customerId: 'customer-1',
       orderStatus: 'Delivered',
       exchangeDeadlineAt: new Date('2026-07-31T09:00:00.000Z'),
@@ -77,6 +80,33 @@ function createHarness(overrides = {}) {
     async findShipmentEvent(eventId, session) {
       const source = session || state;
       return clone(source.shipmentEvents.find((event) => event._id === eventId) || null);
+    },
+    async guardAuthoritativeDelivery({
+      orderId,
+      customerId,
+      shipmentId,
+      deliveryEventId,
+    }, session) {
+      if (overrides.concurrentEvidenceChange) {
+        const changingShipment = session.shipments.find(
+          (shipment) => shipment._id === shipmentId,
+        );
+        changingShipment.status = 'ReturnedToShop';
+        changingShipment.terminalEventId = 'returned-event-concurrent';
+      }
+      const order = session.orders.find((candidate) => (
+        candidate._id === orderId
+        && candidate.customerId === customerId
+        && candidate.orderStatus === 'Delivered'
+      ));
+      if (!order) return { order: null, shipment: null };
+      const shipment = session.shipments.find((candidate) => (
+        candidate._id === shipmentId
+        && candidate.orderId === orderId
+        && candidate.status === 'Delivered'
+        && candidate.terminalEventId === deliveryEventId
+      ));
+      return { order: clone(order), shipment: clone(shipment || null) };
     },
     async findByCommand(customerId, idempotencyKey, session) {
       const source = session || state;
@@ -143,9 +173,13 @@ function createHarness(overrides = {}) {
     },
   };
   const outboxWriter = {
-    async append(entry, session) {
+    async publish(entry, session) {
       if (overrides.failOutbox) throw new Error('outbox persistence failed');
-      session.outbox.push(clone(entry));
+      const row = new DomainOutbox(entry);
+      await row.validate();
+      const persisted = row.toObject();
+      canonicalNotificationEvent(persisted);
+      session.outbox.push(clone(persisted));
     },
   };
 
@@ -205,8 +239,48 @@ describe('customerDeliveryReceipt service', () => {
     await rejectsCode(
       service.recordDecision('customer-1', 'order-1', receivedInput()),
       409,
-      'ORDER_NOT_DELIVERED',
+      'ORDER_NOT_AUTHORITATIVELY_DELIVERED',
     );
+  });
+
+  it('uses exact required/invalid idempotency errors and rejects non-string input fields', async () => {
+    const { service } = createHarness();
+
+    await rejectsCode(
+      service.recordDecision('customer-1', 'order-1', receivedInput({
+        idempotencyKey: undefined,
+      })),
+      422,
+      'IDEMPOTENCY_KEY_REQUIRED',
+    );
+    await rejectsCode(
+      service.recordDecision('customer-1', 'order-1', receivedInput({
+        idempotencyKey: 12345678,
+      })),
+      422,
+      'IDEMPOTENCY_KEY_INVALID',
+    );
+    await rejectsCode(
+      service.recordDecision('customer-1', 'order-1', receivedInput({
+        idempotencyKey: null,
+      })),
+      422,
+      'IDEMPOTENCY_KEY_INVALID',
+    );
+    for (const [field, value] of [
+      ['outcome', { value: 'RECEIVED' }],
+      ['expectedDeliveryEventId', ['delivery-event-1']],
+      ['reason', 123],
+    ]) {
+      await rejectsCode(
+        service.recordDecision('customer-1', 'order-1', receivedInput({
+          [field]: value,
+          idempotencyKey: `receipt-command-invalid-${field}`,
+        })),
+        422,
+        'DELIVERY_RECEIPT_INPUT_INVALID',
+      );
+    }
   });
 
   it('binds to the latest terminal shipment and its exact DELIVERED terminal event', async () => {
@@ -247,7 +321,7 @@ describe('customerDeliveryReceipt service', () => {
     await rejectsCode(
       stale.service.recordDecision('customer-1', 'order-1', receivedInput()),
       409,
-      'DELIVERY_EVIDENCE_STALE',
+      'DELIVERY_EVENT_STALE',
     );
 
     const invalidEvent = createHarness({
@@ -263,7 +337,7 @@ describe('customerDeliveryReceipt service', () => {
     await rejectsCode(
       invalidEvent.service.recordDecision('customer-1', 'order-1', receivedInput()),
       409,
-      'DELIVERY_EVIDENCE_STALE',
+      'DELIVERY_EVENT_STALE',
     );
   });
 
@@ -292,7 +366,19 @@ describe('customerDeliveryReceipt service', () => {
     assert.equal(state.audits[0].action, 'CUSTOMER_DELIVERY_RECEIVED');
     assert.equal(state.audits[0].safeFacts.reason, undefined);
     assert.equal(state.outbox.length, 1);
-    assert.equal(state.outbox[0].eventType, 'CUSTOMER_DELIVERY_RECEIVED');
+    assert.equal(state.outbox[0].eventType, 'ORDER_COMPLETED_BY_CUSTOMER');
+    assert.equal(state.outbox[0].payloadSchemaVersion, 1);
+    assert.match(state.outbox[0].eventHash, /^[a-f0-9]{64}$/);
+    assert.equal(state.outbox[0].aggregateType, 'Order');
+    assert.equal(state.outbox[0].aggregateId, 'order-1');
+    assert.deepEqual(canonicalNotificationEvent(state.outbox[0]), {
+      businessEventId: state.outbox[0].businessEventId,
+      type: 'ORDER_COMPLETED_BY_CUSTOMER',
+      displayValues: { orderCode: 'ORD-RECEIPT-001' },
+      recipient: { userId: 'customer-1', email: '', role: 'Customer' },
+      target: { collection: 'Order', id: 'order-1' },
+    });
+    assert.equal(JSON.stringify(state.outbox[0]).includes('Tôi chưa nhận'), false);
   });
 
   it('requires a normalized 10-500 character reason for NOT_RECEIVED', async () => {
@@ -346,6 +432,43 @@ describe('customerDeliveryReceipt service', () => {
     assert.equal(dispute.returnDeadlineAt, null);
     assert.equal(received.supersedesId, dispute._id);
     assert.equal(harness.snapshot().receipts.length, 2);
+    const disputeEvent = harness.snapshot().outbox[0];
+    assert.equal(disputeEvent.eventType, 'CUSTOMER_DELIVERY_DISPUTED');
+    assert.deepEqual(canonicalNotificationEvent(disputeEvent), {
+      businessEventId: disputeEvent.businessEventId,
+      type: 'CUSTOMER_DELIVERY_DISPUTED',
+      displayValues: { orderCode: 'ORD-RECEIPT-001' },
+      recipientRole: 'Staff',
+      target: { collection: 'Order', id: 'order-1' },
+    });
+    assert.equal(JSON.stringify(disputeEvent).includes(dispute.reason), false);
+  });
+
+  it('reports DELIVERY_DISPUTE_OPEN when another NOT_RECEIVED is attempted', async () => {
+    const harness = createHarness();
+    await harness.service.recordDecision(
+      'customer-1',
+      'order-1',
+      receivedInput({
+        outcome: 'NOT_RECEIVED',
+        reason: 'Tôi chưa nhận được kiện hàng.',
+        idempotencyKey: 'receipt-command-open-dispute',
+      }),
+    );
+
+    await rejectsCode(
+      harness.service.recordDecision(
+        'customer-1',
+        'order-1',
+        receivedInput({
+          outcome: 'NOT_RECEIVED',
+          reason: 'Kiện hàng vẫn chưa được giao cho tôi.',
+          idempotencyKey: 'receipt-command-second-dispute',
+        }),
+      ),
+      409,
+      'DELIVERY_DISPUTE_OPEN',
+    );
   });
 
   it('rejects any decision after terminal RECEIVED and returns the safe winning projection', async () => {
@@ -368,7 +491,7 @@ describe('customerDeliveryReceipt service', () => {
       ),
       (error) => (
         error.statusCode === 409
-        && error.errorCode === 'DELIVERY_RECEIPT_ALREADY_CONFIRMED'
+        && error.errorCode === 'DELIVERY_CONFIRMATION_ALREADY_RECORDED'
         && error.data?.winner?._id === winner._id
         && error.data?.winner?.requestHash === undefined
         && error.data?.winner?.idempotencyKey === undefined
@@ -434,7 +557,7 @@ describe('customerDeliveryReceipt service', () => {
     const conflict = results.find((result) => result.status === 'rejected').reason;
     assert.equal(conflict.statusCode, 409);
     assert.ok([
-      'DELIVERY_RECEIPT_ALREADY_CONFIRMED',
+      'DELIVERY_CONFIRMATION_ALREADY_RECORDED',
       'DELIVERY_RECEIPT_CONFLICT',
     ].includes(conflict.errorCode));
     assert.ok(conflict.data?.winner);
@@ -473,6 +596,27 @@ describe('customerDeliveryReceipt service', () => {
         && error.data?.winner?.idempotencyKey === undefined
       ),
     );
+  });
+
+  it('rolls back both outcomes when physical delivery changes before the guarded write', async () => {
+    for (const input of [
+      receivedInput(),
+      receivedInput({
+        outcome: 'NOT_RECEIVED',
+        reason: 'Tôi chưa nhận được kiện hàng.',
+        idempotencyKey: 'receipt-command-guarded-dispute',
+      }),
+    ]) {
+      const harness = createHarness({ concurrentEvidenceChange: true });
+      const before = harness.snapshot();
+
+      await rejectsCode(
+        harness.service.recordDecision('customer-1', 'order-1', input),
+        409,
+        'DELIVERY_EVENT_STALE',
+      );
+      assert.deepEqual(harness.snapshot(), before);
+    }
   });
 
   it('rolls back receipt, order projection, audit, and outbox when Audit fails', async () => {

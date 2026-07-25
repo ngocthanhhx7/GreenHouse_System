@@ -4,10 +4,13 @@ const mongoose = require('mongoose');
 const ApiError = require('../utils/apiError');
 const AuditLog = require('../models/auditLog.model');
 const CustomerDeliveryReceipt = require('../models/customerDeliveryReceipt.model');
-const DomainOutbox = require('../models/domainOutbox.model');
 const Order = require('../models/order.model');
 const Shipment = require('../models/shipment.model');
 const ShipmentEvent = require('../models/shipmentEvent.model');
+const {
+  canonicalEnvelope,
+  createOutboxWriter: createCanonicalOutboxWriter,
+} = require('./domainEventProducer.service');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const AFTER_SALES_DAYS = 5;
@@ -53,10 +56,43 @@ function typedError(statusCode, errorCode, message, data = null) {
 }
 
 function validateCommand(input = {}) {
-  const outcome = String(input.outcome || '').trim().toUpperCase();
-  const expectedDeliveryEventId = String(input.expectedDeliveryEventId || '').trim();
-  const idempotencyKey = String(input.idempotencyKey || '').trim();
-  const reason = normalizedReason(input.reason);
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw typedError(
+      422,
+      'DELIVERY_RECEIPT_INPUT_INVALID',
+      'Delivery receipt input must be an object',
+    );
+  }
+  if (typeof input.outcome !== 'string'
+    || typeof input.expectedDeliveryEventId !== 'string'
+    || (Object.hasOwn(input, 'reason') && typeof input.reason !== 'string')) {
+    throw typedError(
+      422,
+      'DELIVERY_RECEIPT_INPUT_INVALID',
+      'Delivery receipt fields must use the expected string types',
+    );
+  }
+  if (!Object.hasOwn(input, 'idempotencyKey')
+    || input.idempotencyKey === undefined
+    || (typeof input.idempotencyKey === 'string' && !input.idempotencyKey.trim())) {
+    throw typedError(
+      422,
+      'IDEMPOTENCY_KEY_REQUIRED',
+      'Idempotency key is required',
+    );
+  }
+  if (typeof input.idempotencyKey !== 'string') {
+    throw typedError(
+      422,
+      'IDEMPOTENCY_KEY_INVALID',
+      'Idempotency key must contain 8 to 160 safe characters',
+    );
+  }
+
+  const outcome = input.outcome.trim().toUpperCase();
+  const expectedDeliveryEventId = input.expectedDeliveryEventId.trim();
+  const idempotencyKey = input.idempotencyKey.trim();
+  const reason = Object.hasOwn(input, 'reason') ? normalizedReason(input.reason) : '';
 
   if (!['RECEIVED', 'NOT_RECEIVED'].includes(outcome)) {
     throw typedError(422, 'DELIVERY_RECEIPT_OUTCOME_INVALID', 'Delivery receipt outcome is invalid');
@@ -116,6 +152,45 @@ function createModelRepository() {
     },
     async findShipmentEvent(eventId, session) {
       return withSession(ShipmentEvent.findById(eventId), session).lean();
+    },
+    async guardAuthoritativeDelivery({
+      orderId,
+      customerId,
+      shipmentId,
+      deliveryEventId,
+    }, session) {
+      const guardedOrder = await withSession(
+        Order.findOneAndUpdate(
+          { _id: orderId, customerId, orderStatus: 'Delivered' },
+          { $set: { orderStatus: 'Delivered' } },
+          {
+            new: true,
+            runValidators: true,
+            timestamps: false,
+          },
+        ),
+        session,
+      ).lean();
+      if (!guardedOrder) return { order: null, shipment: null };
+
+      const guardedShipment = await withSession(
+        Shipment.findOneAndUpdate(
+          {
+            _id: shipmentId,
+            orderId,
+            status: 'Delivered',
+            terminalEventId: deliveryEventId,
+          },
+          { $set: { status: 'Delivered', terminalEventId: deliveryEventId } },
+          {
+            new: true,
+            runValidators: true,
+            timestamps: false,
+          },
+        ),
+        session,
+      ).lean();
+      return { order: guardedOrder, shipment: guardedShipment };
     },
     async findByCommand(customerId, idempotencyKey, session) {
       return withSession(
@@ -178,15 +253,6 @@ function createAuditLogger() {
   };
 }
 
-function createOutboxWriter() {
-  return {
-    async append(entry, session) {
-      const [created] = await DomainOutbox.create([entry], { session });
-      return created.toObject();
-    },
-  };
-}
-
 function conflictWithWinner(errorCode, message, winner) {
   return typedError(409, errorCode, message, { winner: safeDecision(winner) });
 }
@@ -195,7 +261,7 @@ function createCustomerDeliveryReceiptService({
   repository = createModelRepository(),
   transactionManager = createTransactionManager(),
   auditLogger = createAuditLogger(),
-  outboxWriter = createOutboxWriter(),
+  outboxWriter = createCanonicalOutboxWriter(),
   clock = () => new Date(),
 } = {}) {
   async function resolveDuplicate(customerId, orderId, command) {
@@ -218,15 +284,18 @@ function createCustomerDeliveryReceiptService({
     const terminal = await repository.findTerminalReceived(orderId, null);
     if (terminal) {
       throw conflictWithWinner(
-        'DELIVERY_RECEIPT_ALREADY_CONFIRMED',
+        'DELIVERY_CONFIRMATION_ALREADY_RECORDED',
         'Customer delivery receipt was already confirmed',
         terminal,
       );
     }
     const winner = await repository.findLatestDecision(orderId, null);
     if (winner) {
+      const errorCode = winner.outcome === 'NOT_RECEIVED' && command.outcome === 'NOT_RECEIVED'
+        ? 'DELIVERY_DISPUTE_OPEN'
+        : 'DELIVERY_RECEIPT_CONFLICT';
       throw conflictWithWinner(
-        'DELIVERY_RECEIPT_CONFLICT',
+        errorCode,
         'Another delivery receipt decision was recorded first',
         winner,
       );
@@ -277,7 +346,7 @@ function createCustomerDeliveryReceiptService({
           if (order.orderStatus !== 'Delivered') {
             throw typedError(
               409,
-              'ORDER_NOT_DELIVERED',
+              'ORDER_NOT_AUTHORITATIVELY_DELIVERED',
               'The order has no authoritative physical delivery',
             );
           }
@@ -298,15 +367,36 @@ function createCustomerDeliveryReceiptService({
           if (!evidenceMatches) {
             throw typedError(
               409,
-              'DELIVERY_EVIDENCE_STALE',
+              'DELIVERY_EVENT_STALE',
               'The delivered shipment evidence has changed; reload the order',
+            );
+          }
+
+          const guarded = await repository.guardAuthoritativeDelivery({
+            orderId: order._id,
+            customerId: order.customerId,
+            shipmentId: shipment._id,
+            deliveryEventId: event._id,
+          }, session);
+          if (!guarded?.order) {
+            throw typedError(
+              409,
+              'ORDER_NOT_AUTHORITATIVELY_DELIVERED',
+              'The order delivery state changed while recording the receipt',
+            );
+          }
+          if (!guarded.shipment) {
+            throw typedError(
+              409,
+              'DELIVERY_EVENT_STALE',
+              'The delivered shipment evidence changed while recording the receipt',
             );
           }
 
           const terminal = await repository.findTerminalReceived(orderId, session);
           if (terminal) {
             throw conflictWithWinner(
-              'DELIVERY_RECEIPT_ALREADY_CONFIRMED',
+              'DELIVERY_CONFIRMATION_ALREADY_RECORDED',
               'Customer delivery receipt was already confirmed',
               terminal,
             );
@@ -316,8 +406,12 @@ function createCustomerDeliveryReceiptService({
             command.outcome !== 'RECEIVED'
             || latest.outcome !== 'NOT_RECEIVED'
           )) {
+            const errorCode = latest.outcome === 'NOT_RECEIVED'
+              && command.outcome === 'NOT_RECEIVED'
+              ? 'DELIVERY_DISPUTE_OPEN'
+              : 'DELIVERY_RECEIPT_CONFLICT';
             throw conflictWithWinner(
-              'DELIVERY_RECEIPT_CONFLICT',
+              errorCode,
               'Another delivery receipt decision was recorded first',
               latest,
             );
@@ -356,9 +450,12 @@ function createCustomerDeliveryReceiptService({
             }
           }
 
-          const eventType = command.outcome === 'RECEIVED'
+          const auditAction = command.outcome === 'RECEIVED'
             ? 'CUSTOMER_DELIVERY_RECEIVED'
             : 'CUSTOMER_DELIVERY_NOT_RECEIVED';
+          const domainEventType = command.outcome === 'RECEIVED'
+            ? 'ORDER_COMPLETED_BY_CUSTOMER'
+            : 'CUSTOMER_DELIVERY_DISPUTED';
           const businessEventId = `customer-delivery-receipt:${receipt._id}`;
           const safeFacts = {
             outcome: command.outcome,
@@ -374,32 +471,33 @@ function createCustomerDeliveryReceiptService({
             actorId: String(customerId),
             actorRole: 'Customer',
             source: 'CustomerDeliveryReceipt',
-            action: eventType,
+            action: auditAction,
             targetType: 'Order',
             targetId: String(order._id),
             outcome: 'Success',
             correlationId: businessEventId,
             businessEventId,
-            reasonCode: eventType,
+            reasonCode: auditAction,
             reason: '',
             previousState: latest?.outcome || 'Awaiting',
             newState: command.outcome,
             safeFacts,
             timestamp: respondedAt,
           }, session);
-          await outboxWriter.append({
+          const envelope = canonicalEnvelope({
             identityKey: businessEventId,
-            eventType,
-            payload: {
-              businessEventId,
-              orderId: String(order._id),
-              customerId: String(customerId),
-              outcome: command.outcome,
-              shipmentId: String(shipment._id),
-              deliveryEventId: String(event._id),
-            },
-            status: 'Pending',
-          }, session);
+            businessEventId,
+            eventType: domainEventType,
+            aggregateType: 'Order',
+            aggregateId: String(order._id),
+            occurredAt: respondedAt,
+            ...(command.outcome === 'RECEIVED'
+              ? { recipient: { userId: String(customerId), role: 'Customer' } }
+              : { recipientRole: 'Staff' }),
+            target: { collection: 'Order', id: String(order._id) },
+            displayValues: { orderCode: String(order.orderCode || '') },
+          });
+          await outboxWriter.publish(envelope, session);
 
           return safeDecision(receipt);
         });
