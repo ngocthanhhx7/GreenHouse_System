@@ -12,6 +12,7 @@ import NotificationPage from './pages/notifications/NotificationPage.jsx';
 import NotificationDetailPage from './pages/notifications/NotificationDetailPage.jsx';
 import LoginPage from './pages/auth/LoginPage.jsx';
 import RegisterPage from './pages/auth/RegisterPage.jsx';
+import ForgotPasswordPage from './pages/auth/ForgotPasswordPage.jsx';
 import AcceptInvitationPage from './pages/auth/AcceptInvitationPage.jsx';
 import ProfilePage from './pages/profile/ProfilePage.jsx';
 import HomePage from './pages/public/HomePage.jsx';
@@ -73,6 +74,7 @@ export default function App() {
         <Route path="contact" element={<ContactPage />} />
         <Route path="login" element={<LoginPage />} />
         <Route path="register" element={<RegisterPage />} />
+        <Route path="forgot-password" element={<ForgotPasswordPage />} />
         <Route path="accept-invitation" element={<AcceptInvitationPage />} />
         <Route path="unauthorized" element={<UnauthorizedPage />} />
         <Route path="forbidden" element={<ForbiddenPage />} />
