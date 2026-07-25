@@ -621,12 +621,12 @@ describe('SL-004 packing, shipment and delivery behavior', () => {
     const unknown = createHarness({ paymentMethod: 'COD', paymentStatus: 'Unpaid' });
     const unknownHandoff = await unknown.handoff();
     await unknown.service.recordShipmentEvent(
-      { actorType: 'Staff', actorId: 'staff-1' },
+      { actorType: 'Carrier', actorId: null },
       unknownHandoff.shipment._id,
       {
         eventKey: 'cod-delivery-unknown',
         eventType: 'DELIVERED',
-        source: 'STAFF_EVIDENCE',
+        source: 'CARRIER',
         occurredAt: '2026-07-24T10:00:00.000Z',
         evidenceReference: 'tracking-delivered-only',
       },
@@ -635,6 +635,46 @@ describe('SL-004 packing, shipment and delivery behavior', () => {
     assert.equal(unknown.state.order.paymentStatus, 'Unpaid');
     assert.equal(unknown.state.discrepancies.length, 1);
     assert.equal(unknown.state.discrepancies[0].status, 'Open');
+  });
+
+  it('P1 requires an explicit Staff COD result outside production and rejects manual COD delivery in production', async () => {
+    for (const runtime of ['development', 'production']) {
+      const manual = createHarness({ paymentMethod: 'COD', paymentStatus: 'Unpaid', runtime });
+      const { shipment } = await manual.handoff(`handoff-explicit-cod-${runtime}`);
+
+      await assert.rejects(
+        manual.service.recordShipmentEvent(
+          { actorType: 'Staff', actorId: 'staff-1' },
+          shipment._id,
+          {
+            eventKey: `staff-cod-result-omitted-${runtime}`,
+            eventType: 'DELIVERED',
+            source: 'STAFF_EVIDENCE',
+            occurredAt: '2026-07-24T10:00:00.000Z',
+            evidenceReference: 'staff-delivery-observation',
+          },
+        ),
+        (error) => {
+          if (runtime === 'production') {
+            assert.equal(error.statusCode, 403);
+            assert.equal(error.errorCode, 'COD_COLLECTION_CARRIER_SIGNATURE_REQUIRED');
+          } else {
+            assert.equal(error.statusCode, 400);
+            assert.equal(error.errorCode, 'COD_COLLECTION_RESULT_REQUIRED');
+            assert.deepEqual(error.errors, [{
+              field: 'codCollectionResult',
+              message: 'Chọn đã thu hoặc chưa thu COD',
+            }]);
+          }
+          return true;
+        },
+      );
+
+      assert.equal(manual.state.order.orderStatus, 'Shipped');
+      assert.equal(manual.state.order.paymentStatus, 'Unpaid');
+      assert.equal(manual.state.events.length, 1);
+      assert.equal(manual.state.discrepancies.length, 0);
+    }
   });
 
   it('P1 lets non-production Staff record successful delivery and derives full COD only from signed image evidence', async () => {
@@ -694,6 +734,40 @@ describe('SL-004 packing, shipment and delivery behavior', () => {
     assert.equal(replay.idempotentReplay, true);
     assert.equal(manual.state.codEvidence.length, 1);
     assert.equal(manual.state.audits.filter((entry) => entry.action === 'SHIPMENT_EVENT_RECORDED').length, 1);
+  });
+
+  it('P2 keeps Staff COD evidence identifiers within the persisted 160-character limit', async () => {
+    const manual = createHarness({ paymentMethod: 'COD', paymentStatus: 'Unpaid', runtime: 'development' });
+    const { shipment } = await manual.handoff('handoff-long-staff-cod-key');
+    const eventKey = `staff-cod-${'a'.repeat(150)}`;
+    assert.equal(eventKey.length, 160);
+    const input = {
+      eventKey,
+      eventType: 'DELIVERED',
+      source: 'STAFF_EVIDENCE',
+      occurredAt: '2026-07-24T10:00:00.000Z',
+      evidenceReferences: [
+        '/api/operational-evidence/77777777-7777-4777-8777-777777777777.jpg?claim=valid',
+      ],
+      codCollectionResult: 'COLLECTED',
+    };
+
+    const result = await manual.service.recordShipmentEvent(
+      { actorType: 'Staff', actorId: 'staff-1' },
+      shipment._id,
+      input,
+    );
+
+    assert.equal(manual.state.codEvidence.length, 1);
+    assert.ok(manual.state.codEvidence[0].eventId.length <= 160);
+    assert.equal(manual.state.codEvidence[0].eventId, `staff-reconciliation:${result.event._id}`);
+    const replay = await manual.service.recordShipmentEvent(
+      { actorType: 'Staff', actorId: 'staff-1' },
+      shipment._id,
+      input,
+    );
+    assert.equal(replay.idempotentReplay, true);
+    assert.equal(manual.state.codEvidence.length, 1);
   });
 
   it('P1 records non-production Staff COD not-collected evidence as Delivered + Unpaid + one Open discrepancy', async () => {

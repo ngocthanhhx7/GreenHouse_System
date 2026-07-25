@@ -508,6 +508,30 @@ function createFulfillmentCommandService({
       if (!shipment) throw new ApiError(404, 'Shipment not found');
       const order = await repository.findOrderById(shipment.orderId, session);
       if (!order) throw new ApiError(404, 'Order not found');
+      const isStaffCodDelivery = (
+        actor.actorType === 'Staff'
+        && eventType === 'DELIVERED'
+        && order.paymentMethod === 'COD'
+      );
+      if (isStaffCodDelivery && runtime === 'production') {
+        throw new ApiError(
+          403,
+          'Production COD collection requires signed Carrier evidence',
+          [],
+          'COD_COLLECTION_CARRIER_SIGNATURE_REQUIRED',
+        );
+      }
+      if (isStaffCodDelivery && !codCollectionResult && !input.customerCollectionEvidence) {
+        throw new ApiError(
+          400,
+          'codCollectionResult is required for Staff COD delivery',
+          [{
+            field: 'codCollectionResult',
+            message: 'Chọn đã thu hoặc chưa thu COD',
+          }],
+          'COD_COLLECTION_RESULT_REQUIRED',
+        );
+      }
       if (codCollectionResult && order.paymentMethod !== 'COD') {
         throw new ApiError(409, 'COD reconciliation is available only for COD orders');
       }
@@ -602,7 +626,7 @@ function createFulfillmentCommandService({
           }
           const staffCollection = codCollectionResult === 'COLLECTED'
             ? {
-              eventId: `staff-reconciliation:${eventKey}`,
+              eventId: `staff-reconciliation:${String(event._id)}`,
               customerCollectedAmount: expected,
               collectionTiming: 'AT_DELIVERY',
               occurredAt,

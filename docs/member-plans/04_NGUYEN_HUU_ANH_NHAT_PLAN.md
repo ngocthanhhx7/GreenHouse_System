@@ -241,12 +241,15 @@ Nguyễn Hữu Anh Nhật bổ sung đường vận hành dành riêng cho môi 
   không nhận các URL vận hành nội bộ.
 - Khóa idempotency của sự kiện được giữ qua lỗi/response không chắc chắn, chỉ
   xoay sau khi server trả kết quả và projection tải lại thành công.
-- `NODE_ENV=production` từ chối `codCollectionResult` của Staff và tiếp tục yêu
-  cầu chứng cứ Carrier có chữ ký; UI chỉ hiện thao tác khi projection Staff trả
-  capability `manualCodReconciliation=true`.
+- `NODE_ENV=production` từ chối mọi kết quả giao COD do Staff ghi nhận, kể cả
+  payload bỏ trống `codCollectionResult`; ngoài production, Staff phải chọn rõ
+  `COLLECTED` hoặc `NOT_COLLECTED`. UI chỉ hiện thao tác khi projection Staff
+  trả capability `manualCodReconciliation=true`.
+- ID của `CodEvidence` do Staff tạo được dẫn xuất từ ShipmentEvent bền vững,
+  không nối trực tiếp event key 160 ký tự nên luôn nằm trong giới hạn persistence.
 
-Kết quả kiểm thử local ngày 2026-07-25: server `1064/1064`, client
-`262/262`, nhóm focused server `39/39`, nhóm focused client `16/16`, và
+Kết quả kiểm thử local ngày 2026-07-25: server `1066/1066`, client
+`262/262`, nhóm focused server `41/41`, nhóm focused client `16/16`, và
 `npm run build` PASS (158 modules; chỉ còn cảnh báo kích thước chunk đã biết).
 
 ## 17. Final Checklist

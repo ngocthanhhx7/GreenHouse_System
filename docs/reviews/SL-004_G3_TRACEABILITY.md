@@ -161,19 +161,20 @@ actor acceptance, deployment, or a production migration.
 | Invariant | Code boundary | Test evidence |
 |---|---|---|
 | Staff never supplies a COD amount | `fulfillmentCommand.service.js` rejects amount fields and derives a successful collection from immutable `codExpectedAmount` | `P1 lets non-production Staff record successful delivery...`; arbitrary amount rejection case |
-| Manual Staff COD is unavailable in production | Runtime guard rejects `codCollectionResult` with `COD_COLLECTION_CARRIER_SIGNATURE_REQUIRED`; Staff projection publishes `manualCodReconciliation=false` and UI consumes that capability | production rejection/capability behavior test; `codUiContract.test.js` |
+| Manual Staff COD is unavailable in production | Runtime guard rejects every Staff COD delivery, including omission of `codCollectionResult`, with `COD_COLLECTION_CARRIER_SIGNATURE_REQUIRED`; Staff projection publishes `manualCodReconciliation=false` and UI consumes that capability | explicit-result/production rejection behavior test; `codUiContract.test.js` |
 | Successful demo collection is attributable and atomic | Delivery transaction appends `ShipmentEvent`, creates `CodEvidence` with source `STAFF_RECONCILIATION`, marks Payment/Attempt/Order Paid, and sets `completedSaleAt` to evidence time | successful Staff reconciliation behavior test |
 | Unsuccessful collection remains financially open without locking later Carrier facts | Explicit not-collected evidence remains on ShipmentEvent, leaves actual collection `null`, creates no CodEvidence/customerCollectionEvidenceId, leaves Payment Unpaid, and opens one `CodDiscrepancy` while Order is Delivered | not-collected behavior test |
 | Failed delivery never becomes Delivered/Paid | `codCollectionResult` is valid only with `DELIVERED`; active failed-attempt/return paths retain their existing shipment/order invariants | failed-delivery rejection behavior test |
 | Evidence is operational and bounded | Every submitted URL is verified by `operationalEvidenceClaim.verify(url)`; canonical `claim.url` values are used only for duplicate detection while the verified signed URLs are persisted on ShipmentEvent/CodEvidence for authenticated preview; maximum 5 images and 20 MiB per command | unsigned and six-image RED/GREEN cases; model contracts; client uploader contract |
 | Internal evidence remains previewable without widening Customer data | Staff fulfillment projection includes the persisted signed URLs; Customer fulfillment projection continues to expose only `hasEvidence` | successful Staff reconciliation projection/privacy assertions; `codUiContract.test.js` |
 | Failure reason, retry and errors remain operationally explicit | Staff operational failed-attempt/return evidence accepts only supported reason codes; validation returns `evidenceReferences`/`reason` field errors; event-key replay is bound to shipment/type/source/actor; the UI retains its event key across failure or failed reload and rotates it only after a confirmed reload | reason/field-error and cross-boundary key-reuse behavior tests; replay assertion; client pending/idempotency contract |
+| Staff evidence identity remains persistence-safe | `CodEvidence.eventId` is derived from the durable ShipmentEvent ID instead of prefixing the caller's 160-character event key | 160-character event-key behavior test and replay assertion |
 
 Fresh RED observed in this continuation: the Staff evidence projection assertion
 failed at `25/26`; the invalid-claim and unsupported-reason tests each failed
 `0/1`; the expanded client contract was `3/5`; and the reload-safe idempotency
 assertion failed `0/1`; Customer-forced evidence projection and cross-boundary
 event-key reuse were each observed RED before their privacy/idempotency guards.
-Current local GREEN: focused server `39/39`, focused client `16/16`, full server
-`1064/1064`, full client `262/262`, and production
+Current local GREEN: focused server `41/41`, focused client `16/16`, full server
+`1066/1066`, full client `262/262`, and production
 client build PASS (158 modules).

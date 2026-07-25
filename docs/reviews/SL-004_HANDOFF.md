@@ -107,16 +107,20 @@ No target or production database was mutated.
   Server replay also binds that key to the same shipment, event type, source,
   and actor instead of returning a foreign command result.
 - Non-delivered outcomes cannot carry COD reconciliation. Production rejects
-  the Staff reconciliation field and continues to require signed Carrier facts;
-  the UI is controlled by the server-projected `manualCodReconciliation`
+  every Staff COD delivery, including an omitted reconciliation field; outside
+  production Staff must choose an explicit collected/not-collected result.
+  The UI is controlled by the server-projected `manualCodReconciliation`
   capability rather than a client build-mode assumption.
+- Staff collection evidence uses the durable ShipmentEvent ID for its bounded
+  persistence identity, so a valid 160-character command key cannot overflow
+  the `CodEvidence.eventId` limit.
 
 Verification run on 2026-07-25:
 
 ```text
-focused server SL-004/model/routes: 39/39
+focused server SL-004/model/routes: 41/41
 focused client SL-004/COD: 16/16
-full server: 1064/1064, 171 suites
+full server: 1066/1066, 171 suites
 full client: 262/262, 65 suites
 client production build: PASS, 158 modules
 ```
