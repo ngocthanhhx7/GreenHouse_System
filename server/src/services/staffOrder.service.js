@@ -381,8 +381,8 @@ function createStaffOrderService({
           session,
         });
         const order = await getOrderOrThrow(orderId, session);
-        if (idempotencyKey && order.staffConfirmIdempotencyKey) {
-          if (order.staffConfirmIdempotencyKey !== idempotencyKey || order.staffConfirmRequestHash !== requestHash) {
+        if (idempotencyKey && order.staffConfirmIdempotencyKey === idempotencyKey) {
+          if (order.staffConfirmRequestHash !== requestHash) {
             throw new ApiError(409, 'Staff confirmation idempotency key was reused with different details');
           }
           const [details, existingRequest] = await Promise.all([

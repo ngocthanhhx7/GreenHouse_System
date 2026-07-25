@@ -244,6 +244,27 @@ describe('SL-004 exact stock export behavior', () => {
     assert.deepEqual(state.transactions, snapshot.transactions);
   });
 
+  it('AT-230 replays a completed Warehouse export without another movement for a different key', async () => {
+    const { service, state } = createHarness();
+    await service.processStockExport('warehouse-1', 'export-1', {
+      idempotencyKey: 'export-001',
+    });
+    const before = structuredClone({
+      inventories: state.inventories,
+      reservations: state.reservations,
+      transactions: state.transactions,
+    });
+
+    const replay = await service.processStockExport('warehouse-2', 'export-1', {
+      idempotencyKey: 'export-002',
+    });
+
+    assert.equal(replay.idempotentReplay, true);
+    assert.deepEqual(state.inventories, before.inventories);
+    assert.deepEqual(state.reservations, before.reservations);
+    assert.deepEqual(state.transactions, before.transactions);
+  });
+
   it('AT-061 rolls back an injected later-line failure and persists only a retryable Failed outcome', async () => {
     const { service, state } = createHarness({ failMovementFor: 'detail-2' });
     assert.equal(typeof service.processStockExport, 'function');

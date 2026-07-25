@@ -995,6 +995,36 @@ describe('SL-004 packing, shipment and delivery behavior', () => {
     assert.equal(replay.idempotentReplay, true);
   });
 
+  it('AT-231 rejects delivery from a non-Shipped Order without appending an event', async () => {
+    const { service, state, handoff } = createHarness();
+    const { shipment } = await handoff('invalid-state-delivery');
+    state.order.orderStatus = 'Confirmed';
+    const before = structuredClone({
+      order: state.order,
+      events: state.events,
+      outbox: state.outbox,
+    });
+
+    await assert.rejects(
+      () => service.recordShipmentEvent(
+        { actorType: 'Staff', actorId: 'staff-1' },
+        shipment._id,
+        {
+          eventKey: 'invalid-state-delivery-event',
+          eventType: 'DELIVERED',
+          source: 'STAFF_EVIDENCE',
+          occurredAt: '2026-07-24T10:00:00.000Z',
+          evidenceReference: 'delivery-proof',
+        },
+      ),
+      /requires an active Shipped order|requires a Shipped order/i,
+    );
+
+    assert.deepEqual(state.order, before.order);
+    assert.deepEqual(state.events, before.events);
+    assert.deepEqual(state.outbox, before.outbox);
+  });
+
   it('P1 rejects shipment-event key reuse across another shipment, event type or Staff actor', async () => {
     const { service, state, handoff } = createHarness();
     const { shipment } = await handoff('handoff-event-key-boundary');
