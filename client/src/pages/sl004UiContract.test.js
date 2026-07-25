@@ -103,8 +103,9 @@ describe('SL-004 fulfillment and delivery UI contract', () => {
     assert.match(staffOrder, /CustomerCollectedAmount|customerCollectedAmount/);
     assert.match(staffOrder, /CarrierSettlementAmount|carrierSettlementAmount|settlementReconciliationStatus/);
     assert.match(staffOrder, /codDiscrepancyStatus/);
-    assert.doesNotMatch(staffOrder, /markCodCollected|Đã thu COD/);
-    assert.doesNotMatch(staffOrder, /codAmount|amount:\s*Number\(|name="amount"/i);
+    assert.match(staffOrder, /markCodCollected/);
+    assert.match(staffOrder, /thu đủ COD|thu thiếu|không thu/i);
+    assert.doesNotMatch(staffOrder, /amount:\s*Number\(|name="amount"/i);
   });
 
   it('AT-068 keeps returned-parcel classification exact and free of finance controls', async () => {

@@ -43,6 +43,18 @@ describe('shared header design contract', () => {
     assert.match(header, /onClick=\{handleLogout\}/);
   });
 
+  it('clears the authenticated session before opening the login page', () => {
+    const logoutIndex = header.indexOf('await logout();');
+    const loginNavigationIndex = header.indexOf("navigate('/login', { replace: true });");
+
+    assert.ok(logoutIndex >= 0);
+    assert.ok(loginNavigationIndex >= 0);
+    assert.ok(
+      logoutIndex < loginNavigationIndex,
+      'logout must clear AuthContext before LoginPage can redirect the previous user',
+    );
+  });
+
   it('uses the premium storefront header structure without changing auth behavior', () => {
     assert.match(header, /site-header-premium/);
     assert.match(header, /header-inner/);

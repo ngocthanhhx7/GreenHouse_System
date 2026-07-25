@@ -68,6 +68,7 @@ function toOrderSummary(order) {
     codExpectedAmount: Number(order.codExpectedAmount ?? order.totalAmount ?? 0),
     customerCollectedAmount: Number(order.customerCollectedAmount || 0),
     customerCollectedAt: order.customerCollectedAt || null,
+    customerCollectionEvidenceId: order.customerCollectionEvidenceId || '',
     carrierSettlementAmount: Number(order.carrierSettlementAmount || 0),
     carrierSettledAt: order.carrierSettledAt || null,
     codDiscrepancyStatus: order.codDiscrepancyStatus || 'None',
@@ -355,10 +356,14 @@ function createStaffOrderService({
 
     async getOrder(orderId) {
       const order = await getOrderOrThrow(orderId);
-      const [details, stockExportRequest] = await Promise.all([
+      const [details, openStockExportRequest, completedStockExportRequest] = await Promise.all([
         orderRepository.listOrderDetails(orderId),
         orderRepository.findOpenStockExportRequest ? orderRepository.findOpenStockExportRequest(orderId) : null,
+        orderRepository.findCompletedStockExportRequest
+          ? orderRepository.findCompletedStockExportRequest(orderId)
+          : null,
       ]);
+      const stockExportRequest = openStockExportRequest || completedStockExportRequest;
       return {
         ...toOrderDetail(order, details),
         stockExportRequest: stockExportRequest ? toStockExportRequest(stockExportRequest) : null,
@@ -513,11 +518,6 @@ function createStaffOrderService({
         await writeAudit(staffId, 'STAFF_ORDER_CANCEL', result.updated, `Staff cancelled ${result.updated.orderCode}: ${cancelReason}`);
       }
       return { ...toOrderDetail(result.updated, result.details), idempotentReplay: Boolean(result.idempotentReplay) };
-    },
-
-    async markCodCollected(staffId, orderId, input = {}) {
-      await getOrderOrThrow(orderId);
-      throw new ApiError(409, 'Carrier evidence is required; Staff cannot mark COD as collected');
     },
 
     async getInvoice(staffId, orderId) {

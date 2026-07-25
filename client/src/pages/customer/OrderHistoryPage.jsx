@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 
+import OrderProgress from '../../components/order/OrderProgress.jsx';
 import { resolveMediaUrl } from '../../services/apiClient.js';
 import { orderService } from '../../services/orderService.js';
 import { formatCurrency, translateOrderStatus, translatePaymentMethod, translatePaymentStatus } from '../../utils/formatters.js';
@@ -58,7 +59,6 @@ export default function OrderHistoryPage() {
         </div>
         <Link className="btn btn-outline-success" to="/products">Mua thêm sản phẩm</Link>
       </div>
-
       <nav className="order-status-tabs" aria-label="Lọc đơn hàng theo trạng thái">
         {ORDER_TABS.map((tab) => (
           <button
@@ -93,6 +93,8 @@ export default function OrderHistoryPage() {
                     {translateOrderStatus(order.orderStatus)}
                   </span>
                 </header>
+
+                <OrderProgress status={order.orderStatus} compact />
 
                 <div className="order-product-list">
                   {(order.details || []).map((detail) => (

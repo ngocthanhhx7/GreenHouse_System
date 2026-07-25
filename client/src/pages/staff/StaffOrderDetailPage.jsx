@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
+import OrderProgress from '../../components/order/OrderProgress.jsx';
 import OperationalEvidenceUploader from '../../components/common/OperationalEvidenceUploader.jsx';
 import { resolveMediaUrl } from '../../services/apiClient.js';
 import { staffOrderService } from '../../services/staffOrderService.js';
@@ -10,6 +11,14 @@ import {
   translatePaymentMethod,
   translatePaymentStatus,
 } from '../../utils/formatters.js';
+
+function toLocalDateTimeValue(value = new Date()) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
+    .toISOString()
+    .slice(0, 16);
+}
 
 const DELIVERY_FAILURE_REASONS = [
   ['CUSTOMER_UNREACHABLE', 'Không liên hệ được khách hàng'],
@@ -23,21 +32,86 @@ function blankHandoff() {
   return {
     carrierName: '',
     trackingReference: '',
-    handedOffAt: '',
+    handedOffAt: toLocalDateTimeValue(),
     evidenceReference: '',
   };
 }
 
 function blankEvent() {
   return {
-    eventType: 'ATTEMPT_FAILED',
+    eventType: 'DELIVERED',
     source: 'STAFF_EVIDENCE',
-    occurredAt: '',
+    occurredAt: toLocalDateTimeValue(),
     evidenceReferences: [],
     codCollectionResult: '',
     reason: '',
     replacesEventId: '',
   };
+}
+
+function blankCodEvidence() {
+  return {
+    customerCollectedAmount: '',
+    collectionTiming: 'AT_DELIVERY',
+    occurredAt: toLocalDateTimeValue(),
+    evidenceReference: '',
+  };
+}
+
+function validateHandoffDraft(draft) {
+  const errors = {};
+  if (!draft.carrierName.trim()) errors.carrierName = 'Vui lòng nhập đơn vị vận chuyển.';
+  if (!draft.trackingReference.trim()) errors.trackingReference = 'Vui lòng nhập mã vận đơn.';
+  if (!draft.evidenceReference.trim()) errors.evidenceReference = 'Vui lòng nhập bằng chứng bàn giao.';
+  if (!draft.handedOffAt || Number.isNaN(new Date(draft.handedOffAt).getTime())) {
+    errors.handedOffAt = 'Vui lòng chọn thời điểm bàn giao hợp lệ.';
+  }
+  return errors;
+}
+
+function validateShipmentEventDraft(draft) {
+  const errors = {};
+  if (!draft.evidenceReference.trim()) errors.evidenceReference = 'Vui lòng nhập bằng chứng giao hàng.';
+  if (!draft.occurredAt || Number.isNaN(new Date(draft.occurredAt).getTime())) {
+    errors.occurredAt = 'Vui lòng chọn thời điểm sự kiện hợp lệ.';
+  }
+  if (['CORRECTION', 'DISPUTED'].includes(draft.eventType) && !draft.replacesEventId.trim()) {
+    errors.replacesEventId = 'Vui lòng chọn sự kiện cần thay thế.';
+  }
+  return errors;
+}
+
+function validateCodEvidenceDraft(draft, expectedAmount, { allowPartial = false } = {}) {
+  const errors = {};
+  if (!draft.evidenceReference.trim()) errors.codEvidenceReference = 'Vui lòng nhập bằng chứng thu COD.';
+  if (!draft.occurredAt || Number.isNaN(new Date(draft.occurredAt).getTime())) {
+    errors.codEvidenceOccurredAt = 'Vui lòng chọn thời điểm thu COD hợp lệ.';
+  }
+  if (!['AT_DELIVERY', 'AFTER_DELIVERY'].includes(draft.collectionTiming)) {
+    errors.codEvidenceTiming = 'Vui lòng chọn thời điểm thu COD hợp lệ.';
+  }
+  if (allowPartial) {
+    const amount = Number(draft.customerCollectedAmount);
+    if (!Number.isSafeInteger(amount) || amount < 0 || amount >= expectedAmount) {
+      errors.customerCollectedAmount = 'Số tiền thực nhận phải là số nguyên từ 0 đến dưới CODExpectedAmount.';
+    }
+  }
+  return errors;
+}
+
+function translateFulfillmentEventType(eventType) {
+  const labels = {
+    HANDOFF: 'Đã bàn giao cho đơn vị vận chuyển',
+    ATTEMPT_FAILED: 'Giao không thành công',
+    RESCHEDULED: 'Đã hẹn giao lại',
+    DELIVERED: 'Đã giao thành công',
+    RETURNED_TO_SHOP: 'Đã hoàn về cửa hàng',
+    LOST: 'Thất lạc',
+    DAMAGED: 'Hư hỏng',
+    CORRECTION: 'Điều chỉnh bằng chứng',
+    DISPUTED: 'Tranh chấp bằng chứng',
+  };
+  return labels[eventType] || eventType;
 }
 
 export default function StaffOrderDetailPage() {
@@ -47,6 +121,7 @@ export default function StaffOrderDetailPage() {
   const [checklist, setChecklist] = useState([]);
   const [handoff, setHandoff] = useState(blankHandoff);
   const [shipmentEvent, setShipmentEvent] = useState(blankEvent);
+  const [codEvidence, setCodEvidence] = useState(blankCodEvidence);
   const [destination, setDestination] = useState({
     receiverName: '',
     receiverPhone: '',
@@ -84,7 +159,7 @@ export default function StaffOrderDetailPage() {
       setChecklist((loadedOrder.details || []).map((item) => ({
         orderDetailId: item._id || item.id,
         quantity: Number(item.quantity),
-        checked: true,
+        checked: false,
       })));
       setDestination((current) => ({
         ...current,
@@ -115,6 +190,7 @@ export default function StaffOrderDetailPage() {
         : successMessage);
       const reloaded = await loadOrder();
       if (reloaded) onSuccess?.(result);
+      return result;
     } catch (err) {
       setError(err.message);
       setFieldErrors(Object.fromEntries((err.errors || []).map((entry) => [entry.field, entry.message])));
@@ -122,11 +198,97 @@ export default function StaffOrderDetailPage() {
       submittingRef.current = false;
       setSubmitting(false);
     }
+    return null;
   }
 
   const activeCycle = fulfillment.cycles?.at(-1);
   const shipment = activeCycle?.shipment;
   const shipmentHistory = activeCycle?.events || [];
+  const allItemsChecked = checklist.length > 0 && checklist.every((line) => line.checked);
+
+  function submitPacking() {
+    return runAction(
+      () => staffOrderService.confirmPacking(order.id, {
+        checklist: checklist.map((line) => ({
+          ...line,
+          checkedQuantity: line.checked ? line.quantity : 0,
+        })),
+        idempotencyKey: idempotencyKey(`packing:${activeCycle?.id || order.id}`),
+      }),
+      'Đã đóng gói đủ sản phẩm; đơn hàng chuyển sang Đã đóng gói.',
+    );
+  }
+
+  function submitHandoff() {
+    const errors = validateHandoffDraft(handoff);
+    if (Object.keys(errors).length) {
+      setFieldErrors(errors);
+      setError('Vui lòng kiểm tra đầy đủ thông tin bàn giao.');
+      return;
+    }
+    return runAction(
+      () => staffOrderService.createShipment(order.id, {
+        ...handoff,
+        handedOffAt: new Date(handoff.handedOffAt).toISOString(),
+        idempotencyKey: idempotencyKey(`handoff:${activeCycle?.id || order.id}`),
+      }),
+      'Đã bàn giao cho đơn vị vận chuyển; đơn hàng chuyển sang Đang giao.',
+    );
+  }
+
+  function submitFullCodCollection() {
+    const expectedAmount = Number(order.codExpectedAmount);
+    const errors = validateCodEvidenceDraft(codEvidence, expectedAmount);
+    if (!Number.isSafeInteger(expectedAmount) || expectedAmount < 0) {
+      errors.codExpectedAmount = 'Đơn hàng chưa có CODExpectedAmount hợp lệ.';
+    }
+    if (Object.keys(errors).length) {
+      setFieldErrors(errors);
+      setError('Vui lòng kiểm tra bằng chứng và thời điểm thu đủ COD.');
+      return;
+    }
+    return runAction(
+      () => staffOrderService.markCodCollected(order.id, {
+        customerCollectedAmount: expectedAmount,
+        collectionTiming: codEvidence.collectionTiming,
+        occurredAt: new Date(codEvidence.occurredAt).toISOString(),
+        evidenceReference: codEvidence.evidenceReference.trim(),
+        idempotencyKey: idempotencyKey(`cod-full:${order.id}`),
+      }),
+      'Đã ghi nhận Staff thu đủ COD; Payment chuyển sang Paid.',
+    ).then((result) => {
+      if (result) setCodEvidence(blankCodEvidence());
+      return result;
+    });
+  }
+
+  function submitPartialCodCollection() {
+    const expectedAmount = Number(order.codExpectedAmount);
+    const errors = validateCodEvidenceDraft(codEvidence, expectedAmount, { allowPartial: true });
+    if (!Number.isSafeInteger(expectedAmount) || expectedAmount < 1) {
+      errors.codExpectedAmount = 'Đơn hàng chưa có CODExpectedAmount hợp lệ.';
+    }
+    if (Object.keys(errors).length) {
+      setFieldErrors(errors);
+      setError('Vui lòng kiểm tra số tiền thực nhận và bằng chứng thu COD.');
+      return;
+    }
+    const observedAmount = Number(codEvidence.customerCollectedAmount);
+    return runAction(
+      () => staffOrderService.markCodCollected(order.id, {
+        customerCollectedAmount: observedAmount,
+        collectionTiming: codEvidence.collectionTiming,
+        occurredAt: new Date(codEvidence.occurredAt).toISOString(),
+        evidenceReference: codEvidence.evidenceReference.trim(),
+        idempotencyKey: idempotencyKey(`cod-observed:${order.id}`),
+      }),
+      'Đã ghi nhận số tiền COD thực nhận; đơn hàng vẫn Unpaid và đã mở đối soát.',
+    ).then((result) => {
+      if (result) setCodEvidence(blankCodEvidence());
+      return result;
+    });
+  }
+
   const manualCodAllowed = fulfillment.capabilities?.manualCodReconciliation === true;
 
   async function submitShipmentEvent() {
@@ -192,6 +354,8 @@ export default function StaffOrderDetailPage() {
             <Link className="btn btn-outline-success" to={`/staff/orders/${order.id}/invoice`}>In hóa đơn</Link>
           </div>
 
+          <OrderProgress status={order.orderStatus} />
+
           <div className="row g-3">
             <div className="col-md-6"><strong>Địa chỉ nhận hàng:</strong> {order.shippingAddress}</div>
             <div className="col-md-3"><strong>Phí vận chuyển:</strong> {formatCurrency(order.shippingFee)}</div>
@@ -214,7 +378,10 @@ export default function StaffOrderDetailPage() {
 
           {order.orderStatus === 'Confirmed' && order.stockExportRequest?.status === 'Completed' && (
             <section className="border rounded p-3 mt-4">
-              <h2 className="h5">Danh mục đóng gói (Packing Record)</h2>
+              <h2 className="h5">Kiểm tra và xác nhận đóng gói <small className="text-secondary">· PackingRecord</small></h2>
+              <p className="text-secondary">
+                Chỉ khi toàn bộ sản phẩm được kiểm tra đủ số lượng, đơn hàng mới chuyển sang Đã đóng gói.
+              </p>
               {checklist.map((line, index) => (
                 <label className="d-flex gap-2 align-items-center mb-2" key={line.orderDetailId}>
                   <input
@@ -227,19 +394,28 @@ export default function StaffOrderDetailPage() {
                   <span>{order.details[index]?.productNameSnapshot} · {line.quantity}</span>
                 </label>
               ))}
-              <button className="btn btn-success" type="button" disabled={submitting} onClick={() => runAction(
-                () => staffOrderService.confirmPacking(order.id, {
-                  checklist,
-                  idempotencyKey: idempotencyKey(`packing:${activeCycle?.id || order.id}`),
-                }),
-                'PackingRecord hoàn tất; không gửi thông báo nội bộ cho Customer.',
-              )}>Xác nhận đóng gói chính xác</button>
+              {!allItemsChecked && (
+                <div className="alert alert-warning mt-3 mb-2">
+                  Vui lòng kiểm tra đủ tất cả sản phẩm trước khi xác nhận đóng gói.
+                </div>
+              )}
+              <button
+                className="btn btn-success"
+                type="button"
+                disabled={submitting || !allItemsChecked}
+                onClick={submitPacking}
+              >
+                Xác nhận đóng gói
+              </button>
             </section>
           )}
 
           {order.orderStatus === 'Packed' && (
             <section className="border rounded p-3 mt-4">
-              <h2 className="h5">Bàn giao Carrier</h2>
+              <h2 className="h5">Bàn giao cho đơn vị vận chuyển</h2>
+              <p className="text-secondary">
+                Ghi nhận đủ mã vận đơn, thời điểm và bằng chứng để chuyển đơn sang Đang giao.
+              </p>
               <div className="row g-2">
                 {[
                   ['carrierName', 'Tên đơn vị vận chuyển', 'text'],
@@ -254,14 +430,9 @@ export default function StaffOrderDetailPage() {
                   </label>
                 ))}
               </div>
-              <button className="btn btn-success mt-3" type="button" disabled={submitting} onClick={() => runAction(
-                () => staffOrderService.createShipment(order.id, {
-                  ...handoff,
-                  handedOffAt: new Date(handoff.handedOffAt).toISOString(),
-                  idempotencyKey: idempotencyKey(`handoff:${activeCycle?.id || order.id}`),
-                }),
-                'Đã ghi nhận bàn giao Carrier và Shipment.',
-              )}>Tạo Shipment</button>
+              <button className="btn btn-success mt-3" type="button" disabled={submitting} onClick={submitHandoff}>
+                Xác nhận bàn giao và bắt đầu giao hàng
+              </button>
             </section>
           )}
 
@@ -289,7 +460,8 @@ export default function StaffOrderDetailPage() {
                   )}
                 </li>
               ))}</ul>
-              <div className="row g-2">
+              {order.orderStatus === 'Shipped' && (
+                <div className="row g-2">
                 <label className="col-md-6">Kết quả giao hàng
                   <select className="form-select" value={shipmentEvent.eventType} onChange={(event) => setShipmentEvent({
                     ...shipmentEvent,
@@ -353,8 +525,16 @@ export default function StaffOrderDetailPage() {
                 <label className="col-md-6">Sự kiện được thay thế (đính chính / tranh chấp)
                   <input className="form-control" value={shipmentEvent.replacesEventId} onChange={(event) => setShipmentEvent({ ...shipmentEvent, replacesEventId: event.target.value })} />
                 </label>
-              </div>
-              <button className="btn btn-outline-success mt-3" type="button" disabled={submitting} onClick={submitShipmentEvent}>Ghi nhận kết quả</button>
+                </div>
+              )}
+              {order.orderStatus === 'Shipped' && (
+                <button className="btn btn-outline-success mt-3" type="button" disabled={submitting} onClick={submitShipmentEvent}>Ghi nhận kết quả</button>
+              )}
+              {order.orderStatus === 'Delivered' && (
+                <div className="alert alert-success mt-3 mb-0">
+                  <strong>Đơn hàng đã giao thành công.</strong> Customer hiện có thể xem trạng thái Đã giao trong lịch sử mua hàng.
+                </div>
+              )}
             </section>
           )}
 
@@ -386,6 +566,97 @@ export default function StaffOrderDetailPage() {
               {order.codRecoveryReceiptId && <div>Mã phiếu nhận hàng hoàn COD: {order.codRecoveryReceiptId}</div>}
             </div>
           )}
+
+          {order.paymentMethod === 'COD'
+            && order.orderStatus === 'Delivered'
+            && order.paymentStatus === 'Unpaid'
+            && !order.customerCollectionEvidenceId
+            && (
+              <section className="border rounded p-3 mt-4">
+                <h2 className="h5">Ghi nhận thu COD thủ công</h2>
+                <p className="text-secondary mb-3">
+                  Staff là người ghi nhận bằng chứng trong phiên bản hiện tại vì hệ thống chưa tích hợp Carrier.
+                  CODExpectedAmount do hệ thống cố định; không nhập lại số tiền cho luồng thu đủ.
+                </p>
+                <div className="row g-2">
+                  <label className="col-md-4">
+                    <span className="form-label">Thời điểm thu COD</span>
+                    <select
+                      className={`form-select ${fieldErrors.codEvidenceTiming ? 'is-invalid' : ''}`}
+                      value={codEvidence.collectionTiming}
+                      onChange={(event) => setCodEvidence({ ...codEvidence, collectionTiming: event.target.value })}
+                    >
+                      <option value="AT_DELIVERY">Khi giao hàng</option>
+                      <option value="AFTER_DELIVERY">Sau khi giao hàng</option>
+                    </select>
+                    {fieldErrors.codEvidenceTiming && <span className="invalid-feedback">{fieldErrors.codEvidenceTiming}</span>}
+                  </label>
+                  <label className="col-md-4">
+                    <span className="form-label">Thời điểm ghi nhận</span>
+                    <input
+                      className={`form-control ${fieldErrors.codEvidenceOccurredAt ? 'is-invalid' : ''}`}
+                      type="datetime-local"
+                      value={codEvidence.occurredAt}
+                      onChange={(event) => setCodEvidence({ ...codEvidence, occurredAt: event.target.value })}
+                      required
+                    />
+                    {fieldErrors.codEvidenceOccurredAt && <span className="invalid-feedback">{fieldErrors.codEvidenceOccurredAt}</span>}
+                  </label>
+                  <label className="col-md-4">
+                    <span className="form-label">Bằng chứng thu COD</span>
+                    <input
+                      className={`form-control ${fieldErrors.codEvidenceReference ? 'is-invalid' : ''}`}
+                      value={codEvidence.evidenceReference}
+                      onChange={(event) => setCodEvidence({ ...codEvidence, evidenceReference: event.target.value })}
+                      placeholder="Ví dụ: staff-pod-001"
+                      required
+                    />
+                    {fieldErrors.codEvidenceReference && <span className="invalid-feedback">{fieldErrors.codEvidenceReference}</span>}
+                  </label>
+                </div>
+
+                <div className="d-flex flex-wrap gap-2 mt-3">
+                  <button
+                    className="btn btn-success"
+                    type="button"
+                    disabled={submitting}
+                    onClick={submitFullCodCollection}
+                  >
+                    Ghi nhận thu đủ COD ({formatCurrency(order.codExpectedAmount)})
+                  </button>
+                </div>
+
+                <hr />
+                <p className="text-secondary">
+                  Nếu thu thiếu hoặc không thu, nhập đúng số tiền thực nhận. Hệ thống giữ Payment ở Unpaid và mở CODDiscrepancy để Staff xử lý tiếp.
+                </p>
+                <div className="row g-2 align-items-end">
+                  <label className="col-md-4">
+                    <span className="form-label">Số tiền thực nhận khi thu thiếu/không thu</span>
+                    <input
+                      className={`form-control ${fieldErrors.customerCollectedAmount ? 'is-invalid' : ''}`}
+                      type="number"
+                      min="0"
+                      max={Math.max(0, Number(order.codExpectedAmount) - 1)}
+                      step="1"
+                      value={codEvidence.customerCollectedAmount}
+                      onChange={(event) => setCodEvidence({ ...codEvidence, customerCollectedAmount: event.target.value })}
+                    />
+                    {fieldErrors.customerCollectedAmount && <span className="invalid-feedback">{fieldErrors.customerCollectedAmount}</span>}
+                  </label>
+                  <div className="col-md-8">
+                    <button
+                      className="btn btn-outline-warning"
+                      type="button"
+                      disabled={submitting}
+                      onClick={submitPartialCodCollection}
+                    >
+                      Ghi nhận thu thiếu/không thu
+                    </button>
+                  </div>
+                </div>
+              </section>
+            )}
 
           {fulfillment.incidents?.length > 0 && (
             <section className="border rounded p-3 mt-4">

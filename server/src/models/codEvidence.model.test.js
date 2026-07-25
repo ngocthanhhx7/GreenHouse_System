@@ -9,6 +9,7 @@ describe('COD evidence model', () => {
     assert.ok(CodEvidence.schema.path('eventId'));
     assert.ok(CodEvidence.schema.path('eventType').enumValues.includes('COLLECTION'));
     assert.ok(CodEvidence.schema.path('eventType').enumValues.includes('SETTLEMENT'));
+    assert.ok(CodEvidence.schema.path('source').enumValues.includes('STAFF_EVIDENCE'));
     assert.ok(CodEvidence.schema.path('customerCollectedAmount'));
     assert.ok(CodEvidence.schema.path('carrierSettlementAmount'));
     assert.ok(CodEvidence.schema.path('evidenceReferences'));

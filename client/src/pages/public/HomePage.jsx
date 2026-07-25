@@ -100,11 +100,11 @@ const benefits = [
 ];
 
 const orderSteps = [
-  { label: 'Đặt hàng', icon: 'cart' },
-  { label: 'Đóng gói', icon: 'box' },
-  { label: 'Thanh toán', icon: 'dollar' },
-  { label: 'Bồi đắp niềm tin', icon: 'user' },
-  { label: 'Hỗ trợ sau mua', icon: 'support' },
+  { label: 'Chọn sản phẩm', icon: 'cart' },
+  { label: 'Đăng nhập', icon: 'user' },
+  { label: 'Đặt hàng & thanh toán', icon: 'dollar' },
+  { label: 'Đóng gói & giao hàng', icon: 'box' },
+  { label: 'Theo dõi & hậu mãi', icon: 'support' },
 ];
 
 const reviews = [
@@ -321,7 +321,7 @@ export default function HomePage() {
         )}
       </section>
 
-      <section className="premium-section premium-why">
+      <section id="quy-trinh-mua-hang" className="premium-section premium-why">
         <div className="premium-heading home-reveal">
           <span>Vì sao chọn GreenHome</span>
         </div>

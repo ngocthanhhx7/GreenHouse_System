@@ -74,6 +74,7 @@ describe('COD reconciliation service', () => {
   let lockReleaseResult;
   let lockFinds;
   let lockFindResult;
+  let auditEntries;
 
   beforeEach(() => {
     repository = createRepository();
@@ -81,11 +82,12 @@ describe('COD reconciliation service', () => {
     lockReleaseResult = { status: 'ClosedPermanently' };
     lockFinds = [];
     lockFindResult = null;
+    auditEntries = [];
     service = createCodReconciliationService({
       repository,
       transactionManager: { async withTransaction(work) { return work({ id: 'session-1' }); } },
       clock: () => new Date('2026-07-23T12:00:00.000Z'),
-      auditLogger: { async log() {} },
+      auditLogger: { async log(entry) { auditEntries.push(entry); } },
       afterSalesLockService: {
         async release(payload, session) {
           lockReleases.push({ payload, session });
@@ -97,6 +99,21 @@ describe('COD reconciliation service', () => {
         },
       },
     });
+  });
+
+  it('allows Staff to record manual full collection with Staff evidence and audit ownership', async () => {
+    const result = await service.recordStaffCollectionEvidence('staff-1', 'order-1', {
+      eventId: 'staff-collection-1',
+      customerCollectedAmount: 100,
+      collectionTiming: 'AT_DELIVERY',
+      occurredAt: '2026-07-23T10:01:00.000Z',
+      evidenceReference: 'staff-pod-1',
+    });
+
+    assert.equal(result.event.source, 'STAFF_EVIDENCE');
+    assert.equal(result.order.paymentStatus, 'Paid');
+    assert.equal(auditEntries[0].userId, 'staff-1');
+    assert.equal(auditEntries[0].action, 'STAFF_COD_COLLECTION_RECORDED');
   });
 
   it('marks a full at-delivery Customer collection as Paid at DeliveredAt and releases a held request', async () => {

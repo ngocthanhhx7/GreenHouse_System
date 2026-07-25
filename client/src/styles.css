@@ -2245,6 +2245,107 @@ body {
   box-shadow: 0 0 0 3px rgba(47, 107, 66, 0.1);
 }
 
+.order-progress {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(110px, 1fr));
+  gap: 0;
+  padding: 0;
+  margin: 0 0 24px;
+  list-style: none;
+}
+
+.order-progress-step {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: #768276;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.order-progress-step::before {
+  position: absolute;
+  z-index: 0;
+  top: 15px;
+  right: 50%;
+  width: 100%;
+  height: 3px;
+  background: #dce5d8;
+  content: '';
+}
+
+.order-progress-step:first-child::before {
+  display: none;
+}
+
+.order-progress-marker {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid #dce5d8;
+  border-radius: 999px;
+  background: #fff;
+  color: #768276;
+}
+
+.order-progress-step.is-complete,
+.order-progress-step.is-current {
+  color: var(--green-900);
+}
+
+.order-progress-step.is-complete::before,
+.order-progress-step.is-current::before {
+  background: var(--green-700);
+}
+
+.order-progress-step.is-complete .order-progress-marker {
+  border-color: var(--green-700);
+  background: var(--green-700);
+  color: #fff;
+}
+
+.order-progress-step.is-current .order-progress-marker {
+  border-color: var(--green-700);
+  box-shadow: 0 0 0 4px rgba(47, 107, 66, 0.12);
+  color: var(--green-800);
+}
+
+.order-progress-compact {
+  min-width: 420px;
+  margin: 0;
+}
+
+.order-progress-compact .order-progress-step {
+  gap: 4px;
+  font-size: 11px;
+}
+
+.order-progress-compact .order-progress-marker {
+  width: 24px;
+  height: 24px;
+  font-size: 11px;
+}
+
+.order-progress-compact .order-progress-step::before {
+  top: 11px;
+}
+
+.order-progress-terminal {
+  display: grid;
+  gap: 5px;
+}
+
+.order-progress-terminal small {
+  color: #6f776f;
+}
+
 .status-pill {
   display: inline-flex;
   align-items: center;
@@ -2254,6 +2355,27 @@ body {
   color: var(--green-800);
   font-weight: 700;
   font-size: 13px;
+}
+
+@media (max-width: 720px) {
+  .order-progress:not(.order-progress-compact) {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .order-progress:not(.order-progress-compact) .order-progress-step {
+    grid-template-columns: 32px 1fr;
+    justify-items: start;
+    text-align: left;
+  }
+
+  .order-progress:not(.order-progress-compact) .order-progress-step::before {
+    top: -10px;
+    right: auto;
+    left: 15px;
+    width: 3px;
+    height: 20px;
+  }
 }
 
 .order-item-list {
@@ -3417,6 +3539,19 @@ body {
   min-height: 52px;
   padding: 0 34px;
   text-transform: uppercase;
+}
+
+.contact-message-card button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.contact-error {
+  background: #fff0ed;
+  border-left: 4px solid #b42318;
+  color: #842218;
+  margin: 20px 0 0;
+  padding: 12px 14px;
 }
 
 .contact-success {

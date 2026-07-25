@@ -31,15 +31,20 @@ export default function StaffDashboardPage() {
     let cancelled = false;
     async function load() {
       try {
-        const [orders, returns, newSupport, openSupport, inProgressSupport] = await Promise.all([
+        const [orders, returns, newSupport, inProgressSupport] = await Promise.all([
           staffOrderService.listOrders({ status: 'Pending' }),
           returnRefundService.listStaffRequests({ status: 'New' }),
           supportService.listStaffRequests({ status: 'New' }),
-          supportService.listStaffRequests({ status: 'Open' }),
           supportService.listStaffRequests({ status: 'InProgress' }),
         ]);
         if (!cancelled) {
-          setStats(toStaffDashboardStats({ orders, returns, newSupport, openSupport, inProgressSupport }));
+          setStats(toStaffDashboardStats({
+            orders,
+            returns,
+            newSupport,
+            openSupport: { total: 0 },
+            inProgressSupport,
+          }));
         }
       } catch (err) {
         if (!cancelled) {

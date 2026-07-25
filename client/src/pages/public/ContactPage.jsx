@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { contactService } from '../../services/contactService.js';
 
 const GOOGLE_MAPS_URL = 'https://maps.app.goo.gl/DUDu37Cr5h13RsqFA';
 const GOOGLE_MAPS_EMBED_URL = 'https://www.google.com/maps?q=H%C3%A0%20N%E1%BB%99i%2C%20Vi%E1%BB%87t%20Nam&output=embed';
@@ -42,14 +42,40 @@ const contactItems = [
   },
 ];
 
-export default function ContactPage() {
-  const [submitted, setSubmitted] = useState(false);
+const EMPTY_FORM = {
+  name: '',
+  email: '',
+  phone: '',
+  subject: '',
+  message: '',
+};
 
-  function handleSubmit(event) {
+export default function ContactPage() {
+  const [form, setForm] = useState(EMPTY_FORM);
+  const [submitted, setSubmitted] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+
+  function handleChange(event) {
+    const { name, value } = event.target;
+    setForm((current) => ({ ...current, [name]: value }));
+  }
+
+  async function handleSubmit(event) {
     event.preventDefault();
-    setSubmitted(true);
-    event.currentTarget.reset();
-    setTimeout(() => setSubmitted(false), 5000);
+    setSubmitted(false);
+    setError('');
+    setSubmitting(true);
+    try {
+      await contactService.submit(form);
+      setForm(EMPTY_FORM);
+      setSubmitted(true);
+    } catch (requestError) {
+      const fieldMessage = requestError?.errors?.[0]?.message;
+      setError(fieldMessage || requestError?.message || 'Không thể gửi tin nhắn. Vui lòng thử lại.');
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -95,28 +121,81 @@ export default function ContactPage() {
           </div>
         </aside>
 
-        <form className="contact-message-card" onSubmit={handleSubmit}>
+        <form id="contact-form" className="contact-message-card" onSubmit={handleSubmit}>
           <h2>Gửi tin nhắn</h2>
           <div className="contact-form-grid">
             <label htmlFor="contactName">
               Họ và tên
-              <input id="contactName" name="name" placeholder="Nguyễn Văn A" required />
+              <input
+                id="contactName"
+                name="name"
+                value={form.name}
+                onChange={handleChange}
+                maxLength="120"
+                placeholder="Nguyễn Văn A"
+                required
+              />
             </label>
             <label htmlFor="contactEmail">
               Email
-              <input id="contactEmail" name="email" type="email" placeholder="email@example.com" required />
+              <input
+                id="contactEmail"
+                name="email"
+                type="email"
+                value={form.email}
+                onChange={handleChange}
+                placeholder="email@example.com"
+                required
+              />
             </label>
           </div>
+          <label htmlFor="contactPhone">
+            Số điện thoại <span className="contact-optional">(không bắt buộc)</span>
+            <input
+              id="contactPhone"
+              name="phone"
+              type="tel"
+              value={form.phone}
+              onChange={handleChange}
+              maxLength="20"
+              placeholder="0856 464 980"
+            />
+          </label>
           <label htmlFor="contactSubject">
             Chủ đề
-            <input id="contactSubject" name="subject" placeholder="Vấn đề bạn cần hỗ trợ" required />
+            <input
+              id="contactSubject"
+              name="subject"
+              value={form.subject}
+              onChange={handleChange}
+              maxLength="160"
+              placeholder="Vấn đề bạn cần hỗ trợ"
+              required
+            />
           </label>
           <label htmlFor="contactMessage">
             Nội dung tin nhắn
-            <textarea id="contactMessage" name="message" rows="6" placeholder="Xin chào, tôi cần tư vấn về..." required />
+            <textarea
+              id="contactMessage"
+              name="message"
+              rows="6"
+              value={form.message}
+              onChange={handleChange}
+              minLength="10"
+              maxLength="5000"
+              placeholder="Xin chào, tôi cần tư vấn về..."
+              required
+            />
           </label>
-          <button type="submit">Gửi tin nhắn</button>
-          {submitted && <p className="contact-success">Đã ghi nhận tin nhắn. GreenHome sẽ phản hồi bạn trong thời gian sớm nhất.</p>}
+          <button type="submit" disabled={submitting}>
+            {submitting ? 'Đang gửi...' : 'Gửi tin nhắn'}
+          </button>
+          {error && <p className="contact-error" role="alert">{error}</p>}
+          {submitted && (
+            <p className="contact-success" role="status">
+              Đã ghi nhận tin nhắn. GreenHome sẽ phản hồi bạn trong thời gian sớm nhất.
+            </p>
+          )}
         </form>
       </section>
 
@@ -138,8 +217,8 @@ export default function ContactPage() {
 
       <section className="contact-faq-cta" aria-labelledby="quick-question-title">
         <h2 id="quick-question-title">Bạn có câu hỏi nhanh?</h2>
-        <p>Hãy xem qua danh sách các câu hỏi thường gặp, có thể câu trả lời bạn cần đã ở đó.</p>
-        <Link to="/support">Xem trung tâm hỗ trợ & FAQ →</Link>
+        <p>Gửi câu hỏi ngay trong biểu mẫu, GreenHome sẽ tiếp nhận và phản hồi qua email.</p>
+        <a href="#contact-form">Gửi câu hỏi cho GreenHome →</a>
       </section>
     </main>
   );

@@ -42,6 +42,18 @@ describe('role layout separation contract', () => {
     assert.doesNotMatch(internalTopbar, /<span aria-hidden="true">⌄<\/span>/);
   });
 
+  it('clears dashboard authentication before opening the login page', () => {
+    const logoutIndex = internalTopbar.indexOf('await logout();');
+    const loginNavigationIndex = internalTopbar.indexOf("navigate('/login', { replace: true });");
+
+    assert.ok(logoutIndex >= 0);
+    assert.ok(loginNavigationIndex >= 0);
+    assert.ok(
+      logoutIndex < loginNavigationIndex,
+      'dashboard logout must clear AuthContext before LoginPage can redirect the previous user',
+    );
+  });
+
   it('uses the approved GreenHome image mark in the dashboard at desktop and mobile sizes', () => {
     assert.match(internalTopbar, /src="\/assets\/icon\/favicon\.png"/);
     assert.match(internalTopbar, /className="internal-brand-logo"/);

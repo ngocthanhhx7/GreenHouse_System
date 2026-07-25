@@ -5,6 +5,7 @@ import { describe, it } from 'node:test';
 
 const login = readFileSync(join(process.cwd(), 'src/pages/auth/LoginPage.jsx'), 'utf8');
 const register = readFileSync(join(process.cwd(), 'src/pages/auth/RegisterPage.jsx'), 'utf8');
+const protectedRoute = readFileSync(join(process.cwd(), 'src/components/auth/ProtectedRoute.jsx'), 'utf8');
 const unauthorized = readFileSync(join(process.cwd(), 'src/pages/errors/UnauthorizedPage.jsx'), 'utf8');
 const forbidden = readFileSync(join(process.cwd(), 'src/pages/errors/ForbiddenPage.jsx'), 'utf8');
 const styles = readFileSync(join(process.cwd(), 'src/styles/modules/public-account.css'), 'utf8');
@@ -33,6 +34,30 @@ describe('public authentication responsive contract', () => {
       assert.match(page, /setSubmitting\(true\)/);
       assert.match(page, /finally \{\s*setSubmitting\(false\);\s*\}/);
     }
+  });
+
+  it('preserves a safe shopping return path through login and registration', () => {
+    assert.match(login, /useLocation/);
+    assert.match(login, /safeRoleReturnPath/);
+    assert.match(login, /safeRoleReturnPath\(location\.state\?\.from,\s*user\.role,\s*dashboardPath\)/);
+    assert.match(login, /location\.state\?\.from/);
+    assert.match(login, /state=\{\{\s*from:/);
+    assert.match(register, /useLocation/);
+    assert.match(register, /safeReturnPath/);
+    assert.match(register, /state:\s*\{\s*message:[\s\S]*?from:/);
+  });
+
+  it('sends an unauthenticated protected-route visit to the login form', () => {
+    assert.match(protectedRoute, /<Navigate to="\/login" replace state=\{\{ from: location\.pathname \}\} \/>/);
+  });
+
+  it('supports OTP resend after 60 seconds and changing the email', () => {
+    assert.match(register, /const \[resendSeconds, setResendSeconds\] = useState\(0\)/);
+    assert.match(register, /setResendSeconds\(60\)/);
+    assert.match(register, /async function resendChallenge/);
+    assert.match(register, /Gửi lại mã/);
+    assert.match(register, /Thay đổi email/);
+    assert.doesNotMatch(register, /challengeId/);
   });
 
   it('uses the shared responsive surface instead of the legacy generic auth card', () => {

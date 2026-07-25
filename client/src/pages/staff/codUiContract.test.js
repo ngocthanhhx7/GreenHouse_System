@@ -6,14 +6,20 @@ const staffOrderSource = readFileSync(new URL('./StaffOrderDetailPage.jsx', impo
 const refundDetailSource = readFileSync(new URL('./ReturnRefundDetailPage.jsx', import.meta.url), 'utf8');
 
 describe('Staff COD and refund UI contract', () => {
-  it('allows evidence-backed demo COD reconciliation without an editable amount and hides it in production', () => {
+  it('lets Staff record manual COD evidence without choosing a normal payment amount', () => {
+    assert.match(staffOrderSource, /markCodCollected/);
+    assert.match(staffOrderSource, /Ghi nhận.*COD|thu đủ COD/i);
+    assert.match(staffOrderSource, /CODExpectedAmount|codExpectedAmount/);
+  });
+
+  it('allows evidence-backed demo COD reconciliation and keeps full collection amount fixed', () => {
     assert.match(staffOrderSource, /OperationalEvidenceUploader/);
     assert.match(staffOrderSource, /codCollectionResult/);
     assert.match(staffOrderSource, /COLLECTED/);
     assert.match(staffOrderSource, /NOT_COLLECTED/);
     assert.match(staffOrderSource, /fulfillment\.capabilities\?\.manualCodReconciliation\s*===\s*true/);
     assert.doesNotMatch(staffOrderSource, /import\.meta\.env\.(?:MODE|PROD)/);
-    assert.doesNotMatch(staffOrderSource, /codAmount|customerCollectedAmount\s*:|amount\s*:\s*Number\(/);
+    assert.match(staffOrderSource, /Ghi nhận thu đủ COD \(\{formatCurrency\(order\.codExpectedAmount\)\}/);
     assert.doesNotMatch(staffOrderSource, /goodsRecoveryEvidenceId/);
     assert.match(staffOrderSource, /codDiscrepancyStatus/);
     assert.match(staffOrderSource, /codRecoveryReceiptId/);

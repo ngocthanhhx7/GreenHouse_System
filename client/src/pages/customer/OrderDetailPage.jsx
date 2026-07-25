@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
+import OrderProgress from '../../components/order/OrderProgress.jsx';
 import { exchangeService } from '../../services/exchangeService.js';
 import { orderService } from '../../services/orderService.js';
 import { returnRefundService } from '../../services/returnRefundService.js';
@@ -381,13 +382,7 @@ export default function OrderDetailPage() {
               </div>
             ))}
           </section>
-          <div className="order-status-timeline">
-            {['Pending', 'Confirmed', 'Packed', 'Shipped', 'Delivered'].map((status) => (
-              <div className={`timeline-step ${order.orderStatus === status ? 'active' : ''}`} key={status}>
-                <span></span><strong>{translateOrderStatus(status)}</strong>
-              </div>
-            ))}
-          </div>
+          <OrderProgress status={order.orderStatus} />
           <dl className="row">
             <dt className="col-sm-3">Mã đơn</dt><dd className="col-sm-9">{order.orderCode}</dd>
             <dt className="col-sm-3">Trạng thái</dt><dd className="col-sm-9">{translateOrderStatus(order.orderStatus)}</dd>

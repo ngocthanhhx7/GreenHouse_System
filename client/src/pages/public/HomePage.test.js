@@ -24,9 +24,13 @@ describe('home page premium commerce design contract', () => {
     assert.match(home, /\/assets\/background\/tableware\.png/);
     assert.match(home, /\/assets\/background\/smart_storage\.png/);
     assert.match(home, /Deal của hôm nay/);
-    assert.match(home, /Đặt hàng/);
-    assert.match(home, /Đóng gói/);
-    assert.match(home, /Bồi đắp niềm tin/);
+    assert.match(home, /Chọn sản phẩm/);
+    assert.match(home, /Đăng nhập/);
+    assert.match(home, /Đặt hàng & thanh toán/);
+    assert.match(home, /Đóng gói & giao hàng/);
+    assert.match(home, /Theo dõi & hậu mãi/);
+    assert.match(home, /id="quy-trinh-mua-hang"/);
+    assert.doesNotMatch(home, /Bồi đắp niềm tin/);
   });
 
   it('keeps GSAP scoped but removes heavy looping and tilt animation patterns', () => {
