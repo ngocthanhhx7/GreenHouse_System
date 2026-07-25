@@ -160,21 +160,72 @@ const DESTINATION_INPUT_KEYS = new Set([
   'idempotencyKey',
 ]);
 const CREDENTIAL_SHAPED_KEY = /(?:pin|otp|password|cvv|passcode)/i;
+const DESTINATION_PAYLOAD_LIMITS = Object.freeze({
+  maxDepth: 8,
+  maxNodes: 128,
+  maxKeys: 256,
+  maxKeyLength: 128,
+});
 
-function findCredentialShapedKey(value, seen = new WeakSet()) {
-  if (!value || typeof value !== 'object') return null;
-  if (seen.has(value)) return null;
-  seen.add(value);
-  for (const [key, nested] of Object.entries(value)) {
-    if (CREDENTIAL_SHAPED_KEY.test(key)) return key;
-    const found = findCredentialShapedKey(nested, seen);
-    if (found) return found;
+function findCredentialShapedKey(value) {
+  const seen = new WeakSet();
+  const queue = [{ value, depth: 0 }];
+  let visitedNodes = 0;
+  let visitedKeys = 0;
+
+  while (queue.length) {
+    const current = queue.shift();
+    if (!current.value || typeof current.value !== 'object' || seen.has(current.value)) continue;
+    if (current.depth > DESTINATION_PAYLOAD_LIMITS.maxDepth) {
+      throw new ApiError(400, 'Refund destination payload is too deep or complex');
+    }
+    seen.add(current.value);
+    visitedNodes += 1;
+    if (visitedNodes > DESTINATION_PAYLOAD_LIMITS.maxNodes) {
+      throw new ApiError(400, 'Refund destination payload is too deep or complex');
+    }
+
+    let keys;
+    try {
+      keys = Object.keys(current.value);
+    } catch {
+      throw new ApiError(400, 'Refund destination payload must contain plain data');
+    }
+    visitedKeys += keys.length;
+    if (visitedKeys > DESTINATION_PAYLOAD_LIMITS.maxKeys) {
+      throw new ApiError(400, 'Refund destination payload is too deep or complex');
+    }
+
+    for (const key of keys) {
+      if (key.length > DESTINATION_PAYLOAD_LIMITS.maxKeyLength) {
+        throw new ApiError(400, 'Refund destination payload contains an invalid field name');
+      }
+      if (CREDENTIAL_SHAPED_KEY.test(key)) return key;
+      let descriptor;
+      try {
+        descriptor = Object.getOwnPropertyDescriptor(current.value, key);
+      } catch {
+        throw new ApiError(400, 'Refund destination payload must contain plain data');
+      }
+      if (!descriptor || !Object.prototype.hasOwnProperty.call(descriptor, 'value')) {
+        throw new ApiError(400, 'Refund destination payload must contain plain data');
+      }
+      if (descriptor.value && typeof descriptor.value === 'object') {
+        queue.push({ value: descriptor.value, depth: current.depth + 1 });
+      }
+    }
   }
   return null;
 }
 
 function validateDestinationInputShape(input) {
-  if (!input || typeof input !== 'object' || Array.isArray(input) || Object.getPrototypeOf(input) !== Object.prototype) {
+  let prototype;
+  try {
+    prototype = input && typeof input === 'object' ? Object.getPrototypeOf(input) : null;
+  } catch {
+    throw new ApiError(400, 'Refund destination input must be a plain object');
+  }
+  if (!input || typeof input !== 'object' || Array.isArray(input) || prototype !== Object.prototype) {
     throw new ApiError(400, 'Refund destination input must be a plain object');
   }
   const credentialKey = findCredentialShapedKey(input);
@@ -271,12 +322,27 @@ function toDestinationResponse(destination, audience = 'Customer') {
   };
 
   if (audience === 'Staff' && destination.accountNumberEncrypted && destination.accountHolderEncrypted) {
-    response.bankBin = destination.bankBin || '';
     response.accountNumber = decrypt(destination.accountNumberEncrypted);
     response.accountHolderName = decrypt(destination.accountHolderEncrypted);
   }
 
   return response;
+}
+
+function payoutDestinationCapability(destination) {
+  if (!destination) {
+    return { ready: false, issueCode: 'DESTINATION_MISSING' };
+  }
+  if (destination.status !== 'Verified') {
+    return { ready: false, issueCode: 'DESTINATION_NOT_VERIFIED' };
+  }
+  if (!/^[0-9]{6}$/.test(String(destination.bankBin || ''))) {
+    return { ready: false, issueCode: 'DESTINATION_ROUTE_UNAVAILABLE' };
+  }
+  if (!destination.accountNumberEncrypted || !destination.accountHolderEncrypted) {
+    return { ready: false, issueCode: 'DESTINATION_ACCOUNT_UNAVAILABLE' };
+  }
+  return { ready: true, issueCode: null };
 }
 
 function toPayoutResponse(evidence, audience) {
@@ -351,6 +417,11 @@ function toResponse({ request, order, details = [], items = [], destination = nu
     response.destination = toDestinationResponse(destination, audience);
     response.payoutEvidence = toPayoutResponse(payoutEvidence, audience);
     response.payoutIncident = toPayoutIncidentResponse(payoutIncident);
+    if (audience === 'Staff' || audience === 'StaffList') {
+      const capability = payoutDestinationCapability(destination);
+      response.payoutDestinationReady = capability.ready;
+      response.payoutDestinationIssueCode = capability.issueCode;
+    }
   }
 
   response.order = order ? (audience === 'Warehouse' ? {

@@ -63,7 +63,6 @@ export default function ReturnRefundDetailPage() {
         <h2 className="h5">Thông tin nhận hoàn tiền để xác minh</h2>
         <p>
           <strong>Ngân hàng:</strong> {request.destination.bankName}<br />
-          {request.destination.bankBin && <><strong>Mã BIN:</strong> {request.destination.bankBin}<br /></>}
           <strong>Số tài khoản để xác minh:</strong> {request.destination.accountNumber || request.destination.maskedAccountNumber}<br />
           <strong>Chủ tài khoản:</strong> {request.destination.accountHolderName || request.destination.maskedAccountHolder}
         </p>
@@ -80,14 +79,14 @@ export default function ReturnRefundDetailPage() {
       </div>}
       {request.status === 'Received' && request.destination?.status === 'Verified' && <section className="border rounded p-3 mt-3">
         <h2 className="h5">Chi trả online qua PayOS</h2>
-        {(!['Processing', 'Unknown'].includes(request.payoutStatus) || request.payoutIncident?.responsibility === 'ShopOrProvider') && <button className="btn btn-primary" type="button" disabled={busy || !request.destination.bankBin} onClick={() => runAction(
+        {(!['Processing', 'Unknown'].includes(request.payoutStatus) || request.payoutIncident?.responsibility === 'ShopOrProvider') && <button className="btn btn-primary" type="button" disabled={busy || !request.payoutDestinationReady} onClick={() => runAction(
           () => returnRefundService.startPayOSPayout(id, {
             idempotencyKey: `payos:${id}:${request.payoutEvidence?.id || 'initial'}`,
             recoveryIncidentId: request.payoutIncident?.status === 'Open' ? request.payoutIncident.id : undefined,
           }),
           'Đã gửi lệnh chi PayOS; hãy đối soát đến khi có kết quả cuối.',
         )}>{request.payoutIncident?.status === 'Open' ? 'Chi lại qua PayOS theo hồ sơ recovery' : 'Gửi lệnh chi PayOS'}</button>}
-        {!request.destination.bankBin && <div className="alert alert-warning mt-2">Không có mã BIN đã xác minh; chỉ có thể dùng quy trình chuyển khoản thủ công.</div>}
+        {!request.payoutDestinationReady && request.payoutDestinationIssueCode && <div className="alert alert-warning mt-2">Kênh chi trả trực tuyến chưa sẵn sàng; hãy dùng quy trình chuyển khoản thủ công.</div>}
         {['Processing', 'Unknown'].includes(request.payoutStatus) && <button className="btn btn-outline-primary" type="button" disabled={busy} onClick={() => runAction(
           () => returnRefundService.reconcilePayOSPayout(id),
           'Đã đối soát trạng thái lệnh chi PayOS.',

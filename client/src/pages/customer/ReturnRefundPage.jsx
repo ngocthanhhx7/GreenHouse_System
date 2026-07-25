@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import AuthenticatedEvidenceList from '../../components/returnRefund/AuthenticatedEvidenceList.jsx';
 import { returnRefundService } from '../../services/returnRefundService.js';
 import { translateRequestStatus } from '../../utils/formatters.js';
+import { createRefundDestinationController } from './refundDestinationController.js';
 
 function formatDate(value) {
   return value ? new Date(value).toLocaleString('vi-VN') : '-';
@@ -17,56 +18,72 @@ export default function ReturnRefundPage() {
   const [busyId, setBusyId] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
-  const actionInFlightRef = useRef(new Set());
-  const destinationKeysRef = useRef(new Map());
-  const sensitiveFormsRef = useRef({});
+  const controllerRef = useRef(null);
+  function currentController() {
+    if (!controllerRef.current || !controllerRef.current.getSnapshot().alive) {
+      controllerRef.current = createRefundDestinationController({
+        createKey: () => `destination:${globalThis.crypto?.randomUUID?.()
+          || `${Date.now()}-${Math.random().toString(36).slice(2)}`}`,
+      });
+    }
+    return controllerRef.current;
+  }
+  const interactionLocked = busyId !== '';
 
-  async function loadRequests() {
-    setError('');
+  async function loadRequests(controller = currentController()) {
+    const epoch = controller.beginRequestLoad();
+    if (epoch === null) return false;
     try {
       const result = await returnRefundService.listMyRequests();
+      if (!controller.isCurrentRequestLoad(epoch)) return false;
       setItems(result.items || []);
+      setError('');
+      return true;
     } catch (err) {
+      if (!controller.isCurrentRequestLoad(epoch)) return false;
       setError(err.message);
+      return false;
     }
   }
 
-  async function loadBanks() {
-    setBankStatus('loading');
-    setBankError('');
+  function syncBankState(controller) {
+    const snapshot = controller.getSnapshot();
+    if (!snapshot.alive) return;
+    setBanks(snapshot.banks);
+    setBankStatus(snapshot.bankStatus);
+    setBankError(snapshot.bankError);
+  }
+
+  async function loadBanks(controller = currentController()) {
+    const epoch = controller.beginBankLoad();
+    if (epoch === null) return;
+    syncBankState(controller);
     try {
       const result = await returnRefundService.listBanks();
-      const safeBanks = Array.isArray(result) ? result : [];
-      setBanks(safeBanks);
-      setBankStatus(safeBanks.length ? 'ready' : 'empty');
+      if (controller.resolveBankLoad(epoch, result)) syncBankState(controller);
     } catch (err) {
-      setBanks([]);
-      setBankStatus('error');
-      setBankError(err.message);
+      if (controller.rejectBankLoad(epoch, err)) syncBankState(controller);
     }
   }
 
   useEffect(() => {
-    loadRequests();
-    loadBanks();
+    const controller = currentController();
+    loadRequests(controller);
+    loadBanks(controller);
     return () => {
-      sensitiveFormsRef.current = {};
-      destinationKeysRef.current.clear();
-      actionInFlightRef.current.clear();
+      controller.dispose();
     };
   }, []);
 
   function updateForm(id, field, value) {
     setForms((current) => {
-      const next = { ...current, [id]: { ...(current[id] || {}), [field]: value } };
-      sensitiveFormsRef.current = next;
-      return next;
+      return { ...current, [id]: { ...(current[id] || {}), [field]: value } };
     });
   }
 
   function clearSensitiveDestinationForm(id) {
     setForms((current) => {
-      const next = {
+      return {
         ...current,
         [id]: {
           ...(current[id] || {}),
@@ -75,51 +92,61 @@ export default function ReturnRefundPage() {
           confirmed: false,
         },
       };
-      sensitiveFormsRef.current = next;
-      return next;
     });
   }
 
-  function destinationIdempotencyKey(id) {
-    if (!destinationKeysRef.current.has(id)) {
-      const uniquePart = globalThis.crypto?.randomUUID?.()
-        || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      destinationKeysRef.current.set(id, `destination:${id}:${uniquePart}`);
-    }
-    return destinationKeysRef.current.get(id);
-  }
-
   async function runAction(id, action, successMessage) {
-    if (actionInFlightRef.current.size > 0) {
+    const controller = currentController();
+    const command = controller.beginAction(id);
+    if (!command) {
       setMessage('Yêu cầu đang được xử lý, vui lòng không bấm nhiều lần.');
       return;
     }
-    actionInFlightRef.current.add(id);
     setBusyId(id); setError(''); setMessage('');
+    let mayUpdate = true;
     try {
       await action();
-      await loadRequests();
-      setMessage(successMessage);
+      const reloaded = await loadRequests(controller);
+      mayUpdate = controller.settleAction(command);
+      if (mayUpdate && reloaded) setMessage(successMessage);
     } catch (err) {
-      setError(err.message);
+      mayUpdate = controller.settleAction(command);
+      if (mayUpdate) setError(err.message);
     } finally {
-      actionInFlightRef.current.delete(id);
-      setBusyId('');
+      if (mayUpdate) setBusyId('');
     }
   }
 
-  async function submitDestination(item, form) {
-    await runAction(item.id, async () => {
-      await returnRefundService.submitDestination(item.id, {
-        bankCode: form.bankCode,
-        accountNumber: form.accountNumber,
-        accountHolderName: form.accountHolderName,
-        confirmed: form.confirmed === true,
-        idempotencyKey: destinationIdempotencyKey(item.id),
+  async function executeDestination(itemId, command, controller) {
+    let mayUpdate = true;
+    try {
+      await returnRefundService.submitDestination(itemId, command.payload);
+      mayUpdate = controller.settleDestination(command, {
+        succeeded: true,
+        onSuccessClear: () => clearSensitiveDestinationForm(itemId),
       });
-      clearSensitiveDestinationForm(item.id);
-      destinationKeysRef.current.delete(item.id);
-    }, 'Đã gửi thông tin nhận hoàn tiền để CSKH xác minh.');
+      if (!mayUpdate) return;
+      const reloaded = await loadRequests(controller);
+      if (reloaded && controller.getSnapshot().alive) {
+        setMessage('Đã gửi thông tin nhận hoàn tiền để CSKH xác minh.');
+      }
+    } catch (err) {
+      mayUpdate = controller.settleDestination(command, { succeeded: false });
+      if (mayUpdate) setError(err.message);
+    } finally {
+      if (mayUpdate && controller.getSnapshot().alive) setBusyId('');
+    }
+  }
+
+  function submitDestination(item, form) {
+    const controller = currentController();
+    const command = controller.beginDestination(item.id, form);
+    if (!command) {
+      setMessage('Yêu cầu đang được xử lý, vui lòng không bấm nhiều lần.');
+      return;
+    }
+    setBusyId(item.id); setError(''); setMessage('');
+    void executeDestination(item.id, command, controller);
   }
 
   return (
@@ -167,29 +194,29 @@ export default function ReturnRefundPage() {
                 {bankStatus === 'loading' && <div className="text-muted" aria-live="polite">Đang tải danh sách ngân hàng…</div>}
                 {bankStatus === 'error' && <div className="alert alert-danger" role="alert" aria-live="assertive">
                   Không thể tải danh sách ngân hàng{bankError ? `: ${bankError}` : '.'}
-                  <button className="btn btn-sm btn-outline-danger ms-2" type="button" onClick={loadBanks}>
+                  <button className="btn btn-sm btn-outline-danger ms-2" type="button" onClick={() => loadBanks()} disabled={interactionLocked}>
                     Tải lại danh sách ngân hàng
                   </button>
                 </div>}
                 {bankStatus === 'empty' && <div className="alert alert-warning" aria-live="polite">
                   Chưa có ngân hàng hỗ trợ nhận hoàn tiền.
-                  <button className="btn btn-sm btn-outline-warning ms-2" type="button" onClick={loadBanks}>
+                  <button className="btn btn-sm btn-outline-warning ms-2" type="button" onClick={() => loadBanks()} disabled={interactionLocked}>
                     Tải lại danh sách ngân hàng
                   </button>
                 </div>}
                 <div className="row g-2">
                   <div className="col-12 col-md-4">
                     <label className="form-label" htmlFor={`bank-${item.id}`}>Ngân hàng</label>
-                    <select id={`bank-${item.id}`} className="form-select" value={form.bankCode || ''} onChange={(event) => updateForm(item.id, 'bankCode', event.target.value)} disabled={bankStatus !== 'ready'} required>
+                    <select id={`bank-${item.id}`} className="form-select" value={form.bankCode || ''} onChange={(event) => updateForm(item.id, 'bankCode', event.target.value)} disabled={interactionLocked || bankStatus !== 'ready'} required>
                       <option value="">Chọn ngân hàng</option>
                       {banks.map((bank) => <option key={bank.code} value={bank.code}>{bank.name}</option>)}
                     </select>
                   </div>
-                  <div className="col-12 col-md-4"><label className="form-label" htmlFor={`account-${item.id}`}>Số tài khoản</label><input id={`account-${item.id}`} className="form-control" inputMode="numeric" autoComplete="off" pattern="[0-9]{6,24}" value={form.accountNumber || ''} onChange={(event) => updateForm(item.id, 'accountNumber', event.target.value.replace(/\D/g, '').slice(0, 24))} required /></div>
-                  <div className="col-12 col-md-4"><label className="form-label" htmlFor={`holder-${item.id}`}>Tên chủ tài khoản</label><input id={`holder-${item.id}`} className="form-control" autoComplete="off" minLength={2} maxLength={120} pattern="[A-Za-zÀ-ỹĐđ .'’-]{2,120}" title="Tên chủ tài khoản chỉ gồm chữ cái và dấu câu thông dụng" value={form.accountHolderName || ''} onChange={(event) => updateForm(item.id, 'accountHolderName', event.target.value)} required /></div>
+                  <div className="col-12 col-md-4"><label className="form-label" htmlFor={`account-${item.id}`}>Số tài khoản</label><input id={`account-${item.id}`} className="form-control" inputMode="numeric" autoComplete="off" pattern="[0-9]{6,24}" value={form.accountNumber || ''} onChange={(event) => updateForm(item.id, 'accountNumber', event.target.value.replace(/\D/g, '').slice(0, 24))} disabled={interactionLocked} required /></div>
+                  <div className="col-12 col-md-4"><label className="form-label" htmlFor={`holder-${item.id}`}>Tên chủ tài khoản</label><input id={`holder-${item.id}`} className="form-control" autoComplete="off" minLength={2} maxLength={120} pattern="[A-Za-zÀ-ỹĐđ .'’-]{2,120}" title="Tên chủ tài khoản chỉ gồm chữ cái và dấu câu thông dụng" value={form.accountHolderName || ''} onChange={(event) => updateForm(item.id, 'accountHolderName', event.target.value)} disabled={interactionLocked} required /></div>
                 </div>
-                <div className="form-check mt-3"><input id={`confirm-${item.id}`} className="form-check-input" type="checkbox" checked={form.confirmed === true} onChange={(event) => updateForm(item.id, 'confirmed', event.target.checked)} required /><label className="form-check-label" htmlFor={`confirm-${item.id}`}>Tôi đã kiểm tra thông tin và chịu trách nhiệm về thông tin tài khoản do mình cung cấp.</label></div>
-                <button className="btn btn-success mt-2" type="submit" disabled={busyId === item.id || bankStatus !== 'ready'}>Gửi thông tin xác minh</button>
+                <div className="form-check mt-3"><input id={`confirm-${item.id}`} className="form-check-input" type="checkbox" checked={form.confirmed === true} onChange={(event) => updateForm(item.id, 'confirmed', event.target.checked)} disabled={interactionLocked} required /><label className="form-check-label" htmlFor={`confirm-${item.id}`}>Tôi đã kiểm tra thông tin và chịu trách nhiệm về thông tin tài khoản do mình cung cấp.</label></div>
+                <button className="btn btn-success mt-2" type="submit" disabled={interactionLocked || bankStatus !== 'ready'}>Gửi thông tin xác minh</button>
               </form>}
               {item.destination && item.destination.status !== 'Rejected' && <div className="alert alert-secondary mt-3">Tài khoản {item.destination.maskedAccountNumber} · {item.destination.bankName} · {item.destination.status === 'Verified' ? 'Đã xác minh' : 'Đang chờ CSKH xác minh'}</div>}
               {item.payoutIncident?.status === 'Open' && <div className="alert alert-warning mt-3">

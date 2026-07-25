@@ -36,12 +36,17 @@ describe('Customer return/refund UI contract', () => {
   });
 
   it('locks rapid submits synchronously, reuses retry identity, and clears sensitive values only after success', () => {
-    assert.match(historySource, /useRef/);
-    assert.match(historySource, /actionInFlightRef/);
-    assert.match(historySource, /destinationKeysRef/);
+    assert.match(historySource, /createRefundDestinationController/);
+    assert.match(historySource, /interactionLocked/);
     assert.match(historySource, /clearSensitiveDestinationForm/);
     assert.match(historySource, /accountNumber:\s*''/);
     assert.match(historySource, /accountHolderName:\s*''/);
     assert.match(historySource, /aria-live="polite"/);
+    assert.match(historySource, /onClick=\{\(\) => loadBanks\(\)\} disabled=\{interactionLocked\}/);
+    assert.match(historySource, /disabled=\{interactionLocked \|\| bankStatus !== 'ready'\}/);
+    assert.match(historySource, /id=\{`account-[^\r\n]+disabled=\{interactionLocked\}/);
+    assert.match(historySource, /id=\{`holder-[^\r\n]+disabled=\{interactionLocked\}/);
+    assert.match(historySource, /id=\{`confirm-[^\r\n]+disabled=\{interactionLocked\}/);
+    assert.match(historySource, /controller\.dispose\(\)/);
   });
 });

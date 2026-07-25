@@ -798,6 +798,48 @@ describe('return/refund service', () => {
     assert.equal(repository.destinations.length, 0);
   });
 
+  it('bounds hostile nested destination payloads and returns typed validation errors instead of overflowing', async () => {
+    const requestId = await approveRequest();
+    const base = {
+      bankCode: 'MB',
+      accountNumber: '0123456789',
+      accountHolderName: 'Nguyen Van A',
+      confirmed: true,
+      idempotencyKey: 'destination-bounded-001',
+    };
+    const nestedCredential = {};
+    let cursor = nestedCredential;
+    for (let depth = 0; depth < 6; depth += 1) {
+      cursor.child = {};
+      cursor = cursor.child;
+    }
+    cursor.PaSsCoDe = 'must-never-be-accepted';
+    await assert.rejects(
+      () => service.submitDestination('customer-1', requestId, { ...base, metadata: nestedCredential }),
+      (error) => error?.statusCode === 400 && /credential/i.test(error.message),
+    );
+
+    const tooDeep = {};
+    cursor = tooDeep;
+    for (let depth = 0; depth < 10000; depth += 1) {
+      cursor.child = {};
+      cursor = cursor.child;
+    }
+    await assert.rejects(
+      () => service.submitDestination('customer-1', requestId, { ...base, metadata: tooDeep }),
+      (error) => error?.statusCode === 400
+        && !(error instanceof RangeError)
+        && /complex|deep|payload/i.test(error.message),
+    );
+    const cyclic = {};
+    cyclic.self = cyclic;
+    await assert.rejects(
+      () => service.submitDestination('customer-1', requestId, { ...base, metadata: cyclic }),
+      (error) => error?.statusCode === 400 && !(error instanceof RangeError),
+    );
+    assert.equal(repository.destinations.length, 0);
+  });
+
   it('denies destination access before approval or to another Customer without revealing financial data', async () => {
     const pending = await createRequest();
     const input = {
@@ -867,11 +909,21 @@ describe('return/refund service', () => {
     const staff = await service.getStaffRequest(requestId);
     assert.equal(staff.destination.accountNumber, '0123456789');
     assert.equal(staff.destination.accountHolderName, 'NGUYEN VAN A');
-    assert.equal(staff.destination.bankBin, '970422');
+    assert.equal(Object.hasOwn(staff.destination, 'bankBin'), false);
+    assert.equal(staff.payoutDestinationReady, true);
+    assert.equal(staff.payoutDestinationIssueCode, null);
 
     const staffQueue = await service.listStaffRequests();
     assert.equal(Object.hasOwn(staffQueue.items[0].destination, 'accountNumber'), false);
     assert.equal(Object.hasOwn(staffQueue.items[0].destination, 'accountHolderName'), false);
+    assert.equal(Object.hasOwn(staffQueue.items[0].destination, 'bankBin'), false);
+    assert.equal(staffQueue.items[0].payoutDestinationReady, true);
+
+    repository.destinations[0].bankBin = '';
+    const routeUnavailable = await service.getStaffRequest(requestId);
+    assert.equal(routeUnavailable.payoutDestinationReady, false);
+    assert.equal(routeUnavailable.payoutDestinationIssueCode, 'DESTINATION_ROUTE_UNAVAILABLE');
+    assert.equal(Object.hasOwn(routeUnavailable.destination, 'bankBin'), false);
 
     const customer = await service.listMyRequests('customer-1');
     assert.equal(Object.hasOwn(customer.items[0].destination, 'accountNumber'), false);
