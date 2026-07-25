@@ -118,7 +118,7 @@ export default function ExchangeDetailPage() {
           <ul>{(request.lines || []).map((line) => <li key={line._id}>{line.productNameSnapshot} — {line.requestedQuantity}</li>)}</ul>
           <AuthenticatedEvidenceList urls={request.evidenceImages} fetchEvidence={exchangeService.fetchEvidence} />
 
-          {request.status === 'ApprovedAwaitingShipment' && (
+          {request.status === 'ApprovedAwaitingShipment' && workflowActions.canCancel && (
             <form className="mt-3" onSubmit={submitHandoff}>
               <label className="form-label" htmlFor="exchangeHandoff">Mã vận đơn/bằng chứng bàn giao</label>
               <input id="exchangeHandoff" className="form-control" value={proofReference} onChange={(event) => setProofReference(event.target.value)} required />
@@ -126,7 +126,7 @@ export default function ExchangeDetailPage() {
               <button className="btn btn-outline-danger mt-2 ms-2" type="button" onClick={cancel}>Hủy trước khi bàn giao</button>
             </form>
           )}
-          {['Submitted', 'AwaitingExactStockChoice', 'WaitingForExactStock'].includes(request.status) && (
+          {workflowActions.canCancel && request.status !== 'ApprovedAwaitingShipment' && (
             <button className="btn btn-outline-danger mt-2" type="button" onClick={cancel}>Hủy yêu cầu</button>
           )}
           {workflowMessage && <div className="alert alert-warning mt-3">{workflowMessage}</div>}

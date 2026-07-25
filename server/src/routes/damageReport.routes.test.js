@@ -8,6 +8,7 @@ const source = readFileSync(path.join(__dirname, 'damageReport.routes.js'), 'utf
 describe('damage report route role boundaries', () => {
   it('allows Staff to create reports without exposing warehouse actions', () => {
     assert.match(source, /router\.post\('\/staff\/damage-reports', authenticate, authorizeRoles\('Staff'\)/);
+    assert.match(source, /router\.get\('\/staff\/damage-reports', authenticate, authorizeRoles\('Staff'\)/);
   });
 
   it('keeps the queue, detail, and confirmation endpoints Warehouse-only', () => {

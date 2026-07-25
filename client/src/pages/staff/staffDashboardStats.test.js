@@ -9,7 +9,6 @@ describe('toStaffDashboardStats', () => {
       orders: { items: [{ id: 'order-1' }], total: 12 },
       returns: { items: [{ id: 'return-1' }], total: 8 },
       newSupport: { items: [{ id: 'support-1' }], total: 3 },
-      openSupport: { items: [], total: 0 },
       inProgressSupport: { items: [{ id: 'support-2' }], total: 4 },
     });
 
@@ -25,7 +24,6 @@ describe('toStaffDashboardStats', () => {
       orders: { items: [{ id: 'order-1' }, { id: 'order-2' }] },
       returns: { items: [{ id: 'return-1' }] },
       newSupport: { items: [{ id: 'support-1' }] },
-      openSupport: { items: [] },
       inProgressSupport: { items: [{ id: 'support-2' }, { id: 'support-3' }] },
     });
 
@@ -36,24 +34,11 @@ describe('toStaffDashboardStats', () => {
     });
   });
 
-  it('includes legacy Open support requests in the open support total', () => {
-    const stats = toStaffDashboardStats({
-      orders: { total: 0 },
-      returns: { total: 0 },
-      newSupport: { total: 1 },
-      openSupport: { total: 2 },
-      inProgressSupport: { total: 3 },
-    });
-
-    assert.equal(stats.openSupport, 6);
-  });
-
   it('keeps an unavailable response unknown instead of treating it as zero', () => {
     const stats = toStaffDashboardStats({
       orders: null,
       returns: { total: 0 },
       newSupport: { total: 1 },
-      openSupport: { total: 0 },
       inProgressSupport: null,
     });
 

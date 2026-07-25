@@ -110,7 +110,14 @@ export function getExchangeWorkflowActions(request = {}) {
     .includes(request.status);
   const stockChoiceCause = ['INITIAL_APPROVAL', 'INCIDENT_RESEND']
     .includes(request.waitingFor);
+  const canCancel = !request.handoffAt
+    && !request.customerShipmentId
+    && (
+      ['Submitted', 'ApprovedAwaitingShipment'].includes(request.status)
+      || (stockChoiceStatus && request.waitingFor === 'INITIAL_APPROVAL')
+    );
   return {
+    canCancel,
     canWaitOrConvert: stockChoiceStatus && stockChoiceCause,
     canRetryReservation: request.status === 'WaitingForExactStock'
       && request.waitingFor === 'INITIAL_APPROVAL',

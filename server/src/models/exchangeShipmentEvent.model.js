@@ -8,7 +8,12 @@ const exchangeShipmentEventSchema = new mongoose.Schema(
     eventType: { type: String, enum: ['DELIVERED', 'LOST', 'DAMAGED', 'DISPUTED', 'CORRECTION'], required: true, immutable: true },
     source: {
       type: String,
-      enum: ['CARRIER', 'STAFF_EVIDENCE', 'CUSTOMER_DISPUTE'],
+      enum: [
+        'CARRIER',
+        'STAFF_RECORDED_CARRIER_EVIDENCE',
+        'STAFF_EVIDENCE',
+        'CUSTOMER_DISPUTE',
+      ],
       required: true,
       immutable: true,
     },

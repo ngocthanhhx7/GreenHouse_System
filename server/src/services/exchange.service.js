@@ -15,6 +15,7 @@ const ExchangeShipment = require('../models/exchangeShipment.model');
 const ExchangeShipmentEvent = require('../models/exchangeShipmentEvent.model');
 const ExchangeConversion = require('../models/exchangeConversion.model');
 const ReturnRefundRequest = require('../models/returnRefundRequest.model');
+const Payment = require('../models/payment.model');
 const { afterSalesLockService } = require('./afterSalesLock.service');
 const {
   assignmentCoordinator: defaultAssignmentCoordinator,
@@ -27,10 +28,18 @@ const {
 const { returnEvidenceClaim, MAX_RETURN_EVIDENCE_TOTAL_SIZE } = require('../utils/returnEvidenceClaim');
 const { logAudit } = require('../utils/auditLogger');
 const {
+  buildStaffQueuePage,
+  escapeRegex,
+  parseStaffQueueQuery,
+} = require('../utils/staffQueueQuery');
+const {
   canonicalEnvelope,
   createOutboxWriter,
 } = require('./domainEventProducer.service');
 const { lowStockAlertLifecycle } = require('./lowStockAlertLifecycle.service');
+const {
+  createCustomerDeliveryReceiptPolicy,
+} = require('./customerDeliveryReceiptPolicy');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const EXCHANGE_WINDOW_MS = 5 * DAY_MS;
@@ -45,6 +54,7 @@ const TERMINAL_STATUSES = new Set([
   'ClosedByCODRecovery', 'Rejected', 'Cancelled', 'Expired',
   'ClosedNoExchange', 'ConvertedToReturnRefund', 'Completed',
 ]);
+const EXCHANGE_STATUSES = new Set(ExchangeCase.STATUSES || []);
 
 class NoExactStockError extends Error {
   constructor(productId) {
@@ -105,6 +115,9 @@ function createModelTransactionManager() {
 function createModelRepository({ lockService = afterSalesLockService } = {}) {
   return {
     async findOrderById(id, session) { return withSession(Order.findById(id), session).lean(); },
+    async findPaymentByOrderId(orderId, session) {
+      return withSession(Payment.findOne({ orderId }), session).lean();
+    },
     async ensureExchangeDeadline(id, value, session) {
       const updated = await withSession(Order.findOneAndUpdate(
         { _id: id, exchangeDeadlineAt: null },
@@ -124,6 +137,22 @@ function createModelRepository({ lockService = afterSalesLockService } = {}) {
       return withSession(ExchangeCase.findOne({ customerId, idempotencyKey }), session).lean();
     },
     async listCases(filter = {}) { return ExchangeCase.find(filter).sort({ createdAt: -1 }).lean(); },
+    async listStaffCasesPage(query = {}) {
+      const filter = {};
+      if (query.status) filter.status = query.status;
+      if (query.search) {
+        filter.requestCode = new RegExp(escapeRegex(query.search), 'i');
+      }
+      const [items, total] = await Promise.all([
+        ExchangeCase.find(filter)
+          .sort({ createdAt: -1, _id: -1 })
+          .skip(query.skip)
+          .limit(query.pageSize)
+          .lean(),
+        ExchangeCase.countDocuments(filter),
+      ]);
+      return { items, total };
+    },
     async listOverdueCases(now, limit = 100) {
       return ExchangeCase.find({
         status: 'ApprovedAwaitingShipment',
@@ -477,6 +506,7 @@ function createExchangeService({
   notifier = createExchangeNotificationOutbox(),
   clock = () => new Date(),
   assignmentCoordinator = defaultAssignmentCoordinator,
+  deliveryReceiptPolicy = createCustomerDeliveryReceiptPolicy({ repository }),
 } = {}) {
   async function activeAfterSalesConflict(orderId, customerId, session, requireVerified = false) {
     const resolved = await resolveActiveAfterSalesConflict({
@@ -525,16 +555,43 @@ function createExchangeService({
       && exchangeCase.waitingFor === 'INCIDENT_RESEND';
   }
 
+  function canCustomerCancelBeforeHandoff(exchangeCase) {
+    if (exchangeCase.handoffAt || exchangeCase.customerShipmentId) return false;
+    if ([
+      'CustomerShipped',
+      'WarehouseInspecting',
+      'OutboundFulfillment',
+      'ReplacementShipped',
+      'DeliveryIncident',
+    ].includes(exchangeCase.status)) {
+      return false;
+    }
+    if (['Submitted', 'ApprovedAwaitingShipment'].includes(exchangeCase.status)) return true;
+    return ['AwaitingExactStockChoice', 'WaitingForExactStock'].includes(exchangeCase.status)
+      && exchangeCase.waitingFor === 'INITIAL_APPROVAL';
+  }
+
   function isInitialReservationRetry(exchangeCase) {
     return exchangeCase.status === 'WaitingForExactStock'
       && exchangeCase.waitingFor === 'INITIAL_APPROVAL';
+  }
+
+  const STAFF_RECORDED_CARRIER_EVIDENCE_SOURCE = 'STAFF_RECORDED_CARRIER_EVIDENCE';
+  const LEGACY_STAFF_EVIDENCE_SOURCES = new Set(['STAFF_EVIDENCE']);
+
+  function canonicalShipmentEvidenceSource(source) {
+    return source === STAFF_RECORDED_CARRIER_EVIDENCE_SOURCE
+      || LEGACY_STAFF_EVIDENCE_SOURCES.has(source)
+      ? STAFF_RECORDED_CARRIER_EVIDENCE_SOURCE
+      : source;
   }
 
   function assertShipmentEventReplay(existing, expected) {
     if (String(existing.exchangeCaseId) !== String(expected.exchangeCaseId)
       || String(existing.shipmentId) !== String(expected.shipmentId)
       || existing.eventType !== expected.eventType
-      || existing.source !== expected.source
+      || canonicalShipmentEvidenceSource(existing.source)
+        !== canonicalShipmentEvidenceSource(expected.source)
       || String(existing.actorId || '') !== String(expected.actorId || '')
       || String(existing.evidenceReference) !== expected.evidenceReference
       || new Date(existing.occurredAt).getTime() !== expected.occurredAt.getTime()
@@ -554,7 +611,12 @@ function createExchangeService({
     }
     return {
       event,
-      request: await load(event.exchangeCaseId, source === 'STAFF_EVIDENCE' ? 'Staff' : 'Customer'),
+      request: await load(
+        event.exchangeCaseId,
+        canonicalShipmentEvidenceSource(source) === STAFF_RECORDED_CARRIER_EVIDENCE_SOURCE
+          ? 'Staff'
+          : 'Customer',
+      ),
       idempotentReplay: replay,
     };
   }
@@ -922,7 +984,7 @@ function createExchangeService({
       if (!reason) throw new ApiError(400, 'Exchange reason is required');
       if (reason.length > 2000) throw new ApiError(400, 'Exchange reason must not exceed 2000 characters');
       const evidenceImages = evidenceVerifier(customerId, input.evidenceImages);
-      let order = await repository.findOrderById(input.orderId);
+      const order = await repository.findOrderById(input.orderId);
       if (!order || String(order.customerId) !== String(customerId)) throw new ApiError(404, 'Order not found');
       if (order.orderStatus !== 'Delivered') throw new ApiError(409, 'Only Delivered orders can be exchanged');
       const replacementUnitIds = [...new Set(
@@ -930,9 +992,11 @@ function createExchangeService({
           .map((value) => String(value || '').trim())
           .filter(Boolean)
       )];
-      if (!replacementUnitIds.length && !order.deliveredAt && !order.exchangeDeadlineAt) {
-        throw new ApiError(409, 'DeliveredAt is required to determine the five-day Exchange window');
-      }
+      const receiptEligibility = await deliveryReceiptPolicy.requireReceived({
+        order,
+        customerId,
+        deadlineField: replacementUnitIds.length ? null : 'exchangeDeadlineAt',
+      });
       let replacementUnits = [];
       if (replacementUnitIds.length) {
         if (!repository.findUnitsByIds) throw new ApiError(409, 'Replacement lineage lookup is unavailable');
@@ -948,13 +1012,12 @@ function createExchangeService({
         }
       }
       const deadlineAt = replacementUnits.length
-        ? new Date(Math.min(...replacementUnits.map((unit) => new Date(unit.exchangeDeadlineAt).getTime())))
-        : order.exchangeDeadlineAt
-          ? new Date(order.exchangeDeadlineAt)
-          : new Date(new Date(order.deliveredAt).getTime() + EXCHANGE_WINDOW_MS);
+        ? new Date(Math.min(...replacementUnits.map(
+          (unit) => new Date(unit.exchangeDeadlineAt).getTime(),
+        )))
+        : receiptEligibility.deadlineAt;
       if (Number.isNaN(deadlineAt.getTime())) throw new ApiError(409, 'The stored Exchange deadline is invalid');
       if (new Date(clock()).getTime() > deadlineAt.getTime()) throw new ApiError(409, 'The five-day Exchange window has expired');
-      if (!replacementUnits.length && !order.exchangeDeadlineAt) order = await repository.ensureExchangeDeadline(order._id, deadlineAt);
 
       const details = await repository.listOrderDetails(order._id);
       const detailById = new Map(details.map((detail) => [String(detail._id), detail]));
@@ -1114,11 +1177,29 @@ function createExchangeService({
     },
 
     async listStaffRequests(query = {}) {
-      const filter = query.status ? { status: query.status } : {};
-      const cases = await repository.listCases(filter);
+      const paging = parseStaffQueueQuery(query, {
+        allowedStatuses: EXCHANGE_STATUSES,
+      });
+      const listed = repository.listStaffCasesPage
+        ? await repository.listStaffCasesPage(paging)
+        : await repository.listCases(paging.status ? { status: paging.status } : {});
+      let cases;
+      let total;
+      if (Array.isArray(listed)) {
+        const matching = paging.search
+          ? listed.filter((exchangeCase) => (
+            String(exchangeCase.requestCode || '').toLowerCase().includes(paging.search.toLowerCase())
+          ))
+          : listed;
+        total = matching.length;
+        cases = matching.slice(paging.skip, paging.skip + paging.pageSize);
+      } else {
+        cases = listed.items || [];
+        total = Number(listed.total || 0);
+      }
       const items = [];
       for (const item of cases) items.push(await load(item._id, 'Staff'));
-      return { items, total: items.length };
+      return buildStaffQueuePage(items, total, paging);
     },
 
     async getStaffRequest(id) { return load(id, 'Staff'); },
@@ -1314,6 +1395,27 @@ function createExchangeService({
         throw new ApiError(409, 'This Exchange cannot convert without an exact-stock failure');
       }
       const convertedResult = await transactionManager.withTransaction(async (session) => {
+        const [currentOrder, payment] = await Promise.all([
+          repository.findOrderById(exchangeCase.orderId, session),
+          repository.findPaymentByOrderId(exchangeCase.orderId, session),
+        ]);
+        if (!currentOrder || String(currentOrder.customerId) !== String(customerId)) {
+          throw new ApiError(404, 'Exchange Order not found');
+        }
+        if (!payment) {
+          throw new ApiError(409, 'Payment record is required before converting to Return/Refund');
+        }
+        if (payment.paymentStatus !== currentOrder.paymentStatus) {
+          throw new ApiError(409, 'Order and Payment status must be reconciled before conversion');
+        }
+        const codHold = currentOrder.paymentMethod === 'COD'
+          && currentOrder.paymentStatus !== 'Paid';
+        if (codHold && currentOrder.codDiscrepancyStatus !== 'Open') {
+          throw new ApiError(409, 'Unpaid COD conversion requires an open COD discrepancy');
+        }
+        if (!codHold && currentOrder.paymentStatus !== 'Paid') {
+          throw new ApiError(409, 'Only paid orders can enter the normal Return/Refund flow');
+        }
         const claimed = await repository.claimCase(id, [
           'AwaitingExactStockChoice', 'WaitingForExactStock',
         ], {
@@ -1348,10 +1450,14 @@ function createExchangeService({
           orderId: exchangeCase.orderId,
           requestCode: `RET-X-${Date.now()}-${crypto.randomUUID().slice(0, 6).toUpperCase()}`,
           customerId: exchangeCase.customerId,
+          paymentId: payment._id,
           reason: `Chuyển từ yêu cầu đổi hàng ${exchangeCase.requestCode}: ${exchangeCase.reason}`,
           evidenceImages: exchangeCase.evidenceImages,
-          status: 'New',
+          status: codHold ? 'AwaitingCODReconciliation' : 'New',
           refundAmount: 0,
+          holdReason: codHold
+            ? 'Đã ghi nhận đúng hạn; đang chờ đối soát bằng chứng thu COD từ khách hàng.'
+            : '',
           deadlineAt: exchangeCase.deadlineAt,
           requestedAt: exchangeCase.sourceTimelyRequestedAt,
           sourceExchangeCaseId: exchangeCase._id,
@@ -1373,11 +1479,16 @@ function createExchangeService({
         await repository.updateCase(id, {
           convertedReturnRefundRequestId: returnRequest._id,
         }, session);
+        await writeAudit(
+          customerId,
+          'EXCHANGE_CONVERTED_TO_RETURN',
+          id,
+          `Converted to Return ${returnRequest.requestCode}`,
+          session,
+        );
         return { returnRequest, releasedInventories };
       });
       await evaluateInventoryLifecycles(convertedResult.releasedInventories);
-      const converted = convertedResult.returnRequest;
-      await writeAudit(customerId, 'EXCHANGE_CONVERTED_TO_RETURN', id, `Converted to Return ${converted.requestCode}`);
       return load(id);
     },
 
@@ -1409,7 +1520,7 @@ function createExchangeService({
       const exchangeCase = await repository.findCaseById(id);
       if (!exchangeCase || String(exchangeCase.customerId) !== String(customerId)) throw new ApiError(404, 'Exchange request not found');
       if (exchangeCase.status === 'Cancelled' && exchangeCase.cancellationIdempotencyKey === idempotencyKey) return load(id, 'Customer', true);
-      if (!['Submitted', 'AwaitingExactStockChoice', 'WaitingForExactStock', 'ApprovedAwaitingShipment'].includes(exchangeCase.status)) {
+      if (!canCustomerCancelBeforeHandoff(exchangeCase)) {
         throw new ApiError(409, 'Customer cannot cancel after Carrier handoff');
       }
       const cancellationResult = await transactionManager.withTransaction(async (session) => {
@@ -1425,10 +1536,16 @@ function createExchangeService({
         const releasedInventories = await releaseReservations(id, customerId, 'Customer cancelled before handoff', session);
         await repository.releaseUnitClaims(id, session);
         await repository.releaseOrderLock(exchangeCase.orderId, exchangeCase._id, 'Cancelled', false, session);
+        await writeAudit(
+          customerId,
+          'EXCHANGE_CANCELLED',
+          id,
+          'Customer cancelled before Carrier handoff',
+          session,
+        );
         return { releasedInventories };
       });
       await evaluateInventoryLifecycles(cancellationResult.releasedInventories);
-      await writeAudit(customerId, 'EXCHANGE_CANCELLED', id, 'Customer cancelled before Carrier handoff');
       return load(id);
     },
 
@@ -1778,6 +1895,7 @@ function createExchangeService({
     },
 
     async recordShipmentEvent(actorId, source, shipmentId, input = {}) {
+      source = canonicalShipmentEvidenceSource(source);
       rejectForbiddenFields(input);
       const eventKey = normalizeIdempotencyKey(input.eventId || input.idempotencyKey, 'eventId');
       const eventType = String(input.eventType || '').toUpperCase();
@@ -1973,7 +2091,12 @@ function createExchangeService({
     },
 
     async recordStaffShipmentEvent(staffId, caseId, shipmentId, input = {}) {
-      return service.recordShipmentEvent(staffId, 'STAFF_EVIDENCE', shipmentId, { ...input, exchangeCaseId: caseId });
+      return service.recordShipmentEvent(
+        staffId,
+        STAFF_RECORDED_CARRIER_EVIDENCE_SOURCE,
+        shipmentId,
+        { ...input, exchangeCaseId: caseId },
+      );
     },
 
     async reportShipmentDispute(customerId, caseId, shipmentId, input = {}) {

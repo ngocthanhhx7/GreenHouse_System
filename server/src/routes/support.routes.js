@@ -2,6 +2,7 @@ const express = require('express');
 const supportController = require('../controller/support.controller');
 const { authenticate } = require('../middlewares/auth.middleware');
 const { authorizeRoles } = require('../middlewares/authorize.middleware');
+const { validateObjectIdParam } = require('../middlewares/validateRequest.middleware');
 
 const router = express.Router();
 
@@ -13,11 +14,11 @@ router.patch('/support-requests/:id/withdraw', authenticate, authorizeRoles('Cus
 router.post('/support-requests/:id/reopen', authenticate, authorizeRoles('Customer'), supportController.reopenCustomerRequest);
 
 router.get('/staff/support-requests', authenticate, authorizeRoles('Staff'), supportController.listStaffRequests);
-router.get('/staff/support-requests/:id', authenticate, authorizeRoles('Staff'), supportController.getStaffRequest);
-router.post('/staff/support-requests/:id/claim', authenticate, authorizeRoles('Staff'), supportController.claimRequest);
-router.post('/staff/support-requests/:id/messages', authenticate, authorizeRoles('Staff'), supportController.appendStaffMessage);
-router.patch('/staff/support-requests/:id/priority', authenticate, authorizeRoles('Staff'), supportController.changePriority);
-router.patch('/staff/support-requests/:id/transfer', authenticate, authorizeRoles('Staff'), supportController.transferRequest);
-router.post('/staff/support-requests/:id/resolve', authenticate, authorizeRoles('Staff'), supportController.resolveRequest);
+router.get('/staff/support-requests/:id', authenticate, authorizeRoles('Staff'), validateObjectIdParam(), supportController.getStaffRequest);
+router.post('/staff/support-requests/:id/claim', authenticate, authorizeRoles('Staff'), validateObjectIdParam(), supportController.claimRequest);
+router.post('/staff/support-requests/:id/messages', authenticate, authorizeRoles('Staff'), validateObjectIdParam(), supportController.appendStaffMessage);
+router.patch('/staff/support-requests/:id/priority', authenticate, authorizeRoles('Staff'), validateObjectIdParam(), supportController.changePriority);
+router.patch('/staff/support-requests/:id/transfer', authenticate, authorizeRoles('Staff'), validateObjectIdParam(), supportController.transferRequest);
+router.post('/staff/support-requests/:id/resolve', authenticate, authorizeRoles('Staff'), validateObjectIdParam(), supportController.resolveRequest);
 
 module.exports = router;

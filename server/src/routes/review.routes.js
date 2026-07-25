@@ -2,6 +2,7 @@ const express = require('express');
 const reviewController = require('../controller/review.controller');
 const { authenticate } = require('../middlewares/auth.middleware');
 const { authorizeRoles } = require('../middlewares/authorize.middleware');
+const { validateObjectIdParam } = require('../middlewares/validateRequest.middleware');
 
 const router = express.Router();
 
@@ -42,6 +43,7 @@ router.patch(
   '/staff/reviews/:reviewId/moderation',
   authenticate,
   authorizeRoles('Staff'),
+  validateObjectIdParam('reviewId'),
   reviewController.moderate,
 );
 

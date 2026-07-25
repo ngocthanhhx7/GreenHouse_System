@@ -212,7 +212,7 @@ describe('SL-004 fulfillment and delivery acceptance', () => {
     );
   });
 
-  it('AT-071 permits irrecoverable loss/damage terminal resolution without fabricating Warehouse receipt', () => {
+  it('AT-071 resolves irrecoverable loss/damage separately while keeping the Order on its Shipped projection', () => {
     assert.ok(
       existsSync(join(SRC, 'models', 'deliveryIncident.model.js')),
       'AT-071 RED: verified pre-delivery loss/damage incident persistence does not exist',
@@ -222,10 +222,15 @@ describe('SL-004 fulfillment and delivery acceptance', () => {
       /irrecoverable|Irrecoverable/,
       'AT-071 RED: terminal resolution cannot distinguish impossible receipt from missing receipt',
     );
+    assert.doesNotMatch(
+      allFulfillmentSource(),
+      /orderStatus:\s*'DeliveryFailed'/,
+      'AT-071: a delivery incident must not replace the approved Shipped Order projection',
+    );
     assert.match(
       allFulfillmentSource(),
-      /DeliveryFailed/,
-      'AT-071 RED: incident terminal outcome is not implemented',
+      /status:\s*'Resolved'/,
+      'AT-071 RED: the irrecoverable incident itself has no terminal result',
     );
   });
 

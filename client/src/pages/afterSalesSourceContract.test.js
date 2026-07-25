@@ -32,6 +32,8 @@ describe('after-sales source contract', () => {
 
   it('uses pure workflow predicates instead of broad incident status checks', () => {
     assert.match(customerDetail, /workflowActions\.canWaitOrConvert/);
+    assert.match(customerDetail, /workflowActions\.canCancel/);
+    assert.doesNotMatch(customerDetail, /\[['"]Submitted['"],\s*['"]AwaitingExactStockChoice['"],\s*['"]WaitingForExactStock['"]\]\.includes\(request\.status\)/);
     assert.match(staffDetail, /workflowActions\.canRetryReservation/);
     assert.match(staffDetail, /workflowActions\.canResend/);
     assert.match(warehouseDetail, /workflowActions\.canCreateOutbound/);
@@ -43,7 +45,9 @@ describe('after-sales source contract', () => {
     assert.match(orderDetail, /err\.data\?\.action\?\.href/);
     assert.match(orderDetail, /setActiveCase/);
     assert.match(orderDetail, /requestReturnRefund[\s\S]*catch \(err\)[\s\S]*handleAfterSalesConflict\(err\)/);
-    assert.match(orderDetail, /!activeCase && order\.orderStatus === ['"]Delivered['"]/);
+    assert.match(orderDetail, /const afterSalesEnabled = order\.afterSales\?\.enabled === true/);
+    assert.match(orderDetail, /order\.afterSales\?\.receiptGatePassed === true/);
+    assert.match(orderDetail, /!activeCase && afterSalesEnabled/);
   });
 
   it('contains all required staff filter states', () => {

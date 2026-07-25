@@ -26,6 +26,9 @@ const {
   createModelRepository,
   createModelTransactionManager,
 } = require('./review.persistence');
+const {
+  createCustomerDeliveryReceiptPolicy,
+} = require('./customerDeliveryReceiptPolicy');
 
 function createReviewService(options = {}) {
   const repository = options.repository || createModelRepository();
@@ -36,6 +39,8 @@ function createReviewService(options = {}) {
     || createModelOutboxRepository();
   const now = options.now
     || (options.clock?.now ? () => options.clock.now() : () => new Date());
+  const deliveryReceiptPolicy = options.deliveryReceiptPolicy
+    || createCustomerDeliveryReceiptPolicy({ repository });
   const inFlight = new Map();
   const aggregateLocks = new Map();
 
@@ -225,13 +230,13 @@ function createReviewService(options = {}) {
         ) {
           throw notEligible();
         }
+        await deliveryReceiptPolicy.requireReceived({ order, customerId });
         return { product, detail, order };
       }
 
-      const eligible = await repository.findOwnedDeliveredOrderDetail(
-        customerId,
-        productId,
-      );
+      const eligible = repository.findOwnedReceivedOrderDetail
+        ? await repository.findOwnedReceivedOrderDetail(customerId, productId)
+        : await repository.findOwnedDeliveredOrderDetail(customerId, productId);
       if (
         !eligible
         || valueId(eligible.productId) !== String(productId)
@@ -240,6 +245,11 @@ function createReviewService(options = {}) {
       ) {
         throw notEligible();
       }
+      await deliveryReceiptPolicy.requireReceived({
+        order: eligible.order,
+        customerId,
+        receipt: eligible.deliveryReceipt,
+      });
       return {
         product,
         detail: eligible,

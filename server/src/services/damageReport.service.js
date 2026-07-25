@@ -5,9 +5,16 @@ const Inventory = require('../models/inventory.model');
 const InventoryTransaction = require('../models/inventoryTransaction.model');
 const Order = require('../models/order.model');
 const OrderDetail = require('../models/orderDetail.model');
+const DomainOutbox = require('../models/domainOutbox.model');
 const { logAudit } = require('../utils/auditLogger');
 const { notificationService } = require('./notification.service');
+const { canonicalEnvelope } = require('./domainEventProducer.service');
 const { lowStockAlertLifecycle: defaultLowStockLifecycle } = require('./lowStockAlertLifecycle.service');
+const {
+  buildStaffQueuePage,
+  escapeRegex,
+  parseStaffQueueQuery,
+} = require('../utils/staffQueueQuery');
 const {
   assignmentCoordinator: defaultAssignmentCoordinator,
 } = require('./assignmentCoordination.service');
@@ -44,8 +51,31 @@ function toResponse(report) {
 }
 function createModelRepository() { return {
   async listReports(query = {}) {
-    const filter = query.status ? { status: query.status } : {};
+    const filter = {};
+    if (query.status) filter.status = query.status;
+    if (query.reportedBy) filter.reportedBy = query.reportedBy;
     return DamageReport.find(filter).sort({ createdAt: -1 }).lean();
+  },
+  async listReportsPage(query = {}) {
+    const filter = {};
+    if (query.status) filter.status = query.status;
+    if (query.reportedBy) filter.reportedBy = query.reportedBy;
+    if (query.search) {
+      const pattern = new RegExp(escapeRegex(query.search), 'i');
+      filter.$or = [
+        { reason: pattern },
+        { idempotencyKey: pattern },
+      ];
+    }
+    const [items, total] = await Promise.all([
+      DamageReport.find(filter)
+        .sort({ createdAt: -1, _id: -1 })
+        .skip(query.skip)
+        .limit(query.pageSize)
+        .lean(),
+      DamageReport.countDocuments(filter),
+    ]);
+    return { items, total };
   },
   async createReport(data, session) { const [report] = await DamageReport.create([data], session ? { session } : undefined); return report.toObject(); },
   async findReportByIdempotencyKey(idempotencyKey, session) { return withOptionalSession(DamageReport.findOne({ idempotencyKey }), session).lean(); },
@@ -85,6 +115,16 @@ function createModelRepository() { return {
     }).select('_id'), session).lean();
     return orders.map((order) => order._id);
   },
+  async enqueuePostCommitWork(data, session) {
+    return withOptionalSession(
+      DomainOutbox.findOneAndUpdate(
+        { identityKey: data.identityKey },
+        { $setOnInsert: data },
+        { upsert: true, new: true, runValidators: true },
+      ),
+      session,
+    ).lean();
+  },
 }; }
 function createDamageReportService({
   repository = createModelRepository(),
@@ -111,6 +151,35 @@ function createDamageReportService({
     } catch (_) { /* Notifications never roll back committed inventory facts. */ }
   }
   const api = {
+    async listStaffReports(staffId, query = {}) {
+      const paging = parseStaffQueueQuery(query, {
+        allowedStatuses: DAMAGE_REPORT_STATUSES,
+      });
+      const reportQuery = { ...paging, reportedBy: staffId };
+      const listed = repository.listReportsPage
+        ? await repository.listReportsPage(reportQuery)
+        : await repository.listReports(reportQuery);
+      let reports;
+      let total;
+      if (Array.isArray(listed)) {
+        const normalizedSearch = paging.search.toLowerCase();
+        const owned = listed.filter((report) => (
+          String(report.reportedBy) === String(staffId)
+          && (!paging.status || report.status === paging.status)
+          && (
+            !normalizedSearch
+            || String(report.reason || '').toLowerCase().includes(normalizedSearch)
+            || String(report.idempotencyKey || '').toLowerCase().includes(normalizedSearch)
+          )
+        ));
+        total = owned.length;
+        reports = owned.slice(paging.skip, paging.skip + paging.pageSize);
+      } else {
+        reports = listed.items || [];
+        total = Number(listed.total || 0);
+      }
+      return buildStaffQueuePage(reports.map(toResponse), total, paging);
+    },
     async listWarehouseReports(query = {}) {
       const status = String(query.status || '').trim();
       if (status && !DAMAGE_REPORT_STATUSES.has(status)) {
@@ -208,6 +277,30 @@ function createDamageReportService({
             evidence: input.evidence,
             idempotencyKey: `damage-quarantine:${idempotencyKey}`,
           }, session);
+          if (!repository.enqueuePostCommitWork) {
+            throw new Error('Canonical DomainOutbox repository is required for damage reporting');
+          }
+          const occurredAt = new Date();
+          const businessEventId = `damage-report:${idempotencyKey}:created`;
+          await auditLogger.log({
+            userId: staffId,
+            action: 'DAMAGE_REPORT_CREATE',
+            targetEntity: 'DamageReport',
+            targetId: String(report._id),
+            description: `Quarantined ${quantity} item(s)`,
+          }, session);
+          await repository.enqueuePostCommitWork(canonicalEnvelope({
+            identityKey: `notification:${businessEventId}:warehouse`,
+            businessEventId,
+            eventType: 'DAMAGE_REPORTED',
+            aggregateType: 'DamageReport',
+            aggregateId: String(report._id),
+            occurredAt,
+            recipientRole: 'WarehouseManager',
+            targetCollection: 'DamageReport',
+            targetId: String(report._id),
+            displayValues: { quantity: Number(report.quantity) },
+          }, () => occurredAt), session);
           return { report, updated, transaction };
         });
       } catch (error) {
@@ -216,16 +309,7 @@ function createDamageReportService({
         if (!existing) throw error;
         return { ...toResponse(existing), replay: true };
       }
-      await auditLogger.log({ userId: staffId, action: 'DAMAGE_REPORT_CREATE', targetEntity: 'DamageReport', targetId: String(result.report._id), description: `Quarantined ${quantity} item(s)` });
       await lowStockLifecycle?.evaluate(result.updated, { eventKey: `damage-quarantine:${idempotencyKey}` });
-      await emitEvent({
-        idempotencyKey: `damage-report:${idempotencyKey}`,
-        recipientRole: 'WarehouseManager',
-        targetCollection: 'DamageReport',
-        targetId: result.report._id,
-        type: 'DAMAGE_REPORTED',
-        displayValues: { quantity: result.report.quantity },
-      });
       return toResponse(result.report);
     },
     async resolveWarehouseReport(warehouseId, id, input = {}) {
@@ -382,9 +466,15 @@ function createDamageReportService({
           dimension: 'sellable',
           reason,
         }, session);
+        await auditLogger.log({
+          userId: staffId,
+          action: 'DAMAGE_REPORT_WITHDRAW',
+          targetEntity: 'DamageReport',
+          targetId: String(id),
+          description: reason,
+        }, session);
         return { withdrawn, updated };
       });
-      await auditLogger.log({ userId: staffId, action: 'DAMAGE_REPORT_WITHDRAW', targetEntity: 'DamageReport', targetId: String(id), description: reason });
       await lowStockLifecycle?.evaluate(result.updated, { eventKey: `damage-withdrawal:${id}` });
       return toResponse(result.withdrawn);
     },

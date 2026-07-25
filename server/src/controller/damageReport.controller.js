@@ -9,6 +9,14 @@ async function createStaffReport(req, res, next) {
   }
 }
 
+async function listStaffReports(req, res, next) {
+  try {
+    return sendSuccess(res, await damageReportService.listStaffReports(req.user.id, req.query));
+  } catch (error) {
+    return next(error);
+  }
+}
+
 async function listWarehouseReports(req, res, next) {
   try {
     return sendSuccess(res, await damageReportService.listWarehouseReports(req.query));
@@ -74,6 +82,7 @@ async function disposeConfirmedDamage(req, res, next) {
 
 module.exports = {
   createStaffReport,
+  listStaffReports,
   listWarehouseReports,
   getWarehouseReport,
   getStaffReport,

@@ -26,23 +26,25 @@ export default function StaffDashboardPage() {
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
     async function load() {
+      setLoading(true);
+      setError('');
       try {
         const [orders, returns, newSupport, inProgressSupport] = await Promise.all([
-          staffOrderService.listOrders({ status: 'Pending' }),
-          returnRefundService.listStaffRequests({ status: 'New' }),
-          supportService.listStaffRequests({ status: 'New' }),
-          supportService.listStaffRequests({ status: 'InProgress' }),
+          staffOrderService.listOrders({ status: 'Pending', page: 1, pageSize: 1 }),
+          returnRefundService.listStaffRequests({ status: 'New', page: 1, pageSize: 1 }),
+          supportService.listStaffRequests({ status: 'New', page: 1, pageSize: 1 }),
+          supportService.listStaffRequests({ status: 'InProgress', page: 1, pageSize: 1 }),
         ]);
         if (!cancelled) {
           setStats(toStaffDashboardStats({
             orders,
             returns,
             newSupport,
-            openSupport: { total: 0 },
             inProgressSupport,
           }));
         }
@@ -58,7 +60,7 @@ export default function StaffDashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [reloadKey]);
 
   if (loading) return <div className="page-center">Đang tải công việc...</div>;
 
@@ -67,7 +69,18 @@ export default function StaffDashboardPage() {
       <div className="page-heading">
         <h1>Tổng quan xử lý đơn</h1>
       </div>
-      {error && <div className="alert alert-warning">Không tải được số liệu xử lý đơn: {error}</div>}
+      {error && (
+        <div className="alert alert-warning d-flex align-items-center justify-content-between gap-3">
+          <span>Không tải được số liệu xử lý đơn: {error}</span>
+          <button
+            type="button"
+            className="btn btn-outline-dark btn-sm"
+            onClick={() => setReloadKey((value) => value + 1)}
+          >
+            Thử tải lại
+          </button>
+        </div>
+      )}
       <div className="metrics-grid mb-4">
         <StatBox
           label="Đơn chờ xử lý"

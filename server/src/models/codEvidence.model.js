@@ -8,7 +8,17 @@ const codEvidenceSchema = new mongoose.Schema(
     orderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Order', required: true },
     eventId: { type: String, required: true, trim: true, maxlength: 160 },
     eventType: { type: String, enum: ['COLLECTION', 'SETTLEMENT'], required: true },
-    source: { type: String, enum: ['CARRIER', 'STAFF_EVIDENCE', 'STAFF_RECONCILIATION'], default: 'CARRIER', required: true },
+    source: {
+      type: String,
+      enum: [
+        'CARRIER',
+        'STAFF_RECORDED_CARRIER_EVIDENCE',
+        'STAFF_EVIDENCE',
+        'STAFF_RECONCILIATION',
+      ],
+      default: 'CARRIER',
+      required: true,
+    },
     customerCollectedAmount: {
       type: Number,
       min: 0,

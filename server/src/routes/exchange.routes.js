@@ -3,6 +3,7 @@ const exchangeController = require('../controller/exchange.controller');
 const { authenticate } = require('../middlewares/auth.middleware');
 const { authorizeRoles } = require('../middlewares/authorize.middleware');
 const { carrierSignature } = require('../middlewares/carrierSignature.middleware');
+const { validateObjectIdParam } = require('../middlewares/validateRequest.middleware');
 
 const router = express.Router();
 
@@ -15,12 +16,12 @@ router.post('/exchanges/:id/stock-choice', authenticate, authorizeRoles('Custome
 router.post('/exchanges/:id/shipments/:shipmentId/disputes', authenticate, authorizeRoles('Customer'), exchangeController.reportShipmentDispute);
 
 router.get('/staff/exchanges', authenticate, authorizeRoles('Staff'), exchangeController.listStaffRequests);
-router.get('/staff/exchanges/:id', authenticate, authorizeRoles('Staff'), exchangeController.getStaffRequest);
-router.patch('/staff/exchanges/:id/decision', authenticate, authorizeRoles('Staff'), exchangeController.decideRequest);
-router.post('/staff/exchanges/:id/retry-reservation', authenticate, authorizeRoles('Staff'), exchangeController.retryReservation);
-router.post('/staff/exchanges/:id/expire', authenticate, authorizeRoles('Staff'), exchangeController.expireRequest);
-router.post('/staff/exchanges/:id/shipments/:shipmentId/events', authenticate, authorizeRoles('Staff'), exchangeController.recordStaffShipmentEvent);
-router.post('/staff/exchanges/:id/resend', authenticate, authorizeRoles('Staff'), exchangeController.resendReplacement);
+router.get('/staff/exchanges/:id', authenticate, authorizeRoles('Staff'), validateObjectIdParam(), exchangeController.getStaffRequest);
+router.patch('/staff/exchanges/:id/decision', authenticate, authorizeRoles('Staff'), validateObjectIdParam(), exchangeController.decideRequest);
+router.post('/staff/exchanges/:id/retry-reservation', authenticate, authorizeRoles('Staff'), validateObjectIdParam(), exchangeController.retryReservation);
+router.post('/staff/exchanges/:id/expire', authenticate, authorizeRoles('Staff'), validateObjectIdParam(), exchangeController.expireRequest);
+router.post('/staff/exchanges/:id/shipments/:shipmentId/events', authenticate, authorizeRoles('Staff'), validateObjectIdParam(), validateObjectIdParam('shipmentId'), exchangeController.recordStaffShipmentEvent);
+router.post('/staff/exchanges/:id/resend', authenticate, authorizeRoles('Staff'), validateObjectIdParam(), exchangeController.resendReplacement);
 
 router.get('/warehouse/exchanges', authenticate, authorizeRoles('WarehouseManager'), exchangeController.listWarehouseRequests);
 router.get('/warehouse/exchanges/:id', authenticate, authorizeRoles('WarehouseManager'), exchangeController.getWarehouseRequest);

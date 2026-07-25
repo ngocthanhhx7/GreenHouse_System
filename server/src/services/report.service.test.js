@@ -97,6 +97,29 @@ describe('report service', () => {
     assert.equal(result.revenue.netSales, result.revenue.grossSales);
   });
 
+  it('derives terminal delivery failures without treating resolved Shipped orders as backlog', async () => {
+    const repository = {
+      async listOrders() {
+        return [
+          { _id: 'active-shipment', orderStatus: 'Shipped' },
+          {
+            _id: 'resolved-shipment',
+            orderStatus: 'Shipped',
+            deliveryResolutionCommandKey: 'terminal-resolution-001',
+          },
+          { _id: 'legacy-failed', orderStatus: 'DeliveryFailed' },
+        ];
+      },
+      async listAuditLogs() { return []; },
+    };
+    const result = await createReportService({ repository }).getOrderReport({ mode: 'allTime' });
+
+    assert.equal(result.orders.currentSnapshot.backlog, 1);
+    assert.equal(result.orders.currentSnapshot.terminalDeliveryFailures, 2);
+    assert.equal(result.orders.currentSnapshot.byStatus.Shipped, 2);
+    assert.equal(result.orders.currentSnapshot.byStatus.DeliveryFailed, 1);
+  });
+
   it('filters period metrics by their reporting timestamps while keeping snapshots current', async () => {
     const repository = {
       async listOrders() {

@@ -23,6 +23,11 @@ const {
 const { createPayOSGateway } = require('../config/payos');
 const { logAudit } = require('../utils/auditLogger');
 const {
+  buildStaffQueuePage,
+  escapeRegex,
+  parseStaffQueueQuery,
+} = require('../utils/staffQueueQuery');
+const {
   canonicalEnvelope,
   createOutboxWriter,
 } = require('./domainEventProducer.service');
@@ -36,11 +41,15 @@ const {
   resolveActiveAfterSalesConflict,
   createActiveAfterSalesConflict,
 } = require('./afterSalesConflict.service');
+const {
+  createCustomerDeliveryReceiptPolicy,
+} = require('./customerDeliveryReceiptPolicy');
 
 const OPEN_STATUSES = [
   'New', 'Pending', 'AwaitingCODReconciliation', 'Approved',
   'AwaitingInspection', 'Received', 'ReadyForRefund', 'CODRecoveryInProgress',
 ];
+const RETURN_REFUND_STATUSES = new Set(ReturnRefundRequest.schema.path('status').enumValues);
 
 function createReturnNotificationOutbox() {
   const writer = createOutboxWriter();
@@ -66,7 +75,6 @@ const DECIDABLE_STATUSES = ['New', 'Pending', 'AwaitingCODReconciliation'];
 const RECEIVABLE_STATUSES = ['Approved', 'AwaitingInspection'];
 const HANDOFF_RECORDABLE_STATUSES = [...RECEIVABLE_STATUSES, 'Expired'];
 const RECEIVED_STATUSES = ['Received', 'ReadyForRefund'];
-const RETURN_WINDOW_MS = 5 * 24 * 60 * 60 * 1000;
 
 function computeMoneyObligationsSettled(obligations = []) {
   return obligations.every((obligation) => (
@@ -368,7 +376,11 @@ function createModelRepository() {
     async findPaymentByOrderId(orderId, session) { return withOptionalSession(Payment.findOne({ orderId }), session).lean(); },
     async findLatestPaymentAttemptByOrder(orderId, session) { return withOptionalSession(PaymentAttempt.findOne({ orderId }).sort({ createdAt: -1 }), session).lean(); },
     async findOpenRequestByOrderId(orderId, session) {
-      return withOptionalSession(ReturnRefundRequest.findOne({ orderId, status: { $in: OPEN_STATUSES } }), session).lean();
+      return withOptionalSession(ReturnRefundRequest.findOne({
+        orderId,
+        status: { $in: OPEN_STATUSES },
+        obligationKey: { $in: ['', null] },
+      }), session).lean();
     },
     async createRequest(data, session) {
       const [created] = await ReturnRefundRequest.create([data], session ? { session } : undefined);
@@ -379,6 +391,22 @@ function createModelRepository() {
       if (query.customerId) filter.customerId = query.customerId;
       if (query.status) filter.status = query.status;
       return ReturnRefundRequest.find(filter).sort({ createdAt: -1 }).lean();
+    },
+    async listStaffRequestsPage(query = {}) {
+      const filter = {};
+      if (query.status) filter.status = query.status;
+      if (query.search) {
+        filter.requestCode = new RegExp(escapeRegex(query.search), 'i');
+      }
+      const [items, total] = await Promise.all([
+        ReturnRefundRequest.find(filter)
+          .sort({ createdAt: -1, _id: -1 })
+          .skip(query.skip)
+          .limit(query.pageSize)
+          .lean(),
+        ReturnRefundRequest.countDocuments(filter),
+      ]);
+      return { items, total };
     },
     async findRequestById(id, session) { return withOptionalSession(ReturnRefundRequest.findById(id), session).lean(); },
     async listOverdueRequests(now, limit = 100, session) {
@@ -588,6 +616,7 @@ function createReturnRefundService({
   payosGateway = createPayOSGateway(),
   clock = () => new Date(),
   assignmentCoordinator = defaultAssignmentCoordinator,
+  deliveryReceiptPolicy = createCustomerDeliveryReceiptPolicy({ repository }),
 } = {}) {
   async function loadRequest(id, session) {
     const request = await repository.findRequestById(id, session);
@@ -965,19 +994,17 @@ function createReturnRefundService({
       const submittedEvidence = Array.isArray(input.evidenceImages) ? input.evidenceImages : [];
       if (!submittedEvidence.length) throw new ApiError(400, 'At least one return/refund evidence attachment is required');
 
-      let order = await repository.findOrderById(input.orderId);
+      const order = await repository.findOrderById(input.orderId);
       if (!order || String(order.customerId) !== String(customerId)) throw new ApiError(404, 'Order not found');
       if (order.orderStatus !== 'Delivered') throw new ApiError(409, 'Only Delivered orders can be returned');
-      if (!order.deliveredAt && !order.returnDeadlineAt) throw new ApiError(409, 'DeliveredAt is required to determine the five-day return window');
-
-      const deadlineAt = order.returnDeadlineAt
-        ? new Date(order.returnDeadlineAt)
-        : new Date(new Date(order.deliveredAt).getTime() + RETURN_WINDOW_MS);
+      const receiptEligibility = await deliveryReceiptPolicy.requireReceived({
+        order,
+        customerId,
+        deadlineField: 'returnDeadlineAt',
+      });
+      const deadlineAt = receiptEligibility.deadlineAt;
       if (Number.isNaN(deadlineAt.getTime())) throw new ApiError(409, 'The stored return deadline is invalid');
       if (new Date(clock()).getTime() > deadlineAt.getTime()) throw new ApiError(409, 'The five-day return window has expired');
-      if (!order.returnDeadlineAt && repository.ensureReturnDeadline) {
-        order = await repository.ensureReturnDeadline(order._id, deadlineAt);
-      }
 
       const preexistingConflict = await resolveConflict(order._id, customerId);
       if (preexistingConflict.hasActiveLock) {
@@ -994,6 +1021,9 @@ function createReturnRefundService({
       const evidenceImages = normalizeCustomerEvidence(customerId, submittedEvidence);
       const payment = await repository.findPaymentByOrderId(order._id);
       const codHold = order.paymentMethod === 'COD' && order.paymentStatus !== 'Paid';
+      if (codHold && order.codDiscrepancyStatus !== 'Open') {
+        throw new ApiError(409, 'Unpaid COD return requires an open COD discrepancy');
+      }
       if (!codHold && order.paymentStatus !== 'Paid') throw new ApiError(409, 'Only paid orders can enter the normal return/refund flow');
 
       let request;
@@ -1055,10 +1085,29 @@ function createReturnRefundService({
     },
 
     async listStaffRequests(query = {}) {
-      const requests = await repository.listRequests(query);
+      const paging = parseStaffQueueQuery(query, {
+        allowedStatuses: RETURN_REFUND_STATUSES,
+      });
+      const listed = repository.listStaffRequestsPage
+        ? await repository.listStaffRequestsPage(paging)
+        : await repository.listRequests(paging);
+      let requests;
+      let total;
+      if (Array.isArray(listed)) {
+        const matching = paging.search
+          ? listed.filter((request) => (
+            String(request.requestCode || '').toLowerCase().includes(paging.search.toLowerCase())
+          ))
+          : listed;
+        total = matching.length;
+        requests = matching.slice(paging.skip, paging.skip + paging.pageSize);
+      } else {
+        requests = listed.items || [];
+        total = Number(listed.total || 0);
+      }
       const items = [];
       for (const request of requests) items.push(await respond(request._id, 'StaffList'));
-      return { items, total: items.length };
+      return buildStaffQueuePage(items, total, paging);
     },
 
     async listWarehouseRequests(query = {}) {
@@ -1325,6 +1374,9 @@ function createReturnRefundService({
       if (forbiddenFields.some((field) => Object.prototype.hasOwnProperty.call(input, field))) {
         await writeAudit(staffId, 'REFUND_DESTINATION_EDIT_DENIED', id, 'Blocked Staff attempt to edit Customer-confirmed refund destination values; sensitive values redacted');
         throw new ApiError(400, 'Staff can verify or reject destination details but cannot edit them');
+      }
+      if (![...RECEIVABLE_STATUSES, ...RECEIVED_STATUSES].includes(request.status)) {
+        throw new ApiError(409, 'Refund destination can only be decided after approval and before completion');
       }
       const status = String(input.status || '').trim();
       if (!['Verified', 'Rejected'].includes(status)) throw new ApiError(400, 'Destination status must be Verified or Rejected');

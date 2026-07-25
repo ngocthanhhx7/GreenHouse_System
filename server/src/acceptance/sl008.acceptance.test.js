@@ -461,6 +461,40 @@ function buildReviewFixture({ now = '2026-07-24T12:00:00.000Z' } = {}) {
       { id: 'order-foreign', customerId: 'customer-2', deliveredAt: new Date('2026-07-23T08:00:00.000Z'), status: 'Delivered' },
       { id: 'order-undelivered', customerId: 'customer-1', deliveredAt: null, status: 'Shipped' },
     ],
+    customerDeliveryReceipts: [
+      {
+        id: 'receipt-old',
+        orderId: 'order-old',
+        customerId: 'customer-1',
+        outcome: 'RECEIVED',
+        createdAt: new Date('2026-07-20T09:00:00.000Z'),
+        respondedAt: new Date('2026-07-20T09:00:00.000Z'),
+      },
+      {
+        id: 'receipt-new',
+        orderId: 'order-new',
+        customerId: 'customer-1',
+        outcome: 'RECEIVED',
+        createdAt: new Date('2026-07-22T09:00:00.000Z'),
+        respondedAt: new Date('2026-07-22T09:00:00.000Z'),
+      },
+      {
+        id: 'receipt-tie',
+        orderId: 'order-tie',
+        customerId: 'customer-1',
+        outcome: 'RECEIVED',
+        createdAt: new Date('2026-07-22T09:00:00.000Z'),
+        respondedAt: new Date('2026-07-22T09:00:00.000Z'),
+      },
+      {
+        id: 'receipt-foreign',
+        orderId: 'order-foreign',
+        customerId: 'customer-2',
+        outcome: 'RECEIVED',
+        createdAt: new Date('2026-07-23T09:00:00.000Z'),
+        respondedAt: new Date('2026-07-23T09:00:00.000Z'),
+      },
+    ],
     orderDetails: [
       // Deliberately shuffled: fallback ordering must not inherit repository insertion order.
       { id: 'detail-010', orderId: 'order-new', productId: 'product-1', sku: 'SKU-1' },
@@ -493,6 +527,13 @@ function buildReviewFixture({ now = '2026-07-24T12:00:00.000Z' } = {}) {
     async findOrderById(id) {
       return state.orders.find((item) => item.id === String(id)) || null;
     },
+    async findLatestCustomerDeliveryReceiptByOrder(orderId) {
+      return state.customerDeliveryReceipts
+        .filter((item) => item.orderId === String(orderId))
+        .sort((left, right) => (
+          new Date(right.respondedAt).getTime() - new Date(left.respondedAt).getTime()
+        ))[0] || null;
+    },
     async findOrderDetailById(id) {
       return state.orderDetails.find((item) => item.id === String(id)) || null;
     },
@@ -515,6 +556,35 @@ function buildReviewFixture({ now = '2026-07-24T12:00:00.000Z' } = {}) {
         .filter((detail) => (
           detail.order?.customerId === String(customerId)
           && detail.order.deliveredAt
+        ))
+        .sort((left, right) => {
+          const deliveredDifference = new Date(right.order.deliveredAt).getTime()
+            - new Date(left.order.deliveredAt).getTime();
+          return deliveredDifference
+            || String(right.id).localeCompare(String(left.id), 'en');
+        })[0] || null;
+    },
+    async findOwnedReceivedOrderDetail(customerId, productId) {
+      return state.orderDetails
+        .filter((detail) => detail.productId === String(productId))
+        .map((detail) => ({
+          ...detail,
+          order: state.orders.find((order) => order.id === detail.orderId),
+        }))
+        .map((detail) => ({
+          ...detail,
+          deliveryReceipt: state.customerDeliveryReceipts
+            .filter((receipt) => receipt.orderId === detail.orderId)
+            .sort((left, right) => (
+              new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+              || String(right.id).localeCompare(String(left.id), 'en')
+            ))[0] || null,
+        }))
+        .filter((detail) => (
+          detail.order?.customerId === String(customerId)
+          && detail.order.deliveredAt
+          && detail.deliveryReceipt?.outcome === 'RECEIVED'
+          && detail.deliveryReceipt.customerId === String(customerId)
         ))
         .sort((left, right) => {
           const deliveredDifference = new Date(right.order.deliveredAt).getTime()
@@ -1852,6 +1922,41 @@ describe('SL-008 Review behavioral acceptance', () => {
     assert.equal(fixture.state.outbox[0].eventType, 'REVIEW_CREATED');
   });
 
+  it('AT-150A requires RECEIVED evidence and distinguishes an active delivery dispute', async () => {
+    const awaitingFixture = buildReviewFixture();
+    awaitingFixture.state.customerDeliveryReceipts = [];
+    const awaitingBefore = snapshotEffects(awaitingFixture.state);
+    const awaiting = await expectDomainError(
+      () => runMutation(
+        requiredMethod(awaitingFixture.service, 'createReview'),
+        [actors.customer, 'product-1'],
+        reviewCommand(),
+        'review-awaiting-delivery-confirmation-0001',
+      ),
+      'AFTER_SALES_DELIVERY_CONFIRMATION_REQUIRED',
+    );
+    assert.equal(awaiting.statusCode, 409);
+    assert.deepEqual(snapshotEffects(awaitingFixture.state), awaitingBefore);
+
+    const disputedFixture = buildReviewFixture();
+    const disputedReceipt = disputedFixture.state.customerDeliveryReceipts.find(
+      (item) => item.orderId === 'order-old',
+    );
+    disputedReceipt.outcome = 'NOT_RECEIVED';
+    const disputedBefore = snapshotEffects(disputedFixture.state);
+    const disputed = await expectDomainError(
+      () => runMutation(
+        requiredMethod(disputedFixture.service, 'createReview'),
+        [actors.customer, 'product-1'],
+        reviewCommand(),
+        'review-delivery-disputed-0001',
+      ),
+      'AFTER_SALES_DELIVERY_DISPUTED',
+    );
+    assert.equal(disputed.statusCode, 409);
+    assert.deepEqual(snapshotEffects(disputedFixture.state), disputedBefore);
+  });
+
   it('AT-151 deterministically falls back by deliveredAt DESC then OrderDetail ID DESC', async () => {
     const tieFixture = buildReviewFixture();
     const createWithTie = requiredMethod(tieFixture.service, 'createReview');
@@ -1863,6 +1968,22 @@ describe('SL-008 Review behavioral acceptance', () => {
       'review-fallback-tie-0001',
     );
     assert.equal(tieResult.orderDetailId, 'detail-011');
+
+    const awaitingNewestFixture = buildReviewFixture();
+    awaitingNewestFixture.state.customerDeliveryReceipts.find(
+      (receipt) => receipt.orderId === 'order-tie',
+    ).outcome = 'NOT_RECEIVED';
+    const createWithAwaitingNewest = requiredMethod(
+      awaitingNewestFixture.service,
+      'createReview',
+    );
+    const receivedFallback = await runMutation(
+      createWithAwaitingNewest,
+      [actors.customer, 'product-1'],
+      reviewCommand({ orderDetailId: undefined }),
+      'review-fallback-received-before-dispute-0001',
+    );
+    assert.equal(receivedFallback.orderDetailId, 'detail-010');
 
     const deliveredAtFixture = buildReviewFixture();
     deliveredAtFixture.state.orderDetails = deliveredAtFixture.state.orderDetails.filter(

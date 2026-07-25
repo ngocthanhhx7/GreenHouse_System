@@ -17,6 +17,7 @@ function reviewError(statusCode, errorCode, message, data = null) {
 
 function valueId(value) {
   if (value === undefined || value === null) return '';
+  if (typeof value.toHexString === 'function') return value.toHexString();
   if (typeof value === 'object' && (value.id !== undefined || value._id !== undefined)) {
     return String(value.id ?? value._id);
   }

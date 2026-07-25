@@ -1054,6 +1054,8 @@ describe("SL-008 Review UI integration contract", () => {
       id: "order-1",
       orderCode: "ORD-1",
       orderStatus: "Delivered",
+      customerOrderStatus: "Completed",
+      afterSales: { enabled: true, receiptGatePassed: true },
       details: [
         {
           id: "eligible-1",

@@ -131,4 +131,33 @@ describe('client order service', () => {
 
     assert.equal(result.orderStatus, 'Cancelled');
   });
+
+  it('records a customer delivery confirmation with only the canonical payload and idempotency key', async () => {
+    const service = createOrderService({
+      baseUrl: 'http://api.test/api',
+      fetcher: async (url, options) => {
+        assert.equal(url, 'http://api.test/api/orders/order-1/delivery-confirmation');
+        assert.equal(options.method, 'POST');
+        assert.equal(options.headers['Idempotency-Key'], 'delivery-confirmation-001');
+        assert.deepEqual(JSON.parse(options.body), {
+          outcome: 'NOT_RECEIVED',
+          expectedDeliveryEventId: 'event-1',
+          reason: 'Tôi chưa nhận được kiện hàng dù trạng thái đã ghi là giao thành công.',
+        });
+        return {
+          ok: true,
+          json: async () => ({ success: true, data: { id: 'order-1', customerOrderStatus: 'Disputed' } }),
+        };
+      },
+    });
+
+    const result = await service.recordDeliveryConfirmation('order-1', {
+      outcome: 'NOT_RECEIVED',
+      expectedDeliveryEventId: 'event-1',
+      reason: 'Tôi chưa nhận được kiện hàng dù trạng thái đã ghi là giao thành công.',
+      ignored: 'must not be sent',
+    }, 'delivery-confirmation-001');
+
+    assert.equal(result.customerOrderStatus, 'Disputed');
+  });
 });

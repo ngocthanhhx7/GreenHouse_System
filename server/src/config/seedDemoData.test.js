@@ -10,6 +10,8 @@ const {
   DEMO_CATEGORIES,
   DEMO_NOTIFICATION_SPECS,
   DEMO_ORDER_SPECS,
+  DEMO_DAMAGE_REPORT_SPECS,
+  DEMO_EXCHANGE_SPECS,
   DEMO_RETURN_REFUND_SPECS,
   DEMO_PRODUCTS,
   DEMO_REVIEW_SPECS,
@@ -65,7 +67,12 @@ describe('demo data seed config', () => {
       'PAYMENT_TIMEOUT_MINUTES',
     ]);
     const scriptSource = readFileSync(path.join(__dirname, 'seedDemoData.js'), 'utf8');
-    assert.doesNotMatch(scriptSource, /requestSpec\.requestCode/);
+    assert.match(scriptSource, /requestCode:\s*requestSpec\.requestCode/);
+    assert.match(scriptSource, /ticketCode:\s*requestSpec\.ticketCode/);
+    assert.ok(DEMO_RETURN_REFUND_SPECS.every((request) => request.requestCode));
+    assert.ok(DEMO_SUPPORT_SPECS.every((request) => request.ticketCode));
+    assert.ok(DEMO_EXCHANGE_SPECS.length >= 1);
+    assert.ok(DEMO_DAMAGE_REPORT_SPECS.length >= 1);
     assert.match(scriptSource, /DEMO_IMAGE_MANIFEST/);
     assert.doesNotMatch(scriptSource, /images\.unsplash\.com/);
     assert.doesNotMatch(scriptSource, /stockQuantity:\s*product\.stockQuantity/);
