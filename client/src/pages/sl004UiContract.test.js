@@ -77,6 +77,7 @@ describe('SL-004 fulfillment and delivery UI contract', () => {
     const handoff = {
       carrierName: 'Carrier A', trackingReference: 'TRK-1',
       handedOffAt: '2026-07-24T10:00:00.000Z', evidenceReference: 'media-1',
+      note: 'Bàn giao tại quầy số 2',
     };
 
     await staff.createShipment('order-1', { ...handoff, idempotencyKey: 'handoff-001' });
@@ -89,6 +90,8 @@ describe('SL-004 fulfillment and delivery UI contract', () => {
     assert.match(staffOrder, /trackingReference/);
     assert.match(staffOrder, /handedOffAt/);
     assert.match(staffOrder, /evidenceReference/);
+    assert.match(staffOrder, /handoff\.note|Ghi chú bàn giao/);
+    assert.equal(JSON.parse(request.options.body).note, 'Bàn giao tại quầy số 2');
   });
 
   it('AT-064/067 uses separate append-only attempt, delivery, correction, and dispute evidence actions', () => {

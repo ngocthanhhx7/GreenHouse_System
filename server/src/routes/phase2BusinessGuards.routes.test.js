@@ -43,7 +43,11 @@ describe('Phase 2 business guard route matrix', () => {
       ['Customer', '/api/warehouse/stock-exports/export-1/process', 'POST'],
       ['Staff', '/api/warehouse/stock-exports/export-1/process', 'POST'],
       ['Admin', '/api/warehouse/stock-exports/export-1/process', 'POST'],
+      ['Customer', '/api/staff/orders/order-1/packing', 'POST'],
+      ['WarehouseManager', '/api/staff/orders/order-1/shipments', 'POST'],
       ['Customer', '/api/staff/shipments/shipment-1/events', 'POST'],
+      ['WarehouseManager', '/api/staff/shipments/shipment-1/events', 'POST'],
+      ['Admin', '/api/staff/shipments/shipment-1/events', 'POST'],
       ['Staff', '/api/orders/order-1/cancel', 'PATCH'],
     ];
 

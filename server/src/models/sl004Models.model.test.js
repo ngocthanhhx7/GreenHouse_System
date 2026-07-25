@@ -39,6 +39,7 @@ describe('SL-004 persistence contracts', () => {
       'HandedOff', 'AttemptFailed', 'Delivered', 'ReturnedToShop', 'Lost', 'Damaged',
     ]);
     assert.equal(model.schema.path('carrierName').options.required, true);
+    assert.equal(model.schema.path('note').options.maxlength, 1000);
     assert.ok(hasUniqueIndex(model, 'shipment_command_key_unique'));
     assert.ok(hasUniqueIndex(model, 'shipment_one_per_cycle'));
     assert.ok(hasUniqueIndex(model, 'shipment_tracking_reference_unique'));
