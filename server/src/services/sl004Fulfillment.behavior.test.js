@@ -9,7 +9,7 @@ function loadFactory() {
   return require(servicePath).createFulfillmentService;
 }
 
-function createHarness({ paymentMethod = 'ONLINE', paymentStatus = 'Paid' } = {}) {
+function createHarness({ paymentMethod = 'ONLINE', paymentStatus = 'Paid', runtime = 'test' } = {}) {
   const state = {
     order: {
       _id: 'order-1',
@@ -407,6 +407,18 @@ function createHarness({ paymentMethod = 'ONLINE', paymentStatus = 'Paid' } = {}
     },
     assignmentCoordinator: { async coordinate() {} },
     clock: () => new Date('2026-07-24T08:00:00.000Z'),
+    runtime,
+    operationalEvidenceClaim: {
+      verify(value) {
+        const raw = String(value || '');
+        if (!raw.includes('?claim=valid')) throw new Error('Operational evidence claim is invalid');
+        const params = new URLSearchParams(raw.split('?')[1]);
+        return {
+          url: raw.split('?')[0].toLowerCase(),
+          size: Number(params.get('size') || 1024),
+        };
+      },
+    },
   });
 
   async function packExact(commandKey = 'packing-command-0001') {
@@ -625,6 +637,271 @@ describe('SL-004 packing, shipment and delivery behavior', () => {
     assert.equal(unknown.state.discrepancies[0].status, 'Open');
   });
 
+  it('P1 lets non-production Staff record successful delivery and derives full COD only from signed image evidence', async () => {
+    const manual = createHarness({ paymentMethod: 'COD', paymentStatus: 'Unpaid', runtime: 'development' });
+    const { shipment } = await manual.handoff();
+    const input = {
+      eventKey: 'staff-demo-cod-collected',
+      eventType: 'DELIVERED',
+      source: 'STAFF_EVIDENCE',
+      occurredAt: '2026-07-24T10:00:00.000Z',
+      evidenceReferences: [
+        '/api/operational-evidence/11111111-1111-4111-8111-111111111111.jpg?claim=valid',
+        '/api/operational-evidence/22222222-2222-4222-8222-222222222222.jpg?claim=valid',
+      ],
+      codCollectionResult: 'COLLECTED',
+    };
+    const result = await manual.service.recordShipmentEvent(
+      { actorType: 'Staff', actorId: 'staff-1' },
+      shipment._id,
+      input,
+    );
+
+    assert.equal(result.order.orderStatus, 'Delivered');
+    assert.equal(result.order.paymentStatus, 'Paid');
+    assert.equal(result.order.customerCollectedAmount, 100);
+    assert.equal(result.order.completedSaleAt.toISOString(), '2026-07-24T10:00:00.000Z');
+    assert.equal(manual.state.payment.paymentStatus, 'Paid');
+    assert.equal(manual.state.payment.paidAt.toISOString(), '2026-07-24T10:00:00.000Z');
+    assert.equal(manual.state.codEvidence.length, 1);
+    assert.equal(manual.state.codEvidence[0].source, 'STAFF_RECONCILIATION');
+    assert.equal(manual.state.codEvidence[0].customerCollectedAmount, 100);
+    assert.deepEqual(manual.state.codEvidence[0].evidenceReferences, [
+      '/api/operational-evidence/11111111-1111-4111-8111-111111111111.jpg?claim=valid',
+      '/api/operational-evidence/22222222-2222-4222-8222-222222222222.jpg?claim=valid',
+    ]);
+    assert.deepEqual(result.event.evidenceReferences, manual.state.codEvidence[0].evidenceReferences);
+    const staffProjection = await manual.service.getStaffFulfillment('order-1');
+    assert.deepEqual(
+      staffProjection.cycles[0].events.at(-1).evidenceReferences,
+      input.evidenceReferences,
+    );
+    const customerProjection = await manual.service.getCustomerFulfillment(
+      'customer-1',
+      'order-1',
+      { includeOperationalEvidence: true },
+    );
+    assert.equal(
+      Object.hasOwn(customerProjection.cycles[0].events.at(-1), 'evidenceReferences'),
+      false,
+    );
+
+    const replay = await manual.service.recordShipmentEvent(
+      { actorType: 'Staff', actorId: 'staff-1' },
+      shipment._id,
+      input,
+    );
+    assert.equal(replay.idempotentReplay, true);
+    assert.equal(manual.state.codEvidence.length, 1);
+    assert.equal(manual.state.audits.filter((entry) => entry.action === 'SHIPMENT_EVENT_RECORDED').length, 1);
+  });
+
+  it('P1 records non-production Staff COD not-collected evidence as Delivered + Unpaid + one Open discrepancy', async () => {
+    const manual = createHarness({ paymentMethod: 'COD', paymentStatus: 'Unpaid', runtime: 'development' });
+    const { shipment } = await manual.handoff();
+    await manual.service.recordShipmentEvent(
+      { actorType: 'Staff', actorId: 'staff-1' },
+      shipment._id,
+      {
+        eventKey: 'staff-demo-cod-not-collected',
+        eventType: 'DELIVERED',
+        source: 'STAFF_EVIDENCE',
+        occurredAt: '2026-07-24T10:00:00.000Z',
+        evidenceReferences: [
+          '/api/operational-evidence/33333333-3333-4333-8333-333333333333.jpg?claim=valid',
+        ],
+        codCollectionResult: 'NOT_COLLECTED',
+      },
+    );
+
+    assert.equal(manual.state.order.orderStatus, 'Delivered');
+    assert.equal(manual.state.order.paymentStatus, 'Unpaid');
+    assert.equal(manual.state.order.completedSaleAt, undefined);
+    assert.equal(manual.state.order.customerCollectedAmount, null);
+    assert.equal(manual.state.order.customerCollectionEvidenceId, undefined);
+    assert.equal(manual.state.codEvidence.length, 0);
+    assert.equal(manual.state.discrepancies.length, 1);
+    assert.equal(manual.state.discrepancies[0].status, 'Open');
+    assert.equal(manual.state.discrepancies[0].customerCollectedAmount, null);
+  });
+
+  it('P1 rejects arbitrary COD amounts, unsigned/too many images, production Staff reconciliation, and COD on failed delivery', async () => {
+    async function rejectManual(runtime, suffix, patch, matcher) {
+      const harness = createHarness({ paymentMethod: 'COD', paymentStatus: 'Unpaid', runtime });
+      const { shipment } = await harness.handoff(`handoff-${suffix}`);
+      await assert.rejects(
+        harness.service.recordShipmentEvent(
+          { actorType: 'Staff', actorId: 'staff-1' },
+          shipment._id,
+          {
+            eventKey: `manual-cod-${suffix}`,
+            eventType: 'DELIVERED',
+            source: 'STAFF_EVIDENCE',
+            occurredAt: '2026-07-24T10:00:00.000Z',
+            evidenceReferences: [
+              '/api/operational-evidence/44444444-4444-4444-8444-444444444444.jpg?claim=valid',
+            ],
+            codCollectionResult: 'COLLECTED',
+            ...patch,
+          },
+        ),
+        matcher,
+      );
+      assert.equal(harness.state.order.orderStatus, 'Shipped');
+      assert.equal(harness.state.order.paymentStatus, 'Unpaid');
+      assert.equal(harness.state.codEvidence.length, 0);
+    }
+
+    await rejectManual('development', 'amount', { amount: 1 }, /amount|COD/i);
+    await rejectManual('development', 'unsigned', {
+      evidenceReferences: ['/api/operational-evidence/unsigned.jpg'],
+    }, /evidence.*invalid|claim|không hợp lệ|chữ ký/i);
+    await rejectManual('development', 'too-many', {
+      evidenceReferences: Array.from({ length: 6 }, (_, index) => (
+        `/api/operational-evidence/${index}.jpg?claim=valid`
+      )),
+    }, /maximum|5|tối đa/i);
+    await rejectManual('production', 'production', {}, /production|Carrier/i);
+    await rejectManual('development', 'failed-delivery', { eventType: 'RETURNED_TO_SHOP' }, /Delivered|delivery|COD/i);
+
+    const developmentProjection = await createHarness({ runtime: 'development' }).service.getStaffFulfillment('order-1');
+    const productionProjection = await createHarness({ runtime: 'production' }).service.getStaffFulfillment('order-1');
+    assert.equal(developmentProjection.capabilities.manualCodReconciliation, true);
+    assert.equal(productionProjection.capabilities.manualCodReconciliation, false);
+  });
+
+  it('P1 deduplicates operational evidence by canonical claim URL and totals the verified claim sizes', async () => {
+    async function rejectEvidence(suffix, evidenceReferences, matcher) {
+      const harness = createHarness({ paymentMethod: 'COD', paymentStatus: 'Unpaid', runtime: 'development' });
+      const { shipment } = await harness.handoff(`handoff-evidence-${suffix}`);
+      await assert.rejects(
+        harness.service.recordShipmentEvent(
+          { actorType: 'Staff', actorId: 'staff-1' },
+          shipment._id,
+          {
+            eventKey: `manual-evidence-${suffix}`,
+            eventType: 'DELIVERED',
+            source: 'STAFF_EVIDENCE',
+            occurredAt: '2026-07-24T10:00:00.000Z',
+            evidenceReferences,
+            codCollectionResult: 'COLLECTED',
+          },
+        ),
+        matcher,
+      );
+      assert.equal(harness.state.order.orderStatus, 'Shipped');
+      assert.equal(harness.state.codEvidence.length, 0);
+    }
+
+    await rejectEvidence('canonical-duplicate', [
+      '/api/operational-evidence/AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA.jpg?claim=valid',
+      '/api/operational-evidence/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.jpg?claim=valid&size=2048',
+    ], /duplicate|trùng/i);
+    await rejectEvidence(
+      'batch-size',
+      Array.from({ length: 5 }, (_, index) => (
+        `/api/operational-evidence/00000000-0000-4000-8000-00000000000${index}.jpg?claim=valid&size=${5 * 1024 * 1024}`
+      )),
+      /20 MiB|size|dung lượng/i,
+    );
+  });
+
+  it('P1 returns field-specific validation details for an invalid operational evidence claim', async () => {
+    const manual = createHarness({ paymentMethod: 'COD', paymentStatus: 'Unpaid', runtime: 'development' });
+    const { shipment } = await manual.handoff('handoff-invalid-evidence-field');
+
+    await assert.rejects(
+      manual.service.recordShipmentEvent(
+        { actorType: 'Staff', actorId: 'staff-1' },
+        shipment._id,
+        {
+          eventKey: 'manual-invalid-evidence-field',
+          eventType: 'DELIVERED',
+          source: 'STAFF_EVIDENCE',
+          occurredAt: '2026-07-24T10:00:00.000Z',
+          evidenceReferences: ['/api/operational-evidence/not-signed.jpg'],
+          codCollectionResult: 'COLLECTED',
+        },
+      ),
+      (error) => {
+        assert.equal(error.statusCode, 400);
+        assert.equal(error.errorCode, 'OPERATIONAL_EVIDENCE_INVALID');
+        assert.deepEqual(error.errors, [{
+          field: 'evidenceReferences',
+          message: 'Ảnh dẫn chứng không hợp lệ hoặc chữ ký đã bị thay đổi',
+        }]);
+        return true;
+      },
+    );
+    assert.equal(manual.state.order.orderStatus, 'Shipped');
+  });
+
+  it('P1 requires a supported reason for Staff operational evidence of an unsuccessful delivery', async () => {
+    for (const [eventType, reason] of [
+      ['ATTEMPT_FAILED', ''],
+      ['RETURNED_TO_SHOP', 'FREE_FORM_REASON'],
+    ]) {
+      const manual = createHarness({ paymentMethod: 'COD', paymentStatus: 'Unpaid', runtime: 'development' });
+      const { shipment } = await manual.handoff(`handoff-invalid-reason-${eventType.toLowerCase()}`);
+      await assert.rejects(
+        manual.service.recordShipmentEvent(
+          { actorType: 'Staff', actorId: 'staff-1' },
+          shipment._id,
+          {
+            eventKey: `manual-invalid-reason-${eventType.toLowerCase()}`,
+            eventType,
+            source: 'STAFF_EVIDENCE',
+            occurredAt: '2026-07-24T10:00:00.000Z',
+            evidenceReferences: [
+              '/api/operational-evidence/66666666-6666-4666-8666-666666666666.jpg?claim=valid',
+            ],
+            reason,
+          },
+        ),
+        (error) => {
+          assert.equal(error.statusCode, 400);
+          assert.equal(error.errors[0].field, 'reason');
+          return true;
+        },
+      );
+      assert.equal(manual.state.order.orderStatus, 'Shipped');
+      assert.equal(manual.state.events.length, 1);
+    }
+  });
+
+  it('P1 rolls back Staff COD collection, payment and delivery evidence when its Audit write fails', async () => {
+    const manual = createHarness({ paymentMethod: 'COD', paymentStatus: 'Unpaid', runtime: 'development' });
+    const { shipment } = await manual.handoff('handoff-manual-cod-audit');
+    const auditCount = manual.state.audits.length;
+    manual.auditControl.failNext = true;
+
+    await assert.rejects(
+      manual.service.recordShipmentEvent(
+        { actorType: 'Staff', actorId: 'staff-1' },
+        shipment._id,
+        {
+          eventKey: 'manual-cod-audit-rollback',
+          eventType: 'DELIVERED',
+          source: 'STAFF_EVIDENCE',
+          occurredAt: '2026-07-24T10:00:00.000Z',
+          evidenceReferences: [
+            '/api/operational-evidence/55555555-5555-4555-8555-555555555555.jpg?claim=valid',
+          ],
+          codCollectionResult: 'COLLECTED',
+        },
+      ),
+      /injected audit write failure/,
+    );
+
+    assert.equal(manual.state.order.orderStatus, 'Shipped');
+    assert.equal(manual.state.order.paymentStatus, 'Unpaid');
+    assert.equal(manual.state.payment.paymentStatus, 'Unpaid');
+    assert.equal(manual.state.attempts[0].paymentStatus, 'Unpaid');
+    assert.equal(manual.state.codEvidence.length, 0);
+    assert.equal(manual.state.events.length, 1);
+    assert.equal(manual.state.audits.length, auditCount);
+  });
+
   it('AT-067 appends every failed attempt, keeps Order Shipped and deduplicates its durable event', async () => {
     const { service, state, handoff } = createHarness();
     const { shipment } = await handoff();
@@ -642,6 +919,45 @@ describe('SL-004 packing, shipment and delivery behavior', () => {
     assert.equal(state.events.filter((entry) => entry.eventType === 'ATTEMPT_FAILED').length, 1);
     assert.equal(state.outbox.filter((entry) => entry.eventType === 'DELIVERY_ATTEMPT_FAILED').length, 1);
     assert.equal(replay.idempotentReplay, true);
+  });
+
+  it('P1 rejects shipment-event key reuse across another shipment, event type or Staff actor', async () => {
+    const { service, state, handoff } = createHarness();
+    const { shipment } = await handoff('handoff-event-key-boundary');
+    state.events.push({
+      _id: 'foreign-idempotency-event',
+      eventKey: 'shared-event-command-key',
+      orderId: 'other-order',
+      cycleId: 'other-cycle',
+      shipmentId: 'other-shipment',
+      eventType: 'ATTEMPT_FAILED',
+      source: 'STAFF_EVIDENCE',
+      actorId: 'staff-2',
+      occurredAt: new Date('2026-07-24T10:00:00.000Z'),
+      evidenceReference: 'foreign-private-evidence',
+    });
+
+    await assert.rejects(
+      service.recordShipmentEvent(
+        { actorType: 'Staff', actorId: 'staff-1' },
+        shipment._id,
+        {
+          eventKey: 'shared-event-command-key',
+          eventType: 'DELIVERED',
+          source: 'STAFF_EVIDENCE',
+          occurredAt: '2026-07-24T11:00:00.000Z',
+          evidenceReference: 'local-evidence',
+        },
+      ),
+      (error) => {
+        assert.equal(error.statusCode, 409);
+        assert.equal(error.errorCode, 'SHIPMENT_EVENT_KEY_REUSED');
+        assert.equal(error.data, null);
+        return true;
+      },
+    );
+    assert.equal(state.order.orderStatus, 'Shipped');
+    assert.equal(state.events.length, 2);
   });
 
   it('P1 binds Staff shipment evidence to Staff source and rejects caller-selected trust domains', async () => {

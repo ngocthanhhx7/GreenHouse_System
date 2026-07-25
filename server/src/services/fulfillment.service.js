@@ -422,6 +422,8 @@ function createFulfillmentService(options = {}) {
     auditLogger: options.auditLogger || { log: logAudit },
     assignmentCoordinator: options.assignmentCoordinator || defaultAssignmentCoordinator,
     clock: options.clock || (() => new Date()),
+    runtime: options.runtime || process.env.NODE_ENV || 'development',
+    operationalEvidenceClaim: options.operationalEvidenceClaim || null,
   };
   const notificationPublisher = options.notificationPublisher || notificationService;
 
@@ -481,7 +483,11 @@ function createFulfillmentService(options = {}) {
     }
   }
 
-  async function getCustomerFulfillment(customerId, orderId) {
+  async function buildFulfillmentProjection(
+    customerId,
+    orderId,
+    { includeOperationalEvidence = false } = {},
+  ) {
     const order = await dependencies.repository.findOrderById(orderId);
     if (!order) {
       const ApiError = require('../utils/apiError');
@@ -521,6 +527,11 @@ function createFulfillmentService(options = {}) {
           occurredAt: event.occurredAt,
           reason: event.reason || '',
           hasEvidence: Boolean(event.evidenceReference),
+          ...(includeOperationalEvidence ? {
+            evidenceReferences: Array.isArray(event.evidenceReferences)
+              ? event.evidenceReferences
+              : [],
+          } : {}),
         })),
         destinations: destinations.map((destination) => ({
           id: String(destination._id),
@@ -585,13 +596,27 @@ function createFulfillmentService(options = {}) {
     };
   }
 
+  async function getCustomerFulfillment(customerId, orderId) {
+    return buildFulfillmentProjection(customerId, orderId);
+  }
+
   async function getStaffFulfillment(orderId) {
     const order = await dependencies.repository.findOrderById(orderId);
     if (!order) {
       const ApiError = require('../utils/apiError');
       throw new ApiError(404, 'Order not found');
     }
-    return getCustomerFulfillment(order.customerId, orderId);
+    const projection = await buildFulfillmentProjection(
+      order.customerId,
+      orderId,
+      { includeOperationalEvidence: true },
+    );
+    return {
+      ...projection,
+      capabilities: {
+        manualCodReconciliation: dependencies.runtime !== 'production',
+      },
+    };
   }
 
   async function listReturnedParcels() {

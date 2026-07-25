@@ -84,6 +84,46 @@ No target or production database was mutated.
 5. Perform authenticated Staff/Warehouse/Customer and signed-Carrier walkthroughs.
 6. Verify target DomainOutbox worker/notification configuration.
 
+## Addendum 2026-07-25 - Demo/non-production Staff COD reconciliation
+
+- Staff Order Detail now uses the protected operational evidence uploader for
+  delivery outcomes, with Vietnamese labels and a hard maximum of five images.
+- For COD delivery in non-production, Staff chooses only `Đã thu đủ COD` or
+  `Chưa thu được COD`. No editable money field is rendered or accepted.
+- A successful choice derives the exact `codExpectedAmount`, appends
+  `CodEvidence(source=STAFF_RECONCILIATION)`, and establishes Paid /
+  `completedSaleAt` from the evidence occurrence time.
+- A not-collected choice keeps actual collection `null`, stores its images only
+  on ShipmentEvent, creates no zero-value COLLECTION evidence, and produces
+  `Delivered + Unpaid + Open discrepancy` without blocking later Carrier facts.
+- Signed evidence URLs are retained for authenticated Staff preview after a
+  reload; the Customer projection still exposes only the evidence-presence bit.
+- Failed-attempt/returned outcomes submitted with operational images require an
+  allowlisted reason. Image/time/COD/reason failures render beside the exact
+  Vietnamese field.
+- A shipment-event key survives validation, transport, and reload ambiguity.
+  It is rotated only after a confirmed result is reloaded, so a later delivery
+  attempt can append a new event without weakening uncertain-response replay.
+  Server replay also binds that key to the same shipment, event type, source,
+  and actor instead of returning a foreign command result.
+- Non-delivered outcomes cannot carry COD reconciliation. Production rejects
+  the Staff reconciliation field and continues to require signed Carrier facts;
+  the UI is controlled by the server-projected `manualCodReconciliation`
+  capability rather than a client build-mode assumption.
+
+Verification run on 2026-07-25:
+
+```text
+focused server SL-004/model/routes: 39/39
+focused client SL-004/COD: 16/16
+full server: 1064/1064, 171 suites
+full client: 262/262, 65 suites
+client production build: PASS, 158 modules
+```
+
+The existing Vite large-chunk warning remains. No target database, deployment,
+or production Carrier walkthrough is claimed.
+
 ## Review checklist
 
 - [x] BR-035 through BR-046 and CR-001 seams map to code/tests.
