@@ -20,7 +20,7 @@ describe('customer delivery receipt UI contract', () => {
     assert.match(source, /'Chưa nhận được hàng'/);
     assert.match(source, /role="dialog"/);
     assert.match(source, /aria-modal="true"/);
-    assert.match(source, /aria-describedby="deliveryReceiptDialogDescription"/);
+    assert.match(source, /aria-describedby=\{error/);
     assert.match(source, /ref=\{deliveryReceiptDialogRef\}/);
     assert.match(source, /onKeyDown=\{handleReceiptDialogKeyDown\}/);
     assert.match(source, /inert=\{deliveryReceiptDialog \? true : undefined\}/);
@@ -53,5 +53,22 @@ describe('customer delivery receipt UI contract', () => {
     assert.match(styles, /\.delivery-receipt-dialog-backdrop[\s\S]*overflow-y:\s*auto/);
     assert.match(styles, /\.delivery-receipt-dialog[\s\S]*max-height:\s*calc\(100(?:dvh|vh) - 32px\)/);
     assert.match(styles, /\.delivery-receipt-dialog[\s\S]*overflow-y:\s*auto/);
+  });
+
+  it('keeps validation and command errors visible inside the portal dialog', () => {
+    assert.match(source, /id="deliveryReceiptDialogError"/);
+    assert.match(source, /role="alert"/);
+    assert.match(source, /aria-live="assertive"/);
+    assert.match(source, /deliveryReceiptDialogDescription deliveryReceiptDialogError/);
+    assert.match(source, /shouldCloseDeliveryReceiptDialog\(loadedOrder, context\)/);
+    assert.match(source, /value=\{notReceivedReason\}/);
+    assert.match(source, /onError: \(commandError\) => setError\(commandError\.message\)/);
+  });
+
+  it('fails closed while Exchange and Return case state is loading or unavailable', () => {
+    assert.match(source, /afterSalesCasesStatus/);
+    assert.match(source, /afterSalesCasesStatus === 'ready'/);
+    assert.match(source, /Không thể xác minh trạng thái yêu cầu đổi\/trả/);
+    assert.match(source, /onAfterSalesUnavailable/);
   });
 });

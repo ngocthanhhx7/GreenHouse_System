@@ -25,6 +25,7 @@ import {
   handleDeliveryDialogKeyDown,
   loadOrderAncillary,
   restoreDialogTriggerFocus,
+  shouldCloseDeliveryReceiptDialog,
 } from './customerDeliveryReceiptController.js';
 
 const ACTIVE_EXCHANGE_STATUSES = new Set([
@@ -55,6 +56,7 @@ export default function OrderDetailPage() {
   });
   const [isSubmittingFulfillment, setIsSubmittingFulfillment] = useState(false);
   const [activeCase, setActiveCase] = useState(null);
+  const [afterSalesCasesStatus, setAfterSalesCasesStatus] = useState('loading');
   const [afterSalesMode, setAfterSalesMode] = useState('');
   const [returnReason, setReturnReason] = useState('');
   const [returnEvidenceFiles, setReturnEvidenceFiles] = useState([]);
@@ -92,6 +94,7 @@ export default function OrderDetailPage() {
   }
 
   function refreshAncillary(orderId, epoch) {
+    setAfterSalesCasesStatus('loading');
     return loadOrderAncillary({
       orderId,
       isCurrent: () => deliveryReceiptController.current?.isCurrentOrder(orderId, epoch),
@@ -99,9 +102,9 @@ export default function OrderDetailPage() {
       listExchanges: () => exchangeService.listMyRequests(),
       listReturns: () => returnRefundService.listMyRequests(),
       onFulfillment: (result) => setFulfillment(result || { cycles: [], incidents: [] }),
-      onComplete: ({ exchanges, returns }) => {
-        const exchangeItems = exchanges?.items || [];
-        const returnItems = returns?.items || [];
+      onAfterSalesCases: ({ exchanges, returns }) => {
+        const exchangeItems = exchanges.items || [];
+        const returnItems = returns.items || [];
         const exchange = exchangeItems.find((item) => (
           String(item.orderId) === String(orderId) && ACTIVE_EXCHANGE_STATUSES.has(item.status)
         ));
@@ -112,7 +115,9 @@ export default function OrderDetailPage() {
         setActiveCase(exchange
           ? { type: 'EXCHANGE', ...exchange }
           : returnRequest ? { type: 'RETURN', ...returnRequest } : null);
+        setAfterSalesCasesStatus('ready');
       },
+      onAfterSalesUnavailable: () => setAfterSalesCasesStatus('unavailable'),
     });
   }
 
@@ -127,6 +132,7 @@ export default function OrderDetailPage() {
         setOrder(null);
         setFulfillment({ cycles: [], incidents: [] });
         setActiveCase(null);
+        setAfterSalesCasesStatus('loading');
         setReplacementExchangeUnits([]);
         setDeliveryReceiptDialog(null);
         setNotReceivedReason('');
@@ -136,6 +142,9 @@ export default function OrderDetailPage() {
       onSubmittingChange: (value) => setIsSubmittingDeliveryReceipt(value),
       onCanonicalOrder: (loadedOrder, context) => {
         applyCanonicalOrder(loadedOrder);
+        if (shouldCloseDeliveryReceiptDialog(loadedOrder, context)) {
+          setDeliveryReceiptDialog(null);
+        }
         void refreshAncillary(context.orderId, context.epoch);
       },
       onSuccess: (_loadedOrder, context) => {
@@ -169,14 +178,13 @@ export default function OrderDetailPage() {
   }
 
   useEffect(() => {
-    const epoch = deliveryReceiptController.current.setOrderId(id);
+    const controller = deliveryReceiptController.current;
+    controller.mount();
+    const epoch = controller.setOrderId(id);
     void loadOrder(id, epoch);
+    return () => controller.unmount();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
-
-  useEffect(() => () => {
-    deliveryReceiptController.current?.unmount();
-  }, []);
 
   useEffect(() => {
     const currentNow = Date.now();
@@ -578,7 +586,9 @@ export default function OrderDetailPage() {
                 role="dialog"
                 aria-modal="true"
                 aria-labelledby="deliveryReceiptDialogTitle"
-                aria-describedby="deliveryReceiptDialogDescription"
+                aria-describedby={error
+                  ? 'deliveryReceiptDialogDescription deliveryReceiptDialogError'
+                  : 'deliveryReceiptDialogDescription'}
                 onSubmit={submitDeliveryReceipt}
                 onKeyDown={handleReceiptDialogKeyDown}
               >
@@ -604,6 +614,16 @@ export default function OrderDetailPage() {
                     />
                     <div className="form-text">Từ 10 đến 500 ký tự.</div>
                   </>
+                )}
+                {error && (
+                  <div
+                    className="alert alert-danger mt-3"
+                    id="deliveryReceiptDialogError"
+                    role="alert"
+                    aria-live="assertive"
+                  >
+                    {error}
+                  </div>
                 )}
                 <div className="delivery-receipt-action-row mt-3">
                   <button className="btn btn-outline-secondary" type="button" onClick={closeDeliveryReceiptDialog} disabled={isSubmittingDeliveryReceipt}>Quay lại</button>
@@ -685,7 +705,28 @@ export default function OrderDetailPage() {
               </Link>
             </div>
           )}
-          {!activeCase && afterSalesEnabled && (
+          {afterSalesEnabled && afterSalesCasesStatus === 'unavailable' && (
+            <div className="alert alert-warning mt-4" role="alert">
+              Không thể xác minh trạng thái yêu cầu đổi/trả hiện tại. Các thao tác tạo yêu cầu mới
+              tạm thời bị khóa để tránh trùng yêu cầu.
+              {' '}
+              <button
+                className="btn btn-sm btn-outline-dark"
+                type="button"
+                onClick={() => {
+                  void refreshAncillary(id, deliveryReceiptController.current.getEpoch());
+                }}
+              >
+                Thử tải lại
+              </button>
+            </div>
+          )}
+          {!activeCase && afterSalesEnabled && afterSalesCasesStatus === 'loading' && (
+            <div className="alert alert-secondary mt-4" role="status" aria-live="polite">
+              Đang xác minh trạng thái yêu cầu đổi/trả…
+            </div>
+          )}
+          {!activeCase && afterSalesEnabled && afterSalesCasesStatus === 'ready' && (
             <section className="mt-4">
               <h2>Đổi/Trả hàng</h2>
               {originalExchangeAction.deadlineAt && (

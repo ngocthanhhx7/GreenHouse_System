@@ -7,6 +7,7 @@ import {
   handleDeliveryDialogKeyDown,
   loadOrderAncillary,
   restoreDialogTriggerFocus,
+  shouldCloseDeliveryReceiptDialog,
 } from './customerDeliveryReceiptController.js';
 
 function deferred() {
@@ -115,6 +116,37 @@ describe('customer delivery receipt controller', () => {
     assert.deepEqual(events, eventsBeforeUnmount);
   });
 
+  it('supports the StrictMode setup-cleanup-setup lifecycle and rejects the stale first load', async () => {
+    const firstLoad = deferred();
+    const secondLoad = deferred();
+    const published = [];
+    const controller = createDeliveryReceiptController({
+      createKey: () => 'key',
+      submitCommand: async () => ({}),
+      reloadCanonical: async () => ({}),
+    });
+
+    controller.mount();
+    const firstEpoch = controller.setOrderId('order-a');
+    const publishWhenCurrent = async (request, epoch) => {
+      const value = await request.promise;
+      if (controller.isCurrentOrder('order-a', epoch)) published.push(value);
+    };
+    const firstPublish = publishWhenCurrent(firstLoad, firstEpoch);
+
+    controller.unmount();
+    controller.mount();
+    const secondEpoch = controller.setOrderId('order-a');
+    const secondPublish = publishWhenCurrent(secondLoad, secondEpoch);
+
+    firstLoad.resolve('stale-first');
+    secondLoad.resolve('fresh-second');
+    await Promise.all([firstPublish, secondPublish]);
+
+    assert.deepEqual(published, ['fresh-second']);
+    assert.equal(controller.isCurrentOrder('order-a', secondEpoch), true);
+  });
+
   it('reloads canonical order for every typed conflict while retaining the command key', async () => {
     const conflictCodes = [
       'DELIVERY_CONFIRMATION_ALREADY_RECORDED',
@@ -167,9 +199,31 @@ describe('customer delivery receipt controller', () => {
     assert.deepEqual(canonical, []);
   });
 
-  it('commits canonical success before ancillary requests settle and tolerates ancillary failure', async () => {
+  it('closes a conflict dialog only when the canonical order no longer allows that outcome', () => {
+    assert.equal(shouldCloseDeliveryReceiptDialog({
+      availableDeliveryActions: [],
+    }, {
+      source: 'conflict',
+      outcome: 'RECEIVED',
+    }), true);
+    assert.equal(shouldCloseDeliveryReceiptDialog({
+      availableDeliveryActions: ['RECEIVED'],
+    }, {
+      source: 'conflict',
+      outcome: 'RECEIVED',
+    }), false);
+    assert.equal(shouldCloseDeliveryReceiptDialog({
+      availableDeliveryActions: [],
+    }, {
+      source: 'success',
+      outcome: 'RECEIVED',
+    }), false);
+  });
+
+  it('commits canonical success before ancillary requests settle and fails closed on partial case failure', async () => {
     const fulfillment = deferred();
     const events = [];
+    let caseState = { status: 'loading', activeCase: { id: 'case-existing' } };
     const ancillaryPromise = loadOrderAncillary({
       orderId: 'order-a',
       isCurrent: () => true,
@@ -177,15 +231,74 @@ describe('customer delivery receipt controller', () => {
       listExchanges: async () => { throw new Error('exchange unavailable'); },
       listReturns: async () => ({ items: [] }),
       onFulfillment: () => events.push('fulfillment'),
-      onExchanges: () => events.push('exchange'),
-      onReturns: () => events.push('return'),
+      onAfterSalesCases: () => {
+        caseState = { status: 'ready', activeCase: null };
+      },
+      onAfterSalesUnavailable: () => {
+        caseState = { ...caseState, status: 'unavailable' };
+      },
     });
     events.push('canonical');
     await flush();
     assert.deepEqual(events, ['canonical']);
     fulfillment.resolve({ cycles: [] });
     await ancillaryPromise;
-    assert.deepEqual(events, ['canonical', 'fulfillment', 'return']);
+    assert.deepEqual(events, ['canonical', 'fulfillment']);
+    assert.deepEqual(caseState, {
+      status: 'unavailable',
+      activeCase: { id: 'case-existing' },
+    });
+  });
+
+  it('keeps initial after-sales state unknown on partial failure instead of coercing it to empty', async () => {
+    let caseState = { status: 'loading', activeCase: null };
+    await loadOrderAncillary({
+      orderId: 'order-a',
+      isCurrent: () => true,
+      getFulfillment: async () => ({ cycles: [] }),
+      listExchanges: async () => ({ items: [] }),
+      listReturns: async () => { throw new Error('return unavailable'); },
+      onAfterSalesCases: () => {
+        caseState = { status: 'ready', activeCase: null };
+      },
+      onAfterSalesUnavailable: () => {
+        caseState = { ...caseState, status: 'unavailable' };
+      },
+    });
+    assert.deepEqual(caseState, { status: 'unavailable', activeCase: null });
+  });
+
+  it('recovers after a case-source failure only when both Exchange and Return succeed', async () => {
+    let caseState = { status: 'loading', exchanges: null, returns: null };
+    const options = {
+      orderId: 'order-a',
+      isCurrent: () => true,
+      getFulfillment: async () => ({ cycles: [] }),
+      onAfterSalesCases: ({ exchanges, returns }) => {
+        caseState = { status: 'ready', exchanges, returns };
+      },
+      onAfterSalesUnavailable: () => {
+        caseState = { ...caseState, status: 'unavailable' };
+      },
+    };
+
+    await loadOrderAncillary({
+      ...options,
+      listExchanges: async () => { throw new Error('exchange unavailable'); },
+      listReturns: async () => ({ items: [] }),
+    });
+    assert.equal(caseState.status, 'unavailable');
+
+    await loadOrderAncillary({
+      ...options,
+      listExchanges: async () => ({ items: [{ id: 'exchange-1' }] }),
+      listReturns: async () => ({ items: [] }),
+    });
+    assert.deepEqual(caseState, {
+      status: 'ready',
+      exchanges: { items: [{ id: 'exchange-1' }] },
+      returns: { items: [] },
+    });
   });
 });
 

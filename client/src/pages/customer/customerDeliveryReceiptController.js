@@ -48,6 +48,11 @@ export function createDeliveryReceiptController({
   }
 
   return {
+    mount() {
+      mounted = true;
+      return epoch;
+    },
+
     setOrderId(orderId) {
       epoch += 1;
       currentOrderId = String(orderId || '');
@@ -142,6 +147,8 @@ export async function loadOrderAncillary({
   onFulfillment = () => {},
   onExchanges = () => {},
   onReturns = () => {},
+  onAfterSalesCases = () => {},
+  onAfterSalesUnavailable = () => {},
   onComplete = () => {},
 }) {
   const results = await Promise.allSettled([
@@ -151,17 +158,35 @@ export async function loadOrderAncillary({
   ]);
   if (!isCurrent()) return { stale: true };
   if (results[0].status === 'fulfilled') onFulfillment(results[0].value);
-  if (results[1].status === 'fulfilled') onExchanges(results[1].value);
-  if (results[2].status === 'fulfilled') onReturns(results[2].value);
-  onComplete({
-    fulfillment: results[0].status === 'fulfilled' ? results[0].value : null,
-    exchanges: results[1].status === 'fulfilled' ? results[1].value : null,
-    returns: results[2].status === 'fulfilled' ? results[2].value : null,
-  });
+  const afterSalesCasesReady = results[1].status === 'fulfilled'
+    && results[2].status === 'fulfilled';
+  if (afterSalesCasesReady) {
+    const exchanges = results[1].value;
+    const returns = results[2].value;
+    onExchanges(exchanges);
+    onReturns(returns);
+    onAfterSalesCases({ exchanges, returns });
+    onComplete({
+      status: 'ready',
+      fulfillment: results[0].status === 'fulfilled' ? results[0].value : null,
+      exchanges,
+      returns,
+    });
+  } else {
+    onAfterSalesUnavailable({
+      exchangeError: results[1].status === 'rejected' ? results[1].reason : null,
+      returnError: results[2].status === 'rejected' ? results[2].reason : null,
+    });
+  }
   return {
     stale: false,
     failures: results.filter((result) => result.status === 'rejected').map((result) => result.reason),
   };
+}
+
+export function shouldCloseDeliveryReceiptDialog(order, context) {
+  return context?.source === 'conflict'
+    && !order?.availableDeliveryActions?.includes(context.outcome);
 }
 
 export function focusFirstInDialog(dialog) {
