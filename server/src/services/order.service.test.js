@@ -170,6 +170,11 @@ function createOrderRepository() {
       refunds.push(refund);
       return refund;
     },
+    async updateRefundPending(id, data) {
+      const refund = refunds.find((entry) => entry._id === id);
+      Object.assign(refund, data);
+      return refund;
+    },
     async findRefundRequestByObligationKey(orderId, obligationKey) {
       return refundRequests.find((request) => (
         request.orderId === orderId && request.obligationKey === obligationKey
@@ -753,7 +758,7 @@ describe('order service', () => {
     );
   });
 
-  it('rejects customer cancellation of a paid order per SRS UC-CS-10', async () => {
+  it('cancels a paid online Pending order and creates one refund hand-off', async () => {
     const order = await orderService.placeOrder('customer-1', checkoutInput({
       paymentMethod: 'ONLINE',
       idempotencyKey: 'cancel-paid-checkout-001',
@@ -768,18 +773,59 @@ describe('order service', () => {
       currency: 'VND',
     });
 
-    await assert.rejects(
-      () => orderService.cancelOrder('customer-1', order.id, {
-        cancelReason: 'Customer requested cancellation',
-        idempotencyKey: 'cancel-paid-command-001',
-      }),
-      (error) => {
-        assert.equal(error.statusCode, 409);
-        assert.match(error.message, /Unpaid, Failed, or Cancelled/);
-        return true;
-      }
-    );
-    assert.equal(orderRepository.orders[0].orderStatus, 'Pending');
+    const input = {
+      cancelReason: 'Customer requested cancellation',
+      idempotencyKey: 'cancel-paid-command-001',
+    };
+    const cancelled = await orderService.cancelOrder('customer-1', order.id, input);
+
+    assert.equal(cancelled.orderStatus, 'Cancelled');
+    assert.equal(cancelled.paymentStatus, 'Paid');
+    assert.equal(cancelled.moneyObligationsSettled, false);
+    assert.equal(orderRepository.orders[0].orderStatus, 'Cancelled');
+    assert.equal(orderRepository.payments[0].paymentStatus, 'Paid');
+    assert.equal(orderRepository.attempts[0].paymentStatus, 'Paid');
+    assert.equal(orderRepository.refunds.length, 1);
+    assert.equal(orderRepository.refunds[0].status, 'RefundPending');
+    assert.equal(orderRepository.refunds[0].obligationKey, 'PAYMENT_REVERSAL:attempt-paid');
+    assert.equal(orderRepository.refunds[0].returnRefundRequestId, 'refund-request-1');
+    assert.equal(orderRepository.refundRequests.length, 1);
+    assert.equal(orderRepository.refundRequests[0].status, 'ReadyForRefund');
+    assert.equal(orderRepository.refundRequests[0].refundPendingId, 'refund-1');
+
+    const replay = await orderService.cancelOrder('customer-1', order.id, input);
+    assert.equal(replay.idempotentReplay, true);
+    assert.equal(orderRepository.refunds.length, 1);
+    assert.equal(orderRepository.refundRequests.length, 1);
+  });
+
+  it('cancels an online Pending payment before provider settlement and retires its active link', async () => {
+    const order = await orderService.placeOrder('customer-1', checkoutInput({
+      paymentMethod: 'ONLINE',
+      idempotencyKey: 'cancel-pending-checkout-001',
+    }));
+    orderRepository.attempts.push({
+      _id: 'attempt-pending',
+      orderId: order.id,
+      paymentStatus: 'Pending',
+      amount: 50,
+      currency: 'VND',
+      paymentLinkId: 'payos-link-pending',
+    });
+
+    const cancelled = await orderService.cancelOrder('customer-1', order.id, {
+      cancelReason: 'Customer requested cancellation before payment',
+      idempotencyKey: 'cancel-pending-command-001',
+    });
+
+    assert.equal(cancelled.orderStatus, 'Cancelled');
+    assert.equal(cancelled.paymentStatus, 'Cancelled');
+    assert.equal(orderRepository.payments[0].paymentStatus, 'Cancelled');
+    assert.equal(orderRepository.attempts[0].paymentStatus, 'Cancelled');
+    assert.deepEqual(retiredPaymentLinks, [{
+      paymentLinkId: 'payos-link-pending',
+      reason: 'Customer cancelled order',
+    }]);
     assert.equal(orderRepository.refunds.length, 0);
   });
 

@@ -473,6 +473,12 @@ function createModelOrderRepository() {
         session
       ).lean();
     },
+    async updateRefundPending(id, data, session) {
+      return withOptionalSession(
+        RefundPending.findByIdAndUpdate(id, { $set: data }, { new: true, runValidators: true }),
+        session
+      ).lean();
+    },
     async markMoneyObligationsUnsettled(orderId, session) {
       return withOptionalSession(
         Order.findByIdAndUpdate(orderId, { $set: { moneyObligationsSettled: false } }, { new: true, runValidators: true }),
@@ -708,6 +714,51 @@ function createOrderService({
       if (!claimed) return null;
     }
     return inventoryRepository.release(detail.productId, detail.quantity, session);
+  }
+
+  async function buildRefundHandoff(order, reason, session, paymentAttempt) {
+    const attempt = paymentAttempt || await orderRepository.findPrimaryPaidPaymentAttemptByOrder(order._id, session);
+    if (!attempt) {
+      throw new ApiError(409, 'A payment attempt is required before creating a refund hand-off');
+    }
+    const obligationKey = `PAYMENT_REVERSAL:${String(attempt._id)}`;
+    const refund = await orderRepository.upsertRefundPending({
+      orderId: order._id,
+      paymentAttemptId: attempt._id,
+      customerId: order.customerId,
+      amount: order.totalAmount,
+      currency: order.currency || attempt.currency || 'VND',
+      reason,
+      status: 'RefundPending',
+      obligationType: 'PAYMENT_REVERSAL',
+      obligationKey,
+    }, session);
+    if (!refund?.returnRefundRequestId && orderRepository.createRefundRequest) {
+      let request = orderRepository.findRefundRequestByObligationKey
+        ? await orderRepository.findRefundRequestByObligationKey(order._id, obligationKey, session)
+        : null;
+      if (!request) {
+        request = await orderRepository.createRefundRequest({
+          orderId: order._id,
+          requestCode: `CAN-${order.orderCode}-${crypto.createHash('sha256').update(obligationKey).digest('hex').slice(0, 12).toUpperCase()}`,
+          customerId: order.customerId,
+          paymentId: null,
+          obligationKey,
+          reason,
+          status: 'ReadyForRefund',
+          refundAmount: Number(order.totalAmount),
+          requestedAt: new Date(clock()),
+        }, session);
+      }
+      if (orderRepository.updateRefundPending) {
+        await orderRepository.updateRefundPending(refund._id, { returnRefundRequestId: request._id }, session);
+      }
+      if (orderRepository.updateRefundRequest) {
+        await orderRepository.updateRefundRequest(request._id, { refundPendingId: refund._id }, session);
+      }
+      return { ...refund, returnRefundRequestId: request._id };
+    }
+    return refund;
   }
 
   return {
@@ -1007,10 +1058,13 @@ function createOrderService({
             return { cancelled: order, orderCode: order.orderCode, replay: true };
           }
         }
-        if (order.orderStatus !== 'Pending' || !['Unpaid', 'Failed', 'Cancelled'].includes(order.paymentStatus)) {
-          throw new ApiError(409, 'Only Pending orders with Unpaid, Failed, or Cancelled payment can be cancelled by the customer');
+        if (order.orderStatus !== 'Pending' || !['Unpaid', 'Pending', 'Failed', 'Cancelled', 'Paid'].includes(order.paymentStatus)) {
+          throw new ApiError(409, 'Only Pending orders with Unpaid, Pending, Failed, Cancelled, or Paid payment can be cancelled by the customer');
         }
-        const cancelledPaymentStatus = order.paymentMethod === 'COD'
+        const isPaid = order.paymentStatus === 'Paid';
+        const cancelledPaymentStatus = isPaid
+          ? 'Paid'
+          : order.paymentMethod === 'COD'
           ? 'Unpaid'
           : 'Cancelled';
         const cancelData = {
@@ -1019,6 +1073,7 @@ function createOrderService({
           cancelReason,
           cancelIdempotencyKey: idempotencyKey,
           cancelRequestHash: requestHash,
+          ...(isPaid ? { moneyObligationsSettled: false } : {}),
         };
         const cancelled = orderRepository.claimCustomerCancellation
           ? await orderRepository.claimCustomerCancellation(customerId, orderId, order.paymentStatus, cancelData, session)
@@ -1041,10 +1096,10 @@ function createOrderService({
         const payment = orderRepository.findPaymentByOrderId
           ? await orderRepository.findPaymentByOrderId(orderId, session)
           : null;
-        if (payment && orderRepository.updatePayment) {
+        if (payment && orderRepository.updatePayment && !isPaid) {
           await orderRepository.updatePayment(payment._id, { paymentStatus: cancelledPaymentStatus }, session);
         }
-        if (orderRepository.findActivePaymentAttemptByOrder) {
+        if (orderRepository.findActivePaymentAttemptByOrder && !isPaid) {
           const activeAttempt = await orderRepository.findActivePaymentAttemptByOrder(orderId, session);
           if (activeAttempt) {
             await orderRepository.updatePaymentAttempt(activeAttempt._id, {
@@ -1052,6 +1107,12 @@ function createOrderService({
             }, session);
             retiredPaymentLinkId = activeAttempt.paymentLinkId || '';
           }
+        }
+        if (isPaid) {
+          const paidAttempt = orderRepository.findPrimaryPaidPaymentAttemptByOrder
+            ? await orderRepository.findPrimaryPaidPaymentAttemptByOrder(orderId, session)
+            : null;
+          await buildRefundHandoff(cancelled, cancelReason, session, paidAttempt);
         }
         const inventories = [];
         for (const detail of details) {
