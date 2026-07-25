@@ -10,6 +10,44 @@
 
 ## State flow
 
+## Addendum 2026-07-26 — Refund destination safety and payout recovery
+
+Customer bank-destination collection is deliberately not a banking-login flow. The
+Customer selects a reviewed bank code and supplies only account number, account-holder
+name, confirmation, and an idempotency key. The server resolves the canonical name/BIN;
+the Customer UI, public bank endpoint, queues, audit records, notifications, and ordinary
+projections must not reveal BIN or request PIN, OTP, password, passcode, or CVV.
+
+Staff may use either PayOS or a manual transfer. Manual transfer is a supported local
+and operational path; it does not need a PayOS webhook. The refund amount remains
+server-derived. If an obligation is Processing or Unknown, no new payout may be made.
+The recovery sequence is exact: inspect the authoritative payout operation; reconcile
+that exact operation as `Succeeded`, `Failed`, or `Unknown` with the required
+reference/time/note/acknowledgement; and create a new manual payout only after a verified
+`Failed` reconciliation. `Succeeded` completes from existing-operation evidence;
+`Unknown` retains the lock. Reconciliation never sends a new payout.
+
+### Migration/runbook
+
+Use the explicit command modes below against the target database only after reviewing
+the safe, bounded diagnostics. `dry-run` is the default and makes no business or index
+writes. The migration never creates payout evidence, changes a payout outcome, or
+rewrites historical bank destinations.
+
+```powershell
+cd server
+npm run migrate:refund-payout-reconciliation:preflight
+npm run migrate:refund-payout-reconciliation
+npm run migrate:refund-payout-reconciliation:apply
+npm run migrate:refund-payout-reconciliation:verify
+```
+
+`apply` fails closed for invalid payout state/method/operation correlations, duplicate
+successful payout evidence, or a mismatched named index. Historical noncanonical bank
+snapshots and unresolved obligations are reported with bounded safe identifiers/statuses
+only; account data, holder, BIN, and reason are not emitted. Apply a second time to prove
+there are no business writes, then finish with `verify`.
+
 `Pending` -> `AwaitingInspection` -> `ReadyForRefund` -> `Completed`
 
 `Pending` -> `Rejected`

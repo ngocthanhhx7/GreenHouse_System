@@ -254,6 +254,25 @@ Kết quả kiểm thử local ngày 2026-07-25: server `1066/1066`, client
 
 ## 17. Final Checklist
 
+## Addendum 2026-07-26 — Refund destination and payout reconciliation
+
+Nguyễn Hữu Anh Nhật owns the Return/Refund implementation boundary for the reviewed
+customer bank-destination and Staff payout-reconciliation change. The newer addendum
+supersedes any earlier implication that a Customer supplies a bank BIN or that a changing
+local PayOS webhook blocks manual payout.
+
+- Customer submits a reviewed `bankCode`, account number, holder name, confirmation, and
+  idempotency key only; no Customer UI/API asks for or exposes PIN, OTP, password,
+  passcode, CVV, or BIN.
+- `RefundPending` is the authoritative payout state. Staff must reconcile the exact
+  Processing/Unknown operation before a new payout; a new manual payout is allowed only
+  after verified `Failed` reconciliation.
+- The migration is index-only and provides preflight/dry-run/apply/verify. It reports
+  bounded safe diagnostics and does not mutate payout outcomes, evidence, or historical
+  bank destinations.
+- Final Task 4/5 integration, full regression, client build, and target-database runbook
+  evidence remain pending the combined release gate; no deployment claim is made here.
+
 - [ ] Staff queue complete.
 - [ ] Staff detail complete.
 - [ ] Confirm/status state machine complete.
