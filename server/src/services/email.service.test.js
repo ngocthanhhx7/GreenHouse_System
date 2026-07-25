@@ -512,4 +512,71 @@ describe('email outbox service', () => {
     assert.match(sent[4].subject, /đặt lại mật khẩu thành công/i);
     assert.match(sent[5].subject, /mật khẩu đã thay đổi/i);
   });
+
+  it('AT-181/182 keeps only canonical safe facts for Notification email delivery', () => {
+    const payload = sanitizeEmailEventPayload('NOTIFICATION_DELIVERY_REQUESTED', {
+      notificationId: 'notification-1',
+      businessEventId: 'order:order-1:shipped',
+      notificationType: 'ORDER_SHIPPED',
+      templateKey: 'ORDER_SHIPPED',
+      orderCode: 'ORD-001',
+      targetCollection: 'Order',
+      targetId: 'order-1',
+      password: 'secret-password',
+      otp: '123456',
+      token: 'secret-token',
+      fullAddress: 'private-address',
+      rawCallback: { provider: 'secret' },
+      supportContent: 'private-support-content',
+    });
+
+    assert.deepEqual(payload, {
+      notificationId: 'notification-1',
+      businessEventId: 'order:order-1:shipped',
+      notificationType: 'ORDER_SHIPPED',
+      templateKey: 'ORDER_SHIPPED',
+      orderCode: 'ORD-001',
+      targetCollection: 'Order',
+      targetId: 'order-1',
+    });
+    assert.doesNotMatch(
+      JSON.stringify(payload),
+      /secret-password|123456|secret-token|private-address|private-support-content/,
+    );
+  });
+
+  it('AT-181 renders Notification delivery with the canonical Vietnamese template', async () => {
+    const sent = [];
+    const provider = createEmailProvider('smtp', {
+      transporter: {
+        async sendMail(message) {
+          sent.push(message);
+          return { messageId: 'notification-mail-1' };
+        },
+      },
+      from: 'GreenHome Kitchen <greenhome.demo@gmail.com>',
+      otpSecret: 'test-otp-secret-at-least-32-characters',
+    });
+
+    await provider.send({
+      eventType: 'NOTIFICATION_DELIVERY_REQUESTED',
+      recipient: 'customer@example.com',
+      payload: {
+        notificationId: 'notification-private-id',
+        businessEventId: 'shipment-private-event',
+        notificationType: 'ORDER_SHIPPED',
+        templateKey: 'ORDER_SHIPPED',
+        orderCode: 'ORD-001',
+        targetCollection: 'Order',
+        targetId: 'private-target-id',
+      },
+    });
+
+    assert.match(sent[0].subject, /ORD-001/);
+    assert.match(sent[0].text, /đơn vị vận chuyển/i);
+    assert.doesNotMatch(
+      `${sent[0].subject} ${sent[0].text}`,
+      /notification-private-id|shipment-private-event|private-target-id/,
+    );
+  });
 });

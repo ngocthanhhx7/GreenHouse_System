@@ -23,6 +23,7 @@ function createModelRepository() {
     async listPendingNotificationEvents(eventTypes, staleBefore, limit) {
       return DomainOutbox.find({
         eventType: { $in: eventTypes },
+        payloadSchemaVersion: 1,
         attemptCount: { $lt: MAX_NOTIFICATION_OUTBOX_ATTEMPTS },
         $or: [
           { status: { $in: ['Pending', 'Failed'] } },
@@ -36,6 +37,7 @@ function createModelRepository() {
         {
           _id: id,
           eventType: { $in: NOTIFICATION_TYPES },
+          payloadSchemaVersion: 1,
           attemptCount: { $lt: maxAttempts },
           $or: [
             { status: { $in: ['Pending', 'Failed'] } },

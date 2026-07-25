@@ -11,6 +11,7 @@ const DomainOutbox = require('../models/domainOutbox.model');
 const { createPayOSGateway } = require('../config/payos');
 const { logAudit } = require('../utils/auditLogger');
 const { notificationService } = require('./notification.service');
+const { canonicalEnvelope } = require('./domainEventProducer.service');
 
 function withOptionalSession(query, session) {
   return session ? query.session(session) : query;
@@ -299,20 +300,39 @@ function createOrderPaymentExpiryService({
         const released = await inventoryRepository.release(detail.productId, detail.quantity, session);
         if (!released) throw new Error(`Order ${claimed.orderCode} reservation could not be released`);
       }
-      await schedulePostCommitWork('ORDER_PAYMENT_EXPIRED_AUDIT', {
-        eventId: `ORDER_PAYMENT_EXPIRED:AUDIT:${String(claimed._id)}`,
-        userId: claimed.customerId,
+      if (!repository.enqueuePostCommitWork) {
+        throw new Error('Canonical DomainOutbox repository is required for payment expiry');
+      }
+      const businessEventId = `order:${String(claimed._id)}:payment-expired`;
+      await auditLogger.log({
+        actorType: 'System',
+        actorId: null,
+        actorRole: '',
+        source: 'OrderPaymentExpiryWorker',
         action: 'ORDER_PAYMENT_EXPIRED',
-        targetEntity: 'Order',
+        targetType: 'Order',
         targetId: String(claimed._id),
-        description: `Online payment deadline expired: ${claimed.orderCode}`,
+        outcome: 'Success',
+        businessEventId,
+        correlationId: businessEventId,
+        reason: 'Online payment deadline expired',
+        previousState: 'Pending',
+        newState: 'Cancelled',
+        safeFacts: { orderCode: claimed.orderCode },
+        timestamp: now,
       }, session);
-      await schedulePostCommitWork('ORDER_PAYMENT_EXPIRED_NOTIFICATION', {
-        eventId: `ORDER_PAYMENT_EXPIRED:${String(claimed._id)}`,
-        userId: claimed.customerId,
-        orderId: String(claimed._id),
-        orderCode: claimed.orderCode,
-      }, session);
+      await repository.enqueuePostCommitWork(canonicalEnvelope({
+        identityKey: `notification:${businessEventId}:customer`,
+        businessEventId,
+        eventType: 'ORDER_PAYMENT_EXPIRED',
+        aggregateType: 'Order',
+        aggregateId: String(claimed._id),
+        occurredAt: now,
+        recipientId: String(claimed.customerId),
+        targetCollection: 'Order',
+        targetId: String(claimed._id),
+        displayValues: { orderCode: claimed.orderCode },
+      }, () => now), session);
       return { order: claimed, expiredAttempt };
     });
 

@@ -27,6 +27,7 @@ function createFixture() {
   const payments = [{ _id: 'payment-1', orderId: 'order-1', paymentStatus: 'Pending' }];
   const auditEntries = [];
   const notifications = [];
+  const outbox = [];
   const retiredLinks = [];
   let committed = false;
 
@@ -54,6 +55,17 @@ function createFixture() {
       if (attempt) attempt.paymentStatus = 'Expired';
       return attempt || null;
     },
+    async enqueuePostCommitWork(item, session) {
+      assert.equal(committed, false);
+      assert.deepEqual(session, { id: 'session-1' });
+      const existing = outbox.find((entry) => entry.identityKey === item.identityKey);
+      if (existing) return existing;
+      outbox.push(item);
+      return item;
+    },
+    async listPendingPostCommitWork(eventTypes) {
+      return outbox.filter((entry) => eventTypes.includes(entry.eventType));
+    },
   };
   const transactionManager = {
     async withTransaction(work) {
@@ -66,7 +78,13 @@ function createFixture() {
     repository,
     transactionManager,
     inventoryRepository: { async release(productId, quantity) { releases.push({ productId, quantity }); return true; } },
-    auditLogger: { async log(entry) { assert.equal(committed, true); auditEntries.push(entry); } },
+    auditLogger: {
+      async log(entry, session) {
+        assert.equal(committed, false);
+        assert.deepEqual(session, { id: 'session-1' });
+        auditEntries.push(entry);
+      },
+    },
     notificationPublisher: { async publish(entry) { assert.equal(committed, true); notifications.push(entry); } },
     payosGateway: {
       async cancelPaymentLink(paymentLinkId, reason) {
@@ -76,7 +94,18 @@ function createFixture() {
     },
     clock: () => new Date('2026-07-23T08:00:01.000Z'),
   });
-  return { service, order, payments, attempts, releases, auditEntries, notifications, retiredLinks, repository };
+  return {
+    service,
+    order,
+    payments,
+    attempts,
+    releases,
+    auditEntries,
+    notifications,
+    outbox,
+    retiredLinks,
+    repository,
+  };
 }
 
 describe('order payment expiry service', () => {
@@ -126,29 +155,21 @@ describe('order payment expiry service', () => {
     assert.equal(auditEntries.length, 0);
   });
 
-  it('persists failed post-commit effects for a later retry without repeating expiry', async () => {
+  it('AT-175 fails the expiry transaction when its mandatory audit fails', async () => {
     const fixture = createFixture();
-    const workItems = [];
-    let auditAttempts = 0;
     const repository = {
       ...fixture.repository,
-      async enqueuePostCommitWork(item) { workItems.push(item); return item; },
     };
     const service = createOrderPaymentExpiryService({
       repository,
       transactionManager: { async withTransaction(work) { return work({}); } },
       inventoryRepository: { async release() { return true; } },
-      auditLogger: { async log() { auditAttempts += 1; if (auditAttempts === 1) throw new Error('audit unavailable'); } },
+      auditLogger: { async log() { throw new Error('audit unavailable'); } },
       notificationPublisher: { async publish() { return true; } },
       clock: () => new Date('2026-07-23T08:00:01.000Z'),
     });
 
-    const first = await service.expireOverdueOrders();
-    const second = await service.expireOverdueOrders();
-    assert.deepEqual(first, { expired: 1 });
-    assert.deepEqual(second, { expired: 0 });
-    assert.equal(workItems.length, 2);
-    assert.equal(fixture.order.orderStatus, 'Cancelled');
+    await assert.rejects(() => service.expireOverdueOrders(), /audit unavailable/);
   });
 
   it('does not publish transaction-local expiry work when commit fails', async () => {
@@ -180,7 +201,7 @@ describe('order payment expiry service', () => {
     await assert.rejects(() => service.expireOverdueOrders(), /commit failed/);
     await service.drainPostCommitWork();
 
-    assert.equal(auditEntries.length, 0);
+    assert.equal(auditEntries.length, 1);
     assert.equal(notifications.length, 0);
   });
 
@@ -199,7 +220,12 @@ describe('order payment expiry service', () => {
       { productId: 'product-b', quantity: 1 },
     ]);
     assert.equal(fixture.auditEntries[0].action, 'ORDER_PAYMENT_EXPIRED');
-    assert.equal(fixture.notifications[0].eventId, 'ORDER_PAYMENT_EXPIRED:order-1');
+    assert.equal(fixture.notifications.length, 0);
+    assert.equal(fixture.outbox.length, 1);
+    assert.equal(fixture.outbox[0].eventType, 'ORDER_PAYMENT_EXPIRED');
+    assert.equal(fixture.outbox[0].payloadSchemaVersion, 1);
+    assert.equal(fixture.outbox[0].payload.recipientId, 'customer-1');
+    assert.equal(fixture.outbox[0].payload.displayValues.orderCode, 'ORD-001');
     assert.deepEqual(fixture.retiredLinks, [{
       paymentLinkId: 'payos-link-active',
       reason: 'Order payment deadline expired',
@@ -257,6 +283,7 @@ describe('order payment expiry service', () => {
     assert.deepEqual(replay, { expired: 0 });
     assert.equal(fixture.releases.length, 2);
     assert.equal(fixture.auditEntries.length, 1);
-    assert.equal(fixture.notifications.length, 1);
+    assert.equal(fixture.notifications.length, 0);
+    assert.equal(fixture.outbox.length, 1);
   });
 });

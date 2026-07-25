@@ -3,6 +3,10 @@ const { randomUUID } = require('node:crypto');
 const EmailOutbox = require('../models/emailOutbox.model');
 const { logAudit } = require('../utils/auditLogger');
 const { sanitizeEmailEventPayload } = require('../utils/emailPayloadSanitizer');
+const {
+  TYPE_DISPLAY_VALUES,
+  renderNotification,
+} = require('../utils/notificationContract');
 const { decryptOtp } = require('./passwordReset.service');
 
 const MAX_DELIVERY_ATTEMPTS = 5;
@@ -90,6 +94,20 @@ function renderEmail(
       subject: `GreenHome đã nhận đơn hàng ${payload.orderCode || ''}`.trim(),
       text: `Đơn hàng ${payload.orderCode || ''} đã được tạo thành công. Tổng thanh toán: ${payload.totalAmount || 0} VND.`,
     };
+  }
+  if (entry.eventType === 'NOTIFICATION_DELIVERY_REQUESTED') {
+    const safePayload = sanitizeEmailEventPayload(entry.eventType, payload);
+    const displayValues = Object.fromEntries(
+      (TYPE_DISPLAY_VALUES[safePayload.notificationType] || [])
+        .filter((key) => Object.hasOwn(safePayload, key))
+        .map((key) => [key, safePayload[key]]),
+    );
+    const rendered = renderNotification(
+      safePayload.notificationType,
+      safePayload.templateKey,
+      displayValues,
+    );
+    return { subject: rendered.subject, text: rendered.content };
   }
   throw new Error(`Unsupported email event: ${entry.eventType}`);
 }

@@ -22,7 +22,10 @@ const {
 } = require('../utils/returnEvidenceClaim');
 const { createPayOSGateway } = require('../config/payos');
 const { logAudit } = require('../utils/auditLogger');
-const { notificationService } = require('./notification.service');
+const {
+  canonicalEnvelope,
+  createOutboxWriter,
+} = require('./domainEventProducer.service');
 const { lowStockAlertLifecycle } = require('./lowStockAlertLifecycle.service');
 const { afterSalesLockService } = require('./afterSalesLock.service');
 const {
@@ -38,6 +41,27 @@ const OPEN_STATUSES = [
   'New', 'Pending', 'AwaitingCODReconciliation', 'Approved',
   'AwaitingInspection', 'Received', 'ReadyForRefund', 'CODRecoveryInProgress',
 ];
+
+function createReturnNotificationOutbox() {
+  const writer = createOutboxWriter();
+  return {
+    async publishDomainEvent(event, session) {
+      const occurredAt = new Date(event.occurredAt || Date.now());
+      return writer.publish(canonicalEnvelope({
+        identityKey: `notification:${event.businessEventId}:customer`,
+        businessEventId: event.businessEventId,
+        eventType: event.type,
+        aggregateType: 'ReturnRefundRequest',
+        aggregateId: String(event.targetId),
+        occurredAt,
+        recipientId: String(event.recipientId),
+        targetCollection: 'ReturnRefundRequest',
+        targetId: String(event.targetId),
+        displayValues: event.displayValues,
+      }, () => occurredAt), session);
+    },
+  };
+}
 const DECIDABLE_STATUSES = ['New', 'Pending', 'AwaitingCODReconciliation'];
 const RECEIVABLE_STATUSES = ['Approved', 'AwaitingInspection'];
 const HANDOFF_RECORDABLE_STATUSES = [...RECEIVABLE_STATUSES, 'Expired'];
@@ -559,7 +583,7 @@ function createReturnRefundService({
   repository = createModelRepository(),
   auditLogger = { log: logAudit },
   transactionManager = createModelTransactionManager(),
-  eventPublisher = notificationService,
+  eventPublisher = createReturnNotificationOutbox(),
   lowStockLifecycle = null,
   payosGateway = createPayOSGateway(),
   clock = () => new Date(),
@@ -585,14 +609,14 @@ function createReturnRefundService({
     return replay ? { ...response, replay: true } : response;
   }
 
-  async function writeAudit(userId, action, targetId, description) {
+  async function writeAudit(userId, action, targetId, description, session) {
     await auditLogger.log({
       userId,
       action,
       targetEntity: 'ReturnRefundRequest',
       targetId: String(targetId),
       description,
-    });
+    }, session);
   }
 
   async function resolveConflict(orderId, customerId, session) {
@@ -604,20 +628,27 @@ function createReturnRefundService({
     });
   }
 
-  async function notifyCustomer(request, type, eventIdentity = '') {
-    try {
-      if (eventPublisher?.createInAppNotification) {
-        await eventPublisher.createInAppNotification({
-          userId: request.customerId,
-          type,
-          displayValues: { requestCode: request.requestCode || String(request._id) },
-          targetCollection: 'ReturnRefundRequest',
-          targetId: request._id,
-          eventId: `${type}:${String(request._id)}${eventIdentity ? `:${String(eventIdentity)}` : ''}`,
-        });
-      }
-    } catch (_) {
-      // Notification delivery is deliberately outside the business transaction.
+  async function notifyCustomer(request, type, eventIdentity = '', session) {
+    const businessEventId = `${type}:${String(request._id)}${eventIdentity ? `:${String(eventIdentity)}` : ''}`;
+    const event = {
+      businessEventId,
+      recipientId: request.customerId,
+      type,
+      displayValues: { requestCode: request.requestCode || String(request._id) },
+      targetCollection: 'ReturnRefundRequest',
+      targetId: request._id,
+      occurredAt: new Date(clock()),
+    };
+    if (eventPublisher?.publishDomainEvent) {
+      await eventPublisher.publishDomainEvent(event, session);
+    } else if (eventPublisher?.createInAppNotification) {
+      await eventPublisher.createInAppNotification({
+        userId: event.recipientId,
+        ...event,
+        eventId: businessEventId,
+      }, session);
+    } else {
+      throw new Error('Return/refund Notification outbox publisher is required');
     }
   }
 
@@ -771,6 +802,19 @@ function createReturnRefundService({
           }, session);
           await repository.updateOrder(loaded.order._id, { orderStatus: 'Delivered' }, session);
         }
+        await writeAudit(
+          staffId,
+          'REFUND_PAYOUT_INCIDENT_OPENED',
+          loaded.request._id,
+          `Opened ${cause} payout recovery with ${responsibility} responsibility; destination values redacted`,
+          session
+        );
+        await notifyCustomer(
+          loaded.request,
+          'REFUND_PAYOUT_INCIDENT_OPENED',
+          created._id,
+          session
+        );
         return created;
       });
     } catch (error) {
@@ -783,12 +827,6 @@ function createReturnRefundService({
       throw error;
     }
 
-    await writeAudit(staffId, 'REFUND_PAYOUT_INCIDENT_OPENED', loaded.request._id, `Opened ${cause} payout recovery with ${responsibility} responsibility; destination values redacted`);
-    await notifyCustomer(
-      loaded.request,
-      'REFUND_PAYOUT_INCIDENT_OPENED',
-      incident._id
-    );
     return toPayoutIncidentResponse(incident);
   }
 
@@ -896,6 +934,16 @@ function createReturnRefundService({
             payoutProviderReference: providerReference,
           }, session);
         }
+        await writeAudit(
+          staffId,
+          'REFUND_PAYOUT_EVIDENCE_RECORDED',
+          id,
+          `${trustedPayOS ? 'System reconciled payOS' : 'Staff recorded manual'} payout evidence with ${status} outcome; destination values redacted`,
+          session
+        );
+        if (status === 'Succeeded') {
+          await notifyCustomer(request, 'RETURN_REFUND_COMPLETED', created._id, session);
+        }
         return created;
       });
     } catch (error) {
@@ -906,8 +954,6 @@ function createReturnRefundService({
       throw error;
     }
 
-    await writeAudit(staffId, 'REFUND_PAYOUT_EVIDENCE_RECORDED', id, `${trustedPayOS ? 'System reconciled payOS' : 'Staff recorded manual'} payout evidence with ${status} outcome; destination values redacted`);
-    if (status === 'Succeeded') await notifyCustomer(request, 'RETURN_REFUND_COMPLETED', evidence._id);
     return { ...toPayoutResponse(evidence, 'Staff'), request: await respond(id, 'Staff') };
   }
 
@@ -976,6 +1022,13 @@ function createReturnRefundService({
               throw createActiveAfterSalesConflict(null);
             }
           }
+          await writeAudit(
+            customerId,
+            'RETURN_REFUND_CREATE',
+            created._id,
+            `Customer created a return/refund request for ${order.orderCode}`,
+            session
+          );
           return created;
         });
       } catch (error) {
@@ -991,7 +1044,6 @@ function createReturnRefundService({
         throw error;
       }
 
-      await writeAudit(customerId, 'RETURN_REFUND_CREATE', request._id, `Customer created a return/refund request for ${order.orderCode}`);
       return respond(request._id, 'Customer');
     },
 
@@ -1068,11 +1120,22 @@ function createReturnRefundService({
           const released = await repository.releaseOrderLock(order._id, request._id, 'Rejected', false, session);
           if (!released) throw new ApiError(409, 'After-sales lock changed while Return was being rejected');
         }
+        await writeAudit(
+          staffId,
+          approved ? 'RETURN_REFUND_APPROVED' : 'RETURN_REFUND_REJECTED',
+          id,
+          `Staff ${approved ? 'approved' : 'rejected'} return/refund for ${order.orderCode}`,
+          session
+        );
+        await notifyCustomer(
+          request,
+          approved ? 'RETURN_REFUND_APPROVED' : 'RETURN_REFUND_REJECTED',
+          '',
+          session
+        );
         return claimed;
       });
 
-      await writeAudit(staffId, approved ? 'RETURN_REFUND_APPROVED' : 'RETURN_REFUND_REJECTED', id, `Staff ${approved ? 'approved' : 'rejected'} return/refund for ${order.orderCode}`);
-      await notifyCustomer(request, approved ? 'RETURN_REFUND_APPROVED' : 'RETURN_REFUND_REJECTED');
       return respond(id, 'Staff');
     },
 
@@ -1100,14 +1163,32 @@ function createReturnRefundService({
         throw new ApiError(409, 'The three-day return handoff deadline has expired');
       }
 
-      const updated = repository.claimHandoff
-        ? await repository.claimHandoff(id, customerId, {
-          status: 'Approved', handoffProofReference: proofReference, handoffAt, handoffRecordedBy: customerId,
-          expiredAt: null, expiryReason: '',
-        })
-        : await repository.updateRequest(id, { status: 'Approved', handoffProofReference: proofReference, handoffAt, handoffRecordedBy: customerId, expiredAt: null, expiryReason: '' });
-      if (!updated) throw new ApiError(409, 'Return/refund request changed while handoff proof was being recorded');
-      await writeAudit(customerId, 'RETURN_HANDOFF_RECORDED', id, 'Customer recorded timely return handoff proof');
+      const updated = await transactionManager.withTransaction(async (session) => {
+        const claimed = repository.claimHandoff
+          ? await repository.claimHandoff(id, customerId, {
+            status: 'Approved', handoffProofReference: proofReference, handoffAt, handoffRecordedBy: customerId,
+            expiredAt: null, expiryReason: '',
+          }, session)
+          : await repository.updateRequest(
+            id,
+            {
+              status: 'Approved', handoffProofReference: proofReference, handoffAt,
+              handoffRecordedBy: customerId, expiredAt: null, expiryReason: '',
+            },
+            session
+          );
+        if (!claimed) {
+          throw new ApiError(409, 'Return/refund request changed while handoff proof was being recorded');
+        }
+        await writeAudit(
+          customerId,
+          'RETURN_HANDOFF_RECORDED',
+          id,
+          'Customer recorded timely return handoff proof',
+          session
+        );
+        return claimed;
+      });
       return respond(id, 'Customer');
     },
 
@@ -1128,10 +1209,16 @@ function createReturnRefundService({
           const released = await repository.releaseOrderLock(request.orderId, request._id, 'Expired', false, session);
           if (!released) throw new ApiError(409, 'After-sales lock changed while Return was expiring');
         }
+        await writeAudit(
+          staffId,
+          'RETURN_REFUND_EXPIRED',
+          id,
+          'Approved request expired without timely handoff proof',
+          session
+        );
+        await notifyCustomer(request, 'RETURN_REFUND_EXPIRED', '', session);
         return claimed;
       });
-      await writeAudit(staffId, 'RETURN_REFUND_EXPIRED', id, 'Approved request expired without timely handoff proof');
-      await notifyCustomer(request, 'RETURN_REFUND_EXPIRED');
       return respond(id, 'Staff');
     },
 
@@ -1188,22 +1275,32 @@ function createReturnRefundService({
 
       let created;
       try {
-        created = await repository.createDestination({
-          returnRefundRequestId: request._id,
-          customerId,
-          version: Number(latest?.version || 0) + 1,
-          supersedesId: latest?._id || null,
-          bankName,
-          bankBin,
-          accountNumberEncrypted: encrypt(accountNumber),
-          accountHolderEncrypted: encrypt(accountHolderName),
-          accountNumberLast4: accountNumber.slice(-4),
-          accountHolderMasked: maskAccountHolder(accountHolderName),
-          destinationFingerprint,
-          confirmationNotice: CONFIRMATION_NOTICE,
-          customerConfirmedAt: new Date(clock()),
-          status: 'Submitted',
-          idempotencyKey,
+        created = await transactionManager.withTransaction(async (session) => {
+          const destination = await repository.createDestination({
+            returnRefundRequestId: request._id,
+            customerId,
+            version: Number(latest?.version || 0) + 1,
+            supersedesId: latest?._id || null,
+            bankName,
+            bankBin,
+            accountNumberEncrypted: encrypt(accountNumber),
+            accountHolderEncrypted: encrypt(accountHolderName),
+            accountNumberLast4: accountNumber.slice(-4),
+            accountHolderMasked: maskAccountHolder(accountHolderName),
+            destinationFingerprint,
+            confirmationNotice: CONFIRMATION_NOTICE,
+            customerConfirmedAt: new Date(clock()),
+            status: 'Submitted',
+            idempotencyKey,
+          }, session);
+          await writeAudit(
+            customerId,
+            'REFUND_DESTINATION_SUBMITTED',
+            id,
+            `Customer submitted refund destination version ${destination.version}; sensitive values redacted`,
+            session
+          );
+          return destination;
         });
       } catch (error) {
         if (error?.code === 11000 && repository.findDestinationByIdempotencyKey) {
@@ -1218,7 +1315,6 @@ function createReturnRefundService({
         throw error;
       }
 
-      await writeAudit(customerId, 'REFUND_DESTINATION_SUBMITTED', id, `Customer submitted refund destination version ${created.version}; sensitive values redacted`);
       return toDestinationResponse(created);
     },
 
@@ -1251,10 +1347,16 @@ function createReturnRefundService({
         }, session);
         if (!decided) throw new ApiError(409, 'Refund destination changed while Staff was deciding it');
         if (status === 'Verified') await repository.updateRequest(request._id, { verifiedDestinationId: decided._id }, session);
+        await writeAudit(
+          staffId,
+          status === 'Verified' ? 'REFUND_DESTINATION_VERIFIED' : 'REFUND_DESTINATION_REJECTED',
+          id,
+          `Staff ${status.toLowerCase()} refund destination version ${decided.version}; sensitive values redacted`,
+          session
+        );
+        await notifyCustomer(request, `REFUND_DESTINATION_${status.toUpperCase()}`, '', session);
         return decided;
       });
-      await writeAudit(staffId, status === 'Verified' ? 'REFUND_DESTINATION_VERIFIED' : 'REFUND_DESTINATION_REJECTED', id, `Staff ${status.toLowerCase()} refund destination version ${updated.version}; sensitive values redacted`);
-      await notifyCustomer(request, `REFUND_DESTINATION_${status.toUpperCase()}`);
       return toDestinationResponse(updated);
     },
 
@@ -1440,14 +1542,20 @@ function createReturnRefundService({
         const createdItems = await repository.createReturnItems(items, session);
         const refund = await createRefundHandoff(order, request, session);
         const updated = await repository.updateRequest(request._id, { refundPendingId: refund._id }, session);
+        await writeAudit(
+          warehouseId,
+          'RETURN_REFUND_RECEIVED',
+          id,
+          `Warehouse received and classified every returned item for ${order.orderCode}`,
+          session
+        );
+        await notifyCustomer(request, 'RETURN_REFUND_RECEIVED', '', session);
         return { createdItems, refund, updated, updatedInventories };
       });
 
-      await writeAudit(warehouseId, 'RETURN_REFUND_RECEIVED', id, `Warehouse received and classified every returned item for ${order.orderCode}`);
       for (const inventory of result.updatedInventories) {
         await lowStockLifecycle?.evaluate?.(inventory, { eventKey: `return-receipt:${id}` });
       }
-      await notifyCustomer(request, 'RETURN_REFUND_RECEIVED');
       return toResponse({ ...loaded, request: result.updated, items: result.createdItems }, 'Warehouse');
     },
 
@@ -1636,8 +1744,14 @@ function createReturnRefundService({
 
       await transactionManager.withTransaction(async (session) => {
         await finalizeSuccessfulPayout(staffId, loaded, refund, successfulEvidence, String(input.note || '').trim() || 'Verified payout completion', session);
+        await writeAudit(
+          staffId,
+          'RETURN_REFUND_COMPLETED',
+          id,
+          `Staff completed refund for ${order.orderCode} from verified payout evidence`,
+          session
+        );
       });
-      await writeAudit(staffId, 'RETURN_REFUND_COMPLETED', id, `Staff completed refund for ${order.orderCode} from verified payout evidence`);
       return respond(id, 'Staff');
     },
   };

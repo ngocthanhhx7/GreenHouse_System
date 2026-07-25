@@ -26,7 +26,10 @@ const {
 } = require('./afterSalesConflict.service');
 const { returnEvidenceClaim, MAX_RETURN_EVIDENCE_TOTAL_SIZE } = require('../utils/returnEvidenceClaim');
 const { logAudit } = require('../utils/auditLogger');
-const { notificationService } = require('./notification.service');
+const {
+  canonicalEnvelope,
+  createOutboxWriter,
+} = require('./domainEventProducer.service');
 const { lowStockAlertLifecycle } = require('./lowStockAlertLifecycle.service');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -443,22 +446,35 @@ function toPlain(value) {
   return value && typeof value.toObject === 'function' ? value.toObject() : value;
 }
 
+function createExchangeNotificationOutbox() {
+  const writer = createOutboxWriter();
+  return {
+    async notify({ userId, type, caseId, caseCode }, session) {
+      const occurredAt = new Date();
+      const businessEventId = `exchange:${String(caseId)}:${String(type).toLowerCase()}`;
+      return writer.publish(canonicalEnvelope({
+        identityKey: `notification:${businessEventId}:customer`,
+        businessEventId,
+        eventType: type,
+        aggregateType: 'ExchangeCase',
+        aggregateId: String(caseId),
+        occurredAt,
+        recipientId: String(userId),
+        targetCollection: 'ExchangeCase',
+        targetId: String(caseId),
+        displayValues: { caseCode },
+      }, () => occurredAt), session);
+    },
+  };
+}
+
 function createExchangeService({
   repository = createModelRepository(),
   transactionManager = createModelTransactionManager(),
   evidenceVerifier = normalizeEvidenceDefault,
   lowStockLifecycle = null,
   auditLogger = { log: logAudit },
-  notifier = {
-    notify: async ({ userId, type, caseId, caseCode }, session) => notificationService.createInAppNotification({
-      userId,
-      type,
-      displayValues: { caseCode },
-      targetCollection: 'ExchangeCase',
-      targetId: caseId,
-      eventId: `${type}:${caseId}`,
-    }, session),
-  },
+  notifier = createExchangeNotificationOutbox(),
   clock = () => new Date(),
   assignmentCoordinator = defaultAssignmentCoordinator,
 } = {}) {

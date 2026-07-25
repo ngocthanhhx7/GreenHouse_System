@@ -12,6 +12,7 @@ const ReturnRefundRequest = require('../models/returnRefundRequest.model');
 const DomainOutbox = require('../models/domainOutbox.model');
 const { createPayOSGateway } = require('../config/payos');
 const { logAudit } = require('../utils/auditLogger');
+const { canonicalEnvelope } = require('./domainEventProducer.service');
 const { notificationService: defaultNotificationService } = require('./notification.service');
 
 function toPaymentResponse(order, attempt, extra = {}) {
@@ -442,45 +443,46 @@ function createPaymentService({
     paymentStatus,
   }) {
     const eventPrefix = `PAYMENT_CALLBACK:${String(event._id)}`;
-    const auditPayload = {
-      userId: order.customerId,
+    const occurredAt = new Date(clock());
+    const businessEventId = `payment-callback:${String(event._id)}:${String(action).toLowerCase()}`;
+    const session = repositorySessionContext.getStore();
+    await auditLogger.log({
+      actorType: 'External',
+      actorId: String(attempt.paymentProvider || 'PaymentProvider'),
+      actorRole: '',
+      source: String(attempt.paymentProvider || 'PaymentProvider'),
       action,
-      eventId: `${eventPrefix}:AUDIT`,
-      targetEntity: 'PaymentAttempt',
+      targetType: 'PaymentAttempt',
       targetId: String(attempt._id),
-      description,
-    };
-    const notificationPayload = {
-        userId: order.customerId,
+      outcome: 'Success',
+      businessEventId,
+      correlationId: eventPrefix,
+      reason: description,
+      newState: paymentStatus,
+      safeFacts: {
         orderCode: order.orderCode,
         paymentStatus,
-        eventId: `${eventPrefix}:NOTIFICATION`,
-    };
-    if (paymentRepository.enqueuePostCommitWork) {
-      await paymentRepository.enqueuePostCommitWork({
-        identityKey: `PAYMENT_CALLBACK_AUDIT:${eventPrefix}`,
-        eventType: 'PAYMENT_CALLBACK_AUDIT',
-        payload: auditPayload,
-        status: 'Pending',
-      });
-      await paymentRepository.enqueuePostCommitWork({
-        identityKey: `PAYMENT_CALLBACK_NOTIFICATION:${eventPrefix}`,
-        eventType: 'PAYMENT_CALLBACK_NOTIFICATION',
-        payload: notificationPayload,
-        status: 'Pending',
-      });
-      // The repository is transaction-bound through AsyncLocalStorage. Let
-      // the post-commit drain query committed rows instead of publishing a
-      // transaction-local mirror when commit later fails.
-      return;
+      },
+      timestamp: occurredAt,
+    }, session);
+    if (!paymentRepository.enqueuePostCommitWork) {
+      throw new Error('Canonical DomainOutbox repository is required for payment callbacks');
     }
-    // In-memory repositories from legacy tests do not provide the durable
-    // adapter; retain the process-bounded fallback while production uses the
-    // DomainOutbox model above.
-    effects.push(
-      () => runPostCommitWork({ eventType: 'PAYMENT_CALLBACK_AUDIT', payload: auditPayload }),
-      () => runPostCommitWork({ eventType: 'PAYMENT_CALLBACK_NOTIFICATION', payload: notificationPayload }),
-    );
+    await paymentRepository.enqueuePostCommitWork(canonicalEnvelope({
+      identityKey: `notification:${businessEventId}:customer`,
+      businessEventId,
+      eventType: 'PAYMENT_STATUS',
+      aggregateType: 'PaymentAttempt',
+      aggregateId: String(attempt._id),
+      occurredAt,
+      recipientId: String(order.customerId),
+      targetCollection: 'Order',
+      targetId: String(order._id),
+      displayValues: {
+        orderCode: order.orderCode,
+        paymentStatus,
+      },
+    }, () => occurredAt));
   }
 
   async function processVerifiedPaymentCallback(input = {}) {

@@ -1393,6 +1393,7 @@ function assertAtomicWrites(scenario, first, key, countsBefore) {
   });
   const expectedAudit = {
     actorId,
+    actorRole: scenario.actorRole ?? scenario.actor.role,
     action: scenario.eventType,
     targetEntity: scenario.aggregateType,
     targetId: aggregateId,
@@ -1681,6 +1682,7 @@ async function prepareSupportAtomicScenario(family) {
       },
     );
     scenario.aggregateScopeId = actors.staffA.id;
+    scenario.actorRole = 'System';
     return scenario;
   }
   if (family === 'disabled-assignee-recovery') {

@@ -456,34 +456,47 @@ describe('order service', () => {
     assert.equal(inventoryRepository.reservedQuantity, 0);
   });
 
-  it('enqueues one idempotent ORDER_CREATED email after checkout commits', async () => {
+  it('AT-175/177 atomically records Order audit and one canonical ORDER_RECEIVED outbox event', async () => {
     const result = await orderService.placeOrder('customer-1', checkoutInput({ idempotencyKey: 'checkout-email-001' }));
     const replay = await orderService.placeOrder('customer-1', checkoutInput({ idempotencyKey: 'checkout-email-001' }));
 
     assert.equal(replay.id, result.id);
-    assert.equal(emailEvents.length, 1);
-    assert.equal(emailEvents[0].eventType, 'ORDER_CREATED');
-    assert.equal(emailEvents[0].idempotencyKey, `ORDER_CREATED:${result.id}`);
-    assert.equal(emailEvents[0].recipient, 'customer@example.com');
-    assert.equal(emailEvents[0].payload.orderCode, result.orderCode);
+    assert.equal(emailEvents.length, 0, 'email delivery belongs to the post-commit Notification consumer');
+    const notificationEvent = orderRepository.outbox.find(
+      (entry) => entry.eventType === 'ORDER_RECEIVED',
+    );
+    assert.ok(notificationEvent);
+    assert.equal(notificationEvent.businessEventId, `order:${result.id}:received`);
+    assert.equal(notificationEvent.aggregateType, 'Order');
+    assert.equal(notificationEvent.aggregateId, result.id);
+    assert.equal(notificationEvent.payloadSchemaVersion, 1);
+    assert.equal(notificationEvent.payload.recipientId, 'customer-1');
+    assert.equal(notificationEvent.payload.displayValues.orderCode, result.orderCode);
+    assert.match(notificationEvent.eventHash, /^[a-f0-9]{64}$/);
+    assert.equal(auditLogger.entries.filter((entry) => entry.action === 'ORDER_CREATE').length, 1);
   });
 
-  it('keeps the committed order response when customer email lookup or enqueue fails', async () => {
-    const failures = [];
+  it('AT-175 fails checkout when mandatory audit or canonical outbox persistence fails', async () => {
+    const repository = createOrderRepository();
+    repository.enqueuePostCommitWork = async () => {
+      throw new Error('mandatory outbox unavailable');
+    };
     orderService = createOrderService({
       transactionManager: { async withTransaction(work) { return work({ id: 'test-session' }); } },
       cartRepository: createCartRepository(),
       productRepository: createProductRepository(),
       inventoryRepository: { async reserve() {} },
-      orderRepository: createOrderRepository(),
-      auditLogger: { async log(entry) { failures.push(entry); } },
-      customerRepository: { async findEmail() { throw new Error('customer lookup unavailable'); } },
-      emailOutboxService: { async enqueue() { throw new Error('outbox unavailable'); } },
+      orderRepository: repository,
+      auditLogger: { async log() {} },
     });
 
-    const result = await orderService.placeOrder('customer-1', checkoutInput({ idempotencyKey: 'checkout-email-fail-001' }));
-    assert.equal(result.orderStatus, 'Pending');
-    assert.equal(failures.at(-1).action, 'EMAIL_OUTBOX_ENQUEUE_FAILED');
+    await assert.rejects(
+      () => orderService.placeOrder(
+        'customer-1',
+        checkoutInput({ idempotencyKey: 'checkout-email-fail-001' }),
+      ),
+      /mandatory outbox unavailable/,
+    );
   });
 
   it('rejects checkout when customer cart is empty', async () => {
@@ -530,6 +543,13 @@ describe('order service', () => {
     assert.equal(orderRepository.payments[0].paymentStatus, 'Unpaid');
     assert.equal(inventoryRepository.reservedQuantity, 0);
     assert.equal(auditLogger.entries.at(-1).action, 'ORDER_CANCEL');
+    const notificationEvent = orderRepository.outbox.find(
+      (entry) => entry.eventType === 'ORDER_CANCELLED',
+    );
+    assert.ok(notificationEvent);
+    assert.equal(notificationEvent.payload.recipientId, 'customer-1');
+    assert.equal(notificationEvent.payload.displayValues.orderCode, order.orderCode);
+    assert.equal(notificationEvent.payloadSchemaVersion, 1);
     const replay = await orderService.cancelOrder('customer-1', order.id, {
       cancelReason: 'Changed my mind',
       idempotencyKey: 'cancel-command-001',
@@ -618,8 +638,6 @@ describe('order service', () => {
       /commit failed/,
     );
     await rollbackService.drainPostCommitWork();
-
-    assert.equal(rollbackAudit.entries.length, 0);
   });
 
   it('fails closed when an order reservation lineage cannot be claimed during cancellation', async () => {
@@ -641,9 +659,8 @@ describe('order service', () => {
     assert.equal(releaseCalls, 0);
   });
 
-  it('retries a failed cancellation audit from durable post-commit work without repeating cancellation', async () => {
+  it('AT-175 fails cancellation when its mandatory audit cannot persist', async () => {
     const order = await orderService.placeOrder('customer-1', checkoutInput({ idempotencyKey: 'cancel-audit-checkout-001' }));
-    let auditAttempts = 0;
     const resilientService = createOrderService({
       transactionManager: { async withTransaction(work) { return work({ id: 'test-session' }); } },
       cartRepository,
@@ -651,30 +668,19 @@ describe('order service', () => {
       inventoryRepository,
       orderRepository,
       auditLogger: {
-        entries: [],
         async log(entry) {
-          auditAttempts += 1;
-          if (entry.action === 'ORDER_CANCEL' && auditAttempts === 1) throw new Error('audit unavailable');
-          this.entries.push(entry);
+          if (entry.action === 'ORDER_CANCEL') throw new Error('audit unavailable');
         },
       },
     });
 
-    const cancelled = await resilientService.cancelOrder('customer-1', order.id, {
-      cancelReason: 'Audit retry',
-      idempotencyKey: 'cancel-audit-command-001',
-    });
-    assert.equal(cancelled.orderStatus, 'Cancelled');
-    assert.equal(orderRepository.outbox.length, 1);
-    assert.equal(inventoryRepository.reservedQuantity, 0);
-
-    const replay = await resilientService.cancelOrder('customer-1', order.id, {
-      cancelReason: 'Audit retry',
-      idempotencyKey: 'cancel-audit-command-001',
-    });
-    assert.equal(replay.idempotentReplay, true);
-    assert.equal(inventoryRepository.reservedQuantity, 0);
-    assert.equal(orderRepository.outbox[0].status, 'Completed');
+    await assert.rejects(
+      () => resilientService.cancelOrder('customer-1', order.id, {
+        cancelReason: 'Audit retry',
+        idempotencyKey: 'cancel-audit-command-001',
+      }),
+      /audit unavailable/,
+    );
   });
 
   it('retires only the active online attempt when a customer cancels an unpaid order', async () => {

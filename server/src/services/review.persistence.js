@@ -11,6 +11,7 @@ const ReviewContentHistory = require('../models/reviewContentHistory.model');
 const ReviewModerationHistory = require('../models/reviewModerationHistory.model');
 const ReviewPublicationHistory = require('../models/reviewPublicationHistory.model');
 const User = require('../models/user.model');
+const { canonicalEnvelope } = require('./domainEventProducer.service');
 
 function withOptionalSession(query, session) {
   return session ? query.session(session) : query;
@@ -378,6 +379,7 @@ function createModelAuditLogger() {
     async log(entry, session) {
       return createOne(AuditLog, {
         userId: entry.actorId,
+        actorRole: entry.actorRole,
         action: entry.action,
         eventId: [
           entry.aggregateType,
@@ -403,14 +405,33 @@ function createModelAuditLogger() {
 
 function createModelOutboxRepository() {
   return {
-    async enqueue(entry, session) {
+    async enqueue(entry, session, context = {}) {
+      const identityKey = [
+        entry.aggregateType,
+        entry.aggregateId,
+        entry.version,
+        entry.eventType,
+      ].join(':');
+      if (entry.eventType === 'REVIEW_MODERATION_CHANGED') {
+        if (!context.recipientId) {
+          throw new Error('Review moderation Notification recipient is required');
+        }
+        return createOne(DomainOutbox, canonicalEnvelope({
+          identityKey,
+          businessEventId: identityKey,
+          eventType: entry.eventType,
+          aggregateType: entry.aggregateType,
+          aggregateId: entry.aggregateId,
+          aggregateVersion: entry.version,
+          occurredAt: entry.occurredAt,
+          recipientId: context.recipientId,
+          targetCollection: 'ProductReview',
+          targetId: entry.aggregateId,
+          displayValues: {},
+        }), session);
+      }
       return createOne(DomainOutbox, {
-        identityKey: [
-          entry.aggregateType,
-          entry.aggregateId,
-          entry.version,
-          entry.eventType,
-        ].join(':'),
+        identityKey,
         eventType: entry.eventType,
         payload: {
           aggregateType: entry.aggregateType,

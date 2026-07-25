@@ -196,6 +196,7 @@ function createModelRepository() {
       return withOptionalSession(
         DomainOutbox.find({
           eventType: { $in: eventTypes },
+          payloadSchemaVersion: { $ne: 1 },
           $or: [
             { status: { $in: ['Pending', 'Failed'] } },
             { status: 'Processing', processingStartedAt: { $lte: staleBefore } },
@@ -209,6 +210,7 @@ function createModelRepository() {
         DomainOutbox.findOneAndUpdate(
           {
             _id: id,
+            payloadSchemaVersion: { $ne: 1 },
             $or: [
               { status: { $in: ['Pending', 'Failed'] } },
               { status: 'Processing', processingStartedAt: { $lte: staleBefore } },

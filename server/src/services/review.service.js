@@ -168,11 +168,14 @@ function createReviewService(options = {}) {
     aggregateScopeId,
     occurredAt,
     session,
+    notificationRecipientId,
+    actorRoleSnapshot,
   }) {
     const aggregateId = String(result.id);
     const version = Number(result.version);
     await auditLogger.log({
       actorId: String(identity.actorId),
+      actorRole: actorRoleSnapshot,
       action: eventType,
       targetEntity: 'Review',
       targetId: aggregateId,
@@ -191,7 +194,7 @@ function createReviewService(options = {}) {
       occurredAt,
       idempotencyKey,
       payload: { aggregateId, version },
-    }, session);
+    }, session, { recipientId: notificationRecipientId });
     await repository.recordCommand({
       actorId: String(identity.actorId),
       aggregateId: String(aggregateScopeId),
@@ -321,6 +324,7 @@ function createReviewService(options = {}) {
               aggregateScopeId: productId,
               occurredAt,
               session,
+              actorRoleSnapshot: actor.role,
             });
             return result;
           });
@@ -420,6 +424,10 @@ function createReviewService(options = {}) {
           aggregateScopeId: reviewId,
           occurredAt,
           session,
+          actorRoleSnapshot: actor.role,
+          notificationRecipientId: eventType === 'REVIEW_MODERATION_CHANGED'
+            ? valueId(current.customerId)
+            : undefined,
         });
         return result;
       });

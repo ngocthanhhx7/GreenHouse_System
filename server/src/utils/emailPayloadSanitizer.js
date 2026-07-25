@@ -1,3 +1,9 @@
+const {
+  TYPE_DISPLAY_VALUES,
+  normalizeNotificationType,
+  sanitizeDisplayValues,
+} = require('./notificationContract');
+
 const SAFE_PAYLOAD_FIELDS = Object.freeze({
   PASSWORD_RESET_OTP_REQUESTED: ['userId', 'encryptedOtp', 'expiresInMinutes'],
   REGISTRATION_OTP_REQUESTED: ['challengeId', 'encryptedOtp', 'expiresInMinutes'],
@@ -10,7 +16,42 @@ const SAFE_PAYLOAD_FIELDS = Object.freeze({
   ORDER_CREATED: ['orderId', 'orderCode', 'totalAmount', 'paymentMethod'],
 });
 
+function sanitizeNotificationDeliveryPayload(payload = {}) {
+  const source = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {};
+  const notificationType = normalizeNotificationType(source.notificationType);
+  const templateKey = normalizeNotificationType(source.templateKey || notificationType);
+  if (templateKey !== notificationType) {
+    throw new Error('Notification email template does not match its type');
+  }
+  const displayValues = sanitizeDisplayValues(
+    notificationType,
+    Object.fromEntries(
+      (TYPE_DISPLAY_VALUES[notificationType] || [])
+        .filter((key) => Object.hasOwn(source, key))
+        .map((key) => [key, source[key]]),
+    ),
+    { rejectUnknown: true },
+  );
+  const safe = {
+    notificationId: String(source.notificationId || '').trim().slice(0, 200),
+    businessEventId: String(source.businessEventId || '').trim().slice(0, 240),
+    notificationType,
+    templateKey,
+    ...displayValues,
+  };
+  const targetCollection = String(source.targetCollection || '').trim().slice(0, 120);
+  const targetId = String(source.targetId || '').trim().slice(0, 200);
+  if (targetCollection && targetId) {
+    safe.targetCollection = targetCollection;
+    safe.targetId = targetId;
+  }
+  return safe;
+}
+
 function sanitizeEmailEventPayload(eventType, payload = {}) {
+  if (eventType === 'NOTIFICATION_DELIVERY_REQUESTED') {
+    return sanitizeNotificationDeliveryPayload(payload);
+  }
   const allowedFields = SAFE_PAYLOAD_FIELDS[eventType];
   if (!allowedFields) throw new Error(`Unsupported email event: ${eventType}`);
   const source = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {};
@@ -23,4 +64,8 @@ function sanitizeEmailEventPayload(eventType, payload = {}) {
   }, {});
 }
 
-module.exports = { SAFE_PAYLOAD_FIELDS, sanitizeEmailEventPayload };
+module.exports = {
+  SAFE_PAYLOAD_FIELDS,
+  sanitizeEmailEventPayload,
+  sanitizeNotificationDeliveryPayload,
+};
