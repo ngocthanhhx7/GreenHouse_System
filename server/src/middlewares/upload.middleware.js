@@ -36,9 +36,11 @@ function handleMulter(middleware) {
 const uploadAvatar = handleMulter(imageUpload.single('avatar'));
 const uploadProductImages = handleMulter(imageUpload.array('images', 5));
 const uploadReturnEvidence = handleMulter(imageUpload.array('images', 5));
+const uploadOperationalEvidence = handleMulter(imageUpload.array('images', 5));
 
 module.exports = {
   uploadAvatar,
   uploadProductImages,
   uploadReturnEvidence,
+  uploadOperationalEvidence,
 };

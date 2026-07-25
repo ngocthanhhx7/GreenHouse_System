@@ -370,3 +370,16 @@ fencing, tối đa năm attempt và không rollback business truth. Thành revie
 Notification của Huy, Reports/Settings của Cường, chạy full regression và quản
 lý handoff/merge. Evidence nằm tại `docs/reviews/SL-009_G3_TRACEABILITY.md`,
 `docs/reviews/SL-009_RELEASE_AUDIT.md` và `docs/reviews/SL-009_HANDOFF.md`.
+
+## Implementation Addendum 2026-07-25 - Operational Evidence Upload Foundation
+
+Nguyễn Ngọc Thành bổ sung upload foundation dùng chung cho dẫn chứng nội bộ của
+Staff và WarehouseManager. API nhận tối đa 5 ảnh JPEG/PNG/WebP, 5 MB mỗi ảnh,
+quét malware trước khi lưu, trả URL capability đã ký và chỉ cho Staff,
+WarehouseManager hoặc Admin đọc sau khi xác thực. Admin giữ quyền đọc để duyệt
+dẫn chứng nhưng không có quyền tải ảnh qua endpoint này. Production bắt buộc cấu
+hình `OPERATIONAL_EVIDENCE_CLAIM_SECRET`; secret thật không được commit.
+
+Traceability, handoff và release evidence được ghi tại
+`docs/reviews/OPERATIONAL_EVIDENCE_G3_TRACEABILITY.md`,
+`OPERATIONAL_EVIDENCE_HANDOFF.md` và `OPERATIONAL_EVIDENCE_RELEASE_AUDIT.md`.
