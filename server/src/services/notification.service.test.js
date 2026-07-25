@@ -224,44 +224,46 @@ describe('SL-009 Notification service', () => {
     assert.deepEqual(unintended, []);
   });
 
-  it('AT-DR-007 routes a customer delivery dispute to active Staff InApp only', async () => {
+  it('AT-DR-007 routes a customer delivery dispute to the owning Customer over Email and InApp only', async () => {
     const rows = [];
+    const enqueued = [];
+    const recipients = {
+      'customer-1': { _id: 'customer-1', email: 'customer@example.com', role: 'Customer', status: 'Active' },
+      'staff-1': { _id: 'staff-1', email: 'staff@example.com', role: 'Staff', status: 'Active' },
+    };
     const service = createNotificationService({
       notificationRepository: {
-        async listActiveUsersByRole(role) {
-          assert.equal(role, 'Staff');
-          return [{ _id: 'staff-1', email: 'staff@example.com', role: 'Staff', status: 'Active' }];
-        },
-        async findRecipientById() {
-          return { _id: 'customer-1', email: 'customer@example.com', role: 'Customer', status: 'Active' };
-        },
+        async findRecipientById(id) { return recipients[id] || null; },
         async createTuple(data) {
           const row = { _id: `notification-${rows.length + 1}`, ...data };
           rows.push(row);
           return row;
         },
       },
+      emailOutboxService: { async enqueue(data) { enqueued.push(data); return data; } },
     });
 
     const disputed = await service.publishDomainEvent({
       businessEventId: 'customer-delivery-receipt:disputed-1',
       type: 'CUSTOMER_DELIVERY_DISPUTED',
-      recipientRole: 'Staff',
-      target: { collection: 'Order', id: 'order-1' },
-      displayValues: { orderCode: 'ORD-001' },
-    });
-    const unintended = await service.publishDomainEvent({
-      businessEventId: 'customer-delivery-receipt:disputed-customer',
-      type: 'CUSTOMER_DELIVERY_DISPUTED',
       recipient: { userId: 'customer-1', role: 'Customer' },
       target: { collection: 'Order', id: 'order-1' },
       displayValues: { orderCode: 'ORD-001' },
     });
+    const unintended = await service.publishDomainEvent({
+      businessEventId: 'customer-delivery-receipt:disputed-staff',
+      type: 'CUSTOMER_DELIVERY_DISPUTED',
+      recipient: { userId: 'staff-1', role: 'Staff' },
+      target: { collection: 'Order', id: 'order-1' },
+      displayValues: { orderCode: 'ORD-001' },
+    });
 
-    assert.deepEqual(disputed.map((row) => row.channel), ['InApp']);
+    assert.deepEqual(disputed.map((row) => row.channel), ['Email', 'InApp']);
     assert.deepEqual(rows.map((row) => [row.type, row.channel]), [
+      ['CUSTOMER_DELIVERY_DISPUTED', 'Email'],
       ['CUSTOMER_DELIVERY_DISPUTED', 'InApp'],
     ]);
+    assert.equal(enqueued.length, 1);
     assert.deepEqual(unintended, []);
   });
 

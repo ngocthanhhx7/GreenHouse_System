@@ -128,10 +128,6 @@ describe('SL-009 canonical Notification DomainOutbox consumer', () => {
         async findRecipientById() {
           return { _id: 'customer-1', email: 'customer@example.com', role: 'Customer', status: 'Active' };
         },
-        async listActiveUsersByRole(role) {
-          assert.equal(role, 'Staff');
-          return [{ _id: 'staff-1', email: 'staff@example.com', role: 'Staff', status: 'Active' }];
-        },
         async createTuple(data) {
           const row = { _id: `notification-${notificationRows.length + 1}`, ...data };
           notificationRows.push(row);
@@ -160,7 +156,7 @@ describe('SL-009 canonical Notification DomainOutbox consumer', () => {
         payload: {
           businessEventId: 'customer-delivery-receipt:disputed-1',
           type: 'CUSTOMER_DELIVERY_DISPUTED',
-          recipientRole: 'Staff',
+          recipient: { userId: 'customer-1', role: 'Customer' },
           target: { collection: 'Order', id: 'order-1' },
           displayValues: { orderCode: 'ORD-001' },
         },
@@ -174,9 +170,10 @@ describe('SL-009 canonical Notification DomainOutbox consumer', () => {
     assert.deepEqual(notificationRows.map((row) => [row.type, row.channel]), [
       ['ORDER_COMPLETED_BY_CUSTOMER', 'Email'],
       ['ORDER_COMPLETED_BY_CUSTOMER', 'InApp'],
+      ['CUSTOMER_DELIVERY_DISPUTED', 'Email'],
       ['CUSTOMER_DELIVERY_DISPUTED', 'InApp'],
     ]);
-    assert.equal(emailRows.length, 1);
+    assert.equal(emailRows.length, 2);
   });
 
   it('never persists raw publisher errors and leaves the fifth failed claim terminal', async () => {
