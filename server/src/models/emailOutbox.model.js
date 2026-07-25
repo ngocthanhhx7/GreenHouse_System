@@ -1,6 +1,49 @@
 const mongoose = require('mongoose');
 const { sanitizeEmailEventPayload } = require('../utils/emailPayloadSanitizer');
 
+const PAYLOAD_MUTATION_ERROR_CODE = 'EMAIL_OUTBOX_PAYLOAD_IMMUTABLE';
+
+function payloadMutationError(operation) {
+  const error = new Error(`EmailOutbox payload cannot be changed by ${operation}`);
+  error.name = 'EmailOutboxPayloadMutationError';
+  error.code = PAYLOAD_MUTATION_ERROR_CODE;
+  return error;
+}
+
+function isPayloadPath(value) {
+  return typeof value === 'string' && (value === 'payload' || value.startsWith('payload.'));
+}
+
+function updateTouchesPayload(update) {
+  if (Array.isArray(update)) {
+    return update.some((stage) => {
+      if (!stage || typeof stage !== 'object') return false;
+      if (Object.hasOwn(stage, '$replaceRoot') || Object.hasOwn(stage, '$replaceWith')) return true;
+      return Object.entries(stage).some(([operator, operand]) => {
+        if (operator === '$project') return true;
+        if (!['$set', '$addFields', '$unset'].includes(operator)) return false;
+        if (isPayloadPath(operand)) return true;
+        if (Array.isArray(operand)) return operand.some(isPayloadPath);
+        return operand && typeof operand === 'object'
+          ? Object.keys(operand).some(isPayloadPath)
+          : false;
+      });
+    });
+  }
+  if (!update || typeof update !== 'object') return false;
+  return Object.entries(update).some(([operatorOrPath, operand]) => {
+    if (isPayloadPath(operatorOrPath)) return true;
+    if (!operatorOrPath.startsWith('$') || !operand || typeof operand !== 'object') return false;
+    if (Object.keys(operand).some(isPayloadPath)) return true;
+    return operatorOrPath === '$rename'
+      && Object.values(operand).some(isPayloadPath);
+  });
+}
+
+function assertPayloadUpdateAllowed(update, operation) {
+  if (updateTouchesPayload(update)) throw payloadMutationError(operation);
+}
+
 const deliveryAttemptSchema = new mongoose.Schema({
   attemptNumber: { type: Number, required: true, min: 1 },
   claimId: { type: String, required: true, trim: true, maxlength: 120 },
@@ -21,7 +64,7 @@ const schema = new mongoose.Schema({
   eventType: { type: String, required: true, trim: true },
   idempotencyKey: { type: String, required: true, unique: true, trim: true },
   recipient: { type: String, required: true, trim: true, lowercase: true },
-  payload: { type: mongoose.Schema.Types.Mixed, default: {} },
+  payload: { type: mongoose.Schema.Types.Mixed, default: {}, immutable: true },
   status: {
     type: String,
     enum: ['Pending', 'Processing', 'Sent', 'RetryScheduled', 'Failed'],
@@ -39,7 +82,39 @@ const schema = new mongoose.Schema({
 }, { timestamps: true });
 
 schema.pre('validate', function sanitizePayload() {
-  this.payload = sanitizeEmailEventPayload(this.eventType, this.payload);
+  if (this.isNew) {
+    this.payload = sanitizeEmailEventPayload(this.eventType, this.payload);
+  } else if (this.isModified('payload')) {
+    throw payloadMutationError('save');
+  }
+});
+
+schema.pre(['updateOne', 'updateMany', 'findOneAndUpdate'], function rejectPayloadQueryUpdate() {
+  assertPayloadUpdateAllowed(this.getUpdate(), this.op);
+});
+
+schema.pre(['replaceOne', 'findOneAndReplace'], function rejectPayloadReplacement() {
+  throw payloadMutationError(this.op);
+});
+
+schema.pre('bulkWrite', function rejectPayloadBulkMutation(next, operations) {
+  try {
+    for (const operation of operations || []) {
+      if (operation.insertOne) {
+        const document = operation.insertOne.document;
+        document.payload = sanitizeEmailEventPayload(document.eventType, document.payload);
+      } else if (operation.updateOne) {
+        assertPayloadUpdateAllowed(operation.updateOne.update, 'bulkWrite.updateOne');
+      } else if (operation.updateMany) {
+        assertPayloadUpdateAllowed(operation.updateMany.update, 'bulkWrite.updateMany');
+      } else if (operation.replaceOne) {
+        throw payloadMutationError('bulkWrite.replaceOne');
+      }
+    }
+    next();
+  } catch (error) {
+    next(error);
+  }
 });
 
 schema.index(

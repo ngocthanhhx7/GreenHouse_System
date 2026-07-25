@@ -66,4 +66,115 @@ describe('EmailOutbox model', () => {
       encryptedToken: 'encrypted-token',
     });
   });
+
+  it('declares the sanitized payload immutable after creation', () => {
+    assert.equal(EmailOutbox.schema.path('payload').options.immutable, true);
+  });
+
+  it('rejects query updates that set or unset payload paths', async () => {
+    const attempts = [
+      EmailOutbox.updateOne(
+        { idempotencyKey: 'invite-1' },
+        { $set: { 'payload.encryptedToken': 'replacement' } }
+      ),
+      EmailOutbox.updateMany(
+        {},
+        { $unset: { 'payload.roleName': 1 } }
+      ),
+      EmailOutbox.findOneAndUpdate(
+        { idempotencyKey: 'invite-1' },
+        [{ $set: { payload: { rawToken: 'replacement' } } }]
+      ),
+    ];
+
+    for (const attempt of attempts) {
+      await assert.rejects(attempt, (error) => {
+        assert.equal(error.code, 'EMAIL_OUTBOX_PAYLOAD_IMMUTABLE');
+        return true;
+      });
+    }
+  });
+
+  it('rejects update projections that could implicitly remove payload', async () => {
+    await assert.rejects(
+      EmailOutbox.findOneAndUpdate(
+        { idempotencyKey: 'invite-1' },
+        [{ $project: { status: 1 } }]
+      ),
+      (error) => {
+        assert.equal(error.code, 'EMAIL_OUTBOX_PAYLOAD_IMMUTABLE');
+        return true;
+      }
+    );
+  });
+
+  it('rejects replacements and bulk updates that could mutate payload', async () => {
+    await assert.rejects(
+      EmailOutbox.replaceOne(
+        { idempotencyKey: 'invite-1' },
+        {
+          eventType: 'INTERNAL_INVITATION_CREATED',
+          idempotencyKey: 'invite-1',
+          recipient: 'staff@example.com',
+          payload: { encryptedToken: 'replacement' },
+        }
+      ),
+      (error) => {
+        assert.equal(error.code, 'EMAIL_OUTBOX_PAYLOAD_IMMUTABLE');
+        return true;
+      }
+    );
+
+    await assert.rejects(
+      EmailOutbox.findOneAndReplace(
+        { idempotencyKey: 'invite-1' },
+        {
+          eventType: 'INTERNAL_INVITATION_CREATED',
+          idempotencyKey: 'invite-1',
+          recipient: 'staff@example.com',
+          payload: { encryptedToken: 'replacement' },
+        }
+      ),
+      (error) => {
+        assert.equal(error.code, 'EMAIL_OUTBOX_PAYLOAD_IMMUTABLE');
+        return true;
+      }
+    );
+
+    const bulkAttempts = [
+      [{
+        updateOne: {
+          filter: { idempotencyKey: 'invite-1' },
+          update: { $set: { 'payload.encryptedToken': 'replacement' } },
+        },
+      }],
+      [{
+        updateMany: {
+          filter: {},
+          update: { $unset: { payload: 1 } },
+        },
+      }],
+      [{
+        replaceOne: {
+          filter: { idempotencyKey: 'invite-1' },
+          replacement: {
+            eventType: 'INTERNAL_INVITATION_CREATED',
+            idempotencyKey: 'invite-1',
+            recipient: 'staff@example.com',
+            payload: { encryptedToken: 'replacement' },
+          },
+        },
+      }],
+    ];
+
+    for (const operations of bulkAttempts) {
+      await assert.rejects(
+        EmailOutbox.bulkWrite(operations),
+        (error) => {
+          assert.equal(error.code, 'EMAIL_OUTBOX_PAYLOAD_IMMUTABLE');
+          return true;
+        }
+      );
+    }
+  });
 });
