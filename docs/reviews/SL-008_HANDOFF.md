@@ -109,3 +109,12 @@ and zero-write second-run evidence.
 - [ ] Nguyen Ngoc Thanh merges with `--no-ff` and pushes `main`.
 - [ ] Deployment owner records target backup, dry-run, apply, zero-write second
   run and authenticated browser walkthrough.
+
+## Customer Review UX relocation - 2026-07-25
+
+- Product Detail now exposes public Reviews only.
+- Protected `/reviews` presents pending and completed per-product Review work
+  from delivered purchases.
+- The focused Review client set passed `54/54`; the production client build
+  exited `0` with the existing Vite chunk-size warning.
+- This relocation has not received a new full-regression run.

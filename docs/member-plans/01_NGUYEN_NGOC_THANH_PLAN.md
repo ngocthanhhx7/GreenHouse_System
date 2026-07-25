@@ -390,3 +390,24 @@ Operational dashboards now use the approved local GreenHome favicon asset in
 the internal topbar instead of the placeholder `⌁` glyph. The image remains
 visible and correctly sized on desktop and mobile; no remote asset or generated
 logo is introduced. Evidence is recorded in the dashboard-logo review artifacts.
+
+## Integration Addendum 2026-07-25 - Customer Order and Review UX
+
+Nguyễn Ngọc Thành sở hữu Header seam và final integration cho khu vực hậu mua
+hàng:
+
+- Dropdown avatar và mobile account navigation chỉ thêm `Đơn hàng của tôi` và
+  `Đánh giá của tôi` cho Customer; role khác giữ nguyên menu hiện có.
+- Order center của Nguyễn Quang Huy và Review center của Lê Vũ Cường được giữ
+  trong commit/branch owner riêng trước khi merge `--no-ff`.
+- Product Detail chỉ còn aggregate và danh sách Review công khai; mọi Customer
+  Review mutation nằm trên route Customer-protected `/reviews`.
+- Focused integration verification sau hai owner merge và remediation đạt
+  `76/76` test; client production build exit `0` với warning chunk lớn đã tồn
+  tại từ baseline.
+- Full regression sau remediation đạt server `1052/1052` và client `276/276`.
+  Ba P1 do independent review phát hiện đã được đúng owner đóng bằng regression
+  test: payment action fail-closed, Review pagination vượt 50 mục và aggregate
+  mutation lock kèm refresh sau lỗi.
+- Remote-main verification được ghi sau gate cuối; addendum này không tự nhận
+  deployment hoặc migration production.
