@@ -34,6 +34,22 @@ function canonicalLog(overrides = {}) {
 }
 
 describe('SL-009 audit log service', () => {
+  it('accepts the durable Unknown outcome used by provider timeout evidence', async () => {
+    let received;
+    const service = createAuditLogService({
+      repository: {
+        async list(filters) {
+          received = filters;
+          return { items: [], nextCursor: null };
+        },
+      },
+    });
+
+    await service.listAuditLogs({ outcome: 'Unknown' });
+
+    assert.equal(received.outcome, 'Unknown');
+  });
+
   it('AT-183/189 validates all filters and returns only safe canonical DTO fields', async () => {
     const received = [];
     const service = createAuditLogService({

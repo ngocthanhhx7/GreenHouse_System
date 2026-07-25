@@ -1,101 +1,18 @@
 const assert = require('node:assert/strict');
-const { spawn } = require('node:child_process');
-const fs = require('node:fs');
-const net = require('node:net');
-const os = require('node:os');
-const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { it } = require('node:test');
 const mongoose = require('mongoose');
 
 const EmailOutbox = require('./emailOutbox.model');
 const { createModelEmailOutboxRepository } = require('../services/email.service');
+const {
+  cleanupDisposableMongo,
+  resolveMongodBinary,
+  startDisposableMongo,
+} = require('../testUtils/disposableMongo');
 
-const MONGOD_PATH = 'C:\\Program Files\\MongoDB\\Server\\8.2\\bin\\mongod.exe';
-const MONGOD_AVAILABLE = fs.existsSync(MONGOD_PATH);
-
-function delay(milliseconds) {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
-
-async function reservePort() {
-  const server = net.createServer();
-  await new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', resolve);
-  });
-  const { port } = server.address();
-  await new Promise((resolve, reject) => server.close((error) => (
-    error ? reject(error) : resolve()
-  )));
-  return port;
-}
-
-async function waitForMongoPort(child, port, timeoutMs = 15_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (child.exitCode !== null) {
-      throw new Error(`Disposable mongod exited before readiness (${child.exitCode})`);
-    }
-    const connected = await new Promise((resolve) => {
-      const socket = net.createConnection({ host: '127.0.0.1', port });
-      socket.setTimeout(200);
-      socket.once('connect', () => {
-        socket.destroy();
-        resolve(true);
-      });
-      const unavailable = () => {
-        socket.destroy();
-        resolve(false);
-      };
-      socket.once('error', unavailable);
-      socket.once('timeout', unavailable);
-    });
-    if (connected) return;
-    await delay(50);
-  }
-  throw new Error('Disposable mongod did not become ready within 15 seconds');
-}
-
-function signalAndWaitForExit(child, signal, timeoutMs) {
-  if (child.exitCode !== null) return Promise.resolve(true);
-  return new Promise((resolve, reject) => {
-    let timer;
-    const finish = (result) => {
-      clearTimeout(timer);
-      child.removeListener('exit', onExit);
-      resolve(result);
-    };
-    const onExit = () => finish(true);
-    child.once('exit', onExit);
-    timer = setTimeout(() => finish(child.exitCode !== null), timeoutMs);
-    try {
-      if (!child.kill(signal) && child.exitCode === null) finish(false);
-    } catch (error) {
-      clearTimeout(timer);
-      child.removeListener('exit', onExit);
-      reject(error);
-    }
-  });
-}
-
-async function stopSpawnedMongo(child) {
-  if (!child || child.exitCode !== null) return;
-  if (await signalAndWaitForExit(child, 'SIGTERM', 5_000)) return;
-  if (await signalAndWaitForExit(child, 'SIGKILL', 2_000)) return;
-  throw new Error(`Disposable mongod process ${child.pid} did not stop`);
-}
-
-function removeVerifiedTempDirectory(directory) {
-  if (!directory) return;
-  const resolved = path.resolve(directory);
-  const tempRoot = `${path.resolve(os.tmpdir())}${path.sep}`;
-  if (!resolved.startsWith(tempRoot)
-      || !path.basename(resolved).startsWith('greenhome-email-outbox-')) {
-    throw new Error(`Refusing to remove unverified disposable Mongo directory: ${resolved}`);
-  }
-  fs.rmSync(resolved, { recursive: true, force: true });
-}
+const MONGOD_PATH = resolveMongodBinary();
+const MONGOD_AVAILABLE = Boolean(MONGOD_PATH);
 
 function completionData(status, completedAt, providerMessageId = '') {
   return {
@@ -116,28 +33,15 @@ it(
     timeout: 30_000,
     skip: MONGOD_AVAILABLE
       ? false
-      : `Disposable MongoDB integration skipped: ${MONGOD_PATH} is unavailable`,
+      : 'Disposable MongoDB integration skipped: no binary found via MONGOD_BINARY, PATH, or common locations',
   },
   async () => {
-    let child;
-    let dbPath;
+    let mongoInstance;
     try {
-      dbPath = fs.mkdtempSync(path.join(os.tmpdir(), 'greenhome-email-outbox-'));
-      const port = await reservePort();
-      child = spawn(MONGOD_PATH, [
-        '--dbpath', dbPath,
-        '--port', String(port),
-        '--bind_ip', '127.0.0.1',
-        '--quiet',
-        '--logpath', path.join(dbPath, 'mongod.log'),
-      ], {
-        windowsHide: true,
-        stdio: 'ignore',
-      });
-      await waitForMongoPort(child, port);
+      mongoInstance = await startDisposableMongo({ binary: MONGOD_PATH });
 
       const database = `greenhome_email_outbox_${randomUUID().replaceAll('-', '')}`;
-      await mongoose.connect(`mongodb://127.0.0.1:${port}/${database}`, {
+      await mongoose.connect(`mongodb://127.0.0.1:${mongoInstance.port}/${database}`, {
         serverSelectionTimeoutMS: 2_000,
       });
       await EmailOutbox.syncIndexes();
@@ -158,6 +62,7 @@ it(
         roleName: 'Staff',
         encryptedToken: 'encrypted-token',
       });
+      assert.equal(created.deliveryPolicyVersion, 2);
 
       await EmailOutbox.bulkWrite([{
         insertOne: {
@@ -183,6 +88,7 @@ it(
         invitationId: 'invitation-bulk-1',
         encryptedToken: 'bulk-encrypted-token',
       });
+      assert.equal(bulkCreated.deliveryPolicyVersion, 2);
 
       const claimTime = new Date('2030-07-25T00:00:00.000Z');
       const firstLeaseUntil = new Date('2030-07-25T00:00:10.000Z');
@@ -204,7 +110,39 @@ it(
       assert.equal(firstClaim.attempts[0].attemptNumber, 1);
       assert.equal(firstClaim.attempts[0].outcome, 'Processing');
 
-      const reclaimTime = new Date(firstLeaseUntil.getTime() + 1);
+      const timeoutObservedAt = new Date(claimTime.getTime() + 1_000);
+      const uncertaintyUntil = new Date(timeoutObservedAt.getTime() + (5 * 60_000));
+      const timeoutUnknown = await repositoryA.markTimeoutUnknown(
+        created._id,
+        {
+          status: 'Processing',
+          uncertaintyUntil,
+          attemptCompletedAt: timeoutObservedAt,
+          attemptOutcome: 'TimeoutUnknown',
+          errorCode: 'EMAIL_PROVIDER_TIMEOUT',
+          errorMessage: 'Email provider result is unknown after timeout',
+        },
+        firstClaim.claimId
+      );
+      assert.equal(timeoutUnknown.status, 'Processing');
+      assert.equal(timeoutUnknown.claimId, firstClaim.claimId);
+      assert.equal(timeoutUnknown.leaseUntil.toISOString(), uncertaintyUntil.toISOString());
+      assert.equal(timeoutUnknown.attempts[0].outcome, 'TimeoutUnknown');
+      assert.equal(
+        timeoutUnknown.attempts[0].leaseUntil.toISOString(),
+        uncertaintyUntil.toISOString()
+      );
+
+      const earlyReclaimRepository = createModelEmailOutboxRepository({
+        createClaimId: () => 'integration-claim-too-early',
+      });
+      const earlyReclaim = await earlyReclaimRepository.claimNext(
+        new Date(uncertaintyUntil.getTime() - 1),
+        new Date(uncertaintyUntil.getTime() + 9_999)
+      );
+      assert.equal(earlyReclaim, null);
+
+      const reclaimTime = uncertaintyUntil;
       const secondLeaseUntil = new Date(reclaimTime.getTime() + 10_000);
       const reclaimRepository = createModelEmailOutboxRepository({
         createClaimId: () => 'integration-claim-reclaimed',
@@ -213,16 +151,16 @@ it(
       assert.equal(secondClaim.attemptCount, 2);
       assert.equal(secondClaim.attempts.length, 2);
       assert.equal(secondClaim.attempts[0].attemptNumber, 1);
-      assert.equal(secondClaim.attempts[0].outcome, 'LeaseExpired');
-      assert.equal(secondClaim.attempts[0].errorCode, 'EMAIL_LEASE_EXPIRED');
+      assert.equal(secondClaim.attempts[0].outcome, 'TimeoutUnknown');
+      assert.equal(secondClaim.attempts[0].errorCode, 'EMAIL_PROVIDER_TIMEOUT');
       assert.equal(secondClaim.attempts[1].attemptNumber, 2);
       assert.equal(secondClaim.attempts[1].outcome, 'Processing');
 
       const attemptOneEvidence = {
-        ...secondClaim.attempts[0],
-        completedAt: secondClaim.attempts[0].completedAt.toISOString(),
-        claimedAt: secondClaim.attempts[0].claimedAt.toISOString(),
-        leaseUntil: secondClaim.attempts[0].leaseUntil.toISOString(),
+        ...timeoutUnknown.attempts[0],
+        completedAt: timeoutUnknown.attempts[0].completedAt.toISOString(),
+        claimedAt: timeoutUnknown.attempts[0].claimedAt.toISOString(),
+        leaseUntil: timeoutUnknown.attempts[0].leaseUntil.toISOString(),
       };
       const staleFinalization = await repositoryA.markSent(
         created._id,
@@ -331,12 +269,68 @@ it(
         roleName: 'Staff',
         encryptedToken: 'encrypted-token',
       });
+
+      const legacyReadyAt = new Date('2030-07-26T00:00:00.000Z');
+      await EmailOutbox.collection.insertMany([
+        {
+          eventType: 'INTERNAL_INVITATION_CREATED',
+          idempotencyKey: 'integration-legacy-failed-1',
+          recipient: 'legacy@example.com',
+          payload: { encryptedToken: 'legacy-encrypted-token' },
+          status: 'Failed',
+          attemptCount: 2,
+          attempts: [],
+          availableAt: new Date(legacyReadyAt.getTime() - 1),
+          leaseUntil: null,
+          claimId: '',
+          createdAt: new Date('2030-07-24T00:00:00.000Z'),
+          updatedAt: new Date('2030-07-24T00:00:00.000Z'),
+        },
+        {
+          eventType: 'INTERNAL_INVITATION_CREATED',
+          idempotencyKey: 'integration-current-terminal-failed-1',
+          recipient: 'terminal@example.com',
+          payload: { encryptedToken: 'terminal-encrypted-token' },
+          status: 'Failed',
+          attemptCount: 2,
+          deliveryPolicyVersion: 2,
+          attempts: [],
+          availableAt: new Date(legacyReadyAt.getTime() - 1),
+          leaseUntil: null,
+          claimId: '',
+          createdAt: new Date('2030-07-24T00:00:01.000Z'),
+          updatedAt: new Date('2030-07-24T00:00:01.000Z'),
+        },
+      ]);
+      const legacyRepository = createModelEmailOutboxRepository({
+        createClaimId: () => 'integration-legacy-claim',
+      });
+      const legacyClaim = await legacyRepository.claimNext(
+        legacyReadyAt,
+        new Date(legacyReadyAt.getTime() + 10_000)
+      );
+      assert.equal(legacyClaim.idempotencyKey, 'integration-legacy-failed-1');
+      assert.equal(legacyClaim.attemptCount, 3);
+      assert.equal(legacyClaim.deliveryPolicyVersion, 2);
+      assert.equal(legacyClaim.attempts[0].attemptNumber, 3);
+      assert.equal(legacyClaim.attempts[0].outcome, 'Processing');
+
+      const noCurrentTerminalClaim = await legacyRepository.claimNext(
+        legacyReadyAt,
+        new Date(legacyReadyAt.getTime() + 10_000)
+      );
+      assert.equal(noCurrentTerminalClaim, null);
+      const currentTerminal = await EmailOutbox.findOne({
+        idempotencyKey: 'integration-current-terminal-failed-1',
+      }).lean();
+      assert.equal(currentTerminal.status, 'Failed');
+      assert.equal(currentTerminal.attemptCount, 2);
+      assert.equal(currentTerminal.deliveryPolicyVersion, 2);
     } finally {
       try {
         await mongoose.disconnect();
       } finally {
-        await stopSpawnedMongo(child);
-        removeVerifiedTempDirectory(dbPath);
+        await cleanupDisposableMongo(mongoInstance);
       }
     }
   }

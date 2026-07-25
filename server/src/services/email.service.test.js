@@ -144,31 +144,82 @@ describe('email outbox service', () => {
     assert.equal(update.errorCode, 'EMAIL_PROVIDER_DISABLED');
   });
 
-  it('times out a provider and schedules retry without exposing the provider error', async () => {
+  it('records provider timeout as unknown and extends the Processing uncertainty lease', async () => {
+    const observedAt = new Date('2026-07-22T00:00:00.000Z');
     const entry = {
       _id: 'event-timeout',
       status: 'Processing',
       attemptCount: 2,
       claimId: 'claim-timeout',
       idempotencyKey: 'timeout-1',
+      leaseUntil: new Date('2026-07-22T00:10:00.000Z'),
     };
     let update;
+    const audits = [];
     const service = createEmailOutboxService({
       repository: {
         async claimNext() { return entry; },
-        async markFailed(_id, data) { update = data; return { ...entry, ...data }; },
-        async markSent() {},
+        async markTimeoutUnknown(_id, data, claimId) {
+          update = { data, claimId };
+          return { ...entry, ...data };
+        },
+        async markFailed() { throw new Error('timeout must not be recorded as failure'); },
+        async markSent() { throw new Error('timeout must not be recorded as sent'); },
       },
       provider: { async send() { return new Promise(() => {}); } },
       providerTimeoutMs: 5,
-      auditLogger: async () => {},
+      now: () => observedAt,
+      auditLogger: async (audit) => audits.push(audit),
     });
 
     const result = await service.deliverNext();
 
-    assert.equal(result.status, 'RetryScheduled');
-    assert.equal(update.errorCode, 'EMAIL_PROVIDER_TIMEOUT');
-    assert.equal(update.errorMessage, 'Email provider request timed out');
+    assert.equal(result.status, 'TimeoutUnknown');
+    assert.equal(update.claimId, 'claim-timeout');
+    assert.equal(update.data.status, 'Processing');
+    assert.equal(update.data.attemptOutcome, 'TimeoutUnknown');
+    assert.equal(update.data.errorCode, 'EMAIL_PROVIDER_TIMEOUT');
+    assert.equal(update.data.errorMessage, 'Email provider result is unknown after timeout');
+    assert.equal(update.data.uncertaintyUntil.toISOString(), '2026-07-22T00:05:00.000Z');
+    assert.equal(audits[0].outcome, 'Unknown');
+    assert.equal(audits[0].action, 'EMAIL_DELIVERY_OUTCOME_UNKNOWN');
+    assert.equal(audits[0].newState, 'TimeoutUnknown');
+    assert.equal(audits[0].reasonCode, 'EMAIL_PROVIDER_TIMEOUT');
+  });
+
+  it('does not turn a late provider resolution into a finalization after timeout', async () => {
+    let resolveProvider;
+    let sentFinalizations = 0;
+    let failureFinalizations = 0;
+    const providerResult = new Promise((resolve) => { resolveProvider = resolve; });
+    const entry = {
+      _id: 'event-late-provider',
+      status: 'Processing',
+      attemptCount: 1,
+      claimId: 'claim-late-provider',
+      idempotencyKey: 'late-provider-1',
+      leaseUntil: new Date('2026-07-22T00:01:00.000Z'),
+    };
+    const service = createEmailOutboxService({
+      repository: {
+        async claimNext() { return entry; },
+        async markTimeoutUnknown(_id, data) { return { ...entry, ...data }; },
+        async markSent() { sentFinalizations += 1; },
+        async markFailed() { failureFinalizations += 1; },
+      },
+      provider: { async send() { return providerResult; } },
+      providerTimeoutMs: 5,
+      now: () => new Date('2026-07-22T00:00:00.000Z'),
+      auditLogger: async () => {},
+    });
+
+    const result = await service.deliverNext();
+    resolveProvider({ accepted: true, messageId: 'late-provider-message' });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(result.status, 'TimeoutUnknown');
+    assert.equal(sentFinalizations, 0);
+    assert.equal(failureFinalizations, 0);
   });
 
   it('does not let a stale claimant finalize a reclaimed lease', async () => {
@@ -287,7 +338,7 @@ describe('email outbox service', () => {
     assert.doesNotMatch(JSON.stringify(errors), /database unavailable/);
   });
 
-  it('claims atomically with a new token, appends one numbered attempt, and excludes terminal Failed', async () => {
+  it('claims current work and only marker-missing retryable legacy Failed rows', async () => {
     let captured;
     const query = {
       lean() { return { _id: 'event-1', attemptCount: 3, claimId: 'claim-fixed' }; },
@@ -308,10 +359,18 @@ describe('email outbox service', () => {
     await repository.claimNext(now, leaseUntil);
 
     assert.deepEqual(captured.filter.$or[0].status.$in, ['Pending', 'RetryScheduled']);
-    assert.equal(captured.filter.$or.some((condition) => condition.status === 'Failed'), false);
+    assert.deepEqual(
+      captured.filter.$or.find((condition) => condition.status === 'Failed'),
+      {
+        status: 'Failed',
+        deliveryPolicyVersion: { $exists: false },
+        availableAt: { $lte: now },
+      }
+    );
     assert.deepEqual(captured.filter.$expr, {
       $lt: [{ $ifNull: ['$attemptCount', 0] }, 5],
     });
+    assert.equal(captured.update[0].$set.deliveryPolicyVersion, 2);
     assert.equal(captured.update[0].$set.claimId, 'claim-fixed');
     assert.deepEqual(captured.update[0].$set.attemptCount, { $add: [{ $ifNull: ['$attemptCount', 0] }, 1] });
     assert.equal(captured.update[0].$set.attempts.$concatArrays[1][0].claimId, 'claim-fixed');
@@ -320,6 +379,44 @@ describe('email outbox service', () => {
       { $add: [{ $ifNull: ['$attemptCount', 0] }, 1] }
     );
     assert.equal(captured.options.sort.availableAt, 1);
+  });
+
+  it('persists timeout uncertainty without releasing the active claim', async () => {
+    let captured;
+    const model = {
+      findOneAndUpdate(filter, update, options) {
+        captured = { filter, update, options };
+        return { lean() { return { _id: 'event-timeout', status: 'Processing' }; } };
+      },
+    };
+    const repository = createModelEmailOutboxRepository({ model });
+    const observedAt = new Date('2026-07-22T00:00:00.000Z');
+    const uncertaintyUntil = new Date('2026-07-22T00:05:00.000Z');
+
+    await repository.markTimeoutUnknown('event-timeout', {
+      status: 'Processing',
+      uncertaintyUntil,
+      attemptCompletedAt: observedAt,
+      attemptOutcome: 'TimeoutUnknown',
+      errorCode: 'EMAIL_PROVIDER_TIMEOUT',
+      errorMessage: 'Email provider result is unknown after timeout',
+    }, 'claim-timeout');
+
+    assert.deepEqual(captured.filter, {
+      _id: 'event-timeout',
+      status: 'Processing',
+      claimId: 'claim-timeout',
+      attempts: { $elemMatch: { claimId: 'claim-timeout', completedAt: null } },
+    });
+    assert.equal(captured.update.$set.status, 'Processing');
+    assert.equal(captured.update.$set.leaseUntil, uncertaintyUntil);
+    assert.equal(captured.update.$set.claimId, 'claim-timeout');
+    assert.equal(captured.update.$set['attempts.$[attempt].outcome'], 'TimeoutUnknown');
+    assert.equal(captured.update.$set['attempts.$[attempt].completedAt'], observedAt);
+    assert.equal(captured.update.$set['attempts.$[attempt].leaseUntil'], uncertaintyUntil);
+    assert.deepEqual(captured.options.arrayFilters, [
+      { 'attempt.claimId': 'claim-timeout', 'attempt.completedAt': null },
+    ]);
   });
 
   it('sends a Vietnamese OTP email through an injected SMTP transport', async () => {

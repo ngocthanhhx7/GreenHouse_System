@@ -174,7 +174,7 @@ const auditLogSchema = new mongoose.Schema(
     outcome: {
       ...immutableString,
       required: true,
-      enum: ['Success', 'Denied', 'Failed'],
+      enum: ['Success', 'Denied', 'Failed', 'Unknown'],
       default: 'Success',
     },
     correlationId: {

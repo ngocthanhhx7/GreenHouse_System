@@ -53,7 +53,14 @@ const deliveryAttemptSchema = new mongoose.Schema({
   outcome: {
     type: String,
     required: true,
-    enum: ['Processing', 'Sent', 'RetryScheduled', 'Failed', 'LeaseExpired'],
+    enum: [
+      'Processing',
+      'Sent',
+      'RetryScheduled',
+      'Failed',
+      'LeaseExpired',
+      'TimeoutUnknown',
+    ],
   },
   errorCode: { type: String, default: '', trim: true, maxlength: 80 },
   errorMessage: { type: String, default: '', trim: true, maxlength: 240 },
@@ -72,6 +79,7 @@ const schema = new mongoose.Schema({
     index: true,
   },
   attemptCount: { type: Number, default: 0, min: 0 },
+  deliveryPolicyVersion: { type: Number, default: 2, min: 1 },
   attempts: { type: [deliveryAttemptSchema], default: () => [] },
   availableAt: { type: Date, default: Date.now, index: true },
   leaseUntil: { type: Date, default: null },

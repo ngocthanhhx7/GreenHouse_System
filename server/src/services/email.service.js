@@ -6,10 +6,12 @@ const { sanitizeEmailEventPayload } = require('../utils/emailPayloadSanitizer');
 const { decryptOtp } = require('./passwordReset.service');
 
 const MAX_DELIVERY_ATTEMPTS = 5;
+const CURRENT_DELIVERY_POLICY_VERSION = 2;
+const PROVIDER_TIMEOUT_UNCERTAINTY_MS = 5 * 60_000;
 const SAFE_DELIVERY_ERRORS = Object.freeze({
   EMAIL_PROVIDER_DISABLED: 'Email provider is disabled',
   EMAIL_PROVIDER_REJECTED: 'Email provider rejected delivery',
-  EMAIL_PROVIDER_TIMEOUT: 'Email provider request timed out',
+  EMAIL_PROVIDER_TIMEOUT: 'Email provider result is unknown after timeout',
 });
 
 function assertEmailConfig(env = process.env) {
@@ -137,6 +139,7 @@ function createModelEmailOutboxRepository({
       lastError: data.errorMessage || '',
       sentAt: data.sentAt || null,
       providerMessageId: data.providerMessageId || '',
+      deliveryPolicyVersion: CURRENT_DELIVERY_POLICY_VERSION,
       updatedAt: data.attemptCompletedAt,
     };
     return model.findOneAndUpdate(
@@ -215,6 +218,7 @@ function createModelEmailOutboxRepository({
               },
             },
             claimId: '',
+            deliveryPolicyVersion: CURRENT_DELIVERY_POLICY_VERSION,
           },
         }],
         { sort: { leaseUntil: 1 }, new: true }
@@ -263,6 +267,11 @@ function createModelEmailOutboxRepository({
               availableAt: { $lte: now },
             },
             { status: 'Processing', leaseUntil: { $lte: now } },
+            {
+              status: 'Failed',
+              deliveryPolicyVersion: { $exists: false },
+              availableAt: { $lte: now },
+            },
           ],
         },
         [{
@@ -271,6 +280,7 @@ function createModelEmailOutboxRepository({
             leaseUntil,
             claimId,
             attemptCount: nextAttempt,
+            deliveryPolicyVersion: CURRENT_DELIVERY_POLICY_VERSION,
             updatedAt: now,
             attempts: {
               $concatArrays: [
@@ -298,6 +308,37 @@ function createModelEmailOutboxRepository({
     },
     async markFailed(id, data, claimId) {
       return completeAttempt(id, data, claimId);
+    },
+    async markTimeoutUnknown(id, data, claimId) {
+      return model.findOneAndUpdate(
+        {
+          _id: id,
+          status: 'Processing',
+          claimId,
+          attempts: { $elemMatch: { claimId, completedAt: null } },
+        },
+        {
+          $set: {
+            status: 'Processing',
+            availableAt: null,
+            leaseUntil: data.uncertaintyUntil,
+            claimId,
+            lastError: data.errorMessage,
+            deliveryPolicyVersion: CURRENT_DELIVERY_POLICY_VERSION,
+            updatedAt: data.attemptCompletedAt,
+            'attempts.$[attempt].completedAt': data.attemptCompletedAt,
+            'attempts.$[attempt].leaseUntil': data.uncertaintyUntil,
+            'attempts.$[attempt].outcome': data.attemptOutcome,
+            'attempts.$[attempt].errorCode': data.errorCode,
+            'attempts.$[attempt].errorMessage': data.errorMessage,
+            'attempts.$[attempt].providerMessageId': '',
+          },
+        },
+        {
+          arrayFilters: [{ 'attempt.claimId': claimId, 'attempt.completedAt': null }],
+          new: true,
+        }
+      ).lean();
     },
   };
 }
@@ -348,20 +389,25 @@ function createEmailOutboxService({
     const businessEventId = `${entry.idempotencyKey || entry._id}:EMAIL_DELIVERY:${claimIdentity}`
       .slice(0, 240);
     try {
+      const timeoutUnknown = status === 'TimeoutUnknown';
       await auditLogger({
         actorType: 'EmailService',
         actorId: null,
         source: 'EmailService',
         action: status === 'LostLease'
           ? 'EMAIL_DELIVERY_LEASE_LOST'
-          : 'EMAIL_DELIVERY_ATTEMPT_COMPLETED',
+          : timeoutUnknown
+            ? 'EMAIL_DELIVERY_OUTCOME_UNKNOWN'
+            : 'EMAIL_DELIVERY_ATTEMPT_COMPLETED',
         targetType: 'EmailOutbox',
         targetId: String(entry._id),
-        outcome: status === 'Sent' ? 'Success' : 'Failed',
+        outcome: status === 'Sent' ? 'Success' : timeoutUnknown ? 'Unknown' : 'Failed',
         correlationId: String(entry.idempotencyKey || entry._id).slice(0, 240),
         businessEventId,
         reasonCode: errorCode,
-        reason: `Email delivery attempt completed with ${status}`,
+        reason: timeoutUnknown
+          ? 'Email delivery result is unknown after provider timeout'
+          : `Email delivery attempt completed with ${status}`,
         previousState: 'Processing',
         newState: status,
         safeFacts: {
@@ -405,6 +451,7 @@ function createEmailOutboxService({
           status: 'Pending',
           attemptCount: 0,
           attempts: [],
+          deliveryPolicyVersion: CURRENT_DELIVERY_POLICY_VERSION,
           availableAt: now(),
         }, session);
       } catch (error) {
@@ -447,6 +494,31 @@ function createEmailOutboxService({
           throw providerError('EMAIL_PROVIDER_REJECTED', 'Email provider rejected delivery');
         }
       } catch (error) {
+        if (error && error.deliveryCode === 'EMAIL_PROVIDER_TIMEOUT') {
+          // SMTP cannot be cancelled reliably: retain Unknown evidence and delay the
+          // at-least-once retry so a late provider success is not called a failure.
+          const observedAt = now();
+          const uncertaintyUntil = new Date(
+            observedAt.getTime() + PROVIDER_TIMEOUT_UNCERTAINTY_MS
+          );
+          const finalized = await repository.markTimeoutUnknown(entry._id, {
+            status: 'Processing',
+            uncertaintyUntil,
+            attemptCompletedAt: observedAt,
+            attemptOutcome: 'TimeoutUnknown',
+            errorCode: 'EMAIL_PROVIDER_TIMEOUT',
+            errorMessage: SAFE_DELIVERY_ERRORS.EMAIL_PROVIDER_TIMEOUT,
+            providerMessageId: '',
+          }, entry.claimId);
+          if (finalized === null) {
+            return withAudit(entry, { ...entry, status: 'LostLease' }, 'EMAIL_LEASE_LOST');
+          }
+          return withAudit(entry, {
+            ...entry,
+            status: 'TimeoutUnknown',
+            uncertaintyUntil,
+          }, 'EMAIL_PROVIDER_TIMEOUT');
+        }
         const attempt = Math.max(1, Number(entry.attemptCount || 1));
         const terminal = attempt >= MAX_DELIVERY_ATTEMPTS;
         const status = terminal ? 'Failed' : 'RetryScheduled';

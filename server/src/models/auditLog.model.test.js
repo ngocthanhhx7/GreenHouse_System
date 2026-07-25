@@ -38,7 +38,7 @@ describe('SL-009 AuditLog model contract', () => {
     );
     assert.deepEqual(
       AuditLog.schema.path('outcome').options.enum,
-      ['Success', 'Denied', 'Failed']
+      ['Success', 'Denied', 'Failed', 'Unknown']
     );
     assert.equal(AuditLog.schema.path('before'), undefined);
     assert.equal(AuditLog.schema.path('after'), undefined);

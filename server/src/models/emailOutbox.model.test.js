@@ -18,6 +18,8 @@ describe('EmailOutbox model', () => {
     assert.ok(attempts.schema.path('errorMessage'));
     assert.ok(attempts.schema.path('providerMessageId'));
     assert.ok(attempts.schema.path('claimId'));
+    assert.ok(attempts.schema.path('outcome').enumValues.includes('TimeoutUnknown'));
+    assert.equal(EmailOutbox.schema.path('deliveryPolicyVersion').options.default, 2);
   });
 
   it('declares claim and idempotency indexes', () => {
