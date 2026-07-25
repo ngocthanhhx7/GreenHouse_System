@@ -3,14 +3,15 @@ import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 
 const source = readFileSync(new URL('./OrderDetailPage.jsx', import.meta.url), 'utf8');
+const styles = readFileSync(new URL('../../styles.css', import.meta.url), 'utf8');
 
 describe('customer delivery receipt UI contract', () => {
   it('renders receipt choices only from the server action projection and preserves a one-flight command key', () => {
     assert.match(source, /availableDeliveryActions\.includes\('RECEIVED'\)/);
     assert.match(source, /availableDeliveryActions\.includes\('NOT_RECEIVED'\)/);
-    assert.match(source, /deliveryReceiptSubmissionInFlight\s*=\s*useRef\(false\)/);
-    assert.match(source, /deliveryReceiptIdempotencyKey\s*=\s*useRef/);
-    assert.match(source, /recordDeliveryConfirmation\(id,/);
+    assert.match(source, /createDeliveryReceiptController/);
+    assert.match(source, /deliveryReceiptController\.current\.submit/);
+    assert.match(source, /recordDeliveryConfirmation\(orderId,/);
     assert.match(source, /await loadOrder\(\)/);
   });
 
@@ -19,6 +20,10 @@ describe('customer delivery receipt UI contract', () => {
     assert.match(source, /'Chưa nhận được hàng'/);
     assert.match(source, /role="dialog"/);
     assert.match(source, /aria-modal="true"/);
+    assert.match(source, /aria-describedby="deliveryReceiptDialogDescription"/);
+    assert.match(source, /ref=\{deliveryReceiptDialogRef\}/);
+    assert.match(source, /onKeyDown=\{handleReceiptDialogKeyDown\}/);
+    assert.match(source, /inert=\{deliveryReceiptDialog \? true : undefined\}/);
     assert.match(source, /htmlFor="notReceivedReason"/);
     assert.match(source, /id="notReceivedReason"/);
     assert.match(source, /minLength=\{10\}/);
@@ -42,5 +47,11 @@ describe('customer delivery receipt UI contract', () => {
   it('announces receipt success politely and surfaces typed command errors as alerts', () => {
     assert.match(source, /\{message && <div className="alert alert-success" role="status" aria-live="polite">\{message\}<\/div>\}/);
     assert.match(source, /\{error && <div className="alert alert-danger" role="alert">\{error\}<\/div>\}/);
+  });
+
+  it('keeps the modal scrollable under mobile and browser zoom constraints', () => {
+    assert.match(styles, /\.delivery-receipt-dialog-backdrop[\s\S]*overflow-y:\s*auto/);
+    assert.match(styles, /\.delivery-receipt-dialog[\s\S]*max-height:\s*calc\(100(?:dvh|vh) - 32px\)/);
+    assert.match(styles, /\.delivery-receipt-dialog[\s\S]*overflow-y:\s*auto/);
   });
 });
