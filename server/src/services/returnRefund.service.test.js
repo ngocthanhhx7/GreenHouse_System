@@ -66,6 +66,7 @@ function createRepository() {
     payoutEvidence: [],
     payoutIncidents: [],
     inventoryTransactions: [],
+    staffQueueQueries: [],
     failInventoryTransaction: false,
   };
 
@@ -114,6 +115,17 @@ function createRepository() {
         (!query.customerId || request.customerId === query.customerId)
         && (!query.status || request.status === query.status)
       ));
+    },
+    async listStaffRequestsPage(query = {}) {
+      state.staffQueueQueries.push(structuredClone(query));
+      const matching = state.requests.filter((request) => (
+        (!query.status || request.status === query.status)
+        && (!query.search || String(request.requestCode || '').toLowerCase().includes(query.search.toLowerCase()))
+      ));
+      return {
+        items: matching.slice(query.skip, query.skip + query.pageSize),
+        total: matching.length,
+      };
     },
     async findRequestById(id) { return state.requests.find((request) => request._id === id) || null; },
     async listOverdueRequests(at, limit = 100) {
@@ -863,6 +875,35 @@ describe('return/refund service', () => {
     const warehouse = await service.getWarehouseRequest(requestId);
     assert.equal(Object.hasOwn(warehouse, 'destination'), false);
     assert.equal(JSON.stringify(warehouse).includes('6789'), false);
+  });
+
+  it('bounds and searches the Staff return/refund queue by request code', async () => {
+    const request = await createRequest();
+    repository.requests[0].requestCode = 'RET-QUEUE-001';
+
+    const page = await service.listStaffRequests({
+      status: 'New',
+      page: '1',
+      pageSize: '1',
+      search: 'QUEUE-001',
+    });
+
+    assert.equal(page.total, 1);
+    assert.equal(page.items[0].id, request.id);
+    assert.equal(page.page, 1);
+    assert.equal(page.pageSize, 1);
+    assert.equal(page.totalPages, 1);
+    assert.deepEqual(repository.state.staffQueueQueries[0], {
+      status: 'New',
+      page: 1,
+      pageSize: 1,
+      search: 'QUEUE-001',
+      skip: 0,
+    });
+    await assert.rejects(
+      () => service.listStaffRequests({ status: 'NotAStatus' }),
+      (error) => error.statusCode === 400,
+    );
   });
 
   it('does not let Staff decide a destination after the Return becomes terminal', async () => {

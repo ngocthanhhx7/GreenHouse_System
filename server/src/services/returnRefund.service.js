@@ -23,6 +23,11 @@ const {
 const { createPayOSGateway } = require('../config/payos');
 const { logAudit } = require('../utils/auditLogger');
 const {
+  buildStaffQueuePage,
+  escapeRegex,
+  parseStaffQueueQuery,
+} = require('../utils/staffQueueQuery');
+const {
   canonicalEnvelope,
   createOutboxWriter,
 } = require('./domainEventProducer.service');
@@ -41,6 +46,7 @@ const OPEN_STATUSES = [
   'New', 'Pending', 'AwaitingCODReconciliation', 'Approved',
   'AwaitingInspection', 'Received', 'ReadyForRefund', 'CODRecoveryInProgress',
 ];
+const RETURN_REFUND_STATUSES = new Set(ReturnRefundRequest.schema.path('status').enumValues);
 
 function createReturnNotificationOutbox() {
   const writer = createOutboxWriter();
@@ -383,6 +389,22 @@ function createModelRepository() {
       if (query.customerId) filter.customerId = query.customerId;
       if (query.status) filter.status = query.status;
       return ReturnRefundRequest.find(filter).sort({ createdAt: -1 }).lean();
+    },
+    async listStaffRequestsPage(query = {}) {
+      const filter = {};
+      if (query.status) filter.status = query.status;
+      if (query.search) {
+        filter.requestCode = new RegExp(escapeRegex(query.search), 'i');
+      }
+      const [items, total] = await Promise.all([
+        ReturnRefundRequest.find(filter)
+          .sort({ createdAt: -1, _id: -1 })
+          .skip(query.skip)
+          .limit(query.pageSize)
+          .lean(),
+        ReturnRefundRequest.countDocuments(filter),
+      ]);
+      return { items, total };
     },
     async findRequestById(id, session) { return withOptionalSession(ReturnRefundRequest.findById(id), session).lean(); },
     async listOverdueRequests(now, limit = 100, session) {
@@ -1062,10 +1084,29 @@ function createReturnRefundService({
     },
 
     async listStaffRequests(query = {}) {
-      const requests = await repository.listRequests(query);
+      const paging = parseStaffQueueQuery(query, {
+        allowedStatuses: RETURN_REFUND_STATUSES,
+      });
+      const listed = repository.listStaffRequestsPage
+        ? await repository.listStaffRequestsPage(paging)
+        : await repository.listRequests(paging);
+      let requests;
+      let total;
+      if (Array.isArray(listed)) {
+        const matching = paging.search
+          ? listed.filter((request) => (
+            String(request.requestCode || '').toLowerCase().includes(paging.search.toLowerCase())
+          ))
+          : listed;
+        total = matching.length;
+        requests = matching.slice(paging.skip, paging.skip + paging.pageSize);
+      } else {
+        requests = listed.items || [];
+        total = Number(listed.total || 0);
+      }
       const items = [];
       for (const request of requests) items.push(await respond(request._id, 'StaffList'));
-      return { items, total: items.length };
+      return buildStaffQueuePage(items, total, paging);
     },
 
     async listWarehouseRequests(query = {}) {

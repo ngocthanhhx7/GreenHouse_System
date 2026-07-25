@@ -16,10 +16,16 @@ const DomainOutbox = require('../models/domainOutbox.model');
 const { logAudit } = require('../utils/auditLogger');
 const { canonicalEnvelope } = require('./domainEventProducer.service');
 const {
+  buildStaffQueuePage,
+  escapeRegex,
+  parseStaffQueueQuery,
+} = require('../utils/staffQueueQuery');
+const {
   assignmentCoordinator: defaultAssignmentCoordinator,
 } = require('./assignmentCoordination.service');
 
 const INVOICE_ELIGIBLE_STATUSES = new Set(['Confirmed', 'Packed', 'Shipped', 'Delivered', 'DeliveryFailed']);
+const STAFF_ORDER_STATUSES = new Set(Order.schema.path('orderStatus').enumValues);
 
 function withOptionalSession(query, session) {
   return session ? query.session(session) : query;
@@ -183,6 +189,27 @@ function createModelOrderRepository() {
         if (query.dateTo) filter.createdAt.$lte = new Date(query.dateTo);
       }
       return Order.find(filter).sort({ createdAt: -1 }).lean();
+    },
+    async listOrdersPage(query = {}) {
+      const filter = {};
+      if (query.status) filter.orderStatus = query.status;
+      if (query.search) {
+        const pattern = new RegExp(escapeRegex(query.search), 'i');
+        filter.$or = [
+          { orderCode: pattern },
+          { receiverName: pattern },
+          { receiverPhone: pattern },
+        ];
+      }
+      const [items, total] = await Promise.all([
+        Order.find(filter)
+          .sort({ createdAt: -1, _id: -1 })
+          .skip(query.skip)
+          .limit(query.pageSize)
+          .lean(),
+        Order.countDocuments(filter),
+      ]);
+      return { items, total };
     },
     async findOrderById(id, session) { return withOptionalSession(Order.findById(id), session).lean(); },
     async listOrderDetails(orderId, session) { return withOptionalSession(OrderDetail.find({ orderId }), session).lean(); },
@@ -519,8 +546,29 @@ function createStaffOrderService({
 
   return {
     async listOrders(query = {}) {
-      const orders = await orderRepository.listOrders(query);
-      return { items: orders.map(toOrderSummary), total: orders.length };
+      const paging = parseStaffQueueQuery(query, {
+        allowedStatuses: STAFF_ORDER_STATUSES,
+      });
+      const listed = orderRepository.listOrdersPage
+        ? await orderRepository.listOrdersPage(paging)
+        : await orderRepository.listOrders(paging);
+      let orders;
+      let total;
+      if (Array.isArray(listed)) {
+        const matching = paging.search
+          ? listed.filter((order) => (
+            String(order.orderCode || '').toLowerCase().includes(paging.search.toLowerCase())
+            || String(order.receiverName || '').toLowerCase().includes(paging.search.toLowerCase())
+            || String(order.receiverPhone || '').includes(paging.search)
+          ))
+          : listed;
+        total = matching.length;
+        orders = matching.slice(paging.skip, paging.skip + paging.pageSize);
+      } else {
+        orders = listed.items || [];
+        total = Number(listed.total || 0);
+      }
+      return buildStaffQueuePage(orders.map(toOrderSummary), total, paging);
     },
 
     async getOrder(orderId) {

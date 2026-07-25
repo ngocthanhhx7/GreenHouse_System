@@ -58,6 +58,7 @@ function makeHarness() {
     inventoryTransactions: [],
     notifications: [],
     audits: [],
+    staffQueueQueries: [],
   };
 
   const repository = {
@@ -80,6 +81,17 @@ function makeHarness() {
     },
     async listCases(filter = {}) {
       return state.cases.filter((item) => !filter.customerId || item.customerId === filter.customerId);
+    },
+    async listStaffCasesPage(query = {}) {
+      state.staffQueueQueries.push(structuredClone(query));
+      const matching = state.cases.filter((item) => (
+        (!query.status || item.status === query.status)
+        && (!query.search || item.requestCode.toLowerCase().includes(query.search.toLowerCase()))
+      ));
+      return {
+        items: matching.slice(query.skip, query.skip + query.pageSize),
+        total: matching.length,
+      };
     },
     async listLines(caseId) { return state.lines.filter((item) => item.exchangeCaseId === caseId); },
     async listUnits(caseId) { return state.units.filter((item) => item.exchangeCaseId === caseId); },
@@ -468,6 +480,35 @@ describe('SL-002 Exchange service', () => {
       /idempotency key.*different|different.*command/i
     );
     assert.equal(harness.state.cases.length, 1);
+  });
+
+  it('bounds and searches the Staff Exchange queue by request code', async () => {
+    const request = await harness.service.createCustomerRequest('customer-1', validRequest({
+      idempotencyKey: 'exchange-staff-queue-0001',
+    }));
+    const page = await harness.service.listStaffRequests({
+      status: 'Submitted',
+      page: '1',
+      pageSize: '1',
+      search: request.requestCode.slice(-6),
+    });
+
+    assert.equal(page.total, 1);
+    assert.equal(page.items[0].id, request.id);
+    assert.equal(page.page, 1);
+    assert.equal(page.pageSize, 1);
+    assert.equal(page.totalPages, 1);
+    assert.deepEqual(harness.state.staffQueueQueries[0], {
+      status: 'Submitted',
+      page: 1,
+      pageSize: 1,
+      search: request.requestCode.slice(-6),
+      skip: 0,
+    });
+    await assert.rejects(
+      () => harness.service.listStaffRequests({ page: '0' }),
+      (error) => error.statusCode === 400,
+    );
   });
 
   it('rejects foreign, fractional, excessive, and free-form/money input', async () => {

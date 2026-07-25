@@ -44,6 +44,7 @@ function createOrderRepository() {
   const inventories = [{ productId: 'p1', stockQuantity: 10, reservedQuantity: 2, inventoryHealth: 'Normal' }];
   let cancelExportCalls = 0;
   const confirmationMutationSessions = [];
+  const queueQueries = [];
 
   return {
     orders, exports, cycles, payments, attempts, refunds, invoices, reservations, outbox,
@@ -52,7 +53,19 @@ function createOrderRepository() {
     get cancelExportCalls() { return cancelExportCalls; },
     inventories,
     confirmationMutationSessions,
+    queueQueries,
     async listOrders(query = {}) { return orders.filter((order) => !query.status || order.orderStatus === query.status); },
+    async listOrdersPage(query = {}) {
+      queueQueries.push(structuredClone(query));
+      const filtered = orders.filter((order) => (
+        (!query.status || order.orderStatus === query.status)
+        && (!query.search || order.orderCode.toLowerCase().includes(query.search.toLowerCase()))
+      ));
+      return {
+        items: filtered.slice(query.skip, query.skip + query.pageSize),
+        total: filtered.length,
+      };
+    },
     async findOrderById(id) { return orders.find((order) => order._id === id) || null; },
     async listOrderDetails(orderId) { return details.filter((detail) => detail.orderId === orderId); },
     async listReservationsByOrder(orderId) {
@@ -217,6 +230,38 @@ describe('staff order service', () => {
     const result = await service.listOrders({ status: 'Pending' });
     assert.equal(result.items.length, 2);
     assert.deepEqual(result.items.map((item) => item.orderCode).sort(), ['ORD-1', 'ORD-2']);
+    assert.deepEqual(
+      {
+        page: result.page,
+        pageSize: result.pageSize,
+        totalPages: result.totalPages,
+        hasNextPage: result.hasNextPage,
+      },
+      { page: 1, pageSize: 20, totalPages: 1, hasNextPage: false },
+    );
+  });
+
+  it('bounds Staff order pagination and forwards a code search to the repository', async () => {
+    const result = await service.listOrders({
+      status: 'Pending',
+      page: '1',
+      pageSize: '1',
+      search: 'ORD-2',
+    });
+
+    assert.equal(result.total, 1);
+    assert.equal(result.items[0].orderCode, 'ORD-2');
+    assert.deepEqual(orderRepository.queueQueries[0], {
+      status: 'Pending',
+      page: 1,
+      pageSize: 1,
+      search: 'ORD-2',
+      skip: 0,
+    });
+    await assert.rejects(
+      () => service.listOrders({ pageSize: '500' }),
+      (error) => error.statusCode === 400,
+    );
   });
 
   it('requires an idempotency key before Staff confirmation', async () => {

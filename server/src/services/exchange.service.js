@@ -28,6 +28,11 @@ const {
 const { returnEvidenceClaim, MAX_RETURN_EVIDENCE_TOTAL_SIZE } = require('../utils/returnEvidenceClaim');
 const { logAudit } = require('../utils/auditLogger');
 const {
+  buildStaffQueuePage,
+  escapeRegex,
+  parseStaffQueueQuery,
+} = require('../utils/staffQueueQuery');
+const {
   canonicalEnvelope,
   createOutboxWriter,
 } = require('./domainEventProducer.service');
@@ -46,6 +51,7 @@ const TERMINAL_STATUSES = new Set([
   'ClosedByCODRecovery', 'Rejected', 'Cancelled', 'Expired',
   'ClosedNoExchange', 'ConvertedToReturnRefund', 'Completed',
 ]);
+const EXCHANGE_STATUSES = new Set(ExchangeCase.STATUSES || []);
 
 class NoExactStockError extends Error {
   constructor(productId) {
@@ -128,6 +134,22 @@ function createModelRepository({ lockService = afterSalesLockService } = {}) {
       return withSession(ExchangeCase.findOne({ customerId, idempotencyKey }), session).lean();
     },
     async listCases(filter = {}) { return ExchangeCase.find(filter).sort({ createdAt: -1 }).lean(); },
+    async listStaffCasesPage(query = {}) {
+      const filter = {};
+      if (query.status) filter.status = query.status;
+      if (query.search) {
+        filter.requestCode = new RegExp(escapeRegex(query.search), 'i');
+      }
+      const [items, total] = await Promise.all([
+        ExchangeCase.find(filter)
+          .sort({ createdAt: -1, _id: -1 })
+          .skip(query.skip)
+          .limit(query.pageSize)
+          .lean(),
+        ExchangeCase.countDocuments(filter),
+      ]);
+      return { items, total };
+    },
     async listOverdueCases(now, limit = 100) {
       return ExchangeCase.find({
         status: 'ApprovedAwaitingShipment',
@@ -1150,11 +1172,29 @@ function createExchangeService({
     },
 
     async listStaffRequests(query = {}) {
-      const filter = query.status ? { status: query.status } : {};
-      const cases = await repository.listCases(filter);
+      const paging = parseStaffQueueQuery(query, {
+        allowedStatuses: EXCHANGE_STATUSES,
+      });
+      const listed = repository.listStaffCasesPage
+        ? await repository.listStaffCasesPage(paging)
+        : await repository.listCases(paging.status ? { status: paging.status } : {});
+      let cases;
+      let total;
+      if (Array.isArray(listed)) {
+        const matching = paging.search
+          ? listed.filter((exchangeCase) => (
+            String(exchangeCase.requestCode || '').toLowerCase().includes(paging.search.toLowerCase())
+          ))
+          : listed;
+        total = matching.length;
+        cases = matching.slice(paging.skip, paging.skip + paging.pageSize);
+      } else {
+        cases = listed.items || [];
+        total = Number(listed.total || 0);
+      }
       const items = [];
       for (const item of cases) items.push(await load(item._id, 'Staff'));
-      return { items, total: items.length };
+      return buildStaffQueuePage(items, total, paging);
     },
 
     async getStaffRequest(id) { return load(id, 'Staff'); },
