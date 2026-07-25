@@ -85,3 +85,12 @@ Verification:
 
 Production deployment and target-environment evidence remain outside this
 local integration claim.
+
+## Main integration gate 2026-07-25
+
+Thành merged the reviewed Cường branch with `--no-ff` after the COD merge.
+Semantic conflict resolution retained the newer Vietnamese `main` changes and
+the complete Admin evidence preview. The final combined tree passed server
+`1075/1075` across 172 suites, client `281/281` across 69 suites, and the
+162-module production build. The remaining Vite chunk-size warning (714.34 kB)
+is non-blocking. Target migration and deployment evidence remain pending.

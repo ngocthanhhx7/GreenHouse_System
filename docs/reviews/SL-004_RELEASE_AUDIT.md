@@ -116,3 +116,12 @@ Supplemental verification result: focused server `41/41`, focused client
 `16/16`, full server `1066/1066`, full client `262/262`, production build PASS
 with 158 transformed modules. `git diff --check` is recorded separately in the
 handoff review. The known client chunk-size warning is unchanged.
+
+## Main integration gate 2026-07-25
+
+Thành merged the reviewed Nhật COD branch with `--no-ff`, preserved the newer
+Vietnamese Staff-order copy, and then integrated the Warehouse evidence branch.
+The final combined tree passed server `1075/1075` across 172 suites, client
+`281/281` across 69 suites, and the 162-module production build. The only build
+notice is the existing non-blocking 714.34 kB Vite chunk warning. No production
+carrier, migration, or deployment claim is made.

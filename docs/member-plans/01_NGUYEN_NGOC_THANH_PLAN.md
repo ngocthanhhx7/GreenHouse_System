@@ -411,3 +411,17 @@ hàng:
   mutation lock kèm refresh sau lỗi.
 - Remote-main verification được ghi sau gate cuối; addendum này không tự nhận
   deployment hoặc migration production.
+
+## Final Integration Addendum 2026-07-25 - COD và dẫn chứng kho
+
+Nguyễn Ngọc Thành đã review và merge `--no-ff` hai nhánh owner:
+`feature/nhat-cod-reconciliation` và
+`feature/cuong-inventory-evidence-i18n`.
+
+- Xung đột với bản dịch tiếng Việt mới trên `main` được hợp nhất theo ngữ nghĩa:
+  giữ toàn bộ ảnh dẫn chứng/COD và giữ nội dung tiếng Việt hiện hành.
+- Gate sau merge đạt server `1075/1075` (172 suites), client `281/281` (69
+  suites) và production build 162 modules.
+- Cảnh báo không chặn còn lại là Vite chunk 714.34 kB lớn hơn 500 kB.
+- Việc triển khai production, migration dữ liệu đích và walkthrough có xác thực
+  không thuộc tuyên bố tích hợp cục bộ này.
