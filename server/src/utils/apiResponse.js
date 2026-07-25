@@ -30,7 +30,7 @@ function sendSuccess(res, data = null, message = 'OK', statusCode = 200, req) {
 
 function sendError(
   res,
-  message = 'Something went wrong',
+  message = 'Đã xảy ra lỗi. Vui lòng thử lại.',
   statusCode = 500,
   errors = [],
   errorCode,

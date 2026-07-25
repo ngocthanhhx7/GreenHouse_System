@@ -2,16 +2,16 @@ const ApiError = require('../utils/apiError');
 const { sendError } = require('../utils/apiResponse');
 
 function notFound(req, res) {
-  return sendError(res, `Route not found: ${req.originalUrl}`, 404);
+  return sendError(res, `Không tìm thấy đường dẫn: ${req.originalUrl}`, 404);
 }
 
 function errorHandler(error, req, res, next) {
   if (res.headersSent) return next(error);
   if (error && error.type === 'entity.parse.failed') {
-    return sendError(res, 'Invalid request body', 400, [], 'VALIDATION_ERROR', req);
+    return sendError(res, 'Dữ liệu yêu cầu không hợp lệ.', 400, [], 'VALIDATION_ERROR', req);
   }
   if (error && (error.type === 'entity.too.large' || error.status === 413)) {
-    return sendError(res, 'Request body is too large', 413, [], 'PAYLOAD_TOO_LARGE', req);
+    return sendError(res, 'Kích thước dữ liệu yêu cầu quá lớn.', 413, [], 'PAYLOAD_TOO_LARGE', req);
   }
   if (
     error
@@ -41,7 +41,7 @@ function errorHandler(error, req, res, next) {
       error.data
     );
   }
-  return sendError(res, 'Internal server error', 500, [], undefined, req);
+  return sendError(res, 'Đã xảy ra lỗi hệ thống. Vui lòng thử lại sau.', 500, [], undefined, req);
 }
 
 module.exports = {

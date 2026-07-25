@@ -24,9 +24,9 @@ function createReturnEvidenceClaim({
   }
 
   function validateBase(url, size) {
-    if (!SAFE_BASE_URL.test(url)) throw new ApiError(400, 'Return evidence URL is invalid');
+    if (!SAFE_BASE_URL.test(url)) throw new ApiError(400, 'Đường dẫn ảnh dẫn chứng không hợp lệ.');
     if (!Number.isSafeInteger(size) || size < 1 || size > MAX_RETURN_EVIDENCE_FILE_SIZE) {
-      throw new ApiError(400, 'Return evidence size is invalid');
+      throw new ApiError(400, 'Dung lượng ảnh dẫn chứng không hợp lệ.');
     }
   }
 
@@ -41,11 +41,11 @@ function createReturnEvidenceClaim({
     verify(customerId, value) {
       const raw = String(value || '');
       const separator = raw.indexOf('?');
-      if (separator < 1) throw new ApiError(400, 'Return evidence is not owned by this Customer');
+      if (separator < 1) throw new ApiError(400, 'Ảnh dẫn chứng không thuộc quyền sở hữu của khách hàng này.');
       const url = raw.slice(0, separator).toLowerCase();
       const params = new URLSearchParams(raw.slice(separator + 1));
       if ([...params.keys()].length !== 2 || !params.has('size') || !params.has('claim')) {
-        throw new ApiError(400, 'Return evidence is not owned by this Customer');
+        throw new ApiError(400, 'Ảnh dẫn chứng không thuộc quyền sở hữu của khách hàng này.');
       }
       const size = Number(params.get('size'));
       validateBase(url, size);
@@ -53,7 +53,7 @@ function createReturnEvidenceClaim({
       const expected = signature(customerId, url, size);
       if (!/^[0-9a-f]{64}$/.test(supplied)
         || !crypto.timingSafeEqual(Buffer.from(supplied, 'hex'), Buffer.from(expected, 'hex'))) {
-        throw new ApiError(400, 'Return evidence is not owned by this Customer');
+        throw new ApiError(400, 'Ảnh dẫn chứng không thuộc quyền sở hữu của khách hàng này.');
       }
       return { url, size };
     },
