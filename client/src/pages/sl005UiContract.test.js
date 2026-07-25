@@ -32,9 +32,10 @@ describe('SL-005 inventory, damage, and replenishment UI contract', () => {
     assert.match(inventorySource, /damagedQuantity/);
     assert.match(inventorySource, /inventoryHealth/);
     assert.match(inventorySource, /setThresholdOverride/);
-    assert.match(inventorySource, /Count reason/);
-    assert.match(inventorySource, /Threshold reason/);
-    assert.match(inventorySource, /Evidence reference/);
+    assert.match(inventorySource, /OperationalEvidenceUploader/);
+    assert.match(inventorySource, /Lý do kiểm kê/);
+    assert.match(inventorySource, /Lý do đổi ngưỡng/);
+    assert.doesNotMatch(inventorySource, /Evidence reference|Count reason|Threshold reason/);
     assert.doesNotMatch(inventorySource, /Physical cycle count|warehouse-count/);
   });
 
@@ -45,7 +46,16 @@ describe('SL-005 inventory, damage, and replenishment UI contract', () => {
     assert.match(replenishmentSource, /correctReceipt/);
     assert.match(adminSource, /decisionReason/);
     assert.match(adminSource, /decideShortClosure/);
+    assert.match(adminSource, /request\.evidence/);
+    assert.match(adminSource, /resolveMediaUrl/);
     assert.match(adminSource, /required/);
+    assert.match(replenishmentSource, /OperationalEvidenceUploader/);
+    assert.match(replenishmentSource, /\[`withdraw-\$\{request\.id\}`\]/);
+    assert.match(replenishmentSource, /\[`short-\$\{request\.id\}`\]/);
+    assert.match(replenishmentSource, /\[`correction-\$\{request\.id\}`\]/);
+    assert.doesNotMatch(replenishmentSource, /Evidence reference|Receipt evidence reference|Short-closure evidence|Correction evidence reference/);
+    assert.doesNotMatch(replenishmentSource, />Replenishment<|>Product<|>Status<|Warehouse actions|No replenishment requests|Loading replenishment requests/);
+    assert.doesNotMatch(adminSource, /Replenishment decisions|Approve or reject|Admin decision reason|No Admin action available/);
     assert.doesNotMatch(replenishmentSource, /external-supplier|warehouse-delivery-inspection|Low stock replenishment/);
     assert.doesNotMatch(adminSource, /bởi quản trị viên/);
   });

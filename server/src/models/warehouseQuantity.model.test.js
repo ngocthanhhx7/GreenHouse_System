@@ -25,5 +25,6 @@ describe('warehouse quantity schema invariants', () => {
   it('stores the related business entity for warehouse traceability', () => {
     assert.ok(InventoryTransaction.schema.path('relatedCollection'));
     assert.ok(InventoryTransaction.schema.path('relatedId'));
+    assert.equal(InventoryTransaction.schema.path('commandFingerprint').options.maxlength, 64);
   });
 });

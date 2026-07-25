@@ -1,4 +1,5 @@
 // SL-005 inventory core. SL-004 exact export commands are composed in inventory.service.js.
+const crypto = require('node:crypto');
 const mongoose = require('mongoose');
 const ApiError = require('../utils/apiError');
 const Inventory = require('../models/inventory.model');
@@ -13,6 +14,10 @@ const { notificationService } = require('./notification.service');
 const { systemSettingService } = require('./systemSetting.service');
 const { lowStockAlertLifecycle: defaultLowStockLifecycle } = require('./lowStockAlertLifecycle.service');
 const { logAudit } = require('../utils/auditLogger');
+const {
+  operationalEvidenceClaim,
+  MAX_OPERATIONAL_EVIDENCE_TOTAL_SIZE,
+} = require('../utils/operationalEvidenceClaim');
 const {
   assignmentCoordinator: defaultAssignmentCoordinator,
 } = require('./assignmentCoordination.service');
@@ -200,11 +205,29 @@ function createInventoryService({
   thresholdProvider = null,
   lowStockLifecycle = null,
   assignmentCoordinator = defaultAssignmentCoordinator,
+  evidenceClaim = operationalEvidenceClaim,
 } = {}) {
   const physicalCountResults = new Map();
   async function getInventoryOrThrow(id) { const inventory = await repository.findInventoryById(id); if (!inventory) throw new ApiError(404, 'Inventory record not found'); return inventory; }
-  function evidenceRequired(evidence) {
-    return Array.isArray(evidence) && evidence.length > 0;
+  function verifyEvidenceImages(evidence, label) {
+    if (!Array.isArray(evidence) || evidence.length < 1) {
+      throw new ApiError(400, `${label} cần ít nhất 1 ảnh dẫn chứng`);
+    }
+    if (evidence.length > 5) throw new ApiError(400, `${label} chỉ được có tối đa 5 ảnh dẫn chứng`);
+    let totalSize = 0;
+    const canonicalUrls = new Set();
+    const verified = evidence.map((signedUrl) => {
+      if (typeof signedUrl !== 'string') throw new ApiError(400, `${label} chứa ảnh dẫn chứng không hợp lệ`);
+      const claim = evidenceClaim.verify(signedUrl);
+      if (canonicalUrls.has(claim.url)) throw new ApiError(400, `${label} không được chứa ảnh dẫn chứng trùng nhau`);
+      canonicalUrls.add(claim.url);
+      totalSize += Number(claim.size || 0);
+      return signedUrl;
+    });
+    if (totalSize > MAX_OPERATIONAL_EVIDENCE_TOTAL_SIZE) {
+      throw new ApiError(413, `${label} vượt quá tổng dung lượng ảnh cho phép`);
+    }
+    return verified;
   }
   function quantityOf(inventory) {
     return Number(inventory.sellableQuantity ?? inventory.stockQuantity ?? 0);
@@ -223,6 +246,7 @@ function createInventoryService({
       reason: input.reason || '',
       movementKey: input.movementKey || input.idempotencyKey || '',
       idempotencyKey: input.idempotencyKey || '',
+      commandFingerprint: input.commandFingerprint || '',
       dimension: input.dimension || '',
       beforeSellableQuantity: input.beforeSellableQuantity ?? null,
       afterSellableQuantity: input.afterSellableQuantity ?? null,
@@ -232,6 +256,34 @@ function createInventoryService({
       afterDamagedQuantity: input.afterDamagedQuantity ?? null,
       evidence: input.evidence || [],
     }, session);
+  }
+  function commandFingerprint(transactionType, userId, inventoryId, facts) {
+    return crypto
+      .createHash('sha256')
+      .update(JSON.stringify([
+        transactionType,
+        String(userId),
+        String(inventoryId),
+        ...facts,
+      ]))
+      .digest('hex');
+  }
+  function assertTransactionReplay(existing, transactionType, inventoryId, fingerprint) {
+    const relatedId = existing?.relatedId?._id || existing?.relatedId;
+    if (
+      existing?.transactionType !== transactionType
+      || existing?.relatedCollection !== 'Inventory'
+      || String(relatedId || '') !== String(inventoryId)
+      || existing?.commandFingerprint !== fingerprint
+    ) {
+      throw new ApiError(
+        409,
+        'Inventory idempotency key was already used with different command facts',
+        [],
+        'IDEMPOTENCY_KEY_REUSED',
+      );
+    }
+    return existing;
   }
   async function emitEvent(event) {
     try {
@@ -277,18 +329,30 @@ function createInventoryService({
       }
       const reason = String(input.reason || '').trim();
       if (!reason) throw new ApiError(400, 'Physical count reason is required');
-      if (!evidenceRequired(input.evidence)) throw new ApiError(400, 'Physical count evidence is required');
+      const evidence = verifyEvidenceImages(input.evidence, 'Kiểm kê thực tế');
       const idempotencyKey = String(input.idempotencyKey || '').trim();
       if (!idempotencyKey) throw new ApiError(400, 'Physical count idempotencyKey is required');
+      const fingerprint = commandFingerprint(
+        'PHYSICAL_COUNT',
+        userId,
+        id,
+        [countedSellableQuantity, reason, evidence],
+      );
 
       if (physicalCountResults.has(idempotencyKey)) {
-        const existing = physicalCountResults.get(idempotencyKey);
+        const existing = assertTransactionReplay(
+          physicalCountResults.get(idempotencyKey),
+          'PHYSICAL_COUNT',
+          id,
+          fingerprint,
+        );
         const inventory = await repository.findInventoryById(id);
         return { inventory: toInventoryResponse(inventory), transaction: existing, replay: true };
       }
       if (repository.findTransactionByIdempotencyKey) {
         const existing = await repository.findTransactionByIdempotencyKey(idempotencyKey);
         if (existing) {
+          assertTransactionReplay(existing, 'PHYSICAL_COUNT', id, fingerprint);
           const inventory = await repository.findInventoryById(id);
           return { inventory: toInventoryResponse(inventory), transaction: existing, replay: true };
         }
@@ -332,8 +396,9 @@ function createInventoryService({
           afterSellableQuantity: countedSellableQuantity,
           dimension: 'sellable',
           reason,
-          evidence: input.evidence,
+          evidence,
           idempotencyKey,
+          commandFingerprint: fingerprint,
           relatedCollection: 'Inventory',
           relatedId: id,
         }, session);
@@ -351,8 +416,26 @@ function createInventoryService({
       if (hasValue && (!Number.isInteger(threshold) || threshold < 0)) throw new ApiError(400, 'Threshold must be a non-negative integer');
       const reason = String(input.reason || '').trim();
       if (!reason) throw new ApiError(400, 'Threshold change reason is required');
-      const inventory = await repository.findInventoryById(id);
-      if (!inventory) throw new ApiError(404, 'Inventory record not found');
+      const evidence = verifyEvidenceImages(input.evidence, 'Điều chỉnh ngưỡng tồn kho');
+      const idempotencyKey = String(input.idempotencyKey || '').trim();
+      if (!idempotencyKey) throw new ApiError(400, 'Threshold override idempotencyKey is required');
+      const fingerprint = commandFingerprint(
+        'THRESHOLD_OVERRIDE',
+        userId,
+        id,
+        [threshold, reason, evidence],
+      );
+      const existing = repository.findTransactionByIdempotencyKey
+        ? await repository.findTransactionByIdempotencyKey(idempotencyKey)
+        : null;
+      if (existing) {
+        assertTransactionReplay(existing, 'THRESHOLD_OVERRIDE', id, fingerprint);
+        return {
+          inventory: toInventoryResponse(await getInventoryOrThrow(id)),
+          transaction: existing,
+          replay: true,
+        };
+      }
       let fallbackThreshold = 0;
       if (threshold === null && thresholdProvider?.listSettings) {
         try {
@@ -360,11 +443,49 @@ function createInventoryService({
           fallbackThreshold = Number((settings?.current?.values || settings)?.LOW_STOCK_DEFAULT_THRESHOLD ?? 0);
         } catch (_) { /* leave zero only when settings are unavailable */ }
       }
-      const updated = await repository.updateInventory(id, { lowStockThreshold: threshold === null ? fallbackThreshold : threshold, lowStockThresholdOverride: threshold, lastUpdatedBy: userId }, null);
-      if (!updated) throw new ApiError(409, 'Inventory threshold changed concurrently');
+      let result;
+      try {
+        result = await transactionManager.withTransaction(async (session) => {
+          const inventory = await repository.findInventoryById(id, session);
+          if (!inventory) throw new ApiError(404, 'Inventory record not found');
+          const sellableQuantity = quantityOf(inventory);
+          const updated = await repository.updateInventory(id, {
+            lowStockThreshold: threshold === null ? fallbackThreshold : threshold,
+            lowStockThresholdOverride: threshold,
+            lastUpdatedBy: userId,
+          }, session);
+          if (!updated) throw new ApiError(409, 'Inventory threshold changed concurrently');
+          const transaction = await createTransaction(userId, inventory, {
+            transactionType: 'THRESHOLD_OVERRIDE',
+            quantity: 0,
+            beforeQuantity: sellableQuantity,
+            afterQuantity: sellableQuantity,
+            beforeSellableQuantity: sellableQuantity,
+            afterSellableQuantity: sellableQuantity,
+            dimension: 'sellable',
+            reason,
+            evidence,
+            idempotencyKey,
+            commandFingerprint: fingerprint,
+            relatedCollection: 'Inventory',
+            relatedId: id,
+          }, session);
+          return { updated, transaction };
+        });
+      } catch (error) {
+        if (error?.code !== 11000 || !repository.findTransactionByIdempotencyKey) throw error;
+        const winner = await repository.findTransactionByIdempotencyKey(idempotencyKey);
+        if (!winner) throw error;
+        assertTransactionReplay(winner, 'THRESHOLD_OVERRIDE', id, fingerprint);
+        return {
+          inventory: toInventoryResponse(await getInventoryOrThrow(id)),
+          transaction: winner,
+          replay: true,
+        };
+      }
       await auditLogger.log({ userId, action: 'INVENTORY_THRESHOLD_OVERRIDE', targetEntity: 'Inventory', targetId: String(id), description: reason });
-      await lowStockLifecycle?.evaluate(updated, { eventKey: `threshold-override:${id}:${updated.updatedAt || threshold}` });
-      return { inventory: toInventoryResponse(updated) };
+      await lowStockLifecycle?.evaluate(result.updated, { eventKey: idempotencyKey });
+      return { inventory: toInventoryResponse(result.updated), transaction: result.transaction };
     },
     async adjustInventory(userId, id, input = {}) {
       if (!String(input.reason || '').trim()) throw new ApiError(400, 'Adjustment reason is required');
