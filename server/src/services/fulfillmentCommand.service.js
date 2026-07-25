@@ -36,6 +36,19 @@ const STAFF_DELIVERY_FAILURE_REASONS = new Set([
   'OTHER_DELIVERY_FAILURE',
 ]);
 const STAFF_EVENTS_REQUIRING_FAILURE_REASON = new Set(['ATTEMPT_FAILED', 'RETURNED_TO_SHOP']);
+const STAFF_RECORDED_CARRIER_EVIDENCE_SOURCE = 'STAFF_RECORDED_CARRIER_EVIDENCE';
+const LEGACY_STAFF_EVIDENCE_SOURCES = new Set(['STAFF_EVIDENCE', 'STAFF_RECONCILIATION']);
+
+function isStaffRecordedCarrierEvidence(source) {
+  return source === STAFF_RECORDED_CARRIER_EVIDENCE_SOURCE
+    || LEGACY_STAFF_EVIDENCE_SOURCES.has(source);
+}
+
+function canonicalEvidenceSource(source) {
+  return isStaffRecordedCarrierEvidence(source)
+    ? STAFF_RECORDED_CARRIER_EVIDENCE_SOURCE
+    : source;
+}
 
 function customerNotificationOutbox({
   identityKey,
@@ -369,7 +382,7 @@ function createFulfillmentCommandService({
         cycleId: cycle._id,
         shipmentId: shipment._id,
         eventType: 'HANDOFF',
-        source: 'STAFF_EVIDENCE',
+        source: STAFF_RECORDED_CARRIER_EVIDENCE_SOURCE,
         occurredAt: handoff.handedOffAt,
         recordedAt: clock(),
         evidenceReference: handoff.evidenceReference,
@@ -417,25 +430,37 @@ function createFulfillmentCommandService({
     if (!DELIVERY_EVENT_TYPES.has(eventType)) {
       throw new ApiError(400, 'Unsupported shipment eventType');
     }
-    const source = String(input.source || '').trim().toUpperCase();
-    if (!['CARRIER', 'STAFF_EVIDENCE', 'CUSTOMER_DISPUTE', 'WAREHOUSE'].includes(source)) {
+    const requestedSource = String(input.source || '').trim().toUpperCase();
+    if (![
+      'CARRIER',
+      STAFF_RECORDED_CARRIER_EVIDENCE_SOURCE,
+      'STAFF_EVIDENCE',
+      'CUSTOMER_DISPUTE',
+      'WAREHOUSE',
+    ].includes(requestedSource)) {
       throw new ApiError(400, 'Unsupported shipment event source');
     }
-    const actor = validateActor(actorContext, source);
-    if (actor.actorType === 'Staff' && source !== 'STAFF_EVIDENCE') {
-      throw new ApiError(403, 'Staff shipment events must use STAFF_EVIDENCE source');
+    const actor = validateActor(actorContext, requestedSource);
+    if (actor.actorType === 'Staff' && !isStaffRecordedCarrierEvidence(requestedSource)) {
+      throw new ApiError(
+        403,
+        `Staff shipment events must use ${STAFF_RECORDED_CARRIER_EVIDENCE_SOURCE} source`,
+      );
     }
-    if (actor.actorType === 'Carrier' && source !== 'CARRIER') {
+    if (actor.actorType === 'Carrier' && requestedSource !== 'CARRIER') {
       throw new ApiError(403, 'Signed Carrier shipment events must use CARRIER source');
     }
     if (!['Staff', 'Carrier'].includes(actor.actorType)) {
       throw new ApiError(403, 'Only Staff or signed Carrier may record Shipment events');
     }
+    const source = actor.actorType === 'Staff'
+      ? STAFF_RECORDED_CARRIER_EVIDENCE_SOURCE
+      : requestedSource;
     const assertReplayIdentity = (event) => {
       if (
         !sameId(event.shipmentId, shipmentId)
         || event.eventType !== eventType
-        || event.source !== source
+        || canonicalEvidenceSource(event.source) !== source
         || !sameId(event.actorId, actor.actorId)
       ) {
         throw new ApiError(
@@ -469,15 +494,7 @@ function createFulfillmentCommandService({
       throw new ApiError(409, 'COD reconciliation is allowed only with a Delivered result');
     }
     if (codCollectionResult && actor.actorType !== 'Staff') {
-      throw new ApiError(403, 'codCollectionResult is reserved for non-production Staff reconciliation');
-    }
-    if (codCollectionResult && runtime === 'production') {
-      throw new ApiError(
-        403,
-        'Production COD collection requires signed Carrier evidence',
-        [],
-        'COD_COLLECTION_CARRIER_SIGNATURE_REQUIRED',
-      );
+      throw new ApiError(403, 'codCollectionResult is reserved for Staff-recorded Carrier evidence');
     }
     const evidenceReferences = normalizeOperationalEvidence(
       input,
@@ -514,14 +531,6 @@ function createFulfillmentCommandService({
         && eventType === 'DELIVERED'
         && order.paymentMethod === 'COD'
       );
-      if (isStaffCodDelivery && runtime === 'production') {
-        throw new ApiError(
-          403,
-          'Production COD collection requires signed Carrier evidence',
-          [],
-          'COD_COLLECTION_CARRIER_SIGNATURE_REQUIRED',
-        );
-      }
       if (isStaffCodDelivery && !codCollectionResult && !input.customerCollectionEvidence) {
         throw new ApiError(
           400,
@@ -633,7 +642,7 @@ function createFulfillmentCommandService({
               occurredAt,
               evidenceReference,
               evidenceReferences,
-              source: 'STAFF_RECONCILIATION',
+              source: STAFF_RECORDED_CARRIER_EVIDENCE_SOURCE,
             }
             : null;
           const effectiveCollection = collection || staffCollection;
@@ -799,7 +808,7 @@ function createFulfillmentCommandService({
   }
 
   async function addDestinationVersion(actorContext, orderId, input = {}) {
-    const actor = validateActor(actorContext, 'STAFF_EVIDENCE');
+    const actor = validateActor(actorContext, STAFF_RECORDED_CARRIER_EVIDENCE_SOURCE);
     if (!['Staff', 'Customer'].includes(actor.actorType)) {
       throw new ApiError(403, 'Only Customer or Staff may request a destination change');
     }
@@ -862,7 +871,9 @@ function createFulfillmentCommandService({
           cycleId: cycle._id,
           shipmentId: shipment._id,
           eventType: 'DESTINATION_CHANGED',
-          source: actor.actorType === 'Customer' ? 'CUSTOMER_DISPUTE' : 'STAFF_EVIDENCE',
+          source: actor.actorType === 'Customer'
+            ? 'CUSTOMER_DISPUTE'
+            : STAFF_RECORDED_CARRIER_EVIDENCE_SOURCE,
           occurredAt: clock(),
           recordedAt: clock(),
           evidenceReference: customerReference,

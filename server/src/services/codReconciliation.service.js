@@ -15,6 +15,8 @@ const {
 } = require('./afterSalesLock.service');
 
 const MAX_EVENT_ID_LENGTH = 160;
+const STAFF_RECORDED_CARRIER_EVIDENCE_SOURCE = 'STAFF_RECORDED_CARRIER_EVIDENCE';
+const LEGACY_STAFF_EVIDENCE_SOURCES = new Set(['STAFF_EVIDENCE', 'STAFF_RECONCILIATION']);
 
 function withOptionalSession(query, session) {
   return session ? query.session(session) : query;
@@ -141,7 +143,14 @@ function normalizeEventId(value) {
 
 function normalizeCollectionSource(value) {
   const source = String(value || 'CARRIER').trim();
-  if (!['CARRIER', 'STAFF_EVIDENCE'].includes(source)) {
+  if (source === 'CARRIER') return source;
+  if (
+    source === STAFF_RECORDED_CARRIER_EVIDENCE_SOURCE
+    || LEGACY_STAFF_EVIDENCE_SOURCES.has(source)
+  ) {
+    return STAFF_RECORDED_CARRIER_EVIDENCE_SOURCE;
+  }
+  if (source !== 'CARRIER') {
     throw new ApiError(400, 'Collection evidence source is invalid');
   }
   return source;
@@ -342,10 +351,12 @@ function createCodReconciliationService({
     }
 
     if (!result.idempotentReplay) {
-      const auditAction = source === 'STAFF_EVIDENCE'
+      const auditAction = source === STAFF_RECORDED_CARRIER_EVIDENCE_SOURCE
         ? 'STAFF_COD_COLLECTION_RECORDED'
         : 'CARRIER_COD_COLLECTION_RECORDED';
-      const sourceLabel = source === 'STAFF_EVIDENCE' ? 'Staff manual' : 'Carrier';
+      const sourceLabel = source === STAFF_RECORDED_CARRIER_EVIDENCE_SOURCE
+        ? 'Staff-recorded Carrier'
+        : 'Carrier';
       await writeAudit(actorId, auditAction, result.order, `Recorded ${sourceLabel} Customer-collection evidence ${eventId}`);
     }
     return result;
@@ -353,7 +364,7 @@ function createCodReconciliationService({
 
   async function recordStaffCollectionEvidence(staffId, orderId, input = {}) {
     return recordCollectionEvidence(orderId, input, {
-      source: 'STAFF_EVIDENCE',
+      source: STAFF_RECORDED_CARRIER_EVIDENCE_SOURCE,
       actorId: staffId,
     });
   }

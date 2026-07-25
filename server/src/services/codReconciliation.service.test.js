@@ -110,7 +110,7 @@ describe('COD reconciliation service', () => {
       evidenceReference: 'staff-pod-1',
     });
 
-    assert.equal(result.event.source, 'STAFF_EVIDENCE');
+    assert.equal(result.event.source, 'STAFF_RECORDED_CARRIER_EVIDENCE');
     assert.equal(result.order.paymentStatus, 'Paid');
     assert.equal(auditEntries[0].userId, 'staff-1');
     assert.equal(auditEntries[0].action, 'STAFF_COD_COLLECTION_RECORDED');

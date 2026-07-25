@@ -16,7 +16,7 @@ describe('SL-004 route actor and command boundaries', () => {
     assert.match(routes, /\/staff\/shipments\/:shipmentId\/events/);
     assert.match(routes, /\/staff\/orders\/:id\/delivery-resolution/);
     assert.match(routes, /authorizeRoles\('Staff'\)/);
-    assert.match(controller, /source:\s*'STAFF_EVIDENCE'/);
+    assert.match(controller, /source:\s*'STAFF_RECORDED_CARRIER_EVIDENCE'/);
     assert.doesNotMatch(routes, /\/status/);
   });
 

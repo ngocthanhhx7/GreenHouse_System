@@ -654,7 +654,7 @@ describe('SL-004 packing, shipment and delivery behavior', () => {
     assert.equal(unknown.state.discrepancies[0].status, 'Open');
   });
 
-  it('P1 requires an explicit Staff COD result outside production and rejects manual COD delivery in production', async () => {
+  it('P1 requires an explicit Staff COD result in every runtime', async () => {
     for (const runtime of ['development', 'production']) {
       const manual = createHarness({ paymentMethod: 'COD', paymentStatus: 'Unpaid', runtime });
       const { shipment } = await manual.handoff(`handoff-explicit-cod-${runtime}`);
@@ -666,23 +666,18 @@ describe('SL-004 packing, shipment and delivery behavior', () => {
           {
             eventKey: `staff-cod-result-omitted-${runtime}`,
             eventType: 'DELIVERED',
-            source: 'STAFF_EVIDENCE',
+            source: 'STAFF_RECORDED_CARRIER_EVIDENCE',
             occurredAt: '2026-07-24T10:00:00.000Z',
             evidenceReference: 'staff-delivery-observation',
           },
         ),
         (error) => {
-          if (runtime === 'production') {
-            assert.equal(error.statusCode, 403);
-            assert.equal(error.errorCode, 'COD_COLLECTION_CARRIER_SIGNATURE_REQUIRED');
-          } else {
-            assert.equal(error.statusCode, 400);
-            assert.equal(error.errorCode, 'COD_COLLECTION_RESULT_REQUIRED');
-            assert.deepEqual(error.errors, [{
-              field: 'codCollectionResult',
-              message: 'Chọn đã thu hoặc chưa thu COD',
-            }]);
-          }
+          assert.equal(error.statusCode, 400);
+          assert.equal(error.errorCode, 'COD_COLLECTION_RESULT_REQUIRED');
+          assert.deepEqual(error.errors, [{
+            field: 'codCollectionResult',
+            message: 'Chọn đã thu hoặc chưa thu COD',
+          }]);
           return true;
         },
       );
@@ -694,63 +689,65 @@ describe('SL-004 packing, shipment and delivery behavior', () => {
     }
   });
 
-  it('P1 lets non-production Staff record successful delivery and derives full COD only from signed image evidence', async () => {
-    const manual = createHarness({ paymentMethod: 'COD', paymentStatus: 'Unpaid', runtime: 'development' });
-    const { shipment } = await manual.handoff();
-    const input = {
-      eventKey: 'staff-demo-cod-collected',
-      eventType: 'DELIVERED',
-      source: 'STAFF_EVIDENCE',
-      occurredAt: '2026-07-24T10:00:00.000Z',
-      evidenceReferences: [
+  it('P1 lets Staff record canonical successful delivery evidence in every runtime and derives the fixed full COD', async () => {
+    for (const runtime of ['development', 'production']) {
+      const manual = createHarness({ paymentMethod: 'COD', paymentStatus: 'Unpaid', runtime });
+      const { shipment } = await manual.handoff(`staff-canonical-handoff-${runtime}`);
+      const input = {
+        eventKey: `staff-canonical-cod-collected-${runtime}`,
+        eventType: 'DELIVERED',
+        source: 'STAFF_RECORDED_CARRIER_EVIDENCE',
+        occurredAt: '2026-07-24T10:00:00.000Z',
+        evidenceReferences: [
+          '/api/operational-evidence/11111111-1111-4111-8111-111111111111.jpg?claim=valid',
+          '/api/operational-evidence/22222222-2222-4222-8222-222222222222.jpg?claim=valid',
+        ],
+        codCollectionResult: 'COLLECTED',
+      };
+      const result = await manual.service.recordShipmentEvent(
+        { actorType: 'Staff', actorId: 'staff-1' },
+        shipment._id,
+        input,
+      );
+
+      assert.equal(result.order.orderStatus, 'Delivered');
+      assert.equal(result.order.paymentStatus, 'Paid');
+      assert.equal(result.order.customerCollectedAmount, 100);
+      assert.equal(result.order.completedSaleAt.toISOString(), '2026-07-24T10:00:00.000Z');
+      assert.equal(manual.state.payment.paymentStatus, 'Paid');
+      assert.equal(manual.state.payment.paidAt.toISOString(), '2026-07-24T10:00:00.000Z');
+      assert.equal(manual.state.codEvidence.length, 1);
+      assert.equal(manual.state.codEvidence[0].source, 'STAFF_RECORDED_CARRIER_EVIDENCE');
+      assert.equal(manual.state.codEvidence[0].customerCollectedAmount, 100);
+      assert.deepEqual(manual.state.codEvidence[0].evidenceReferences, [
         '/api/operational-evidence/11111111-1111-4111-8111-111111111111.jpg?claim=valid',
         '/api/operational-evidence/22222222-2222-4222-8222-222222222222.jpg?claim=valid',
-      ],
-      codCollectionResult: 'COLLECTED',
-    };
-    const result = await manual.service.recordShipmentEvent(
-      { actorType: 'Staff', actorId: 'staff-1' },
-      shipment._id,
-      input,
-    );
+      ]);
+      assert.deepEqual(result.event.evidenceReferences, manual.state.codEvidence[0].evidenceReferences);
+      const staffProjection = await manual.service.getStaffFulfillment('order-1');
+      assert.deepEqual(
+        staffProjection.cycles[0].events.at(-1).evidenceReferences,
+        input.evidenceReferences,
+      );
+      const customerProjection = await manual.service.getCustomerFulfillment(
+        'customer-1',
+        'order-1',
+        { includeOperationalEvidence: true },
+      );
+      assert.equal(
+        Object.hasOwn(customerProjection.cycles[0].events.at(-1), 'evidenceReferences'),
+        false,
+      );
 
-    assert.equal(result.order.orderStatus, 'Delivered');
-    assert.equal(result.order.paymentStatus, 'Paid');
-    assert.equal(result.order.customerCollectedAmount, 100);
-    assert.equal(result.order.completedSaleAt.toISOString(), '2026-07-24T10:00:00.000Z');
-    assert.equal(manual.state.payment.paymentStatus, 'Paid');
-    assert.equal(manual.state.payment.paidAt.toISOString(), '2026-07-24T10:00:00.000Z');
-    assert.equal(manual.state.codEvidence.length, 1);
-    assert.equal(manual.state.codEvidence[0].source, 'STAFF_RECONCILIATION');
-    assert.equal(manual.state.codEvidence[0].customerCollectedAmount, 100);
-    assert.deepEqual(manual.state.codEvidence[0].evidenceReferences, [
-      '/api/operational-evidence/11111111-1111-4111-8111-111111111111.jpg?claim=valid',
-      '/api/operational-evidence/22222222-2222-4222-8222-222222222222.jpg?claim=valid',
-    ]);
-    assert.deepEqual(result.event.evidenceReferences, manual.state.codEvidence[0].evidenceReferences);
-    const staffProjection = await manual.service.getStaffFulfillment('order-1');
-    assert.deepEqual(
-      staffProjection.cycles[0].events.at(-1).evidenceReferences,
-      input.evidenceReferences,
-    );
-    const customerProjection = await manual.service.getCustomerFulfillment(
-      'customer-1',
-      'order-1',
-      { includeOperationalEvidence: true },
-    );
-    assert.equal(
-      Object.hasOwn(customerProjection.cycles[0].events.at(-1), 'evidenceReferences'),
-      false,
-    );
-
-    const replay = await manual.service.recordShipmentEvent(
-      { actorType: 'Staff', actorId: 'staff-1' },
-      shipment._id,
-      input,
-    );
-    assert.equal(replay.idempotentReplay, true);
-    assert.equal(manual.state.codEvidence.length, 1);
-    assert.equal(manual.state.audits.filter((entry) => entry.action === 'SHIPMENT_EVENT_RECORDED').length, 1);
+      const replay = await manual.service.recordShipmentEvent(
+        { actorType: 'Staff', actorId: 'staff-1' },
+        shipment._id,
+        input,
+      );
+      assert.equal(replay.idempotentReplay, true);
+      assert.equal(manual.state.codEvidence.length, 1);
+      assert.equal(manual.state.audits.filter((entry) => entry.action === 'SHIPMENT_EVENT_RECORDED').length, 1);
+    }
   });
 
   it('P2 keeps Staff COD evidence identifiers within the persisted 160-character limit', async () => {
@@ -816,7 +813,7 @@ describe('SL-004 packing, shipment and delivery behavior', () => {
     assert.equal(manual.state.discrepancies[0].customerCollectedAmount, null);
   });
 
-  it('P1 rejects arbitrary COD amounts, unsigned/too many images, production Staff reconciliation, and COD on failed delivery', async () => {
+  it('P1 rejects arbitrary COD amounts, unsigned/too many images, and COD on failed delivery', async () => {
     async function rejectManual(runtime, suffix, patch, matcher) {
       const harness = createHarness({ paymentMethod: 'COD', paymentStatus: 'Unpaid', runtime });
       const { shipment } = await harness.handoff(`handoff-${suffix}`);
@@ -852,13 +849,12 @@ describe('SL-004 packing, shipment and delivery behavior', () => {
         `/api/operational-evidence/${index}.jpg?claim=valid`
       )),
     }, /maximum|5|tối đa/i);
-    await rejectManual('production', 'production', {}, /production|Carrier/i);
     await rejectManual('development', 'failed-delivery', { eventType: 'RETURNED_TO_SHOP' }, /Delivered|delivery|COD/i);
 
     const developmentProjection = await createHarness({ runtime: 'development' }).service.getStaffFulfillment('order-1');
     const productionProjection = await createHarness({ runtime: 'production' }).service.getStaffFulfillment('order-1');
     assert.equal(developmentProjection.capabilities.manualCodReconciliation, true);
-    assert.equal(productionProjection.capabilities.manualCodReconciliation, false);
+    assert.equal(productionProjection.capabilities.manualCodReconciliation, true);
   });
 
   it('P1 deduplicates operational evidence by canonical claim URL and totals the verified claim sizes', async () => {
@@ -1133,7 +1129,7 @@ describe('SL-004 packing, shipment and delivery behavior', () => {
           },
         },
       ),
-      /Staff.*STAFF_EVIDENCE|source.*Staff/i,
+      /Staff.*STAFF_RECORDED_CARRIER_EVIDENCE|source.*Staff/i,
     );
     assert.equal(state.order.orderStatus, 'Shipped');
     assert.equal(state.order.paymentStatus, 'Unpaid');

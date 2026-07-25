@@ -41,7 +41,7 @@ function blankHandoff() {
 function blankEvent() {
   return {
     eventType: 'DELIVERED',
-    source: 'STAFF_EVIDENCE',
+    source: 'STAFF_RECORDED_CARRIER_EVIDENCE',
     occurredAt: toLocalDateTimeValue(),
     evidenceReferences: [],
     codCollectionResult: '',

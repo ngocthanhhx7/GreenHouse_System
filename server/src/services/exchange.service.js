@@ -530,11 +530,22 @@ function createExchangeService({
       && exchangeCase.waitingFor === 'INITIAL_APPROVAL';
   }
 
+  const STAFF_RECORDED_CARRIER_EVIDENCE_SOURCE = 'STAFF_RECORDED_CARRIER_EVIDENCE';
+  const LEGACY_STAFF_EVIDENCE_SOURCES = new Set(['STAFF_EVIDENCE']);
+
+  function canonicalShipmentEvidenceSource(source) {
+    return source === STAFF_RECORDED_CARRIER_EVIDENCE_SOURCE
+      || LEGACY_STAFF_EVIDENCE_SOURCES.has(source)
+      ? STAFF_RECORDED_CARRIER_EVIDENCE_SOURCE
+      : source;
+  }
+
   function assertShipmentEventReplay(existing, expected) {
     if (String(existing.exchangeCaseId) !== String(expected.exchangeCaseId)
       || String(existing.shipmentId) !== String(expected.shipmentId)
       || existing.eventType !== expected.eventType
-      || existing.source !== expected.source
+      || canonicalShipmentEvidenceSource(existing.source)
+        !== canonicalShipmentEvidenceSource(expected.source)
       || String(existing.actorId || '') !== String(expected.actorId || '')
       || String(existing.evidenceReference) !== expected.evidenceReference
       || new Date(existing.occurredAt).getTime() !== expected.occurredAt.getTime()
@@ -554,7 +565,12 @@ function createExchangeService({
     }
     return {
       event,
-      request: await load(event.exchangeCaseId, source === 'STAFF_EVIDENCE' ? 'Staff' : 'Customer'),
+      request: await load(
+        event.exchangeCaseId,
+        canonicalShipmentEvidenceSource(source) === STAFF_RECORDED_CARRIER_EVIDENCE_SOURCE
+          ? 'Staff'
+          : 'Customer',
+      ),
       idempotentReplay: replay,
     };
   }
@@ -1778,6 +1794,7 @@ function createExchangeService({
     },
 
     async recordShipmentEvent(actorId, source, shipmentId, input = {}) {
+      source = canonicalShipmentEvidenceSource(source);
       rejectForbiddenFields(input);
       const eventKey = normalizeIdempotencyKey(input.eventId || input.idempotencyKey, 'eventId');
       const eventType = String(input.eventType || '').toUpperCase();
@@ -1973,7 +1990,12 @@ function createExchangeService({
     },
 
     async recordStaffShipmentEvent(staffId, caseId, shipmentId, input = {}) {
-      return service.recordShipmentEvent(staffId, 'STAFF_EVIDENCE', shipmentId, { ...input, exchangeCaseId: caseId });
+      return service.recordShipmentEvent(
+        staffId,
+        STAFF_RECORDED_CARRIER_EVIDENCE_SOURCE,
+        shipmentId,
+        { ...input, exchangeCaseId: caseId },
+      );
     },
 
     async reportShipmentDispute(customerId, caseId, shipmentId, input = {}) {

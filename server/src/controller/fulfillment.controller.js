@@ -48,7 +48,7 @@ async function recordStaffShipmentEvent(req, res, next) {
       await fulfillmentService.recordShipmentEvent(
         { actorType: 'Staff', actorId: req.user.id },
         req.params.shipmentId,
-        { ...(req.body || {}), source: 'STAFF_EVIDENCE' },
+        { ...(req.body || {}), source: 'STAFF_RECORDED_CARRIER_EVIDENCE' },
       ),
       'Shipment event recorded',
       201,
