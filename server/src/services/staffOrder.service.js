@@ -623,15 +623,20 @@ function createStaffOrderService({
             );
           }
 
-          const cycle = await orderRepository.createFulfillmentCycle({
-            cycleKey: `fulfillment:${String(orderId)}:1`,
-            orderId,
-            cycleNumber: 1,
-            cycleType: 'Initial',
-            status: 'AwaitingExport',
-            commandKey: idempotencyKey,
-            createdBy: staffId,
-          }, session);
+          let cycle = orderRepository.findInitialFulfillmentCycle
+            ? await orderRepository.findInitialFulfillmentCycle(orderId, session)
+            : null;
+          if (!cycle) {
+            cycle = await orderRepository.createFulfillmentCycle({
+              cycleKey: `fulfillment:${String(orderId)}:1`,
+              orderId,
+              cycleNumber: 1,
+              cycleType: 'Initial',
+              status: 'AwaitingExport',
+              commandKey: idempotencyKey,
+              createdBy: staffId,
+            }, session);
+          }
           const stockExportRequest = await orderRepository.createStockExportRequest({
             orderId,
             cycleId: cycle._id,
