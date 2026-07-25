@@ -514,6 +514,14 @@ async confirmOrder(staffId, orderId, input = {}) {
       if (!paymentValid) {
         throw new ApiError(409, 'Trạng thái thanh toán chưa phù hợp để xác nhận đơn.', [], 'ORDER_CONFIRM_PAYMENT_INVALID');
       }
+      const payment = await orderRepository.findPaymentByOrderId(orderId, session);
+      if (
+        !payment
+        || payment.paymentMethod !== order.paymentMethod
+        || payment.paymentStatus !== order.paymentStatus
+      ) {
+        throw new ApiError(409, 'Dữ liệu thanh toán của đơn không còn hợp lệ.', [], 'ORDER_CONFIRM_PAYMENT_INVALID');
+      }
 
       const details = await orderRepository.listOrderDetails(orderId, session);
       if (!details.length) {
