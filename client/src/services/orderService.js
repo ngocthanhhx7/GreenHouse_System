@@ -24,7 +24,11 @@ export function createCheckoutIdempotencyKey() {
   return `checkout-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
 }
 
-export function createOrderService({ baseUrl = DEFAULT_BASE_URL, fetcher = fetch } = {}) {
+export function createOrderService({
+  baseUrl = DEFAULT_BASE_URL,
+  fetcher = fetch,
+  apiRequester = apiRequest,
+} = {}) {
   return {
     async placeOrder(input, { idempotencyKey = input?.idempotencyKey || createCheckoutIdempotencyKey() } = {}) {
       const { idempotencyKey: _idempotencyKey, ...payload } = input;
@@ -38,10 +42,28 @@ export function createOrderService({ baseUrl = DEFAULT_BASE_URL, fetcher = fetch
       );
     },
     async listMyOrders() {
-      return apiRequest('/orders/my');
+      return apiRequester('/orders/my');
+    },
+    async listMyOrdersWithDetails() {
+      const payload = await apiRequester('/orders/my');
+      const orders = Array.isArray(payload) ? payload : payload?.items || payload?.orders || [];
+      return Promise.all(orders.map(async (order) => {
+        if (Array.isArray(order.details) && order.details.length) return order;
+        const id = order.id || order._id;
+        if (!id) return { ...order, details: [], detailLoadError: 'Thiếu mã đơn hàng.' };
+        try {
+          return await apiRequester(`/orders/${encodeURIComponent(String(id))}`);
+        } catch (error) {
+          return {
+            ...order,
+            details: [],
+            detailLoadError: error.message || 'Không thể tải chi tiết đơn hàng.',
+          };
+        }
+      }));
     },
     async getOrder(id) {
-      return apiRequest(`/orders/${id}`);
+      return apiRequester(`/orders/${id}`);
     },
     async getFulfillment(id) {
       return parseResponse(await fetcher(`${baseUrl}/orders/${id}/fulfillment`, {
