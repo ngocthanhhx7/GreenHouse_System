@@ -425,3 +425,27 @@ Nguyễn Ngọc Thành đã review và merge `--no-ff` hai nhánh owner:
 - Cảnh báo không chặn còn lại là Vite chunk 714.34 kB lớn hơn 500 kB.
 - Việc triển khai production, migration dữ liệu đích và walkthrough có xác thực
   không thuộc tuyên bố tích hợp cục bộ này.
+
+## Implementation Addendum 2026-07-25 - Auth Email Recovery UI
+
+Nguyễn Ngọc Thành đóng khoảng trống giao diện của password-reset OTP đã có trên
+server bằng branch `feature/thanh-auth-email`:
+
+- Login có liên kết `Quên mật khẩu?` tới một trang public hai bước
+  `/forgot-password`.
+- Bước đầu yêu cầu OTP bằng email với phản hồi chống dò tài khoản; bước sau nhập
+  OTP, mật khẩu mới và xác nhận mật khẩu, có gửi lại sau 60 giây và đổi email.
+- Frontend kiểm tra email, OTP sáu số, password policy 8–72 byte có chữ và số,
+  xác nhận mật khẩu; lỗi backend theo trường tiếp tục là nguồn xác thực cuối cùng.
+- Đăng ký Customer vẫn bắt buộc tạo RegistrationChallenge và tiêu thụ OTP trước
+  khi tạo User; không bổ sung direct-registration route hoặc tự đăng nhập sau
+  reset.
+- Evidence trong phiên: client Auth targeted `21/21`, server Auth targeted
+  `30/30`, SL-007 verifier `15/15`, browser E2E desktop/mobile `2/2`, full server
+  `1078/1078`, full client `315/315`, production build `168` modules exit `0`.
+- Không có migration hoặc biến môi trường mới. Production vẫn cần cấu hình Gmail,
+  EmailOutbox và `RESET_OTP_SECRET` mạnh ngoài Git.
+- Warning không chặn: Vite chunk `733.23 kB`; client audit giữ nguyên ba advisory
+  high từ baseline (`react-router-dom`/`react-router` RSC và `postcss` build-time).
+  Ứng dụng là Vite SPA không dùng React Server Components; package/lockfile không
+  thay đổi trong scope Auth này.
