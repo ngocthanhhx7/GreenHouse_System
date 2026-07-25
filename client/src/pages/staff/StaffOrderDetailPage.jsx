@@ -286,10 +286,6 @@ export default function StaffOrderDetailPage() {
                   .filter((incident) => incident.customerChoice === 'TerminalRefund')
                   .map((incident) => <option key={incident.id} value={incident.id}>{incident.incidentType} · {incident.customerChoice || incident.status}</option>)}
               </select>
-                {fulfillment.incidents
-                  .filter((incident) => incident.customerChoice === 'TerminalRefund')
-                  .map((incident) => <option key={incident.id} value={incident.id}>{incident.incidentType} · {incident.customerChoice || incident.status}</option>)}
-              </select>
               <p className="mt-2">FAILED_DELIVERY refund Pending được hệ thống suy ra; ShippingFee không bị khấu trừ.</p>
               <button className="btn btn-outline-danger" type="button" disabled={submitting || !resolutionIncidentId} onClick={() => runAction(
                 () => staffOrderService.resolveDeliveryFailure(order.id, {
