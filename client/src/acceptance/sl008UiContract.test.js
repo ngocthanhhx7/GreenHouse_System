@@ -826,7 +826,7 @@ describe('SL-008 Review UI integration contract', () => {
     );
     assert.match(
       moderation,
-      /Staff moderation|Moderation decision|Moderated by Staff/i,
+      /Staff moderation|Moderation decision|Moderated by Staff|Kiểm duyệt nhân viên|Kiểm duyệt đánh giá/i,
     );
     await assertDeferredMutation({
       componentPath: 'pages/staff/ReviewModerationPage.jsx',

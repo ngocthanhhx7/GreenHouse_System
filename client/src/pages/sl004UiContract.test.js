@@ -147,8 +147,8 @@ describe('SL-004 fulfillment and delivery UI contract', () => {
 
   it('AT-072 displays immutable destination versions and requires Customer/Carrier evidence for corrections', () => {
     assert.match(customerOrder, /destinationVersion|ShipmentDestinationVersion/);
-    assert.match(customerOrder, /destination.*history|history.*destination/i);
-    assert.match(customerOrder, /destination.*correction|correction.*destination/i);
+    assert.match(customerOrder, /destination.*history|history.*destination|Lịch sử địa chỉ/i);
+    assert.match(customerOrder, /destination.*correction|correction.*destination|Đính chính địa chỉ/i);
     assert.match(staffOrder, /carrier.*accept|accept.*carrier|Carrier evidence/i);
     assert.doesNotMatch(customerOrder, /setOrder\([^)]*shippingAddress|shippingAddress\s*=/);
   });
