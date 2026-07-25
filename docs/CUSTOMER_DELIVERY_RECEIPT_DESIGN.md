@@ -168,6 +168,9 @@ Outbox failure rolls back the owning transaction. Notification delivery failure 
 - `IDEMPOTENCY_KEY_REQUIRED`
 - `IDEMPOTENCY_KEY_INVALID`
 - `IDEMPOTENCY_KEY_REUSED`
+- Migration preflight: `CUSTOMER_DELIVERY_RECEIPT_COMMAND_AMBIGUOUS` when
+  duplicate Customer/idempotency command identities would make the unique
+  command index unsafe.
 
 ## 9. Acceptance evidence
 

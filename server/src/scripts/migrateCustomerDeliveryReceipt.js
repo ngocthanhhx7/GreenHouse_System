@@ -33,9 +33,10 @@ const REQUIRED_INDEXES = Object.freeze([
   }),
 ]);
 
-function migrationError(code) {
+function migrationError(code, data = null) {
   const error = new Error(code);
   error.code = code;
+  if (data) error.data = data;
   return error;
 }
 
@@ -115,11 +116,35 @@ function createMigrationRepository({ collections = defaultCollections() } = {}) 
 
   return {
     async preflight() {
-      const [receipts, shipments] = await Promise.all([
+      const [receipts, shipments, duplicateCommandGroups] = await Promise.all([
         readAll(collections.receipts),
         readAll(collections.shipments),
+        collections.receipts.aggregate([
+          {
+            $group: {
+              _id: {
+                customerId: '$customerId',
+                idempotencyKey: '$idempotencyKey',
+              },
+              ids: { $push: '$_id' },
+              count: { $sum: 1 },
+            },
+          },
+          { $match: { count: { $gt: 1 } } },
+        ]).toArray(),
       ]);
 
+      if (duplicateCommandGroups.length) {
+        const receiptIds = duplicateCommandGroups
+          .flatMap((group) => group.ids || [])
+          .map(String)
+          .sort();
+        throw migrationError('CUSTOMER_DELIVERY_RECEIPT_COMMAND_AMBIGUOUS', {
+          conflictGroups: duplicateCommandGroups.length,
+          duplicateReceiptCount: receiptIds.length,
+          receiptIds,
+        });
+      }
       if (duplicateIdentity(
         receipts.filter((receipt) => receipt?.outcome === 'RECEIVED'),
         (receipt) => String(receipt.orderId || ''),

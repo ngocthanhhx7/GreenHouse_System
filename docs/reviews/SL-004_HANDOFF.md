@@ -104,7 +104,8 @@ The Customer-facing completion boundary is now separate from physical delivery:
 
 Local evidence known at this handoff: model/schema 11 passing assertions,
 service variants 46 and 32, API/projection 90, after-sales 161, and migration
-RED 0/6 to GREEN 6/6. The isolated client task's final count and the combined
+RED 0/6 to GREEN 6/6, followed by command-identity P1 RED 6/7 to GREEN 7/7.
+The isolated client task's final count and the combined
 full-suite/build results are pending final integration and must be recorded
 there, not guessed here.
 

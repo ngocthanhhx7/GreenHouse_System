@@ -18,6 +18,8 @@
 - Task 4 direct after-sales gates: 161 passing assertions.
 - Task 6 migration contract was observed RED at 0/6 because the module and npm
   commands were absent, then GREEN at 6/6 after the index-only migration.
+- The duplicate command-identity P1 was observed RED at 6/7, then GREEN at 7/7
+  after fail-closed preflight was added.
 - Task 5 client count remains pending the isolated client task's final evidence;
   this document deliberately does not estimate it.
 - The current combined server receipt-targeted command passed 270/270; it is not

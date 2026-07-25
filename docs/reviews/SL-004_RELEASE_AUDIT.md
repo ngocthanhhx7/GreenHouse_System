@@ -136,7 +136,7 @@ handoff review. The known client chunk-size warning is unchanged.
 | Transactional service variants | 46 and 32 passing assertions |
 | API/projection | 90 passing assertions |
 | Direct Review/Exchange/Return receipt gates | 161 passing assertions |
-| Receipt migration | RED 0/6, then GREEN 6/6 |
+| Receipt migration | Initial RED 0/6 then GREEN 6/6; command-identity P1 RED 6/7 then GREEN 7/7 |
 | Current combined server receipt-targeted command | 270/270 |
 | Client receipt UI | Pending isolated client gate; no count estimated |
 | Combined server/client regression and production build | Pending final integration; no result implied |
@@ -145,7 +145,9 @@ handoff review. The known client chunk-size warning is unchanged.
 
 `migrateCustomerDeliveryReceipt.js` has explicit dry-run, apply, and verify
 modes. It reads receipt/shipment technical state, fails closed for duplicate
-receipt identities, unsafe guard types, or index-definition drift, and creates
+Customer/idempotency command identities
+(`CUSTOMER_DELIVERY_RECEIPT_COMMAND_AMBIGUOUS`), duplicate receipt identities,
+unsafe guard types, or index-definition drift, and creates
 only the five exact `CustomerDeliveryReceipt` indexes. It does not backfill or
 rewrite legacy `Delivered` Orders, does not create `Received` rows, and reports
 only safe counts. A second apply performs zero business writes by contract.

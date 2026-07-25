@@ -32,6 +32,29 @@ class MemoryCollection {
     return { toArray: async () => clone(this.documents) };
   }
 
+  aggregate() {
+    const groups = new Map();
+    for (const document of this.documents) {
+      const customerId = String(document.customerId || '');
+      const idempotencyKey = String(document.idempotencyKey || '');
+      if (!customerId || !idempotencyKey) continue;
+      const identity = `${customerId}\u0000${idempotencyKey}`;
+      const group = groups.get(identity) || {
+        _id: { customerId, idempotencyKey },
+        ids: [],
+        count: 0,
+      };
+      group.ids.push(document._id);
+      group.count += 1;
+      groups.set(identity, group);
+    }
+    return {
+      toArray: async () => clone(
+        [...groups.values()].filter((group) => group.count > 1),
+      ),
+    };
+  }
+
   listIndexes() {
     return { toArray: async () => clone(this.indexes) };
   }
@@ -135,6 +158,57 @@ describe('Customer delivery receipt migration', () => {
         row.name,
       );
       assert.deepEqual(data.operations, [], row.name);
+    }
+  });
+
+  it('fails dry-run and apply before any index or business write when command identities are duplicated', async () => {
+    for (const mode of ['dry-run', 'apply']) {
+      const data = fixture({
+        receipts: [
+          {
+            _id: 'receipt-a',
+            orderId: 'order-1',
+            customerId: 'customer-1',
+            idempotencyKey: 'receipt-command-001',
+            outcome: 'NOT_RECEIVED',
+            supersedesId: null,
+            reason: 'private customer reason A',
+          },
+          {
+            _id: 'receipt-b',
+            orderId: 'order-2',
+            customerId: 'customer-1',
+            idempotencyKey: 'receipt-command-001',
+            outcome: 'NOT_RECEIVED',
+            supersedesId: null,
+            reason: 'private customer reason B',
+          },
+        ],
+      });
+
+      let rejected;
+      await assert.rejects(
+        () => migration.migrateCustomerDeliveryReceipt({
+          repository: repositoryFor(data),
+          mode,
+        }),
+        (error) => {
+          rejected = error;
+          return error?.code === 'CUSTOMER_DELIVERY_RECEIPT_COMMAND_AMBIGUOUS';
+        },
+        mode,
+      );
+      assert.deepEqual(rejected.data, {
+        conflictGroups: 1,
+        duplicateReceiptCount: 2,
+        receiptIds: ['receipt-a', 'receipt-b'],
+      });
+      assert.doesNotMatch(
+        JSON.stringify(rejected),
+        /receipt-command-001|private customer reason/,
+      );
+      assert.deepEqual(data.operations, [], `${mode} must not create indexes or write data`);
+      assert.equal(data.collections.receipts.documents.length, 2);
     }
   });
 
