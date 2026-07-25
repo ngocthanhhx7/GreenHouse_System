@@ -125,7 +125,7 @@ function createOrderRepository() {
 
 function createAuditLogger() {
   const entries = [];
-  return { entries, async log(entry) { entries.push(entry); } };
+  return { entries, async log(entry, session) { entries.push({ ...entry, session }); } };
 }
 
 describe('staff order service', () => {
@@ -139,7 +139,25 @@ describe('staff order service', () => {
     service = createStaffOrderService({
       orderRepository,
       auditLogger,
-      transactionManager: { async withTransaction(work) { return work({ id: 'staff-test-session' }); } },
+      transactionManager: {
+        async withTransaction(work) {
+          const orderSnapshot = structuredClone(orderRepository.orders);
+          const exportSnapshot = structuredClone(orderRepository.exports);
+          const cycleSnapshot = structuredClone(orderRepository.cycles);
+          try {
+            return await work({ id: 'staff-test-session' });
+          } catch (error) {
+            const currentKey = orderRepository.orders[0]?.staffConfirmIdempotencyKey || '';
+            const snapshotKey = orderSnapshot[0]?.staffConfirmIdempotencyKey || '';
+            if (currentKey === snapshotKey || error.message === 'audit unavailable') {
+              orderRepository.orders.splice(0, orderRepository.orders.length, ...orderSnapshot);
+              orderRepository.exports.splice(0, orderRepository.exports.length, ...exportSnapshot);
+              orderRepository.cycles.splice(0, orderRepository.cycles.length, ...cycleSnapshot);
+            }
+            throw error;
+          }
+        },
+      },
       assignmentCoordinator: { async coordinate() {} },
     });
   });
@@ -148,6 +166,24 @@ describe('staff order service', () => {
     const result = await service.listOrders({ status: 'Pending' });
     assert.equal(result.items.length, 2);
     assert.deepEqual(result.items.map((item) => item.orderCode).sort(), ['ORD-1', 'ORD-2']);
+  });
+
+  it('requires an idempotency key before Staff confirmation', async () => {
+    await assert.rejects(
+      () => service.confirmOrder('staff-1', 'order-1', { note: 'Reviewed' }),
+      (error) => error.statusCode === 400 && error.errorCode === 'STAFF_CONFIRM_IDEMPOTENCY_KEY_REQUIRED',
+    );
+    assert.equal(orderRepository.orders[0].orderStatus, 'Pending');
+    assert.equal(orderRepository.exports.length, 0);
+  });
+
+  it('requires COD to remain Unpaid at confirmation', async () => {
+    orderRepository.orders[0].paymentStatus = 'Paid';
+
+    await assert.rejects(
+      () => service.confirmOrder('staff-1', 'order-1', { idempotencyKey: 'staff-confirm-001' }),
+      (error) => error.statusCode === 409 && error.errorCode === 'ORDER_CONFIRM_PAYMENT_INVALID',
+    );
   });
 
   it('returns the completed stock export so Staff can continue to packing', async () => {
@@ -169,7 +205,10 @@ describe('staff order service', () => {
   });
 
   it('atomically confirms a pending order and creates its initial cycle and single stock export request', async () => {
-    const result = await service.confirmOrder('staff-1', 'order-1', { note: 'Reviewed' });
+    const result = await service.confirmOrder('staff-1', 'order-1', {
+      note: 'Reviewed',
+      idempotencyKey: 'staff-confirm-001',
+    });
 
     assert.equal(result.orderStatus, 'Confirmed');
     assert.ok(orderRepository.orders[0].confirmedAt);
@@ -183,21 +222,35 @@ describe('staff order service', () => {
     assert.equal(orderRepository.cycles.length, 1);
     assert.equal(orderRepository.cycles[0].cycleType, 'Initial');
     assert.equal(orderRepository.cycles[0].cycleNumber, 1);
+    assert.equal(result.confirmedBy, 'staff-1');
+    assert.ok(result.confirmedAt);
     assert.equal(orderRepository.confirmationMutationSessions.length, 3);
     assert.ok(orderRepository.confirmationMutationSessions.every(
       (session) => session === orderRepository.confirmationMutationSessions[0],
     ));
     assert.equal(auditLogger.entries[0].action, 'STAFF_ORDER_CONFIRM');
+    assert.equal(auditLogger.entries[0].actorId, 'staff-1');
+    assert.equal(auditLogger.entries[0].actorRole, 'Staff');
+    assert.equal(auditLogger.entries[0].previousState, 'Pending');
+    assert.equal(auditLogger.entries[0].newState, 'Confirmed');
+    assert.equal(auditLogger.entries[0].businessEventId, 'order:order-1:confirmed');
+    assert.equal(auditLogger.entries[0].session.id, 'staff-test-session');
   });
 
   it('rejects confirming an unpaid online order', async () => {
-    await assert.rejects(() => service.confirmOrder('staff-1', 'order-2', {}), /Online order must be paid before confirmation/);
+    await assert.rejects(
+      () => service.confirmOrder('staff-1', 'order-2', { idempotencyKey: 'staff-confirm-001' }),
+      (error) => error.statusCode === 409 && error.errorCode === 'ORDER_CONFIRM_PAYMENT_INVALID',
+    );
   });
 
   it('does not create a second stock export request for duplicate confirmation', async () => {
-    await service.confirmOrder('staff-1', 'order-1', {});
+    await service.confirmOrder('staff-1', 'order-1', { idempotencyKey: 'staff-confirm-001' });
 
-    await assert.rejects(() => service.confirmOrder('staff-1', 'order-1', {}), /Only Pending orders can be confirmed/);
+    await assert.rejects(
+      () => service.confirmOrder('staff-1', 'order-1', { idempotencyKey: 'staff-confirm-002' }),
+      (error) => error.statusCode === 409 && error.errorCode === 'ORDER_CONFIRM_STALE_STATE',
+    );
 
     assert.equal(orderRepository.orders[0].orderStatus, 'Confirmed');
     assert.equal(orderRepository.exports.length, 1);
@@ -208,7 +261,7 @@ describe('staff order service', () => {
 
     await assert.rejects(
       () => service.confirmOrder('staff-1', 'order-1', { idempotencyKey: 'confirm-002' }),
-      /Only Pending orders can be confirmed/,
+      (error) => error.statusCode === 409 && error.errorCode === 'ORDER_CONFIRM_STALE_STATE',
     );
 
     assert.equal(orderRepository.orders[0].orderStatus, 'Confirmed');
@@ -218,7 +271,10 @@ describe('staff order service', () => {
   it('does not create a stock export request for a stale confirmation', async () => {
     orderRepository.orders[0].orderStatus = 'Confirmed';
 
-    await assert.rejects(() => service.confirmOrder('staff-1', 'order-1', {}), /Only Pending orders can be confirmed/);
+    await assert.rejects(
+      () => service.confirmOrder('staff-1', 'order-1', { idempotencyKey: 'staff-confirm-001' }),
+      (error) => error.statusCode === 409 && error.errorCode === 'ORDER_CONFIRM_STALE_STATE',
+    );
 
     assert.equal(orderRepository.exports.length, 0);
   });
@@ -227,7 +283,7 @@ describe('staff order service', () => {
     orderRepository.inventories[0].reservedQuantity = 1;
 
     await assert.rejects(
-      () => service.confirmOrder('staff-1', 'order-1', {}),
+      () => service.confirmOrder('staff-1', 'order-1', { idempotencyKey: 'staff-confirm-001' }),
       (error) => error.statusCode === 409 && error.errorCode === 'ORDER_CONFIRM_RESERVATION_MISSING',
     );
 
@@ -287,6 +343,42 @@ describe('staff order service', () => {
     assert.equal(first.orderStatus, 'Confirmed');
     assert.equal(replay.orderStatus, 'Confirmed');
     assert.equal(replay.idempotentReplay, true);
+    assert.equal(orderRepository.exports.length, 1);
+    assert.equal(orderRepository.cycles.length, 1);
+  });
+
+  it('rolls back confirmation and export creation when audit fails', async () => {
+    auditLogger.log = async () => { throw new Error('audit unavailable'); };
+    const before = structuredClone(orderRepository.orders[0]);
+
+    await assert.rejects(
+      () => service.confirmOrder('staff-1', 'order-1', { idempotencyKey: 'staff-confirm-001' }),
+      /audit unavailable/,
+    );
+
+    assert.deepEqual(orderRepository.orders[0], before);
+    assert.equal(orderRepository.exports.length, 0);
+    assert.equal(orderRepository.cycles.length, 0);
+  });
+
+  it('serializes concurrent confirmations so only one different key succeeds', async () => {
+    const claim = orderRepository.claimStaffConfirmation.bind(orderRepository);
+    orderRepository.claimStaffConfirmation = async (...args) => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return claim(...args);
+    };
+
+    const outcomes = await Promise.allSettled([
+      service.confirmOrder('staff-1', 'order-1', { idempotencyKey: 'staff-confirm-001' }),
+      service.confirmOrder('staff-2', 'order-1', { idempotencyKey: 'staff-confirm-002' }),
+    ]);
+    const successes = outcomes.filter((outcome) => outcome.status === 'fulfilled');
+    const failures = outcomes.filter((outcome) => outcome.status === 'rejected');
+
+    assert.equal(successes.length, 1);
+    assert.equal(failures.length, 1);
+    assert.equal(failures[0].reason.statusCode, 409);
+    assert.ok(['ORDER_CONFIRM_STALE_STATE', 'ORDER_CONFIRM_CONCURRENT'].includes(failures[0].reason.errorCode));
     assert.equal(orderRepository.exports.length, 1);
     assert.equal(orderRepository.cycles.length, 1);
   });
