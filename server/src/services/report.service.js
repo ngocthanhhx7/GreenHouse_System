@@ -46,6 +46,7 @@ function createModelRepository() {
         'totalAmount', 'codExpectedAmount', 'customerCollectedAmount',
         'customerCollectedAt', 'completedSaleAt', 'createdAt', 'confirmedAt',
         'shippedAt', 'deliveredAt', 'cancelledAt', 'canceledAt', 'returnedAt',
+        'deliveryResolutionCommandKey',
       ].join(' ')));
     },
     async listOrderDetails() {
@@ -332,13 +333,22 @@ function buildOrders(orders, period, dataAsOf, auditLogs = []) {
     new Set(['RETURN_REFUND_COMPLETED', 'STAFF_COD_RECOVERY_FINALIZED']),
   );
   const byStatus = groupCount(orders, 'orderStatus');
+  const isTerminalDeliveryFailure = (order) => (
+    order.orderStatus === 'DeliveryFailed'
+    || (
+      order.orderStatus === 'Shipped'
+      && Boolean(String(order.deliveryResolutionCommandKey || '').trim())
+    )
+  );
   return {
     periodEvents,
     currentSnapshot: {
       total: orders.length,
       backlog: orders.filter((order) => (
-        ['Pending', 'Confirmed', 'Packed', 'Shipped', 'DeliveryFailed'].includes(order.orderStatus)
+        ['Pending', 'Confirmed', 'Packed', 'Shipped'].includes(order.orderStatus)
+        && !isTerminalDeliveryFailure(order)
       )).length,
+      terminalDeliveryFailures: orders.filter(isTerminalDeliveryFailure).length,
       byStatus,
       dataAsOf,
     },

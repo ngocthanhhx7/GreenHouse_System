@@ -1232,7 +1232,9 @@ describe('SL-004 packing, shipment and delivery behavior', () => {
       idempotencyKey: 'returned-terminal-resolution',
       incidentId: returned.incident._id,
     });
-    assert.equal(terminal.order.orderStatus, 'DeliveryFailed');
+    assert.equal(terminal.order.orderStatus, 'Shipped');
+    assert.equal(terminal.incident.status, 'Resolved');
+    assert.equal(terminal.order.deliveryResolutionCommandKey, 'returned-terminal-resolution');
   });
 
   it('AT-068 gives Warehouse a receipt queue with every exact order line and no completed receipts', async () => {
@@ -1442,7 +1444,7 @@ describe('SL-004 packing, shipment and delivery behavior', () => {
     assert.equal(state.cycles.length, 2);
   });
 
-  it('AT-069/071 resolves receipt or irrecoverable incident to DeliveryFailed with independent money result', async () => {
+  it('AT-069/071 resolves a terminal delivery incident while keeping the Order Shipped', async () => {
     const paid = createHarness();
     const { shipment } = await paid.handoff();
     const incidentResult = await paid.service.recordShipmentEvent(
@@ -1468,7 +1470,9 @@ describe('SL-004 packing, shipment and delivery behavior', () => {
       incidentId: incidentResult.incident._id,
       note: 'Customer selected terminal resolution',
     });
-    assert.equal(result.order.orderStatus, 'DeliveryFailed');
+    assert.equal(result.order.orderStatus, 'Shipped');
+    assert.equal(result.incident.status, 'Resolved');
+    assert.equal(result.order.deliveryResolutionCommandKey, 'terminal-resolution-0001');
     assert.equal(result.order.paymentStatus, 'Paid');
     assert.equal(result.refund.amount, 100);
     assert.match(result.refund.obligationKey, /^FAILED_DELIVERY:/);
@@ -1480,6 +1484,15 @@ describe('SL-004 packing, shipment and delivery behavior', () => {
     assert.equal(replay.idempotentReplay, true);
     assert.equal(replay.refund._id, result.refund._id);
     assert.equal(replay.refundRequest._id, result.refundRequest._id);
+    await assert.rejects(
+      paid.service.resolveDeliveryFailure('staff-1', 'order-1', {
+        idempotencyKey: 'terminal-resolution-different-command',
+        incidentId: incidentResult.incident._id,
+      }),
+      /already resolved|đã được xử lý/i,
+    );
+    assert.equal(paid.state.refunds.length, 1);
+    assert.equal(paid.state.refundRequests.length, 1);
 
     const cod = createHarness({ paymentMethod: 'COD', paymentStatus: 'Unpaid' });
     const codShipment = await cod.handoff();
@@ -1505,6 +1518,9 @@ describe('SL-004 packing, shipment and delivery behavior', () => {
       idempotencyKey: 'terminal-cod-resolution',
       incidentId: codIncident.incident._id,
     });
+    assert.equal(codResult.order.orderStatus, 'Shipped');
+    assert.equal(codResult.incident.status, 'Resolved');
+    assert.equal(codResult.order.deliveryResolutionCommandKey, 'terminal-cod-resolution');
     assert.equal(codResult.order.paymentStatus, 'Cancelled');
     assert.equal(codResult.refund, null);
   });

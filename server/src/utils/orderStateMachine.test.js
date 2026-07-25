@@ -9,12 +9,15 @@ describe('order state machine', () => {
     assert.equal(canTransitionOrderStatus('Confirmed', 'Packed'), true);
     assert.equal(canTransitionOrderStatus('Packed', 'Shipped'), true);
     assert.equal(canTransitionOrderStatus('Shipped', 'Delivered'), true);
-    assert.equal(canTransitionOrderStatus('Shipped', 'DeliveryFailed'), true);
+    assert.equal(canTransitionOrderStatus('Pending', 'Cancelled'), true);
+    assert.equal(canTransitionOrderStatus('Confirmed', 'Cancelled'), true);
+    assert.equal(canTransitionOrderStatus('Delivered', 'Returned'), true);
+    assert.equal(canTransitionOrderStatus('Shipped', 'DeliveryFailed'), false);
   });
 
   it('rejects skipped staff order transitions', () => {
     assert.equal(canTransitionOrderStatus('Confirmed', 'Shipped'), false);
-    assert.deepEqual(getAllowedOrderStatusTransitions('Confirmed'), ['Packed']);
+    assert.deepEqual(getAllowedOrderStatusTransitions('Confirmed'), ['Packed', 'Cancelled']);
     assert.deepEqual(getAllowedOrderStatusTransitions('DeliveryFailed'), []);
   });
 });
