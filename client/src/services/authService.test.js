@@ -105,4 +105,40 @@ describe('client auth service', () => {
     assert.equal(calls.every(({ options }) => options.credentials === 'include'), true);
     assert.equal(Object.values(globalThis).some((value) => value === 'opaque-token'), false);
   });
+
+  it('uses the public OTP password-recovery endpoints without creating a session', async () => {
+    const calls = [];
+    const service = createAuthService({
+      baseUrl: 'http://api.test/api',
+      fetcher: async (url, options) => {
+        calls.push({ url, options });
+        return {
+          ok: true,
+          json: async () => ({ success: true, data: null }),
+        };
+      },
+    });
+
+    await service.requestPasswordReset('thanh@example.com');
+    await service.resetPassword({
+      email: 'thanh@example.com',
+      otp: '123456',
+      password: 'Matkhau456',
+      confirmPassword: 'Matkhau456',
+    });
+
+    assert.deepEqual(calls.map(({ url }) => url), [
+      'http://api.test/api/auth/forgot-password',
+      'http://api.test/api/auth/reset-password',
+    ]);
+    assert.deepEqual(calls.map(({ options }) => options.method), ['POST', 'POST']);
+    assert.deepEqual(JSON.parse(calls[0].options.body), { email: 'thanh@example.com' });
+    assert.deepEqual(JSON.parse(calls[1].options.body), {
+      email: 'thanh@example.com',
+      otp: '123456',
+      password: 'Matkhau456',
+      confirmPassword: 'Matkhau456',
+    });
+    assert.equal(calls.every(({ options }) => options.credentials === 'include'), true);
+  });
 });

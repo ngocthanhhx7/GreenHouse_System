@@ -61,4 +61,14 @@ describe('SL-003 Order persistence contract', () => {
       ['checkout-hash', 'cancel-key', 'cancel-hash'],
     );
   });
+
+  it('stores immutable Staff confirmation evidence', () => {
+    const confirmedBy = Order.schema.path('confirmedBy');
+
+    assert.ok(confirmedBy);
+    assert.equal(confirmedBy.instance, 'ObjectId');
+    assert.equal(confirmedBy.options.ref, 'User');
+    assert.equal(confirmedBy.options.default, null);
+    assert.equal(confirmedBy.options.immutable, true);
+  });
 });

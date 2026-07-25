@@ -155,6 +155,29 @@
   color: var(--gh-muted);
 }
 
+.auth-form-panel input[aria-invalid='true'] {
+  border-color: var(--gh-error);
+}
+
+.auth-field-error {
+  color: var(--gh-error);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.45;
+}
+
+.auth-password-help {
+  margin: -8px 0 0;
+  text-align: right;
+}
+
+.auth-password-help a {
+  color: var(--gh-leaf);
+  font-size: 14px;
+  font-weight: 750;
+  text-underline-offset: 3px;
+}
+
 .auth-submit,
 .access-state-action {
   display: inline-flex;

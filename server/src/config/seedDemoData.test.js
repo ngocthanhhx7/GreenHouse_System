@@ -85,6 +85,7 @@ describe('demo data seed config', () => {
     )?.[0] || '';
 
     assert.match(scriptSource, /buildProductSearchText/);
+    assert.match(scriptSource, /normalizedName:\s*normalizeCategoryIdentity\(category\.name\)/);
     assert.match(productWriter, /searchTextNormalized:\s*buildProductSearchText\(product\)/);
     assert.match(reviewWriter, /OrderDetail\.findOne/);
     assert.match(reviewWriter, /ProductReview\.collection\.updateOne/);

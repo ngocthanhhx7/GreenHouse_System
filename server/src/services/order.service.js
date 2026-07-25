@@ -11,6 +11,7 @@ const Payment = require('../models/payment.model');
 const PaymentAttempt = require('../models/paymentAttempt.model');
 const RefundPending = require('../models/refundPending.model');
 const OrderReservation = require('../models/orderReservation.model');
+const Shipment = require('../models/shipment.model');
 const DomainOutbox = require('../models/domainOutbox.model');
 const ReturnRefundRequest = require('../models/returnRefundRequest.model');
 const UserAddress = require('../models/userAddress.model');
@@ -20,7 +21,22 @@ const { canonicalEnvelope } = require('./domainEventProducer.service');
 const { systemSettingService } = require('./systemSetting.service');
 const { lowStockAlertLifecycle } = require('./lowStockAlertLifecycle.service');
 
-function toOrderResponse(order, details = []) {
+function toShippingResponse(shipment) {
+  if (!shipment) return { shippingStatus: null, shipping: null };
+  const toIso = (value) => (value ? new Date(value).toISOString() : null);
+  return {
+    shippingStatus: shipment.status || null,
+    shipping: {
+      providerName: shipment.carrierName || '',
+      trackingCode: shipment.trackingReference || '',
+      handedOverAt: toIso(shipment.handedOffAt),
+      deliveredAt: toIso(shipment.deliveredAt),
+      note: shipment.note || '',
+    },
+  };
+}
+
+function toOrderResponse(order, details = [], shipment = null) {
   return {
     id: String(order._id),
     orderCode: order.orderCode,
@@ -53,6 +69,7 @@ function toOrderResponse(order, details = []) {
     paymentDeadlineAt: order.paymentDeadlineAt ? new Date(order.paymentDeadlineAt).toISOString() : null,
     details,
     createdAt: order.createdAt,
+    ...toShippingResponse(shipment),
   };
 }
 
@@ -244,6 +261,7 @@ function createModelCartRepository() {
 function createModelProductRepository() {
   return {
     async findSellableById(id, session) {
+      if (!mongoose.isValidObjectId(id)) return null;
       const product = await withOptionalSession(
         Product.findOne({ _id: id, status: 'Active' }).populate('categoryId'),
         session,
@@ -417,6 +435,24 @@ function createModelOrderRepository() {
     },
     async listByCustomer(customerId) {
       return Order.find({ customerId }).sort({ createdAt: -1 }).lean();
+    },
+    async findLatestShipmentByOrder(orderId, session) {
+      return withOptionalSession(
+        Shipment.findOne({ orderId }).sort({ createdAt: -1, _id: -1 }),
+        session,
+      ).lean();
+    },
+    async listLatestShipmentsByOrders(orderIds) {
+      if (!orderIds.length) return new Map();
+      const rows = await Shipment.find({ orderId: { $in: orderIds } })
+        .sort({ createdAt: -1, _id: -1 })
+        .lean();
+      const latest = new Map();
+      for (const row of rows) {
+        const key = String(row.orderId);
+        if (!latest.has(key)) latest.set(key, row);
+      }
+      return latest;
     },
     async findById(id, session) {
       return withOptionalSession(Order.findById(id), session).lean();
@@ -632,11 +668,23 @@ function createOrderService({
     const expectedByProductId = new Map(expectedItems.map((item) => [item.productId, item]));
     const lines = [];
     for (const item of cartItems) {
+      const quantity = Number(item.quantity);
+      if (!item.productId || !Number.isInteger(quantity) || quantity <= 0) {
+        throw new ApiError(
+          400,
+          'Cart contains an invalid item',
+          [{
+            field: `cartItems.${String(item._id || lines.length)}`,
+            message: 'Product and quantity must be valid',
+          }],
+          'CART_ITEM_INVALID',
+        );
+      }
       const product = await productRepository.findSellableById(item.productId, session);
       if (!product) throw new ApiError(400, `Product is no longer available: ${item.productName}`);
       const productId = String(item.productId);
       const expected = expectedByProductId.get(productId);
-      if (!expected || expected.quantity !== Number(item.quantity)) {
+      if (!expected || expected.quantity !== quantity) {
         throw new ApiError(
           409,
           'Cart contents changed before checkout',
@@ -675,8 +723,8 @@ function createOrderService({
         productImageSnapshot: Array.isArray(product.imageUrls) ? product.imageUrls[0] || '' : '',
         priceSnapshot: product.price,
         priceVersionSnapshot: currentPriceVersion,
-        quantity: item.quantity,
-        subtotal: product.price * item.quantity,
+        quantity,
+        subtotal: product.price * quantity,
       });
       expectedByProductId.delete(productId);
     }
@@ -1029,14 +1077,27 @@ function createOrderService({
 
     async listMyOrders(customerId) {
       const orders = await orderRepository.listByCustomer(customerId);
-      return orders.map((order) => toOrderResponse(order));
+      const latestShipments = orderRepository.listLatestShipmentsByOrders
+        ? await orderRepository.listLatestShipmentsByOrders(orders.map((order) => order._id))
+        : new Map();
+      return orders.map((order) => toOrderResponse(
+        order,
+        [],
+        latestShipments.get(String(order._id)),
+      ));
     },
 
     async getMyOrder(customerId, orderId) {
+      if (!mongoose.isValidObjectId(orderId)) {
+        throw new ApiError(404, 'Order not found');
+      }
       const order = await orderRepository.findById(orderId);
       if (!order || String(order.customerId) !== String(customerId)) throw new ApiError(404, 'Order not found');
       const details = orderRepository.listDetails ? await orderRepository.listDetails(orderId) : [];
-      return toOrderResponse(order, details);
+      const shipment = orderRepository.findLatestShipmentByOrder
+        ? await orderRepository.findLatestShipmentByOrder(orderId)
+        : null;
+      return toOrderResponse(order, details, shipment);
     },
 
     async cancelOrder(customerId, orderId, input = {}) {
@@ -1187,6 +1248,7 @@ function createOrderService({
 }
 
 module.exports = {
+  createModelProductRepository,
   createOrderService,
   orderService: createOrderService({
     lowStockLifecycle: lowStockAlertLifecycle,

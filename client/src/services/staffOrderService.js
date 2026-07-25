@@ -34,10 +34,11 @@ export function createStaffOrderService({ baseUrl = DEFAULT_BASE_URL, fetcher } 
       return request(`/staff/orders/${id}`);
     },
     async confirmOrder(id, input = {}) {
+      const { idempotencyKey, note } = input;
       return request(`/staff/orders/${id}/confirm`, {
         method: 'POST',
-        ...(input.idempotencyKey ? { headers: { 'Idempotency-Key': input.idempotencyKey } } : {}),
-        body: JSON.stringify(input),
+        headers: { 'Idempotency-Key': idempotencyKey },
+        body: JSON.stringify({ note }),
       });
     },
     async confirmPacking(id, input = {}) {

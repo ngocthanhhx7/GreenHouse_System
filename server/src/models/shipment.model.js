@@ -11,6 +11,7 @@ const shipmentSchema = new mongoose.Schema(
     trackingReference: { type: String, required: true, trim: true, maxlength: 160, immutable: true },
     handedOffAt: { type: Date, required: true, immutable: true },
     handoffEvidenceReference: { type: String, required: true, trim: true, maxlength: 256, immutable: true },
+    note: { type: String, default: '', trim: true, maxlength: 1000, immutable: true },
     recordedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, immutable: true },
     currentDestinationVersionId: {
       type: mongoose.Schema.Types.ObjectId,

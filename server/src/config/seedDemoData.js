@@ -24,7 +24,10 @@ const Notification = require('../models/notification.model');
 const AuditLog = require('../models/auditLog.model');
 const UserAddress = require('../models/userAddress.model');
 const { DEMO_IMAGE_MANIFEST } = require('../demo-data/demoImageManifest');
-const { buildProductSearchText } = require('../utils/catalogNormalization');
+const {
+  buildProductSearchText,
+  normalizeCategoryIdentity,
+} = require('../utils/catalogNormalization');
 const { normalizeNotificationType, sanitizeDisplayValues } = require('../utils/notificationContract');
 
 const DEMO_PASSWORD = 'GreenHome@123';
@@ -386,7 +389,14 @@ async function upsertCategories() {
   for (const category of DEMO_CATEGORIES) {
     const saved = await Category.findOneAndUpdate(
       { name: { $in: [category.name, category.legacyName] } },
-      { $set: { name: category.name, description: category.description, status: 'Active' } },
+      {
+        $set: {
+          name: category.name,
+          normalizedName: normalizeCategoryIdentity(category.name),
+          description: category.description,
+          status: 'Active',
+        },
+      },
       { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
     );
     categories[category.name] = saved;

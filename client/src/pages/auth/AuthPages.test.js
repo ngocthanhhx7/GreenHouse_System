@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 const login = readFileSync(join(process.cwd(), 'src/pages/auth/LoginPage.jsx'), 'utf8');
 const register = readFileSync(join(process.cwd(), 'src/pages/auth/RegisterPage.jsx'), 'utf8');
+const forgotPasswordPath = join(process.cwd(), 'src/pages/auth/ForgotPasswordPage.jsx');
+const forgotPassword = existsSync(forgotPasswordPath) ? readFileSync(forgotPasswordPath, 'utf8') : '';
+const app = readFileSync(join(process.cwd(), 'src/App.jsx'), 'utf8');
 const protectedRoute = readFileSync(join(process.cwd(), 'src/components/auth/ProtectedRoute.jsx'), 'utf8');
 const unauthorized = readFileSync(join(process.cwd(), 'src/pages/errors/UnauthorizedPage.jsx'), 'utf8');
 const forbidden = readFileSync(join(process.cwd(), 'src/pages/errors/ForbiddenPage.jsx'), 'utf8');
@@ -48,7 +51,9 @@ describe('public authentication responsive contract', () => {
   });
 
   it('sends an unauthenticated protected-route visit to the login form', () => {
-    assert.match(protectedRoute, /<Navigate to="\/login" replace state=\{\{ from: location\.pathname \}\} \/>/);
+    assert.match(protectedRoute, /sessionNotice/);
+    assert.match(protectedRoute, /message: sessionNotice \|\| location\.state\.message/);
+    assert.match(protectedRoute, /<Navigate to="\/login" replace state=\{redirectState\} \/>/);
   });
 
   it('supports OTP resend after 60 seconds and changing the email', () => {
@@ -58,6 +63,37 @@ describe('public authentication responsive contract', () => {
     assert.match(register, /Gửi lại mã/);
     assert.match(register, /Thay đổi email/);
     assert.doesNotMatch(register, /challengeId/);
+  });
+
+  it('keeps Customer registration challenge-first and impossible to submit without OTP', () => {
+    assert.match(register, /onSubmit=\{challengeSent \? complete : sendChallenge\}/);
+    assert.match(register, /await requestRegistrationChallenge\(form\.email\)/);
+    assert.match(register, /await completeRegistration\(\{[\s\S]*?otp:\s*form\.otp/);
+    assert.match(register, /challengeSent && \([\s\S]*?htmlFor="register-otp"/);
+  });
+
+  it('links Login to one public two-step password recovery route', () => {
+    assert.match(login, /to="\/forgot-password"/);
+    assert.match(login, /Quên mật khẩu\?/);
+    assert.match(login, /to="\/forgot-password"[\s\S]*?state=\{\{\s*from:\s*safeReturnPath/);
+    assert.match(app, /import ForgotPasswordPage from '\.\/pages\/auth\/ForgotPasswordPage\.jsx'/);
+    assert.match(app, /<Route path="forgot-password" element=\{<ForgotPasswordPage \/>\} \/>/);
+  });
+
+  it('provides accessible request reset resend and field-error states on the recovery page', () => {
+    assert.match(forgotPassword, /requestPasswordReset/);
+    assert.match(forgotPassword, /resetPassword/);
+    assert.match(forgotPassword, /const \[phase, setPhase\] = useState\('request'\)/);
+    assert.match(forgotPassword, /const \[resendSeconds, setResendSeconds\] = useState\(0\)/);
+    assert.match(forgotPassword, /setResendSeconds\(60\)/);
+    assert.match(forgotPassword, /htmlFor="forgot-password-email"/);
+    assert.match(forgotPassword, /htmlFor="forgot-password-otp"/);
+    assert.match(forgotPassword, /htmlFor="forgot-password-new-password"/);
+    assert.match(forgotPassword, /htmlFor="forgot-password-confirm-password"/);
+    assert.match(forgotPassword, /aria-live="polite"/);
+    assert.match(forgotPassword, /className="auth-field-error"/);
+    assert.match(forgotPassword, /Gửi lại mã/);
+    assert.match(forgotPassword, /Thay đổi email/);
   });
 
   it('uses the shared responsive surface instead of the legacy generic auth card', () => {

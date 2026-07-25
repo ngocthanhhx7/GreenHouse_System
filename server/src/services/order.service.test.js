@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const { describe, it, beforeEach } = require('node:test');
 
-const { createOrderService } = require('./order.service');
+const { createModelProductRepository, createOrderService } = require('./order.service');
 
 function checkoutInput(overrides = {}) {
   const { deliveryAddress, ...inputOverrides } = overrides;
@@ -309,6 +309,75 @@ describe('order service', () => {
     assert.equal(auditLogger.entries[0].action, 'ORDER_CREATE');
   });
 
+  it('projects the latest manual shipment into owned order history', async () => {
+    orderRepository.orders.push(
+      {
+        _id: 'order-owned',
+        customerId: 'customer-1',
+        orderCode: 'ORD-OWNED',
+        totalAmount: 50,
+        paymentMethod: 'COD',
+        paymentStatus: 'Paid',
+        orderStatus: 'Delivered',
+        shippingAddress: '12 Nguyễn Trãi',
+        createdAt: new Date('2026-07-25T08:00:00.000Z'),
+      },
+      {
+        _id: 'order-foreign',
+        customerId: 'customer-2',
+        orderCode: 'ORD-FOREIGN',
+        totalAmount: 75,
+        paymentMethod: 'COD',
+        paymentStatus: 'Unpaid',
+        orderStatus: 'Pending',
+        shippingAddress: 'Địa chỉ khác',
+        createdAt: new Date('2026-07-25T07:00:00.000Z'),
+      },
+    );
+    const shipments = new Map([
+      ['order-owned', {
+        orderId: 'order-owned',
+        status: 'HandedOff',
+        carrierName: 'Manual Carrier',
+        trackingReference: 'TRACK-001',
+        handedOffAt: new Date('2026-07-25T09:00:00.000Z'),
+        deliveredAt: null,
+        note: 'Bàn giao tại quầy',
+      }],
+      ['order-foreign', {
+        orderId: 'order-foreign',
+        status: 'Delivered',
+        carrierName: 'Foreign Carrier',
+        trackingReference: 'TRACK-FOREIGN',
+      }],
+    ]);
+    orderRepository.listLatestShipmentsByOrders = async (orderIds) => (
+      new Map(orderIds
+        .map((id) => [String(id), shipments.get(String(id))])
+        .filter(([, shipment]) => shipment))
+    );
+
+    const [result] = await orderService.listMyOrders('customer-1');
+
+    assert.equal(result.orderCode, 'ORD-OWNED');
+    assert.equal(result.shippingStatus, 'HandedOff');
+    assert.deepEqual(result.shipping, {
+      providerName: 'Manual Carrier',
+      trackingCode: 'TRACK-001',
+      handedOverAt: '2026-07-25T09:00:00.000Z',
+      deliveredAt: null,
+      note: 'Bàn giao tại quầy',
+    });
+    assert.equal((await orderService.listMyOrders('customer-1')).some((order) => order.orderCode === 'ORD-FOREIGN'), false);
+  });
+
+  it('returns a safe not-found error for an invalid customer order id', async () => {
+    await assert.rejects(
+      () => orderService.getMyOrder('customer-1', 'not-an-object-id'),
+      (error) => error.statusCode === 404 && error.message === 'Order not found',
+    );
+  });
+
   it('AT-227 returns a stable Vietnamese stock error for a final checkout shortage', async () => {
     inventoryRepository.reserve = async () => {
       throw new Error('Insufficient available inventory for checkout');
@@ -324,6 +393,28 @@ describe('order service', () => {
       },
     );
     assert.equal(cartRepository.carts[0].status, 'Active');
+  });
+
+  it('rejects a persisted Cart item with a non-positive quantity before creating an Order', async () => {
+    cartRepository.items[0].quantity = 0;
+
+    await assert.rejects(
+      () => orderService.placeOrder('customer-1', checkoutInput({
+        idempotencyKey: 'invalid-cart-quantity-001',
+      })),
+      (error) => error.statusCode === 400 && error.errorCode === 'CART_ITEM_INVALID',
+    );
+
+    assert.equal(orderRepository.orders.length, 0);
+    assert.equal(orderRepository.details.length, 0);
+    assert.equal(inventoryRepository.reservedQuantity, 0);
+    assert.equal(cartRepository.carts[0].status, 'Active');
+  });
+
+  it('returns no sellable Product for a malformed MongoDB ObjectId', async () => {
+    const repository = createModelProductRepository();
+
+    assert.equal(await repository.findSellableById('not-a-mongo-id'), null);
   });
 
   it('creates an online checkout as Pending without creating a synthetic provider attempt', async () => {

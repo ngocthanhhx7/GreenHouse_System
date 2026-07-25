@@ -23,4 +23,14 @@ describe('customer order cancellation UI contract', () => {
     assert.match(source, /idempotentReplay/);
     assert.match(source, /Yêu cầu hủy đơn đã được ghi nhận trước đó/);
   });
+
+  it('renders persisted shipping status and manual carrier information', () => {
+    assert.match(source, /shippingStatus/);
+    assert.match(source, /providerName|carrierName/);
+    assert.match(source, /trackingCode|trackingReference/);
+  });
+
+  it('returns an error surface before rendering order-dependent helpers', () => {
+    assert.match(source, /if \(!order && error\)/);
+  });
 });

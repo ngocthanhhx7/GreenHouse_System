@@ -50,7 +50,21 @@ describe('checkout address book contract', () => {
 
   it('clears the shared cart indicator only after a successful order is created', () => {
     assert.match(source, /useCart/);
-    assert.match(source, /resetCart\(\);[\s\S]*?navigate\(`\/orders\/\$\{order\.id\}`/);
+    assert.match(source, /resetCart\(\);[\s\S]*?navigate\(/);
+    assert.match(source, /`\/orders\/\$\{order\.id\}`/);
+  });
+
+  it('renders COD and ONLINE options with COD selected by default', () => {
+    assert.match(source, /useState\(['"]COD['"]\)/);
+    assert.match(source, /value=["']COD["']/);
+    assert.match(source, /value=["']ONLINE["']/);
+    assert.match(source, /Thanh toán khi nhận hàng/);
+    assert.match(source, /Thanh toán trực tuyến/);
+  });
+
+  it('routes an ONLINE order to the existing payment page', () => {
+    assert.match(source, /paymentMethod === ['"]ONLINE['"]/);
+    assert.match(source, /`\/orders\/\$\{order\.id\}\/payment`/);
   });
 
   it('submits the exact displayed cart quantity, price, and price version', () => {
@@ -74,4 +88,5 @@ describe('checkout address book contract', () => {
     assert.match(source, /if \(submittingRef\.current\) return/);
     assert.match(source, /submittingRef\.current = true/);
   });
+
 });

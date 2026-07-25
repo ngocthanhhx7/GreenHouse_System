@@ -154,7 +154,12 @@ export default function CheckoutPage() {
         })),
       }, { idempotencyKey: checkoutIdempotencyKey });
       resetCart();
-      navigate(`/orders/${order.id}`, { replace: true });
+      navigate(
+        paymentMethod === 'ONLINE'
+          ? `/orders/${order.id}/payment`
+          : `/orders/${order.id}`,
+        { replace: true },
+      );
     } catch (requestError) {
       const nextFieldErrors = toFieldErrors(requestError.errors, requestError.errorCode);
       setFieldErrors(nextFieldErrors);

@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { formatCurrency, formatProductCurrency, formatProductSku } from './formatters.js';
+import {
+  formatCurrency,
+  formatProductCurrency,
+  formatProductSku,
+  translateShippingStatus,
+} from './formatters.js';
 
 describe('product detail formatters', () => {
   it('formats the API currency and falls back to VND for legacy products', () => {
@@ -15,5 +20,11 @@ describe('product detail formatters', () => {
   it('formats a Vietnamese SKU label with a legacy fallback', () => {
     assert.equal(formatProductSku('GP-001'), 'SKU: GP-001');
     assert.equal(formatProductSku(''), 'SKU: Chưa cập nhật');
+  });
+
+  it('translates manual shipping states without inventing a new state', () => {
+    assert.equal(translateShippingStatus('HandedOff'), 'Đã bàn giao vận chuyển');
+    assert.equal(translateShippingStatus('Delivered'), 'Đã giao thành công');
+    assert.equal(translateShippingStatus(null), 'Chưa bàn giao');
   });
 });

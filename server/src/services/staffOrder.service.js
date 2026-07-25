@@ -32,8 +32,52 @@ function normalizeIdempotencyKey(value) {
   return key;
 }
 
+function requireStaffConfirmIdempotencyKey(value) {
+  const key = String(value || '').trim();
+  if (!key) {
+    throw new ApiError(
+      400,
+      'Thiếu mã chống gửi lặp cho thao tác xác nhận đơn.',
+      [],
+      'STAFF_CONFIRM_IDEMPOTENCY_KEY_REQUIRED',
+    );
+  }
+  try {
+    return normalizeIdempotencyKey(key);
+  } catch (_error) {
+    throw new ApiError(
+      400,
+      'Mã chống gửi lặp không hợp lệ.',
+      [],
+      'STAFF_CONFIRM_IDEMPOTENCY_KEY_INVALID',
+    );
+  }
+}
+
+function normalizeConfirmationNote(value) {
+  const note = String(value || '').trim();
+  if (note.length > 500) {
+    throw new ApiError(
+      400,
+      'Ghi chú xác nhận không được vượt quá 500 ký tự.',
+      [],
+      'VALIDATION_ERROR',
+    );
+  }
+  return note;
+}
+
 function hashCommand(value) {
   return crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
+}
+
+function isConfirmationWriteConflict(error) {
+  return Boolean(
+    error?.code === 11000
+    || error?.errorLabels?.includes('TransientTransactionError')
+    || error?.errorLabels?.includes('UnknownTransactionCommitResult')
+    || /write conflict|duplicate key|transaction.*conflict/i.test(error?.message || ''),
+  );
 }
 
 function createModelTransactionManager() {
@@ -82,6 +126,8 @@ function toOrderSummary(order) {
     receiverName: order.receiverName || '',
     receiverPhone: order.receiverPhone || '',
     cancelReason: order.cancelReason || '',
+    confirmedBy: order.confirmedBy ? String(order.confirmedBy) : null,
+    confirmedAt: order.confirmedAt || null,
     createdAt: order.createdAt,
   };
 }
@@ -90,8 +136,23 @@ function toOrderDetail(order, details = []) {
   return { ...toOrderSummary(order), details };
 }
 
-function toStockExportRequest(request) {
-  return { id: String(request._id), orderId: String(request.orderId), requestedBy: String(request.requestedBy), status: request.status, note: request.note || '', createdAt: request.createdAt };
+function toStockExportRequest(request, details = []) {
+  return {
+    id: String(request._id),
+    orderId: String(request.orderId),
+    cycleId: request.cycleId ? String(request.cycleId) : null,
+    requestKind: request.requestKind,
+    requestedBy: String(request.requestedBy),
+    status: request.status,
+    note: request.note || '',
+    createdAt: request.createdAt,
+    items: details.map((detail) => ({
+      orderDetailId: String(detail._id),
+      productId: String(detail.productId),
+      productNameSnapshot: detail.productNameSnapshot,
+      quantity: Number(detail.quantity),
+    })),
+  };
 }
 
 function toInvoiceResponse(invoice, order) {
@@ -129,7 +190,10 @@ function createModelOrderRepository() {
         {
           _id: id,
           orderStatus: 'Pending',
-          $or: [{ paymentMethod: 'COD' }, { paymentStatus: 'Paid' }],
+          $or: [
+            { paymentMethod: 'COD', paymentStatus: 'Unpaid' },
+            { paymentMethod: 'ONLINE', paymentStatus: 'Paid' },
+          ],
         },
         { $set: data },
         { new: true, runValidators: true }
@@ -172,6 +236,12 @@ function createModelOrderRepository() {
       return withOptionalSession(
         StockExportRequest.findOne({ orderId, status: { $in: ['Pending', 'Processing', 'Failed'] } }),
         session
+      ).lean();
+    },
+    async findInitialStockExportRequest(orderId, session) {
+      return withOptionalSession(
+        StockExportRequest.findOne({ orderId, requestKind: 'Initial' }),
+        session,
       ).lean();
     },
     async cancelOpenStockExportRequest(orderId, data, session) {
@@ -265,34 +335,101 @@ function createStaffOrderService({
     return order;
   }
 
+  async function writeConfirmationAudit(staffId, order, request, note, idempotencyKey, session) {
+    await auditLogger.log({
+      actorType: 'User',
+      actorId: String(staffId),
+      actorRole: 'Staff',
+      source: 'Application',
+      action: 'STAFF_ORDER_CONFIRM',
+      targetType: 'Order',
+      targetId: String(order._id),
+      outcome: 'Success',
+      correlationId: idempotencyKey,
+      businessEventId: `order:${String(order._id)}:confirmed`,
+      previousState: 'Pending',
+      newState: 'Confirmed',
+      reasonCode: 'ORDER_CONFIRMED',
+      reason: `Staff confirmed order ${order.orderCode}. ${note}`.trim(),
+      safeFacts: {
+        orderCode: order.orderCode,
+        stockExportRequestId: String(request._id),
+        requestKind: request.requestKind,
+      },
+    }, session);
+  }
+
   async function writeAudit(staffId, action, order, description) {
-    await auditLogger.log({ userId: staffId, action, targetEntity: 'Order', targetId: String(order._id), description });
+    await auditLogger.log({
+      userId: staffId,
+      action,
+      targetEntity: 'Order',
+      targetId: String(order._id),
+      description,
+    });
   }
 
   async function assertExactReservation(details, session) {
-    if (!orderRepository.findInventoryByProductId) return;
-    if (orderRepository.listReservationsByOrder) {
-      const reservations = await orderRepository.listReservationsByOrder(details[0]?.orderId, session);
-      const ownedByDetail = new Map((reservations || []).map((reservation) => [String(reservation.orderDetailId), Number(reservation.quantity)]));
-      for (const detail of details) {
-        if ((ownedByDetail.get(String(detail._id)) || 0) < Number(detail.quantity || 0)) {
-          throw new ApiError(409, 'Order exact reservation is no longer intact');
-        }
-      }
-      return;
+    if (!details.length || !orderRepository.listReservationsByOrder) {
+      throw new ApiError(
+        409,
+        'Đơn chưa có dữ liệu giữ hàng đầy đủ.',
+        [],
+        'ORDER_CONFIRM_RESERVATION_MISSING',
+      );
     }
+
+    const reservations = await orderRepository.listReservationsByOrder(details[0].orderId, session);
+    const byDetail = new Map();
+    for (const reservation of reservations || []) {
+      const key = String(reservation.orderDetailId);
+      const rows = byDetail.get(key) || [];
+      rows.push(reservation);
+      byDetail.set(key, rows);
+    }
+
     const requiredByProduct = new Map();
     for (const detail of details) {
+      const quantity = Number(detail.quantity);
+      const rows = byDetail.get(String(detail._id)) || [];
+      if (
+        rows.length !== 1
+        || String(rows[0].orderId) !== String(detail.orderId)
+        || String(rows[0].productId) !== String(detail.productId)
+        || Number(rows[0].quantity) !== quantity
+        || rows[0].status !== 'Reserved'
+      ) {
+        throw new ApiError(
+          409,
+          'Dữ liệu giữ hàng của đơn không còn đầy đủ.',
+          [],
+          'ORDER_CONFIRM_RESERVATION_MISSING',
+        );
+      }
       const productId = String(detail.productId);
-      requiredByProduct.set(productId, (requiredByProduct.get(productId) || 0) + Number(detail.quantity || 0));
+      requiredByProduct.set(productId, (requiredByProduct.get(productId) || 0) + quantity);
     }
+
+    if (byDetail.size !== details.length) {
+      throw new ApiError(
+        409,
+        'Dữ liệu giữ hàng của đơn không khớp chi tiết đơn.',
+        [],
+        'ORDER_CONFIRM_RESERVATION_MISSING',
+      );
+    }
+
     for (const [productId, quantity] of requiredByProduct) {
       const inventory = await orderRepository.findInventoryByProductId(productId, session);
-      if (!inventory
-        || inventory.inventoryHealth === 'ReconciliationRequired'
-        || Number(inventory.sellableQuantity ?? inventory.stockQuantity ?? 0) < quantity
-        || Number(inventory.reservedQuantity || 0) < quantity) {
-        throw new ApiError(409, 'Order exact reservation is no longer intact');
+      const sellable = Number(inventory?.sellableQuantity ?? inventory?.stockQuantity ?? 0);
+      const reserved = Number(inventory?.reservedQuantity || 0);
+      if (!inventory || inventory.inventoryHealth !== 'Normal' || sellable < quantity || reserved < quantity) {
+        throw new ApiError(
+          409,
+          'Số lượng giữ hàng không còn đủ để xác nhận.',
+          [],
+          'ORDER_CONFIRM_RESERVATION_MISSING',
+        );
       }
     }
   }
@@ -356,63 +493,136 @@ function createStaffOrderService({
 
     async getOrder(orderId) {
       const order = await getOrderOrThrow(orderId);
-      const [details, openStockExportRequest, completedStockExportRequest] = await Promise.all([
+      const [details, initialStockExportRequest, openStockExportRequest, completedStockExportRequest] = await Promise.all([
         orderRepository.listOrderDetails(orderId),
+        orderRepository.findInitialStockExportRequest
+          ? orderRepository.findInitialStockExportRequest(orderId)
+          : null,
         orderRepository.findOpenStockExportRequest ? orderRepository.findOpenStockExportRequest(orderId) : null,
         orderRepository.findCompletedStockExportRequest
           ? orderRepository.findCompletedStockExportRequest(orderId)
           : null,
       ]);
-      const stockExportRequest = openStockExportRequest || completedStockExportRequest;
+      const stockExportRequest = initialStockExportRequest || openStockExportRequest || completedStockExportRequest;
       return {
         ...toOrderDetail(order, details),
-        stockExportRequest: stockExportRequest ? toStockExportRequest(stockExportRequest) : null,
+        stockExportRequest: stockExportRequest ? toStockExportRequest(stockExportRequest, details) : null,
       };
     },
 
     async confirmOrder(staffId, orderId, input = {}) {
-      const note = String(input.note || '').trim();
-      const idempotencyKey = normalizeIdempotencyKey(input.idempotencyKey);
+      const note = normalizeConfirmationNote(input.note);
+      const idempotencyKey = requireStaffConfirmIdempotencyKey(input.idempotencyKey);
       const requestHash = hashCommand({ note });
-      const result = await transactionManager.withTransaction(async (session) => {
-        await assignmentCoordinator.coordinate({
-          userId: staffId,
-          expectedRole: 'Staff',
-          session,
-        });
-        const order = await getOrderOrThrow(orderId, session);
-        if (idempotencyKey && order.staffConfirmIdempotencyKey === idempotencyKey) {
-          if (order.staffConfirmRequestHash !== requestHash) {
-            throw new ApiError(409, 'Staff confirmation idempotency key was reused with different details');
+
+      try {
+        const result = await transactionManager.withTransaction(async (session) => {
+          await assignmentCoordinator.coordinate({
+            userId: staffId,
+            expectedRole: 'Staff',
+            session,
+          });
+          const order = await getOrderOrThrow(orderId, session);
+
+          if (order.staffConfirmIdempotencyKey === idempotencyKey) {
+            if (order.staffConfirmRequestHash !== requestHash) {
+              throw new ApiError(
+                409,
+                'Mã xác nhận đã được dùng cho nội dung khác.',
+                [],
+                'ORDER_CONFIRM_KEY_REUSED',
+              );
+            }
+            const details = await orderRepository.listOrderDetails(orderId, session);
+            const request = await orderRepository.findInitialStockExportRequest(orderId, session);
+            if (!request) {
+              throw new ApiError(
+                409,
+                'Không tìm thấy kết quả xác nhận đã ghi nhận.',
+                [],
+                'ORDER_CONFIRM_STALE_STATE',
+              );
+            }
+            return { updated: order, details, stockExportRequest: request, idempotentReplay: true };
           }
-          const [details, existingRequest] = await Promise.all([
-            orderRepository.listOrderDetails(orderId, session),
-            orderRepository.findOpenStockExportRequest ? orderRepository.findOpenStockExportRequest(orderId, session) : null,
-          ]);
-          return { updated: order, details, stockExportRequest: existingRequest, idempotentReplay: true };
-        }
-        if (order.paymentMethod === 'ONLINE' && order.paymentStatus !== 'Paid') throw new ApiError(409, 'Online order must be paid before confirmation');
-        if (order.orderStatus !== 'Pending') throw new ApiError(409, 'Only Pending orders can be confirmed');
-        const details = await orderRepository.listOrderDetails(orderId, session);
-        await assertExactReservation(details, session);
-        const updated = await orderRepository.claimStaffConfirmation(
-          orderId,
-          {
-            orderStatus: 'Confirmed',
-            confirmedAt: new Date(),
-            ...(idempotencyKey ? {
+
+          if (order.orderStatus !== 'Pending') {
+            throw new ApiError(
+              409,
+              'Đơn đã đổi trạng thái, không thể xác nhận lại.',
+              [],
+              'ORDER_CONFIRM_STALE_STATE',
+            );
+          }
+
+          const paymentValid = (
+            (order.paymentMethod === 'COD' && order.paymentStatus === 'Unpaid')
+            || (order.paymentMethod === 'ONLINE' && order.paymentStatus === 'Paid')
+          );
+          if (!paymentValid) {
+            throw new ApiError(
+              409,
+              'Trạng thái thanh toán chưa phù hợp để xác nhận đơn.',
+              [],
+              'ORDER_CONFIRM_PAYMENT_INVALID',
+            );
+          }
+
+          const payment = await orderRepository.findPaymentByOrderId(orderId, session);
+          if (
+            !payment
+            || payment.paymentMethod !== order.paymentMethod
+            || payment.paymentStatus !== order.paymentStatus
+          ) {
+            throw new ApiError(
+              409,
+              'Dữ liệu thanh toán của đơn không còn hợp lệ.',
+              [],
+              'ORDER_CONFIRM_PAYMENT_INVALID',
+            );
+          }
+
+          const details = await orderRepository.listOrderDetails(orderId, session);
+          if (!details.length) {
+            throw new ApiError(
+              409,
+              'Đơn chưa có sản phẩm để xác nhận.',
+              [],
+              'ORDER_CONFIRM_RESERVATION_MISSING',
+            );
+          }
+          await assertExactReservation(details, session);
+
+          const initialRequest = await orderRepository.findInitialStockExportRequest(orderId, session);
+          if (initialRequest) {
+            throw new ApiError(
+              409,
+              'Đơn đã có phiếu xuất kho ban đầu.',
+              [],
+              'ORDER_CONFIRM_STALE_STATE',
+            );
+          }
+
+          const updated = await orderRepository.claimStaffConfirmation(
+            orderId,
+            {
+              orderStatus: 'Confirmed',
+              confirmedBy: staffId,
+              confirmedAt: new Date(),
               staffConfirmIdempotencyKey: idempotencyKey,
               staffConfirmRequestHash: requestHash,
-            } : {}),
-          },
-          session
-        );
-        if (!updated) throw new ApiError(409, 'Order changed while confirmation was being processed');
-        const existingRequest = orderRepository.findOpenStockExportRequest
-          ? await orderRepository.findOpenStockExportRequest(orderId, session)
-          : null;
-        let stockExportRequest = existingRequest;
-        if (!stockExportRequest) {
+            },
+            session,
+          );
+          if (!updated) {
+            throw new ApiError(
+              409,
+              'Đơn đã được xử lý bởi yêu cầu khác.',
+              [],
+              'ORDER_CONFIRM_CONCURRENT',
+            );
+          }
+
           let cycle = orderRepository.findInitialFulfillmentCycle
             ? await orderRepository.findInitialFulfillmentCycle(orderId, session)
             : null;
@@ -423,11 +633,11 @@ function createStaffOrderService({
               cycleNumber: 1,
               cycleType: 'Initial',
               status: 'AwaitingExport',
-              commandKey: idempotencyKey || `confirm:${String(orderId)}`,
+              commandKey: idempotencyKey,
               createdBy: staffId,
             }, session);
           }
-          stockExportRequest = await orderRepository.createStockExportRequest({
+          const stockExportRequest = await orderRepository.createStockExportRequest({
             orderId,
             cycleId: cycle._id,
             requestKind: 'Initial',
@@ -435,17 +645,47 @@ function createStaffOrderService({
             status: 'Pending',
             note,
           }, session);
+          await writeConfirmationAudit(
+            staffId,
+            updated,
+            stockExportRequest,
+            note,
+            idempotencyKey,
+            session,
+          );
+          return { updated, details, stockExportRequest, idempotentReplay: false };
+        });
+
+        return {
+          ...toOrderDetail(result.updated, result.details),
+          stockExportRequest: result.stockExportRequest
+            ? toStockExportRequest(result.stockExportRequest, result.details)
+            : null,
+          idempotentReplay: Boolean(result.idempotentReplay),
+        };
+      } catch (error) {
+        if (!isConfirmationWriteConflict(error)) throw error;
+        const committed = await orderRepository.findOrderById(orderId);
+        if (
+          committed
+          && committed.staffConfirmIdempotencyKey === idempotencyKey
+          && committed.staffConfirmRequestHash === requestHash
+        ) {
+          const details = await orderRepository.listOrderDetails(orderId);
+          const request = await orderRepository.findInitialStockExportRequest(orderId);
+          return {
+            ...toOrderDetail(committed, details),
+            stockExportRequest: request ? toStockExportRequest(request, details) : null,
+            idempotentReplay: true,
+          };
         }
-        return { updated, details, stockExportRequest, idempotentReplay: false };
-      });
-      if (!result.idempotentReplay) {
-        await writeAudit(staffId, 'STAFF_ORDER_CONFIRM', result.updated, `Staff confirmed order ${result.updated.orderCode}. ${note}`.trim());
+        throw new ApiError(
+          409,
+          'Đơn đã được xử lý bởi yêu cầu khác.',
+          [],
+          'ORDER_CONFIRM_CONCURRENT',
+        );
       }
-      return {
-        ...toOrderDetail(result.updated, result.details),
-        stockExportRequest: result.stockExportRequest ? toStockExportRequest(result.stockExportRequest) : null,
-        idempotentReplay: Boolean(result.idempotentReplay),
-      };
     },
 
     async cancelOrder(staffId, orderId, input = {}) {
