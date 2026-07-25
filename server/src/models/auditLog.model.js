@@ -377,7 +377,6 @@ auditLogSchema.index(
   {
     name: 'audit_legacy_user_order_cursor',
     partialFilterExpression: {
-      actorType: { $exists: false },
       userId: { $type: 'objectId' },
     },
   }

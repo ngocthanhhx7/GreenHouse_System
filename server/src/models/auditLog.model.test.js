@@ -102,7 +102,6 @@ describe('SL-009 AuditLog model contract', () => {
       JSON.stringify(fields) === JSON.stringify({ timestamp: -1, _id: -1 })
       && options.name === 'audit_legacy_user_order_cursor'
       && JSON.stringify(options.partialFilterExpression) === JSON.stringify({
-        actorType: { $exists: false },
         userId: { $type: 'objectId' },
       })
     )));
