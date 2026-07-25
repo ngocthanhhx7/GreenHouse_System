@@ -1,21 +1,12 @@
+const {
+  availableQuantityOf,
+  inventoryHealthOf,
+} = require('./inventoryAvailability');
+
 function normalizeVersion(value) {
   if (!value) return '';
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? String(value) : date.toISOString();
-}
-
-function availableQuantityOf(product) {
-  const inventory = product?.inventory || product;
-  if (!inventory || inventory.inventoryHealth !== 'Normal') return 0;
-  return Math.max(
-    0,
-    Number(inventory.sellableQuantity ?? inventory.stockQuantity ?? product.availableQuantity ?? 0)
-      - Number(inventory.reservedQuantity || 0),
-  );
-}
-
-function inventoryHealthOf(product) {
-  return product?.inventory?.inventoryHealth || product?.inventoryHealth || 'Missing';
 }
 
 function categoryIsActive(product) {
