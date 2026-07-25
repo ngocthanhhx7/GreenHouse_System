@@ -409,3 +409,9 @@ tác thanh toán, hủy và đánh giá chỉ xuất hiện theo trạng thái, 
 payment status và payment deadline. Focused evidence: `11/11` tests pass trong
 `orderHistoryView.test.js`, `OrderHistoryPage.test.js` và `orderService.test.js`;
 không phải kết quả full regression.
+
+Hậu kiểm P1 `canPay` đã đóng tại `f0b14b6`: thao tác thanh toán fail-closed nếu
+deadline thiếu, không hợp lệ hoặc hết hạn, và chỉ mở cho Order `Pending` +
+`ONLINE` có payment status `Unpaid`, `Pending` hoặc `Failed`. Focused evidence
+sau remediation: `12/12` tests pass trong đúng ba file trên; không phải kết quả
+full regression.
