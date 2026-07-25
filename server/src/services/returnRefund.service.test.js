@@ -472,7 +472,7 @@ describe('return/refund service', () => {
       () => service.createCustomerRequest('customer-1', {
         orderId: 'order-1', reason: 'Damaged', evidenceImages: [claimedEvidence('customer-2')],
       }),
-      /not owned by this Customer/i,
+      /không thuộc quyền sở hữu/i,
     );
     await assert.rejects(
       () => service.createCustomerRequest('customer-1', {
