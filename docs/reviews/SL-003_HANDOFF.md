@@ -57,3 +57,11 @@ These are environment/provider checks, not unresolved code blockers:
 
 Scope boundaries remain unchanged: COD remittance is not treated as Customer
 collection/refund, and Exchange financial fields are not introduced.
+
+## Post-review evidence — 2026-07-25
+
+P1 `canPay` was closed at `f0b14b6`: the Customer Order Center exposes payment
+only for a Pending ONLINE order with payment status `Unpaid`, `Pending`, or
+`Failed` and a valid future payment deadline. Missing, invalid, expired, and
+closed payment facts fail closed. Focused client evidence is **12/12 passing**
+in the three Order Center test files; no full-suite regression is claimed.
