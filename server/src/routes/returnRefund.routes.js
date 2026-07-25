@@ -7,6 +7,7 @@ const router = express.Router();
 
 router.post('/orders/:id/return-refund', authenticate, authorizeRoles('Customer'), returnRefundController.createCustomerRequest);
 router.get('/return-refunds/my', authenticate, authorizeRoles('Customer'), returnRefundController.listMyRequests);
+router.get('/return-refunds/banks', authenticate, authorizeRoles('Customer'), returnRefundController.listPublicBanks);
 router.post('/return-refunds/:id/handoff-proof', authenticate, authorizeRoles('Customer'), returnRefundController.recordHandoffProof);
 router.post('/return-refunds/:id/destination', authenticate, authorizeRoles('Customer'), returnRefundController.submitDestination);
 router.get('/staff/return-refunds', authenticate, authorizeRoles('Staff'), returnRefundController.listStaffRequests);

@@ -1,5 +1,6 @@
 const { returnRefundService } = require('../services/returnRefund.service');
 const { sendSuccess } = require('../utils/apiResponse');
+const { listPublicBanks: listPublicRefundBanks } = require('../config/refundBankCatalog');
 
 function preventSensitiveCaching(res) {
   res.set('Cache-Control', 'no-store');
@@ -16,6 +17,15 @@ async function createCustomerRequest(req, res, next) {
 async function listMyRequests(req, res, next) {
   try {
     return sendSuccess(res, await returnRefundService.listMyRequests(req.user.id));
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function listPublicBanks(_req, res, next) {
+  try {
+    preventSensitiveCaching(res);
+    return sendSuccess(res, listPublicRefundBanks());
   } catch (error) {
     return next(error);
   }
@@ -154,6 +164,7 @@ async function reportPayoutIncident(req, res, next) {
 module.exports = {
   createCustomerRequest,
   listMyRequests,
+  listPublicBanks,
   listStaffRequests,
   listWarehouseRequests,
   getStaffRequest,
