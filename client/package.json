@@ -6,6 +6,7 @@
   "scripts": {
     "test": "node --test",
     "test:ephemeral-browser": "playwright test --config=playwright.config.js",
+    "test:phase1-browser": "playwright test --config=playwright.config.js e2e/phase1-order-history.spec.js",
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0"
