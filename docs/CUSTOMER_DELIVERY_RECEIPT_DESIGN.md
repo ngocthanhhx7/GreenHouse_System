@@ -60,6 +60,11 @@ Dry-run disables both Mongoose automatic index and collection creation before
 connecting; it must leave an empty target database's collection list unchanged.
 Conflict preflight uses bounded server-side counts and never loads receipt
 reasons or an unbounded list of document IDs.
+`Shipment.customerReceiptGuardVersion` compatibility accepts only BSON
+`int`/`long`/`double` values that are finite non-negative integers from `0`
+through `9,007,199,254,740,990`. This leaves one exact safe `$inc` before
+JavaScript's maximum safe integer. Decimal128, strings, negatives, fractions,
+NaN, and either Infinity fail closed.
 
 ## 4. Commands and projections
 
@@ -175,6 +180,8 @@ Outbox failure rolls back the owning transaction. Notification delivery failure 
 - Migration preflight: `CUSTOMER_DELIVERY_RECEIPT_COMMAND_AMBIGUOUS` when
   duplicate Customer/idempotency command identities would make the unique
   command index unsafe.
+- Migration preflight: `CUSTOMER_RECEIPT_GUARD_VERSION_AMBIGUOUS` when a
+  Shipment guard has an unsafe BSON type or value.
 
 ## 9. Acceptance evidence
 

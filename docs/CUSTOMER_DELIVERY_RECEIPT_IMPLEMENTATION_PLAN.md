@@ -23,6 +23,9 @@
 - The bounded/read-only migration quality expansion was observed RED at 5/9,
   then GREEN at 9/9. A disposable MongoDB 8.2 database retained the exact empty
   collection list `[] -> []` across dry-run.
+- The BSON guard compatibility expansion was observed RED at 7/10, then GREEN
+  at 10/10. The portable disposable-Mongo resolver exercised real positive
+  Infinity and Decimal128 rows with zero migration mutation.
 - Task 5 client count remains pending the isolated client task's final evidence;
   this document deliberately does not estimate it.
 - The current combined server receipt-targeted command passed 270/270; it is not

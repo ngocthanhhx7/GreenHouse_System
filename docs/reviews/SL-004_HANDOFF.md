@@ -107,6 +107,10 @@ service variants 46 and 32, API/projection 90, after-sales 161, and migration
 RED 0/6 to GREEN 6/6, followed by command-identity P1 RED 6/7 to GREEN 7/7.
 The bounded/read-only quality expansion was RED 5/9 then GREEN 9/9; a
 disposable MongoDB 8.2 dry-run preserved the collection list `[] -> []`.
+The guard BSON expansion was RED 7/10 then GREEN 10/10. The migration accepts
+only finite integral BSON int/long/double values through
+`9,007,199,254,740,990`; real Infinity and Decimal128 fixtures were rejected
+with zero mutation using the portable disposable-Mongo resolver.
 The isolated client task's final count and the combined
 full-suite/build results are pending final integration and must be recorded
 there, not guessed here.

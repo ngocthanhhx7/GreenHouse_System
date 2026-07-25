@@ -1,12 +1,12 @@
 const assert = require('node:assert/strict');
 const { randomUUID } = require('node:crypto');
-const { spawn } = require('node:child_process');
-const fs = require('node:fs');
-const net = require('node:net');
-const os = require('node:os');
-const path = require('node:path');
 const { describe, it } = require('node:test');
 const mongoose = require('mongoose');
+const {
+  cleanupDisposableMongo,
+  resolveMongodBinary,
+  startDisposableMongo,
+} = require('../testUtils/disposableMongo');
 
 let migration = {};
 try {
@@ -22,8 +22,8 @@ const REQUIRED_INDEX_NAMES = [
   'customer_receipt_history',
   'customer_receipt_not_received_history',
 ];
-const MONGOD_PATH = 'C:\\Program Files\\MongoDB\\Server\\8.2\\bin\\mongod.exe';
-const MONGOD_AVAILABLE = fs.existsSync(MONGOD_PATH);
+const MONGOD_PATH = resolveMongodBinary();
+const MONGOD_AVAILABLE = Boolean(MONGOD_PATH);
 
 function clone(value) {
   return structuredClone(value);
@@ -57,7 +57,12 @@ class MemoryCollection {
       if (isUnsafeGuard) {
         const present = Object.hasOwn(document, 'customerReceiptGuardVersion');
         const value = document.customerReceiptGuardVersion;
-        if (!present || (Number.isFinite(value) && value >= 0)) continue;
+        const intended = typeof value === 'number'
+          && Number.isFinite(value)
+          && Number.isInteger(value)
+          && value >= 0
+          && value <= Number.MAX_SAFE_INTEGER - 1;
+        if (!present || intended) continue;
       }
       const identity = isCommand
         ? `${String(document.customerId || '')}\u0000${String(document.idempotencyKey || '')}`
@@ -112,60 +117,6 @@ function fixture({ receipts = [], shipments = [], indexes = [] } = {}) {
       shipments: new MemoryCollection('shipments', shipments, [], operations, pipelines),
     },
   };
-}
-
-function delay(milliseconds) {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
-
-async function reservePort() {
-  const server = net.createServer();
-  await new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', resolve);
-  });
-  const { port } = server.address();
-  await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
-  return port;
-}
-
-async function waitForMongoPort(child, port, timeoutMs = 15_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (child.exitCode !== null) throw new Error(`Disposable mongod exited (${child.exitCode})`);
-    const connected = await new Promise((resolve) => {
-      const socket = net.createConnection({ host: '127.0.0.1', port });
-      socket.setTimeout(200);
-      socket.once('connect', () => { socket.destroy(); resolve(true); });
-      const unavailable = () => { socket.destroy(); resolve(false); };
-      socket.once('error', unavailable);
-      socket.once('timeout', unavailable);
-    });
-    if (connected) return;
-    await delay(50);
-  }
-  throw new Error('Disposable mongod did not become ready');
-}
-
-async function stopMongo(child) {
-  if (!child || child.exitCode !== null) return;
-  child.kill('SIGTERM');
-  await Promise.race([
-    new Promise((resolve) => child.once('exit', resolve)),
-    delay(5_000),
-  ]);
-  if (child.exitCode === null) child.kill('SIGKILL');
-}
-
-function removeVerifiedMongoDirectory(directory) {
-  if (!directory) return;
-  const resolved = path.resolve(directory);
-  const tempRoot = `${path.resolve(os.tmpdir())}${path.sep}`;
-  if (!resolved.startsWith(tempRoot)
-    || !path.basename(resolved).startsWith('greenhome-receipt-migration-')) {
-    throw new Error(`Refusing to remove unverified Mongo directory: ${resolved}`);
-  }
-  fs.rmSync(resolved, { recursive: true, force: true });
 }
 
 function repositoryFor(value) {
@@ -265,7 +216,43 @@ describe('Customer delivery receipt migration', () => {
       {
         name: 'unsafe guard type',
         shipments: [{ _id: 'shipment-1', customerReceiptGuardVersion: 'zero' }],
-        code: 'CUSTOMER_DELIVERY_RECEIPT_GUARD_AMBIGUOUS',
+        code: 'CUSTOMER_RECEIPT_GUARD_VERSION_AMBIGUOUS',
+      },
+      {
+        name: 'positive infinity guard',
+        shipments: [{ _id: 'shipment-1', customerReceiptGuardVersion: Number.POSITIVE_INFINITY }],
+        code: 'CUSTOMER_RECEIPT_GUARD_VERSION_AMBIGUOUS',
+      },
+      {
+        name: 'negative infinity guard',
+        shipments: [{ _id: 'shipment-1', customerReceiptGuardVersion: Number.NEGATIVE_INFINITY }],
+        code: 'CUSTOMER_RECEIPT_GUARD_VERSION_AMBIGUOUS',
+      },
+      {
+        name: 'NaN guard',
+        shipments: [{ _id: 'shipment-1', customerReceiptGuardVersion: Number.NaN }],
+        code: 'CUSTOMER_RECEIPT_GUARD_VERSION_AMBIGUOUS',
+      },
+      {
+        name: 'fractional guard',
+        shipments: [{ _id: 'shipment-1', customerReceiptGuardVersion: 1.5 }],
+        code: 'CUSTOMER_RECEIPT_GUARD_VERSION_AMBIGUOUS',
+      },
+      {
+        name: 'increment would exceed Number.MAX_SAFE_INTEGER',
+        shipments: [{
+          _id: 'shipment-1',
+          customerReceiptGuardVersion: Number.MAX_SAFE_INTEGER,
+        }],
+        code: 'CUSTOMER_RECEIPT_GUARD_VERSION_AMBIGUOUS',
+      },
+      {
+        name: 'Decimal128 guard',
+        shipments: [{
+          _id: 'shipment-1',
+          customerReceiptGuardVersion: mongoose.Types.Decimal128.fromString('1'),
+        }],
+        code: 'CUSTOMER_RECEIPT_GUARD_VERSION_AMBIGUOUS',
       },
     ];
 
@@ -278,6 +265,35 @@ describe('Customer delivery receipt migration', () => {
       );
       assert.deepEqual(data.operations, [], row.name);
     }
+  });
+
+  it('accepts only finite non-negative integer guards that remain safe after one increment', async () => {
+    assert.equal(migration.MAX_RECEIPT_GUARD_VERSION, Number.MAX_SAFE_INTEGER - 1);
+    const data = fixture({
+      shipments: [
+        { _id: 'shipment-zero', customerReceiptGuardVersion: 0 },
+        { _id: 'shipment-one', customerReceiptGuardVersion: 1 },
+        {
+          _id: 'shipment-max',
+          customerReceiptGuardVersion: Number.MAX_SAFE_INTEGER - 1,
+        },
+      ],
+    });
+
+    const result = await migration.migrateCustomerDeliveryReceipt({
+      repository: repositoryFor(data),
+      mode: 'dry-run',
+    });
+
+    assert.equal(result.shipmentsMissingGuard, 0);
+    assert.equal(result.businessWrites, 0);
+    assert.deepEqual(data.operations, []);
+    const guardPipeline = data.pipelines.find(
+      (pipeline) => JSON.stringify(pipeline).includes('customerReceiptGuardVersion'),
+    );
+    const serialized = JSON.stringify(guardPipeline);
+    assert.match(serialized, /\"int\",\"long\",\"double\"/);
+    assert.match(serialized, new RegExp(String(Number.MAX_SAFE_INTEGER - 1)));
   });
 
   it('fails dry-run and apply before any index or business write when command identities are duplicated', async () => {
@@ -432,54 +448,89 @@ describe('Customer delivery receipt migration', () => {
     assert.equal(calls.at(-1), 'disconnect');
   });
 
-  it('keeps a disposable MongoDB 8.2 empty database collection list unchanged on dry-run', {
-    skip: !MONGOD_AVAILABLE,
+  it('keeps a portable disposable MongoDB empty database unchanged and rejects unsafe BSON guards', {
+    skip: MONGOD_AVAILABLE
+      ? false
+      : 'Disposable MongoDB skipped: no binary found via MONGOD_BINARY, PATH, or common locations',
     timeout: 60_000,
   }, async () => {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'greenhome-receipt-migration-'));
-    const port = await reservePort();
-    const child = spawn(MONGOD_PATH, [
-      '--dbpath', directory,
-      '--port', String(port),
-      '--bind_ip', '127.0.0.1',
-      '--quiet',
-    ], {
-      stdio: 'ignore',
-      windowsHide: true,
-    });
-    const database = `greenhome_receipt_dry_run_${randomUUID().replaceAll('-', '')}`;
-    const uri = `mongodb://127.0.0.1:${port}/${database}`;
+    let mongoInstance;
     const names = async () => (
       await mongoose.connection.db.listCollections({}, { nameOnly: true }).toArray()
     ).map((entry) => entry.name).sort();
+    const runDryRun = async (uri) => migration.runCli({
+      argv: ['--dry-run'],
+      loadEnv() {},
+      mongooseClient: mongoose,
+      async connect(_ignoredUri, { mongooseClient }) {
+        await mongooseClient.connect(uri);
+        return mongooseClient.connection;
+      },
+      logger: { log() {}, table() {} },
+    });
 
     try {
-      await waitForMongoPort(child, port);
+      mongoInstance = await startDisposableMongo({ binary: MONGOD_PATH });
+      const database = `greenhome_receipt_dry_run_${randomUUID().replaceAll('-', '')}`;
+      const uri = `mongodb://127.0.0.1:${mongoInstance.port}/${database}`;
       await mongoose.connect(uri, { autoCreate: false, autoIndex: false });
       const buildInfo = await mongoose.connection.db.admin().command({ buildInfo: 1 });
-      assert.match(buildInfo.version, /^8\.2\./);
+      assert.match(buildInfo.version, /^(?:6|7|8)\./);
       const before = await names();
       await mongoose.disconnect();
 
-      await migration.runCli({
-        argv: ['--dry-run'],
-        loadEnv() {},
-        mongooseClient: mongoose,
-        async connect(_ignoredUri, { mongooseClient }) {
-          await mongooseClient.connect(uri);
-          return mongooseClient.connection;
-        },
-        logger: { log() {}, table() {} },
-      });
+      await runDryRun(uri);
 
       await mongoose.connect(uri, { autoCreate: false, autoIndex: false });
       const after = await names();
       assert.deepEqual(before, []);
       assert.deepEqual(after, before);
+      await mongoose.disconnect();
+
+      const invalidCases = [
+        {
+          name: 'positive infinity',
+          value: Number.POSITIVE_INFINITY,
+          assertPersisted(value) { assert.equal(value, Number.POSITIVE_INFINITY); },
+        },
+        {
+          name: 'Decimal128',
+          value: mongoose.Types.Decimal128.fromString('1'),
+          assertPersisted(value) {
+            assert.equal(value?._bsontype, 'Decimal128');
+            assert.equal(value.toString(), '1');
+          },
+        },
+      ];
+      for (const row of invalidCases) {
+        const caseDatabase = `greenhome_receipt_guard_${randomUUID().replaceAll('-', '')}`;
+        const caseUri = `mongodb://127.0.0.1:${mongoInstance.port}/${caseDatabase}`;
+        await mongoose.connect(caseUri, { autoCreate: false, autoIndex: false });
+        const shipments = mongoose.connection.db.collection('shipments');
+        await shipments.insertOne({
+          shipmentKey: `guard-${row.name}`,
+          customerReceiptGuardVersion: row.value,
+        });
+        const beforeNames = await names();
+        await mongoose.disconnect();
+
+        await assert.rejects(
+          () => runDryRun(caseUri),
+          (error) => error?.code === 'CUSTOMER_RECEIPT_GUARD_VERSION_AMBIGUOUS',
+          row.name,
+        );
+
+        await mongoose.connect(caseUri, { autoCreate: false, autoIndex: false });
+        const afterNames = await names();
+        const persisted = await mongoose.connection.db.collection('shipments').findOne({});
+        assert.deepEqual(afterNames, beforeNames);
+        assert.equal(await mongoose.connection.db.collection('shipments').countDocuments({}), 1);
+        row.assertPersisted(persisted.customerReceiptGuardVersion);
+        await mongoose.disconnect();
+      }
     } finally {
       await mongoose.disconnect().catch(() => {});
-      await stopMongo(child);
-      removeVerifiedMongoDirectory(directory);
+      await cleanupDisposableMongo(mongoInstance);
     }
   });
 });

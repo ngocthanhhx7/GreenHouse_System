@@ -138,6 +138,7 @@ handoff review. The known client chunk-size warning is unchanged.
 | Direct Review/Exchange/Return receipt gates | 161 passing assertions |
 | Receipt migration | Initial RED 0/6 then GREEN 6/6; command-identity P1 RED 6/7 then GREEN 7/7; bounded/read-only expansion RED 5/9 then GREEN 9/9 |
 | Disposable MongoDB 8.2 dry-run | Empty collection list remained `[] -> []` |
+| Receipt guard BSON compatibility | RED 7/10 then GREEN 10/10; real Infinity and Decimal128 rejected with zero mutation |
 | Current combined server receipt-targeted command | 270/270 |
 | Client receipt UI | Pending isolated client gate; no count estimated |
 | Combined server/client regression and production build | Pending final integration; no result implied |
@@ -155,6 +156,10 @@ only safe counts. A second apply performs zero business writes by contract.
 Dry-run disables Mongoose `autoIndex` and `autoCreate` before connection.
 Conflict discovery uses server-side grouped counts with a one-row result, not
 full document reads or unbounded ID arrays.
+Shipment guard compatibility accepts only finite integral BSON
+int/long/double values in `0..9,007,199,254,740,990`. All other BSON
+types/values fail with `CUSTOMER_RECEIPT_GUARD_VERSION_AMBIGUOUS`. Integration
+tests resolve mongod from `MONGOD_BINARY`, PATH, or shared platform fallbacks.
 
 The target deployment remains responsible for database identity/backup,
 dry-run/apply/verify execution, a recorded second zero-write apply, and

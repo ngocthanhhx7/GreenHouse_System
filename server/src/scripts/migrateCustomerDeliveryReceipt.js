@@ -4,6 +4,8 @@ const { connectDatabase } = require('../config/database');
 const CustomerDeliveryReceipt = require('../models/customerDeliveryReceipt.model');
 const Shipment = require('../models/shipment.model');
 
+// The next $inc must remain an exactly representable JavaScript/Mongoose Number.
+const MAX_RECEIPT_GUARD_VERSION = Number.MAX_SAFE_INTEGER - 1;
 const REQUIRED_INDEXES = Object.freeze([
   Object.freeze({
     name: 'customer_receipt_command_unique',
@@ -153,10 +155,36 @@ function createMigrationRepository({ collections = defaultCollections() } = {}) 
           {
             $match: {
               $expr: {
-                $or: [
-                  { $not: [{ $isNumber: '$customerReceiptGuardVersion' }] },
-                  { $lt: ['$customerReceiptGuardVersion', 0] },
-                ],
+                $not: [{
+                  $switch: {
+                    branches: [{
+                      case: {
+                        $in: [
+                          { $type: '$customerReceiptGuardVersion' },
+                          ['int', 'long', 'double'],
+                        ],
+                      },
+                      then: {
+                        $and: [
+                          { $gte: ['$customerReceiptGuardVersion', 0] },
+                          {
+                            $lte: [
+                              '$customerReceiptGuardVersion',
+                              MAX_RECEIPT_GUARD_VERSION,
+                            ],
+                          },
+                          {
+                            $eq: [
+                              '$customerReceiptGuardVersion',
+                              { $trunc: '$customerReceiptGuardVersion' },
+                            ],
+                          },
+                        ],
+                      },
+                    }],
+                    default: false,
+                  },
+                }],
               },
             },
           },
@@ -188,7 +216,7 @@ function createMigrationRepository({ collections = defaultCollections() } = {}) 
         });
       }
       if (unsafeGuardDocuments) {
-        throw migrationError('CUSTOMER_DELIVERY_RECEIPT_GUARD_AMBIGUOUS', {
+        throw migrationError('CUSTOMER_RECEIPT_GUARD_VERSION_AMBIGUOUS', {
           conflictGroups: unsafeGuardDocuments,
         });
       }
@@ -324,6 +352,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  MAX_RECEIPT_GUARD_VERSION,
   REQUIRED_INDEXES,
   createMigrationRepository,
   formatDiagnostic,
