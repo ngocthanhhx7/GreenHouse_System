@@ -156,6 +156,27 @@ async function expectHttpFailure(client, requestPath, options, expectedStatuses,
   throw new Error(`${requestPath}: expected an HTTP error`);
 }
 
+async function acceptIdempotentReplay(
+  client,
+  requestPath,
+  options,
+  expectedStatuses,
+  expectedCodes = [],
+) {
+  try {
+    return await client.request(requestPath, options);
+  } catch (error) {
+    const statuses = Array.isArray(expectedStatuses) ? expectedStatuses : [expectedStatuses];
+    if (!statuses.includes(error.statusCode)) {
+      throw new Error(`${requestPath}: expected success or status ${statuses.join('/')}, got ${error.statusCode} (${error.errorCode})`);
+    }
+    if (expectedCodes.length && !expectedCodes.includes(error.errorCode)) {
+      throw new Error(`${requestPath}: expected success or error ${expectedCodes.join('/')}, got ${error.errorCode}`);
+    }
+    return error;
+  }
+}
+
 function loadModels() {
   return {
     Product: require('../models/product.model'),
@@ -351,7 +372,7 @@ async function runPhase1E2E({
     headers: { 'Idempotency-Key': confirmKey },
     body: { note: 'Phase 1 E2E staff confirmation' },
   }));
-  const exportBeforeProcess = await runStep('Assert Confirmed order has one StockExportRequest', async () => {
+  const exportBefore = await runStep('Assert Confirmed order has one StockExportRequest', async () => {
     const [order, exports] = await Promise.all([
       orderModel.findById(orderId).lean(),
       exportModel.find({ orderId }).lean(),
@@ -362,11 +383,11 @@ async function runPhase1E2E({
     return exports[0];
   });
   await runStep('Staff confirm replay does not create a second export request', async () => {
-    await staff.request(`/staff/orders/${orderId}/confirm`, {
+    await acceptIdempotentReplay(staff, `/staff/orders/${orderId}/confirm`, {
       method: 'POST',
       headers: { 'Idempotency-Key': confirmKey },
       body: { note: 'Phase 1 E2E staff confirmation' },
-    });
+    }, 409, ['ORDER_CONFIRM_STALE_STATE', 'ORDER_CONFIRM_CONCURRENT']);
     assertEqual(await exportModel.countDocuments({ orderId }), 1, 'export count after confirm replay');
   });
 
@@ -419,11 +440,11 @@ async function runPhase1E2E({
     assertEqual(reservation.status, 'Consumed', 'reservation status after export');
   });
   await runStep('Warehouse export replay does not deduct inventory twice', async () => {
-    await warehouse.request(`/warehouse/stock-exports/${asId(exportBefore)}/process`, {
+    await acceptIdempotentReplay(warehouse, `/warehouse/stock-exports/${asId(exportBefore)}/process`, {
       method: 'POST',
       headers: { 'Idempotency-Key': exportKey },
       body: { note: 'Phase 1 E2E warehouse export' },
-    });
+    }, 409, ['EXPORT_STALE_STATE', 'EXPORT_ALREADY_PROCESSING']);
     assertEqual(
       await inventoryTransactionModel.countDocuments({
         relatedCollection: 'StockExportRequest',
@@ -501,7 +522,7 @@ async function runPhase1E2E({
       eventKey: commandKey('delivered-replay', suffix),
       eventType: 'DELIVERED',
       occurredAt: new Date(now()).toISOString(),
-      evidenceReference: `phase1-replay-${suffix}`,
+      evidenceReferences: [signedEvidence],
       codCollectionResult: 'COLLECTED',
     },
   }, 409, ['SHIPMENT_EVENT_TERMINAL_STATE']));
@@ -533,7 +554,11 @@ async function runPhase1E2E({
     assertEqual(current.paymentStatus, 'Paid', 'history PaymentStatus');
     assertEqual(current.shippingStatus, 'Delivered', 'history ShippingStatus');
     assertEqual(current.shipping?.trackingCode, trackingCode, 'history tracking code');
-    assert.equal(history.some((item) => String(item.id || item._id) === String(foreignOrder._id)), false);
+    assertEqual(
+      history.some((item) => String(item.id || item._id) === String(foreignOrder._id)),
+      false,
+      'foreign order visibility',
+    );
     return current;
   });
   await runStep('Invalid order id returns a safe 404', () => expectHttpFailure(
@@ -600,6 +625,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  acceptIdempotentReplay,
   assertEqual,
   commandKey,
   createSessionClient,

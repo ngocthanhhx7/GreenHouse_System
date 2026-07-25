@@ -20,6 +20,7 @@ test('phase 1 customer order history survives refresh and shows manual shipping'
   await page.locator('#login-email').fill('customer@greenhome.test');
   await page.locator('#login-password').fill(password);
   await page.locator('button.auth-submit').click();
+  await expect(page).not.toHaveURL(/\/login(?:$|[?#])/);
   await page.goto('/orders');
 
   const orderCard = page.locator('.order-card').filter({ hasText: context.orderCode });
