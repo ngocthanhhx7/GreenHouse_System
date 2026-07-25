@@ -477,7 +477,13 @@ describe('SL-004 packing, shipment and delivery behavior', () => {
     });
     assert.equal(result.shipment.status, 'HandedOff');
     assert.equal(state.order.orderStatus, 'Shipped');
-    assert.equal(state.outbox.filter((entry) => entry.eventType === 'ORDER_SHIPPED').length, 1);
+    const shippedEvent = state.outbox.find((entry) => entry.eventType === 'ORDER_SHIPPED');
+    assert.ok(shippedEvent);
+    assert.equal(shippedEvent.payloadSchemaVersion, 1);
+    assert.equal(shippedEvent.payload.recipientId, 'customer-1');
+    assert.equal(shippedEvent.payload.displayValues.orderCode, 'GH-004-1');
+    assert.equal(shippedEvent.aggregateType, 'Shipment');
+    assert.match(shippedEvent.eventHash, /^[a-f0-9]{64}$/);
   });
 
   it('AT-064 appends delivery, dispute and correction while never shortening published deadlines', async () => {
@@ -496,6 +502,10 @@ describe('SL-004 packing, shipment and delivery behavior', () => {
     );
     assert.equal(state.order.orderStatus, 'Delivered');
     assert.equal(state.order.returnDeadlineAt.toISOString(), '2026-07-29T10:00:00.000Z');
+    const deliveredEvent = state.outbox.find((entry) => entry.eventType === 'ORDER_DELIVERED');
+    assert.ok(deliveredEvent);
+    assert.equal(deliveredEvent.payloadSchemaVersion, 1);
+    assert.equal(deliveredEvent.payload.recipientId, 'customer-1');
     const publishedDeadline = state.order.returnDeadlineAt;
 
     const dispute = await service.recordShipmentEvent(

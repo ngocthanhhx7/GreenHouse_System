@@ -84,12 +84,11 @@ describe('schema alignment with ERD', () => {
     });
   });
 
-  it('stores notification targeting and provider fields', () => {
-    ['targetCollection', 'targetId', 'recipientEmail', 'providerMessageId', 'eventId'].forEach((field) => {
+  it('stores notification targeting and safe logical tuple fields', () => {
+    ['targetCollection', 'targetId', 'businessEventId', 'recipientIdentity', 'type', 'channel', 'templateKey', 'displayValues'].forEach((field) => {
       assertPath(Notification, field);
     });
-    const eventIndex = Notification.schema.indexes().find(([fields]) => fields.userId === 1 && fields.eventId === 1);
+    const eventIndex = Notification.schema.indexes().find(([fields]) => fields.businessEventId === 1 && fields.recipientIdentity === 1 && fields.type === 1 && fields.channel === 1);
     assert.equal(eventIndex[1].unique, true);
-    assert.ok(eventIndex[1].partialFilterExpression);
   });
 });

@@ -388,3 +388,13 @@ Chung's SL-006 Product/Category/Catalog implementation.
 Post-race-hardening evidence on the merged SL-004 `main` is server `792/792`
 across 133 suites, client `206/206` across 55 suites, and production build PASS
 with `153` modules and only the existing large-chunk warning.
+
+## Implementation Addendum 2026-07-25 - SL-009 Notification
+
+Nguyễn Quang Huy hoàn tất Notification domain của SL-009: tuple deduplication
+theo business event/recipient/type/channel, policy Email/InApp theo actor,
+retained `Unread -> Read -> Archived`, owner-only API/UI, target authorization
+recheck và canonical DomainOutbox consumption. Notification không hard-delete,
+không chứa secret/full address/refund destination/raw callback/full
+Review/Support content. Các producer khác chỉ phát minimum-safe domain event
+theo contract này.

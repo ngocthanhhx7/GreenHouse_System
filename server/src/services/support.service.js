@@ -14,6 +14,7 @@ const {
 const {
   commandFingerprint,
 } = require('./review.domain');
+const { canonicalEnvelope } = require('./domainEventProducer.service');
 
 const REQUEST_TYPES = new Set([
   'Order', 'Payment', 'ReturnRefund', 'Exchange', 'Product', 'Account', 'Other',
@@ -447,14 +448,49 @@ function createSupportService({
   const clockNow = () => (now ? new Date(now()) : clock?.now ? new Date(clock.now()) : new Date());
   const inFlight = new Map();
   const eventOutbox = outboxRepository || {
-    async enqueue(entry, session) {
+    async enqueue(entry, session, context = {}) {
       const DomainOutbox = require('../models/domainOutbox.model');
-      const [created] = await DomainOutbox.create([{
-        identityKey: entry.identityKey
-          || `${entry.eventType}:${entry.aggregateType}:${entry.aggregateId}:${entry.version}`,
+      const identityKey = entry.identityKey
+        || `${entry.eventType}:${entry.aggregateType}:${entry.aggregateId}:${entry.version}`;
+      const result = context.result || {};
+      const directCustomerEvent = (
+        entry.eventType === 'SUPPORT_RESOLVED'
+        || (entry.eventType === 'SUPPORT_MESSAGE_APPENDED' && context.actorRole === 'Staff')
+      );
+      const directStaffEvent = ['SUPPORT_CLAIMED', 'SUPPORT_TRANSFERRED'].includes(entry.eventType);
+      const broadcastStaffEvent = entry.eventType === 'ASSIGNEE_CLEARED';
+      let document = {
+        identityKey,
         eventType: entry.eventType,
         payload: entry.payload,
-      }], session ? { session } : undefined);
+      };
+      if (directCustomerEvent || directStaffEvent || broadcastStaffEvent) {
+        const recipientId = directCustomerEvent
+          ? idOf(result.customerId)
+          : directStaffEvent
+            ? idOf(result.assigneeId ?? result.handledBy)
+            : '';
+        if (!broadcastStaffEvent && !recipientId) {
+          throw new Error('Support Notification recipient is required');
+        }
+        document = canonicalEnvelope({
+          identityKey,
+          businessEventId: identityKey,
+          eventType: entry.eventType,
+          aggregateType: entry.aggregateType,
+          aggregateId: entry.aggregateId,
+          aggregateVersion: entry.version,
+          occurredAt: entry.occurredAt,
+          ...(broadcastStaffEvent ? { recipientRole: 'Staff' } : { recipientId }),
+          targetCollection: 'SupportRequest',
+          targetId: entry.aggregateId,
+          displayValues: result.ticketCode ? { ticketCode: result.ticketCode } : {},
+        });
+      }
+      const [created] = await DomainOutbox.create(
+        [document],
+        session ? { session } : undefined
+      );
       return created.toObject ? created.toObject() : created;
     },
   };
@@ -532,7 +568,7 @@ function createSupportService({
     ));
   };
 
-  async function writeEffects({ actorId, operation, eventType, aggregateType, aggregateId, result, commandResult, idempotencyKey, session, commandIdentity, history }) {
+  async function writeEffects({ actorId, actorRole: commandActorRole, operation, eventType, aggregateType, aggregateId, result, commandResult, idempotencyKey, session, commandIdentity, history }) {
     const targetId = ticketId(result) || String(aggregateId);
     const version = Number(result?.version || 1);
     const occurredAt = clockNow();
@@ -545,6 +581,7 @@ function createSupportService({
     }, session);
     await auditLogger.log({
       actorId: String(actorId),
+      actorRole: commandActorRole,
       action: eventType,
       targetEntity: aggregateType,
       targetId,
@@ -564,7 +601,7 @@ function createSupportService({
       occurredAt,
       idempotencyKey,
       payload: { aggregateId: targetId, version },
-    }, session);
+    }, session, { actorRole: commandActorRole, result });
     await recordCommand({
       actorId: String(actorId),
       aggregateId: String(commandIdentity.aggregateId),
@@ -581,6 +618,7 @@ function createSupportService({
 
   async function writeSupplementalEffect({
     actorId,
+    actorRole: supplementalActorRole,
     eventType,
     result,
     idempotencyKey,
@@ -602,6 +640,7 @@ function createSupportService({
     }
     await auditLogger.log({
       actorId: String(actorId),
+      actorRole: supplementalActorRole || '',
       action: eventType,
       targetEntity: 'SupportRequest',
       targetId,
@@ -621,7 +660,7 @@ function createSupportService({
       occurredAt,
       idempotencyKey,
       payload: { aggregateId: targetId, version },
-    }, session);
+    }, session, { actorRole: 'System', result });
   }
 
   function sameCommand(left, right) {
@@ -686,6 +725,7 @@ function createSupportService({
       const commandResult = publicTicket(result);
       await writeEffects({
         actorId: context.auditActorId ?? actorValue,
+        actorRole: actorRole(actor),
         operation,
         eventType,
         aggregateType: 'SupportRequest',
@@ -700,6 +740,7 @@ function createSupportService({
       for (const effect of context.additionalEffects || []) {
         await writeSupplementalEffect({
           actorId: context.auditActorId ?? actorValue,
+          actorRole: actorRole(actor),
           eventType,
           session,
           commandIdentity: identity,
@@ -1017,7 +1058,19 @@ function createSupportService({
             createdAt: reopenedAt,
           }, session);
           await auditLogger.log({ actorId: idOf(actor), action: 'ASSIGNEE_CLEARED', targetEntity: 'SupportRequest', targetId: id, aggregateType: 'SupportRequest', aggregateId: id, version: updated.version, occurredAt: reopenedAt, idempotencyKey: options.idempotencyKey.trim(), metadata: {} }, session);
-          await eventOutbox.enqueue({ eventType: 'ASSIGNEE_CLEARED', aggregateType: 'SupportRequest', aggregateId: id, version: updated.version, occurredAt: reopenedAt, idempotencyKey: options.idempotencyKey.trim(), payload: { aggregateId: id, version: updated.version } }, session);
+          await eventOutbox.enqueue(
+            {
+              eventType: 'ASSIGNEE_CLEARED',
+              aggregateType: 'SupportRequest',
+              aggregateId: id,
+              version: updated.version,
+              occurredAt: reopenedAt,
+              idempotencyKey: options.idempotencyKey.trim(),
+              payload: { aggregateId: id, version: updated.version },
+            },
+            session,
+            { actorRole: 'System', result: updated }
+          );
         }
         await appendMessage({ ticketId: id, actorId: idOf(actor), actorRole: 'Customer', content: message, commandId: options.idempotencyKey.trim(), createdAt: reopenedAt }, session);
         return { result: updated, history: { kind: 'Resolution', entry: { actorRole: 'Customer', beforeStatus: 'Resolved', afterStatus: 'InProgress', transition: 'Reopened', resolvedAt: new Date(resolvedAt), reopenDeadline: new Date(deadline) } } };

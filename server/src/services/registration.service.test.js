@@ -43,7 +43,14 @@ function createRepositories() {
     },
     async createUser(data) { const item = { _id: `user-${users.length + 1}`, ...data }; users.push(item); return item; },
     async findCustomerRole() { return role; },
-    async audit(entry) { audit.push(entry); },
+    async audit(entry) {
+      audit.push({
+        ...entry,
+        replayBinding: entry.after?.commandFingerprint
+          ? { commandFingerprint: entry.after.commandFingerprint }
+          : undefined,
+      });
+    },
     async enqueue(event) { outbox.push(event); },
   };
   return { repository, challenges, users, audit, outbox };
@@ -378,6 +385,13 @@ describe('verified Customer registration', () => {
       idempotencyKey: 'durable-complete',
     };
     const first = await firstService.completeRegistration(command);
+    state.audit[0] = {
+      ...state.audit[0],
+      replayBinding: {
+        commandFingerprint: state.audit[0].after.commandFingerprint,
+      },
+    };
+    delete state.audit[0].after;
 
     const restartedService = createRegistrationService(options);
     const replay = await restartedService.completeRegistration(command);
@@ -387,6 +401,38 @@ describe('verified Customer registration', () => {
     assert.equal(state.users.length, 1);
     assert.equal(state.audit.length, 1);
     assert.equal(state.outbox.filter((item) => item.eventType === 'ACCOUNT_REGISTRATION_COMPLETED').length, 1);
+  });
+
+  it('replays an actual legacy registration row with only after.commandFingerprint', async () => {
+    const state = createRepositories();
+    const options = {
+      repository: state.repository,
+      otpGenerator: () => '123456',
+      otpSecret: 'registration-test-secret',
+      transactionManager: createRollbackTransactionManager(state),
+    };
+    const firstService = createRegistrationService(options);
+    await firstService.requestRegistrationChallenge({
+      email: 'legacy-registration@example.com',
+      idempotencyKey: 'legacy-request',
+    });
+    const command = {
+      email: 'legacy-registration@example.com',
+      otp: '123456',
+      fullName: 'Legacy Customer',
+      phoneNumber: '0912345678',
+      password: 'Matkhau123',
+      confirmPassword: 'Matkhau123',
+      idempotencyKey: 'legacy-complete',
+    };
+    const first = await firstService.completeRegistration(command);
+    delete state.audit[0].replayBinding;
+
+    const replay = await createRegistrationService(options).completeRegistration(command);
+
+    assert.equal(replay.replay, true);
+    assert.equal(replay.user.id, first.user.id);
+    assert.equal(state.audit.length, 1);
   });
 
   it('rejects reuse of a completion idempotency key for different registration data', async () => {

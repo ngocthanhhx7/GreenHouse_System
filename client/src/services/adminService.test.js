@@ -30,20 +30,29 @@ describe('client admin service', () => {
     await service.getOverviewReport({ from: '2026-07-01', to: '2026-07-31' });
   });
 
-  it('updates admin system settings', async () => {
+  it('sends a versioned complete settings command with its idempotency identity', async () => {
     const service = createAdminService({
       baseUrl: 'http://api.test/api',
       fetcher: async (url, options) => {
         assert.equal(url, 'http://api.test/api/admin/settings');
         assert.equal(options.method, 'PATCH');
-        assert.deepEqual(JSON.parse(options.body), { lowStockDefaultThreshold: 10 });
-        return { ok: true, json: async () => ({ success: true, data: { lowStockDefaultThreshold: 10 } }) };
+        assert.equal(options.headers['Idempotency-Key'], 'settings-client-001');
+        assert.deepEqual(JSON.parse(options.body), {
+          expectedVersion: 3,
+          reason: 'Cập nhật ngưỡng kho',
+          values: { PAYMENT_TIMEOUT_MINUTES: 20, LOW_STOCK_DEFAULT_THRESHOLD: 10 },
+        });
+        return { ok: true, json: async () => ({ success: true, data: { current: { version: 4 } } }) };
       },
     });
 
-    const result = await service.updateSettings({ lowStockDefaultThreshold: 10 });
+    const result = await service.updateSettings({
+      expectedVersion: 3,
+      reason: 'Cập nhật ngưỡng kho',
+      values: { PAYMENT_TIMEOUT_MINUTES: 20, LOW_STOCK_DEFAULT_THRESHOLD: 10 },
+    }, 'settings-client-001');
 
-    assert.equal(result.lowStockDefaultThreshold, 10);
+    assert.equal(result.current.version, 4);
   });
 
   it('fetches admin audit logs with query filters', async () => {
@@ -58,5 +67,34 @@ describe('client admin service', () => {
     const result = await service.listAuditLogs({ action: 'ORDER_CREATE', userId: 'user-1' });
 
     assert.equal(result.total, 1);
+  });
+
+  it('loads each bounded SL-009 report endpoint with the same encoded period', async () => {
+    const calls = [];
+    const service = createAdminService({
+      baseUrl: 'http://api.test/api',
+      fetcher: async (url) => {
+        calls.push(url);
+        return { ok: true, json: async () => ({ success: true, data: {} }) };
+      },
+    });
+
+    const query = { mode: 'period', from: '2026-07-01', to: '2026-07-31' };
+    await service.getRevenueReport(query);
+    await service.getOrderReport(query);
+    await service.getProductReport(query);
+    await service.getCustomerReport(query);
+    await service.getStaffReport(query);
+    await service.getInventoryReport(query);
+
+    const suffix = '?mode=period&from=2026-07-01&to=2026-07-31';
+    assert.deepEqual(calls, [
+      `http://api.test/api/admin/reports/revenue${suffix}`,
+      `http://api.test/api/admin/reports/orders${suffix}`,
+      `http://api.test/api/admin/reports/products${suffix}`,
+      `http://api.test/api/admin/reports/customers${suffix}`,
+      `http://api.test/api/admin/reports/staff${suffix}`,
+      `http://api.test/api/admin/reports/inventory${suffix}`,
+    ]);
   });
 });

@@ -1,5 +1,6 @@
 const LowStockAlert = require('../models/lowStockAlert.model');
-const SystemSetting = require('../models/systemSetting.model');
+const Product = require('../models/product.model');
+const SystemSettingVersion = require('../models/systemSettingVersion.model');
 const { notificationService } = require('./notification.service');
 
 const DEFAULT_THRESHOLD = 5;
@@ -8,12 +9,32 @@ function productIdOf(inventory) {
   return inventory.productId && inventory.productId._id ? inventory.productId._id : inventory.productId;
 }
 
+function settingVersionGuard(data = {}) {
+  const version = Number(data.settingVersion);
+  if (!Number.isInteger(version) || version < 0) return {};
+  return {
+    $or: [
+      { settingVersion: { $exists: false } },
+      { settingVersion: null },
+      { settingVersion: { $lte: version } },
+    ],
+  };
+}
+
 function createModelRepository() {
   return {
     async listInventories() { return require('../models/inventory.model').find({}).lean(); },
     async findDefaultThreshold() {
-      const setting = await SystemSetting.findOne({ key: 'LOW_STOCK_DEFAULT_THRESHOLD' }).lean();
-      return setting ? Number(setting.value) : DEFAULT_THRESHOLD;
+      const version = await SystemSettingVersion.findOne({}).sort({ version: -1 }).lean();
+      return version ? Number(version.values.LOW_STOCK_DEFAULT_THRESHOLD) : DEFAULT_THRESHOLD;
+    },
+    async findProductName(productId) {
+      const product = await Product.findById(productId).select('name').lean();
+      return product?.name || '';
+    },
+    async findLatestSettingVersion() {
+      const version = await SystemSettingVersion.findOne({}).sort({ version: -1 }).select('version').lean();
+      return version ? Number(version.version) : 0;
     },
     async findOpen(productId) {
       return LowStockAlert.findOne({ productId, status: 'Open' }).lean();
@@ -23,14 +44,14 @@ function createModelRepository() {
     },
     async refreshOpen(id, data) {
       return LowStockAlert.findOneAndUpdate(
-        { _id: id, status: 'Open' },
+        { _id: id, status: 'Open', ...settingVersionGuard(data) },
         { $set: data },
         { new: true, runValidators: true },
       ).lean();
     },
     async resolveOpen(id, data) {
       return LowStockAlert.findOneAndUpdate(
-        { _id: id, status: 'Open' },
+        { _id: id, status: 'Open', ...settingVersionGuard(data) },
         { $set: { status: 'Resolved', ...data } },
         { new: true, runValidators: true },
       ).lean();
@@ -43,22 +64,31 @@ function createLowStockAlertLifecycle({
   eventPublisher = null,
   clock = () => new Date(),
 } = {}) {
-  async function publishCrossing(alert, context) {
-    const event = {
-      idempotencyKey: `low-stock-crossing:${String(alert._id)}`,
-      type: 'LOW_STOCK_OPENED',
-      recipientRole: 'WarehouseManager',
-      targetCollection: 'LowStockAlert',
-      targetId: alert._id,
-      productId: alert.productId,
-      inventoryId: alert.inventoryId,
-      availableQuantity: alert.availableQuantity,
-      effectiveThreshold: alert.effectiveThreshold,
-      sourceEventKey: context.eventKey || '',
-      subject: 'Low stock alert',
-      content: `Product ${String(alert.productId)} has ${alert.availableQuantity} available.`,
-    };
+  async function publishCrossing(alert, context, inventory) {
     try {
+      if (!eventPublisher) return;
+      const populatedName = typeof inventory.productId === 'object' ? inventory.productId?.name : '';
+      const productName = String(
+        populatedName || await repository.findProductName?.(productIdOf(inventory)) || '',
+      ).trim();
+      if (!productName) throw new Error('Low-stock Notification product name is required');
+      const event = {
+        idempotencyKey: `low-stock-crossing:${String(alert._id)}`,
+        type: 'LOW_STOCK_OPENED',
+        recipientRole: 'WarehouseManager',
+        targetCollection: 'LowStockAlert',
+        targetId: alert._id,
+        productId: alert.productId,
+        inventoryId: alert.inventoryId,
+        availableQuantity: alert.availableQuantity,
+        effectiveThreshold: alert.effectiveThreshold,
+        displayValues: {
+          productName,
+          availableQuantity: alert.availableQuantity,
+          effectiveThreshold: alert.effectiveThreshold,
+        },
+        sourceEventKey: context.eventKey || '',
+      };
       if (eventPublisher?.publishDomainEvent) await eventPublisher.publishDomainEvent(event);
       else if (eventPublisher?.createRoleNotifications) await eventPublisher.createRoleNotifications(event);
     } catch (_) {
@@ -74,21 +104,72 @@ function createLowStockAlertLifecycle({
     const availableQuantity = inventory.inventoryHealth === 'ReconciliationRequired'
       ? 0
       : Math.max(0, sellableQuantity - reservedQuantity);
+    const claimedGlobalThreshold = Number(context.globalThreshold);
+    const hasClaimedGlobalThreshold = Number.isInteger(claimedGlobalThreshold) && claimedGlobalThreshold >= 0;
+    const claimedSettingVersion = Number(context.settingVersion);
+    const hasClaimedSettingVersion = Number.isInteger(claimedSettingVersion) && claimedSettingVersion >= 0;
+    const settingVersionPatch = hasClaimedSettingVersion
+      ? { settingVersion: claimedSettingVersion }
+      : {};
     const effectiveThreshold = inventory.lowStockThresholdOverride !== null
       && inventory.lowStockThresholdOverride !== undefined
       ? Number(inventory.lowStockThresholdOverride)
-      : Number(await repository.findDefaultThreshold?.() ?? inventory.lowStockThreshold ?? DEFAULT_THRESHOLD);
+      : hasClaimedGlobalThreshold
+        ? claimedGlobalThreshold
+        : Number(await repository.findDefaultThreshold?.() ?? inventory.lowStockThreshold ?? DEFAULT_THRESHOLD);
     const open = await repository.findOpen(productId);
+    const suppliedLatestVersion = Number(context.latestApprovedSettingVersion);
+    const hasSuppliedLatestVersion = Object.hasOwn(context, 'latestApprovedSettingVersion')
+      && Number.isInteger(suppliedLatestVersion)
+      && suppliedLatestVersion >= 0;
+    const latestApprovedVersion = hasClaimedSettingVersion
+      ? hasSuppliedLatestVersion
+        ? suppliedLatestVersion
+        : repository.findLatestSettingVersion
+          ? Number(await repository.findLatestSettingVersion())
+          : null
+      : null;
+    const persistedSettingVersion = Number(open?.settingVersion);
+    const newerVersionExists = hasClaimedSettingVersion && (
+      (Number.isInteger(latestApprovedVersion) && latestApprovedVersion > claimedSettingVersion)
+      || (Number.isInteger(persistedSettingVersion) && persistedSettingVersion > claimedSettingVersion)
+    );
+    if (newerVersionExists) {
+      return {
+        alert: open || null,
+        opened: false,
+        resolved: false,
+        replay: true,
+        staleSettingVersion: true,
+        availableQuantity,
+        effectiveThreshold: open ? Number(open.effectiveThreshold) : effectiveThreshold,
+      };
+    }
 
     if (availableQuantity <= effectiveThreshold) {
       const patch = {
         availableQuantity,
         effectiveThreshold,
+        ...settingVersionPatch,
         lastEvaluatedAt: now,
         crossingKey: context.eventKey || open?.crossingKey || '',
       };
       if (open) {
         const refreshed = await repository.refreshOpen(open._id, patch);
+        if (!refreshed && hasClaimedSettingVersion) {
+          const winner = await repository.findOpen(productId);
+          if (Number(winner?.settingVersion) > claimedSettingVersion) {
+            return {
+              alert: winner,
+              opened: false,
+              resolved: false,
+              replay: true,
+              staleSettingVersion: true,
+              availableQuantity,
+              effectiveThreshold: Number(winner.effectiveThreshold),
+            };
+          }
+        }
         return {
           alert: refreshed || open,
           opened: false,
@@ -123,7 +204,7 @@ function createLowStockAlertLifecycle({
           effectiveThreshold,
         };
       }
-      await publishCrossing(created, context);
+      await publishCrossing(created, context, inventory);
       return {
         alert: created,
         opened: true,
@@ -145,6 +226,7 @@ function createLowStockAlertLifecycle({
     const resolved = await repository.resolveOpen(open._id, {
       availableQuantity,
       effectiveThreshold,
+      ...settingVersionPatch,
       resolvedAt: now,
       lastEvaluatedAt: now,
       crossingKey: context.eventKey || open.crossingKey || '',
@@ -162,7 +244,18 @@ function createLowStockAlertLifecycle({
   async function evaluateAll(context = {}) {
     if (!repository.listInventories) return [];
     const inventories = await repository.listInventories();
-    return Promise.all(inventories.map((inventory) => evaluate(inventory, context)));
+    const settingVersion = Number(context.settingVersion);
+    const shouldLoadApprovedVersion = Number.isInteger(settingVersion)
+      && settingVersion >= 0
+      && !Object.hasOwn(context, 'latestApprovedSettingVersion')
+      && repository.findLatestSettingVersion;
+    const sharedContext = shouldLoadApprovedVersion
+      ? {
+        ...context,
+        latestApprovedSettingVersion: Number(await repository.findLatestSettingVersion()),
+      }
+      : context;
+    return Promise.all(inventories.map((inventory) => evaluate(inventory, sharedContext)));
   }
 
   return { evaluate, evaluateAll };

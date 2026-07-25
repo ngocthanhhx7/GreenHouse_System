@@ -7,6 +7,7 @@ const lowStockAlertSchema = new mongoose.Schema(
     status: { type: String, enum: ['Open', 'Resolved'], default: 'Open' },
     availableQuantity: { type: Number, required: true, min: 0 },
     effectiveThreshold: { type: Number, required: true, min: 0 },
+    settingVersion: { type: Number, default: null, min: 0 },
     openedAt: { type: Date, default: Date.now },
     resolvedAt: { type: Date, default: null },
     lastEvaluatedAt: { type: Date, default: Date.now },

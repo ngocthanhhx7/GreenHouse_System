@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const { describe, it } = require('node:test');
 
 const { createLowStockAlertLifecycle } = require('./lowStockAlertLifecycle.service');
+const { renderNotification } = require('../utils/notificationContract');
 
 function createRepository() {
   const alerts = [];
@@ -79,5 +80,148 @@ describe('low stock alert lifecycle', () => {
 
     assert.equal(result.availableQuantity, 0);
     assert.equal(result.opened, true);
+  });
+
+  it('publishes LOW_STOCK_OPENED with the exact safe facts required by its rendered copy', async () => {
+    const repository = createRepository();
+    repository.findProductName = async (productId) => {
+      assert.equal(productId, 'product-1');
+      return 'Monstera Deliciosa';
+    };
+    const events = [];
+    const lifecycle = createLowStockAlertLifecycle({
+      repository,
+      eventPublisher: { async publishDomainEvent(event) { events.push(event); } },
+    });
+
+    await lifecycle.evaluate({
+      _id: 'inventory-1',
+      productId: 'product-1',
+      sellableQuantity: 2,
+      reservedQuantity: 0,
+      inventoryHealth: 'Normal',
+      lowStockThresholdOverride: 5,
+    }, { eventKey: 'count:product-1' });
+
+    assert.equal(events.length, 1);
+    assert.deepEqual(events[0].displayValues, {
+      productName: 'Monstera Deliciosa',
+      availableQuantity: 2,
+      effectiveThreshold: 5,
+    });
+    assert.deepEqual(Object.keys(events[0].displayValues).sort(), [
+      'availableQuantity', 'effectiveThreshold', 'productName',
+    ]);
+    const rendered = renderNotification(
+      events[0].type,
+      events[0].type,
+      events[0].displayValues,
+    );
+    assert.match(rendered.content, /Monstera Deliciosa/);
+    assert.match(rendered.content, /2/);
+    assert.match(rendered.content, /5/);
+    assert.doesNotMatch(`${rendered.subject} ${rendered.content}`, /\{[A-Za-z]+\}/);
+  });
+
+  it('uses the claimed global setting version while preserving the Product override', async () => {
+    const repository = createRepository();
+    let fallbackReads = 0;
+    repository.findDefaultThreshold = async () => { fallbackReads += 1; return 5; };
+    const lifecycle = createLowStockAlertLifecycle({ repository });
+    const base = {
+      _id: 'inventory-global',
+      productId: 'product-global',
+      sellableQuantity: 9,
+      reservedQuantity: 0,
+      inventoryHealth: 'Normal',
+      lowStockThresholdOverride: null,
+    };
+
+    const global = await lifecycle.evaluate(base, {
+      eventKey: 'system-settings:8',
+      settingVersion: 8,
+      globalThreshold: 10,
+    });
+    const override = await lifecycle.evaluate({
+      ...base,
+      _id: 'inventory-override',
+      productId: 'product-override',
+      lowStockThresholdOverride: 3,
+    }, {
+      eventKey: 'system-settings:8',
+      settingVersion: 8,
+      globalThreshold: 10,
+    });
+    await lifecycle.evaluate({ ...base, sellableQuantity: 8 }, { eventKey: 'inventory:later' });
+
+    assert.equal(global.effectiveThreshold, 10);
+    assert.equal(global.opened, true);
+    assert.equal(global.alert.settingVersion, 8);
+    assert.equal(override.effectiveThreshold, 3);
+    assert.equal(override.opened, false);
+    assert.equal(global.alert.settingVersion, 8, 'later non-setting evaluations must not erase version provenance');
+    assert.equal(fallbackReads, 1);
+  });
+
+  it('does not let a stale claimed setting version refresh or resolve a newer open lifecycle', async () => {
+    const repository = createRepository();
+    repository.alerts.push({
+      _id: 'alert-newer',
+      productId: 'product-1',
+      inventoryId: 'inventory-1',
+      status: 'Open',
+      availableQuantity: 9,
+      effectiveThreshold: 10,
+      settingVersion: 2,
+      crossingKey: 'system-settings:2',
+    });
+    const lifecycle = createLowStockAlertLifecycle({ repository });
+
+    const result = await lifecycle.evaluate({
+      _id: 'inventory-1',
+      productId: 'product-1',
+      sellableQuantity: 9,
+      reservedQuantity: 0,
+      inventoryHealth: 'Normal',
+      lowStockThresholdOverride: null,
+    }, {
+      eventKey: 'system-settings:1',
+      settingVersion: 1,
+      globalThreshold: 4,
+      replay: true,
+    });
+
+    assert.equal(result.staleSettingVersion, true);
+    assert.equal(result.resolved, false);
+    assert.equal(repository.alerts[0].status, 'Open');
+    assert.equal(repository.alerts[0].effectiveThreshold, 10);
+    assert.equal(repository.alerts[0].settingVersion, 2);
+    assert.equal(repository.alerts[0].crossingKey, 'system-settings:2');
+  });
+
+  it('loads the approved setting version once for a bounded all-inventory reevaluation', async () => {
+    const repository = createRepository();
+    let versionReads = 0;
+    repository.listInventories = async () => [
+      { _id: 'inventory-1', productId: 'product-1', sellableQuantity: 1, reservedQuantity: 0, quarantinedQuantity: 0, lowStockThresholdOverride: null },
+      { _id: 'inventory-2', productId: 'product-2', sellableQuantity: 2, reservedQuantity: 0, quarantinedQuantity: 0, lowStockThresholdOverride: null },
+      { _id: 'inventory-3', productId: 'product-3', sellableQuantity: 3, reservedQuantity: 0, quarantinedQuantity: 0, lowStockThresholdOverride: null },
+    ];
+    repository.findLatestSettingVersion = async () => {
+      versionReads += 1;
+      return 2;
+    };
+    const lifecycle = createLowStockAlertLifecycle({ repository });
+
+    const results = await lifecycle.evaluateAll({
+      eventKey: 'system-settings:1',
+      settingVersion: 1,
+      globalThreshold: 4,
+    });
+
+    assert.equal(versionReads, 1);
+    assert.equal(results.length, 3);
+    assert.equal(results.every((result) => result.staleSettingVersion === true), true);
+    assert.equal(repository.alerts.length, 0);
   });
 });

@@ -628,6 +628,26 @@ describe('return/refund service', () => {
     assert.equal(repository.refunds.length, 0);
   });
 
+  it('rolls back a decision when its mandatory Customer notification outbox cannot be written', async () => {
+    const request = await createRequest();
+    const guarded = createService({
+      eventPublisher: {
+        async publishDomainEvent() {
+          throw new Error('notification outbox unavailable');
+        },
+      },
+    });
+
+    await assert.rejects(
+      () => guarded.decideRequest('staff-1', request.id, {
+        status: 'Approved',
+        staffNote: 'Evidence accepted',
+      }),
+      /notification outbox unavailable/i,
+    );
+    assert.equal(repository.requests[0].status, 'New');
+  });
+
   it('requires a Staff reason, rejects Staff-supplied amounts, and prevents stale decision overwrite', async () => {
     const request = await createRequest();
     await assert.rejects(() => service.decideRequest('staff-1', request.id, { status: 'Rejected' }), /Staff note/i);

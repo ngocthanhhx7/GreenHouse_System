@@ -1,5 +1,22 @@
+const { randomUUID } = require('node:crypto');
+
 const EmailOutbox = require('../models/emailOutbox.model');
+const { logAudit } = require('../utils/auditLogger');
+const { sanitizeEmailEventPayload } = require('../utils/emailPayloadSanitizer');
+const {
+  TYPE_DISPLAY_VALUES,
+  renderNotification,
+} = require('../utils/notificationContract');
 const { decryptOtp } = require('./passwordReset.service');
+
+const MAX_DELIVERY_ATTEMPTS = 5;
+const CURRENT_DELIVERY_POLICY_VERSION = 2;
+const PROVIDER_TIMEOUT_UNCERTAINTY_MS = 5 * 60_000;
+const SAFE_DELIVERY_ERRORS = Object.freeze({
+  EMAIL_PROVIDER_DISABLED: 'Email provider is disabled',
+  EMAIL_PROVIDER_REJECTED: 'Email provider rejected delivery',
+  EMAIL_PROVIDER_TIMEOUT: 'Email provider result is unknown after timeout',
+});
 
 function assertEmailConfig(env = process.env) {
   if (env.MAIL_PROVIDER !== 'smtp') return true;
@@ -78,6 +95,20 @@ function renderEmail(
       text: `Đơn hàng ${payload.orderCode || ''} đã được tạo thành công. Tổng thanh toán: ${payload.totalAmount || 0} VND.`,
     };
   }
+  if (entry.eventType === 'NOTIFICATION_DELIVERY_REQUESTED') {
+    const safePayload = sanitizeEmailEventPayload(entry.eventType, payload);
+    const displayValues = Object.fromEntries(
+      (TYPE_DISPLAY_VALUES[safePayload.notificationType] || [])
+        .filter((key) => Object.hasOwn(safePayload, key))
+        .map((key) => [key, safePayload[key]]),
+    );
+    const rendered = renderNotification(
+      safePayload.notificationType,
+      safePayload.templateKey,
+      displayValues,
+    );
+    return { subject: rendered.subject, text: rendered.content };
+  }
   throw new Error(`Unsupported email event: ${entry.eventType}`);
 }
 
@@ -113,36 +144,334 @@ function createEmailProvider(providerName = process.env.MAIL_PROVIDER || 'disabl
   };
 }
 
-function createModelEmailOutboxRepository() {
+function createModelEmailOutboxRepository({
+  model = EmailOutbox,
+  createClaimId = randomUUID,
+} = {}) {
+  function completeAttempt(id, data, claimId) {
+    const rootUpdate = {
+      status: data.status,
+      availableAt: data.availableAt,
+      leaseUntil: null,
+      claimId: '',
+      lastError: data.errorMessage || '',
+      sentAt: data.sentAt || null,
+      providerMessageId: data.providerMessageId || '',
+      deliveryPolicyVersion: CURRENT_DELIVERY_POLICY_VERSION,
+      updatedAt: data.attemptCompletedAt,
+    };
+    return model.findOneAndUpdate(
+      {
+        _id: id,
+        status: 'Processing',
+        claimId,
+        attempts: { $elemMatch: { claimId, completedAt: null } },
+      },
+      {
+        $set: {
+          ...rootUpdate,
+          'attempts.$[attempt].completedAt': data.attemptCompletedAt,
+          'attempts.$[attempt].outcome': data.attemptOutcome,
+          'attempts.$[attempt].errorCode': data.errorCode || '',
+          'attempts.$[attempt].errorMessage': data.errorMessage || '',
+          'attempts.$[attempt].providerMessageId': data.providerMessageId || '',
+        },
+      },
+      {
+        arrayFilters: [{ 'attempt.claimId': claimId, 'attempt.completedAt': null }],
+        new: true,
+      }
+    ).lean();
+  }
+
   return {
     async findByIdempotencyKey(key, session) {
-      const query = EmailOutbox.findOne({ idempotencyKey: key });
+      const query = model.findOne({ idempotencyKey: key });
       return (session ? query.session(session) : query).lean();
     },
     async create(data, session) {
-      const [created] = await EmailOutbox.create([data], session ? { session } : undefined);
+      const [created] = await model.create([data], session ? { session } : undefined);
       return created.toObject();
     },
+    async finalizeExpiredTerminal(now) {
+      const expired = await model.findOneAndUpdate(
+        {
+          status: 'Processing',
+          leaseUntil: { $lte: now },
+          attemptCount: { $gte: MAX_DELIVERY_ATTEMPTS },
+        },
+        [{
+          $set: {
+            status: 'Failed',
+            availableAt: null,
+            leaseUntil: null,
+            lastError: 'Email delivery lease expired',
+            updatedAt: now,
+            attempts: {
+              $map: {
+                input: { $ifNull: ['$attempts', []] },
+                as: 'attempt',
+                in: {
+                  $cond: [
+                    {
+                      $and: [
+                        { $eq: ['$$attempt.claimId', '$claimId'] },
+                        { $eq: [{ $ifNull: ['$$attempt.completedAt', null] }, null] },
+                      ],
+                    },
+                    {
+                      $mergeObjects: [
+                        '$$attempt',
+                        {
+                          completedAt: now,
+                          outcome: 'Failed',
+                          errorCode: 'EMAIL_LEASE_EXPIRED',
+                          errorMessage: 'Email delivery lease expired',
+                        },
+                      ],
+                    },
+                    '$$attempt',
+                  ],
+                },
+              },
+            },
+            claimId: '',
+            deliveryPolicyVersion: CURRENT_DELIVERY_POLICY_VERSION,
+          },
+        }],
+        { sort: { leaseUntil: 1 }, new: true }
+      ).lean();
+      return expired ? { ...expired, recoveredTerminalLease: true } : null;
+    },
     async claimNext(now, leaseUntil) {
-      const claimId = require('node:crypto').randomUUID();
-      return EmailOutbox.findOneAndUpdate(
-        { $or: [{ status: { $in: ['Pending', 'Failed'] }, availableAt: { $lte: now } }, { status: 'Processing', leaseUntil: { $lt: now } }] },
-        { $set: { status: 'Processing', leaseUntil, claimId }, $inc: { attemptCount: 1 } },
-        { sort: { availableAt: 1 }, new: true }
+      const claimId = createClaimId();
+      const nextAttempt = { $add: [{ $ifNull: ['$attemptCount', 0] }, 1] };
+      const closeExpiredAttempts = {
+        $map: {
+          input: { $ifNull: ['$attempts', []] },
+          as: 'attempt',
+          in: {
+            $cond: [
+              {
+                $and: [
+                  { $eq: ['$$attempt.claimId', '$claimId'] },
+                  { $eq: [{ $ifNull: ['$$attempt.completedAt', null] }, null] },
+                ],
+              },
+              {
+                $mergeObjects: [
+                  '$$attempt',
+                  {
+                    completedAt: now,
+                    outcome: 'LeaseExpired',
+                    errorCode: 'EMAIL_LEASE_EXPIRED',
+                    errorMessage: 'Email delivery lease expired',
+                  },
+                ],
+              },
+              '$$attempt',
+            ],
+          },
+        },
+      };
+      return model.findOneAndUpdate(
+        {
+          $expr: {
+            $lt: [{ $ifNull: ['$attemptCount', 0] }, MAX_DELIVERY_ATTEMPTS],
+          },
+          $or: [
+            {
+              status: { $in: ['Pending', 'RetryScheduled'] },
+              availableAt: { $lte: now },
+            },
+            { status: 'Processing', leaseUntil: { $lte: now } },
+            {
+              status: 'Failed',
+              deliveryPolicyVersion: { $exists: false },
+              availableAt: { $lte: now },
+            },
+          ],
+        },
+        [{
+          $set: {
+            status: 'Processing',
+            leaseUntil,
+            claimId,
+            attemptCount: nextAttempt,
+            deliveryPolicyVersion: CURRENT_DELIVERY_POLICY_VERSION,
+            updatedAt: now,
+            attempts: {
+              $concatArrays: [
+                closeExpiredAttempts,
+                [{
+                  attemptNumber: nextAttempt,
+                  claimId,
+                  claimedAt: now,
+                  leaseUntil,
+                  completedAt: null,
+                  outcome: 'Processing',
+                  errorCode: '',
+                  errorMessage: '',
+                  providerMessageId: '',
+                }],
+              ],
+            },
+          },
+        }],
+        { sort: { availableAt: 1, createdAt: 1 }, new: true }
       ).lean();
     },
-    async markSent(id, data, claimId) { return EmailOutbox.findOneAndUpdate({ _id: id, status: 'Processing', claimId }, { $set: data }, { new: true }).lean(); },
-    async markFailed(id, data, claimId) { return EmailOutbox.findOneAndUpdate({ _id: id, status: 'Processing', claimId }, { $set: data }, { new: true }).lean(); },
+    async markSent(id, data, claimId) {
+      return completeAttempt(id, data, claimId);
+    },
+    async markFailed(id, data, claimId) {
+      return completeAttempt(id, data, claimId);
+    },
+    async markTimeoutUnknown(id, data, claimId) {
+      return model.findOneAndUpdate(
+        {
+          _id: id,
+          status: 'Processing',
+          claimId,
+          attempts: { $elemMatch: { claimId, completedAt: null } },
+        },
+        {
+          $set: {
+            status: 'Processing',
+            availableAt: null,
+            leaseUntil: data.uncertaintyUntil,
+            claimId,
+            lastError: data.errorMessage,
+            deliveryPolicyVersion: CURRENT_DELIVERY_POLICY_VERSION,
+            updatedAt: data.attemptCompletedAt,
+            'attempts.$[attempt].completedAt': data.attemptCompletedAt,
+            'attempts.$[attempt].leaseUntil': data.uncertaintyUntil,
+            'attempts.$[attempt].outcome': data.attemptOutcome,
+            'attempts.$[attempt].errorCode': data.errorCode,
+            'attempts.$[attempt].errorMessage': data.errorMessage,
+            'attempts.$[attempt].providerMessageId': '',
+          },
+        },
+        {
+          arrayFilters: [{ 'attempt.claimId': claimId, 'attempt.completedAt': null }],
+          new: true,
+        }
+      ).lean();
+    },
   };
 }
 
-function createEmailOutboxService({ repository = createModelEmailOutboxRepository(), provider = createEmailProvider(), now = () => new Date(), leaseMs = 60_000 } = {}) {
+function providerError(code, safeMessage) {
+  const error = new Error(safeMessage);
+  error.deliveryCode = code;
+  return error;
+}
+
+function safeProviderMessageId(value) {
+  const normalized = String(value || '').trim();
+  return /^[A-Za-z0-9._:@<>-]{1,200}$/.test(normalized) ? normalized : '';
+}
+
+async function sendWithTimeout(provider, entry, timeoutMs) {
+  let timer;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(() => provider.send(entry)),
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () => reject(providerError('EMAIL_PROVIDER_TIMEOUT', 'Email provider request timed out')),
+          timeoutMs
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function createEmailOutboxService({
+  repository = createModelEmailOutboxRepository(),
+  provider = createEmailProvider(),
+  now = () => new Date(),
+  leaseMs = 60_000,
+  providerTimeoutMs = 30_000,
+  retryBaseMs = 60_000,
+  auditLogger = logAudit,
+  logger = console,
+} = {}) {
+  async function auditDelivery(entry, status, errorCode = '') {
+    const attemptNumber = Math.max(1, Number(entry.attemptCount || 1));
+    const claimIdentity = entry.claimId
+      || entry.attempts?.findLast?.((attempt) => attempt.attemptNumber === attemptNumber)?.claimId
+      || 'unknown-claim';
+    const businessEventId = `${entry.idempotencyKey || entry._id}:EMAIL_DELIVERY:${claimIdentity}`
+      .slice(0, 240);
+    try {
+      const timeoutUnknown = status === 'TimeoutUnknown';
+      await auditLogger({
+        actorType: 'EmailService',
+        actorId: null,
+        source: 'EmailService',
+        action: status === 'LostLease'
+          ? 'EMAIL_DELIVERY_LEASE_LOST'
+          : timeoutUnknown
+            ? 'EMAIL_DELIVERY_OUTCOME_UNKNOWN'
+            : 'EMAIL_DELIVERY_ATTEMPT_COMPLETED',
+        targetType: 'EmailOutbox',
+        targetId: String(entry._id),
+        outcome: status === 'Sent' ? 'Success' : timeoutUnknown ? 'Unknown' : 'Failed',
+        correlationId: String(entry.idempotencyKey || entry._id).slice(0, 240),
+        businessEventId,
+        reasonCode: errorCode,
+        reason: timeoutUnknown
+          ? 'Email delivery result is unknown after provider timeout'
+          : `Email delivery attempt completed with ${status}`,
+        previousState: 'Processing',
+        newState: status,
+        safeFacts: {
+          attemptNumber,
+          deliveryStatus: status,
+          ...(errorCode ? { errorCode } : {}),
+        },
+        timestamp: now(),
+      });
+      return 'Written';
+    } catch {
+      try {
+        logger.error('Email delivery audit write failed', {
+          code: 'EMAIL_AUDIT_WRITE_FAILED',
+          outboxId: String(entry._id),
+          attemptNumber,
+        });
+      } catch {
+        // The durable delivery state is authoritative even if operational logging also fails.
+      }
+      return 'Failed';
+    }
+  }
+
+  async function withAudit(entry, result, errorCode = '') {
+    const auditStatus = await auditDelivery(entry, result.status, errorCode);
+    return { ...result, auditStatus };
+  }
+
   return {
     async enqueue(event, session) {
+      const payload = sanitizeEmailEventPayload(event.eventType, event.payload);
       const existing = await repository.findByIdempotencyKey(event.idempotencyKey, session);
       if (existing) return existing;
       try {
-        return await repository.create({ status: 'Pending', attemptCount: 0, availableAt: now(), ...event }, session);
+        return await repository.create({
+          eventType: event.eventType,
+          idempotencyKey: event.idempotencyKey,
+          recipient: event.recipient,
+          payload,
+          status: 'Pending',
+          attemptCount: 0,
+          attempts: [],
+          deliveryPolicyVersion: CURRENT_DELIVERY_POLICY_VERSION,
+          availableAt: now(),
+        }, session);
       } catch (error) {
         if (error && error.code === 11000) return repository.findByIdempotencyKey(event.idempotencyKey, session);
         throw error;
@@ -150,26 +479,114 @@ function createEmailOutboxService({ repository = createModelEmailOutboxRepositor
     },
     async deliverNext() {
       const current = now();
+      const expiredTerminal = repository.finalizeExpiredTerminal
+        ? await repository.finalizeExpiredTerminal(current)
+        : null;
+      if (expiredTerminal) {
+        return withAudit(expiredTerminal, {
+          ...expiredTerminal,
+          status: 'Failed',
+          errorCode: 'EMAIL_LEASE_EXPIRED',
+        }, 'EMAIL_LEASE_EXPIRED');
+      }
       const entry = await repository.claimNext(current, new Date(current.getTime() + leaseMs));
       if (!entry) return null;
-      try {
-        const result = await provider.send(entry);
-        if (result && result.disabled) {
-          await repository.markFailed(entry._id, { status: 'Failed', availableAt: new Date(current.getTime() + 60_000), leaseUntil: null, lastError: 'Email provider disabled' }, entry.claimId);
-          return { ...entry, status: 'Failed' };
-        }
-        const finalized = await repository.markSent(entry._id, { status: 'Sent', sentAt: now(), leaseUntil: null, lastError: '', providerMessageId: result.messageId || '' }, entry.claimId);
-        if (finalized === null) return { ...entry, status: 'LostLease' };
-        return { ...entry, status: 'Sent' };
-      } catch (error) {
-        const attempt = Math.max(1, Number(entry.attemptCount || 1));
-        const delay = Math.min(60 * 60_000, (2 ** Math.min(attempt, 10)) * 1000);
-        const finalized = await repository.markFailed(entry._id, { status: 'Failed', attemptCount: attempt, availableAt: new Date(current.getTime() + delay), leaseUntil: null, lastError: error.message }, entry.claimId);
-        if (finalized === null) return { ...entry, status: 'LostLease' };
-        return { ...entry, status: 'Failed' };
+      const reclaimedAttempt = entry.attempts?.find((attempt) => (
+        Number(attempt.attemptNumber) === Number(entry.attemptCount) - 1
+        && attempt.outcome === 'LeaseExpired'
+      ));
+      if (reclaimedAttempt) {
+        await auditDelivery({
+          ...entry,
+          attemptCount: reclaimedAttempt.attemptNumber,
+          claimId: reclaimedAttempt.claimId,
+        }, 'LostLease', 'EMAIL_LEASE_EXPIRED');
       }
+      let result;
+      try {
+        result = await sendWithTimeout(provider, entry, providerTimeoutMs);
+        if (result && result.disabled) {
+          throw providerError('EMAIL_PROVIDER_DISABLED', 'Email provider is disabled');
+        }
+        if (result && result.accepted === false) {
+          throw providerError('EMAIL_PROVIDER_REJECTED', 'Email provider rejected delivery');
+        }
+      } catch (error) {
+        if (error && error.deliveryCode === 'EMAIL_PROVIDER_TIMEOUT') {
+          // SMTP cannot be cancelled reliably: retain Unknown evidence and delay the
+          // at-least-once retry so a late provider success is not called a failure.
+          const observedAt = now();
+          const uncertaintyUntil = new Date(
+            observedAt.getTime() + PROVIDER_TIMEOUT_UNCERTAINTY_MS
+          );
+          const finalized = await repository.markTimeoutUnknown(entry._id, {
+            status: 'Processing',
+            uncertaintyUntil,
+            attemptCompletedAt: observedAt,
+            attemptOutcome: 'TimeoutUnknown',
+            errorCode: 'EMAIL_PROVIDER_TIMEOUT',
+            errorMessage: SAFE_DELIVERY_ERRORS.EMAIL_PROVIDER_TIMEOUT,
+            providerMessageId: '',
+          }, entry.claimId);
+          if (finalized === null) {
+            return withAudit(entry, { ...entry, status: 'LostLease' }, 'EMAIL_LEASE_LOST');
+          }
+          return withAudit(entry, {
+            ...entry,
+            status: 'TimeoutUnknown',
+            uncertaintyUntil,
+          }, 'EMAIL_PROVIDER_TIMEOUT');
+        }
+        const attempt = Math.max(1, Number(entry.attemptCount || 1));
+        const terminal = attempt >= MAX_DELIVERY_ATTEMPTS;
+        const status = terminal ? 'Failed' : 'RetryScheduled';
+        const knownErrorMessage = SAFE_DELIVERY_ERRORS[error && error.deliveryCode];
+        const errorCode = knownErrorMessage
+          ? error.deliveryCode
+          : 'EMAIL_PROVIDER_ERROR';
+        const errorMessage = knownErrorMessage || 'Email provider request failed';
+        const delay = Math.min(60 * 60_000, retryBaseMs * (2 ** Math.min(attempt - 1, 10)));
+        const completedAt = now();
+        const finalized = await repository.markFailed(entry._id, {
+          status,
+          availableAt: terminal ? null : new Date(completedAt.getTime() + delay),
+          attemptCompletedAt: completedAt,
+          attemptOutcome: status,
+          errorCode,
+          errorMessage,
+          providerMessageId: '',
+        }, entry.claimId);
+        if (finalized === null) {
+          return withAudit(entry, { ...entry, status: 'LostLease' }, 'EMAIL_LEASE_LOST');
+        }
+        return withAudit(entry, { ...entry, status }, errorCode);
+      }
+
+      const completedAt = now();
+      const providerMessageId = safeProviderMessageId(result && result.messageId);
+      const finalized = await repository.markSent(entry._id, {
+        status: 'Sent',
+        availableAt: null,
+        sentAt: completedAt,
+        attemptCompletedAt: completedAt,
+        attemptOutcome: 'Sent',
+        errorCode: '',
+        errorMessage: '',
+        providerMessageId,
+      }, entry.claimId);
+      if (finalized === null) {
+        return withAudit(entry, { ...entry, status: 'LostLease' }, 'EMAIL_LEASE_LOST');
+      }
+      return withAudit(entry, { ...entry, status: 'Sent' });
     },
   };
 }
 
-module.exports = { createEmailProvider, createEmailOutboxService, createModelEmailOutboxRepository, renderEmail, assertEmailConfig };
+module.exports = {
+  createEmailProvider,
+  createEmailOutboxService,
+  createModelEmailOutboxRepository,
+  sanitizeEmailEventPayload,
+  renderEmail,
+  assertEmailConfig,
+};

@@ -104,8 +104,7 @@ function createDamageReportService({
         await eventPublisher.createInAppNotification({
           userId: event.recipientId,
           type: event.type,
-          subject: event.subject,
-          content: event.content,
+          displayValues: event.displayValues || {},
           eventId: event.idempotencyKey,
         });
       }
@@ -225,8 +224,7 @@ function createDamageReportService({
         targetCollection: 'DamageReport',
         targetId: result.report._id,
         type: 'DAMAGE_REPORTED',
-        subject: 'Damage report submitted',
-        content: `Damage report ${result.report._id} is pending Warehouse review.`,
+        displayValues: { quantity: result.report.quantity },
       });
       return toResponse(result.report);
     },
@@ -327,11 +325,11 @@ function createDamageReportService({
       await lowStockLifecycle?.evaluate(result.updated, { eventKey: transactionKey });
       await emitEvent({
         idempotencyKey: `damage-decision:${id}`,
-        recipientRole: 'WarehouseManager',
         recipientId: result.completed.reportedBy,
+        targetCollection: 'DamageReport',
+        targetId: result.completed._id,
         type: 'DAMAGE_DECIDED',
-        subject: 'Damage report decided',
-        content: `Damage report ${id} is ${result.completed.status}.`,
+        displayValues: { quantity: result.completed.quantity },
       });
       return { ...toResponse(result.completed), transaction: result.transaction };
     },

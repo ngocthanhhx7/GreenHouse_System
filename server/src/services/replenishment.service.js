@@ -214,8 +214,7 @@ function createReplenishmentService({
         await eventPublisher.createInAppNotification({
           userId: event.recipientId,
           type: event.type,
-          subject: event.subject,
-          content: event.content,
+          displayValues: event.displayValues || {},
           eventId: event.idempotencyKey,
           targetCollection: event.targetCollection || '',
           targetId: event.targetId || null,
@@ -302,8 +301,7 @@ function createReplenishmentService({
         targetCollection: 'ReplenishmentRequest',
         targetId: request._id,
         type: 'REPLENISHMENT_REQUESTED',
-        subject: 'Replenishment request created',
-        content: `Request ${String(request._id)} is pending Admin approval.`,
+        displayValues: { quantity },
       });
       return toResponse(request, inventory);
     },
@@ -413,8 +411,7 @@ function createReplenishmentService({
         targetCollection: 'ReplenishmentRequest',
         targetId: updated._id,
         type: `REPLENISHMENT_${input.status.toUpperCase()}`,
-        subject: `Replenishment request ${input.status.toLowerCase()}`,
-        content: `Replenishment request ${id} was decided.`,
+        displayValues: { quantity: updated.requestedQuantity },
       });
       return toResponse(updated, inventory);
     },
@@ -558,8 +555,7 @@ function createReplenishmentService({
         targetCollection: 'ReplenishmentRequest',
         targetId: result.updatedRequest._id,
         type: 'REPLENISHMENT_RECEIVED',
-        subject: 'Replenishment receipt recorded',
-        content: `Accepted ${acceptedSellableQuantity} unit(s).`,
+        displayValues: { quantity: acceptedSellableQuantity },
       });
       return {
         ...toResponse(result.updatedRequest, result.updatedInventory),

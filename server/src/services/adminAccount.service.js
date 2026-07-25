@@ -4,6 +4,10 @@ const ApiError = require('../utils/apiError');
 const User = require('../models/user.model');
 const Role = require('../models/role.model');
 const AuditLog = require('../models/auditLog.model');
+const {
+  extractAdminCommandResult,
+  extractAuditReplayBinding,
+} = require('../utils/auditReplay');
 const { sessionService: defaultSessionService } = require('./session.service');
 const { activeAssignmentService: defaultAssignmentService } = require('./activeAssignment.service');
 const { internalInvitationService: defaultInvitationService } = require('./internalInvitation.service');
@@ -49,7 +53,29 @@ function createModelRepository() {
       return (session ? query.session(session) : query).lean();
     },
     async findAuditByEventId(eventId, session) {
-      const query = AuditLog.findOne({ eventId });
+      const query = AuditLog.findOne({ eventId }).select({
+        userId: 1,
+        action: 1,
+        targetId: 1,
+        replayBinding: 1,
+        commandResult: 1,
+        'after.commandFingerprint': 1,
+        'after.result.user.id': 1,
+        'after.result.user.fullName': 1,
+        'after.result.user.email': 1,
+        'after.result.user.role': 1,
+        'after.result.user.status': 1,
+        'after.result.user.createdAt': 1,
+        'after.result.user.lastLoginAt': 1,
+        'after.result.user.version': 1,
+        'after.result.revokedSessions': 1,
+        'after.result.handoff.activeAssignments.sliceId': 1,
+        'after.result.handoff.activeAssignments.detail.entity': 1,
+        'after.result.handoff.activeAssignments.detail.activeStatuses': 1,
+        'after.result.handoff.assignmentCheckUnavailable': 1,
+        'after.result.handoff.recoveries.sliceId': 1,
+        'after.result.handoff.recoveries.recovered': 1,
+      });
       return (session ? query.session(session) : query).lean();
     },
     async search({ query = '', roleName, status, page = 1, pageSize = 25 } = {}) {
@@ -173,8 +199,6 @@ function createAdminAccountService({
   auditLogger = createAuditLogger(),
   transactionManager = createTransactionManager(),
 } = {}) {
-  const completedCommands = new Map();
-
   function commandKey(idempotencyKey) {
     if (!idempotencyKey) {
       throw new ApiError(400, 'Thiếu mã idempotency.', [], 'IDEMPOTENCY_REQUIRED');
@@ -216,23 +240,20 @@ function createAdminAccountService({
     );
   }
 
-  function remember(identity, result) {
-    completedCommands.set(identity.eventId, {
-      fingerprint: identity.fingerprint,
-      result,
-    });
+  function idempotencyReplayUnavailable() {
+    return new ApiError(
+      409,
+      'Không thể phục hồi kết quả lệnh quản trị trước đó.',
+      [],
+      'IDEMPOTENCY_REPLAY_UNAVAILABLE',
+    );
   }
 
   async function findReplay(identity, session = null) {
-    const cached = completedCommands.get(identity.eventId);
-    if (cached) {
-      if (cached.fingerprint !== identity.fingerprint) throw idempotencyConflict();
-      return { alreadyProcessed: true, ...cached.result };
-    }
     if (!repository.findAuditByEventId) return null;
     const audit = await repository.findAuditByEventId(identity.eventId, session);
     if (!audit) return null;
-    const storedFingerprint = audit.after?.commandFingerprint;
+    const storedFingerprint = extractAuditReplayBinding(audit).commandFingerprint;
     if (
       String(audit.userId) !== identity.actorUserId
       || String(audit.targetId) !== identity.targetUserId
@@ -241,16 +262,8 @@ function createAdminAccountService({
     ) {
       throw idempotencyConflict();
     }
-    let result = audit.after?.result || null;
-    if (!result) {
-      const current = await repository.findById(identity.targetUserId, session);
-      if (!current) throw idempotencyConflict();
-      result = {
-        user: minimumAccount(current),
-        revokedSessions: 0,
-      };
-    }
-    remember(identity, result);
+    const result = extractAdminCommandResult(audit);
+    if (!result) throw idempotencyReplayUnavailable();
     return { alreadyProcessed: true, ...result };
   }
 
@@ -269,7 +282,6 @@ function createAdminAccountService({
       if (committedReplay) return committedReplay;
       throw error;
     }
-    if (!result.alreadyProcessed) remember(identity, result);
     return result;
   }
 

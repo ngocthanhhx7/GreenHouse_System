@@ -47,7 +47,7 @@ describe('client notification service', () => {
     assert.equal(result.unreadCount, 2);
   });
 
-  it('loads notification detail and deletes a read notification', async () => {
+  it('loads notification detail, its authorized target, and archives a read notification', async () => {
     const calls = [];
     const service = createNotificationService({
       baseUrl: 'http://api.test/api',
@@ -58,9 +58,24 @@ describe('client notification service', () => {
     });
 
     await service.getNotification('noti-1');
-    await service.deleteNotification('noti-1');
+    await service.getNotificationTarget('noti-1');
+    await service.archiveNotification('noti-1');
 
     assert.equal(calls[0].url, 'http://api.test/api/notifications/noti-1');
-    assert.equal(calls[1].options.method, 'DELETE');
+    assert.equal(calls[1].url, 'http://api.test/api/notifications/noti-1/target');
+    assert.equal(calls[2].url, 'http://api.test/api/notifications/noti-1/archive');
+    assert.equal(calls[2].options.method, 'PATCH');
+  });
+
+  it('requests the archived history filter explicitly', async () => {
+    const service = createNotificationService({
+      baseUrl: 'http://api.test/api',
+      fetcher: async (url) => {
+        assert.equal(url, 'http://api.test/api/notifications?status=archived&limit=20');
+        return { ok: true, json: async () => ({ success: true, data: { items: [] } }) };
+      },
+    });
+
+    await service.listMyNotifications({ status: 'archived', limit: 20 });
   });
 });

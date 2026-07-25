@@ -6,6 +6,7 @@ const { authorizeRoles } = require('../middlewares/authorize.middleware');
 const router = express.Router();
 
 router.get('/admin/settings', authenticate, authorizeRoles('Admin'), systemSettingController.listSettings);
+router.get('/admin/settings/history', authenticate, authorizeRoles('Admin'), systemSettingController.listHistory);
 router.patch('/admin/settings', authenticate, authorizeRoles('Admin'), systemSettingController.updateSettings);
 
 module.exports = router;

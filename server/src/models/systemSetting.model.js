@@ -7,6 +7,7 @@ const systemSettingSchema = new mongoose.Schema(
       required: true,
       unique: true,
       trim: true,
+      enum: ['PAYMENT_TIMEOUT_MINUTES', 'LOW_STOCK_DEFAULT_THRESHOLD'],
     },
     value: {
       type: Number,

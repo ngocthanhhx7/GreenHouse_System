@@ -237,7 +237,7 @@ function createInventoryService({
     try {
       if (eventPublisher?.publishDomainEvent) await eventPublisher.publishDomainEvent(event);
       else if (eventPublisher?.createRoleNotifications && event.recipientRole) await eventPublisher.createRoleNotifications(event);
-      else if (event.recipientId && eventPublisher && eventPublisher.createInAppNotification) await eventPublisher.createInAppNotification({ userId: event.recipientId, type: event.type, subject: event.subject, content: event.content, eventId: event.idempotencyKey });
+      else if (event.recipientId && eventPublisher && eventPublisher.createInAppNotification) await eventPublisher.createInAppNotification({ userId: event.recipientId, type: event.type, displayValues: event.displayValues || {}, eventId: event.idempotencyKey, targetCollection: event.targetCollection || '', targetId: event.targetId || null });
     } catch (_) { /* Notification delivery is intentionally outside the inventory transaction. */ }
   }
   async function ensureInventoryRecords() {
@@ -245,7 +245,8 @@ function createInventoryService({
     let defaultThreshold = 5;
     try {
       const settings = thresholdProvider && await thresholdProvider.listSettings();
-      if (settings?.LOW_STOCK_DEFAULT_THRESHOLD !== undefined) defaultThreshold = Number(settings.LOW_STOCK_DEFAULT_THRESHOLD);
+      const settingValues = settings?.current?.values || settings;
+      if (settingValues?.LOW_STOCK_DEFAULT_THRESHOLD !== undefined) defaultThreshold = Number(settingValues.LOW_STOCK_DEFAULT_THRESHOLD);
     } catch (_) { /* keep legacy fallback when settings are unavailable */ }
     for (const product of products) {
       const existing = await repository.findInventoryByProductId(product._id);
@@ -256,8 +257,9 @@ function createInventoryService({
     if (inventory.lowStockThresholdOverride !== undefined && inventory.lowStockThresholdOverride !== null) return inventory;
     try {
       const settings = thresholdProvider && await thresholdProvider.listSettings();
-      if (settings?.LOW_STOCK_DEFAULT_THRESHOLD !== undefined) {
-        return { ...inventory, effectiveThreshold: Number(settings.LOW_STOCK_DEFAULT_THRESHOLD), lowStockThreshold: Number(settings.LOW_STOCK_DEFAULT_THRESHOLD) };
+      const settingValues = settings?.current?.values || settings;
+      if (settingValues?.LOW_STOCK_DEFAULT_THRESHOLD !== undefined) {
+        return { ...inventory, effectiveThreshold: Number(settingValues.LOW_STOCK_DEFAULT_THRESHOLD), lowStockThreshold: Number(settingValues.LOW_STOCK_DEFAULT_THRESHOLD) };
       }
     } catch (_) { /* fallback to persisted legacy threshold */ }
     return inventory;
@@ -355,7 +357,7 @@ function createInventoryService({
       if (threshold === null && thresholdProvider?.listSettings) {
         try {
           const settings = await thresholdProvider.listSettings();
-          fallbackThreshold = Number(settings?.LOW_STOCK_DEFAULT_THRESHOLD ?? 0);
+          fallbackThreshold = Number((settings?.current?.values || settings)?.LOW_STOCK_DEFAULT_THRESHOLD ?? 0);
         } catch (_) { /* leave zero only when settings are unavailable */ }
       }
       const updated = await repository.updateInventory(id, { lowStockThreshold: threshold === null ? fallbackThreshold : threshold, lowStockThresholdOverride: threshold, lastUpdatedBy: userId }, null);
@@ -464,7 +466,7 @@ function createInventoryService({
           return { updatedRequest, order };
         });
         await auditLogger.log({ userId, action: `STOCK_EXPORT_${nextStatus.toUpperCase()}`, targetEntity: 'StockExportRequest', targetId: String(id), description: `${nextStatus} stock export request` });
-        await emitEvent({ idempotencyKey: `stock-export-decision:${id}:${nextStatus}`, recipientId: request.requestedBy, type: `STOCK_EXPORT_${nextStatus.toUpperCase()}`, subject: `Phiếu xuất kho đã ${nextStatus === 'Approved' ? 'được duyệt' : 'bị từ chối'}`, content: `Phiếu xuất kho ${id} đã được xử lý.` });
+        await emitEvent({ idempotencyKey: `stock-export-decision:${id}:${nextStatus}`, recipientId: request.requestedBy, type: `STOCK_EXPORT_${nextStatus.toUpperCase()}`, displayValues: { quantity: request.requestedQuantity || 0 }, targetCollection: 'StockExportRequest', targetId: request._id });
         return {
           stockExport: await this.getStockExport(decision.updatedRequest._id),
           order: { id: String(decision.order._id), orderStatus: decision.order.orderStatus },
@@ -521,7 +523,7 @@ function createInventoryService({
       for (const inventory of result.inventories) {
         await lowStockLifecycle?.evaluate(inventory, { eventKey: `stock-export:${id}` });
       }
-      await emitEvent({ idempotencyKey: `stock-export:${id}`, recipientId: result.packed.customerId, type: 'STOCK_EXPORT', subject: 'Đơn hàng đã được xuất kho', content: `Đơn ${result.packed.orderCode} đã được xuất kho.` });
+      await emitEvent({ idempotencyKey: `stock-export:${id}`, recipientId: result.packed.customerId, type: 'STOCK_EXPORT', displayValues: { quantity: result.details.reduce((total, detail) => total + Number(detail.quantity || 0), 0) }, targetCollection: 'StockExportRequest', targetId: result.exported._id });
       const stockExport = toStockExportResponse(result.exported, result.packed, result.details);
       return { stockExport, order: { id: String(result.packed._id), orderStatus: result.packed.orderStatus } };
     },

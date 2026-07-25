@@ -7,6 +7,7 @@ const {
   requiredText,
   sameId,
 } = require('./fulfillmentValidation');
+const { canonicalEnvelope } = require('./domainEventProducer.service');
 
 function isDuplicateKey(error) {
   return Number(error?.code) === 11000 || error?.codeName === 'DuplicateKey';
@@ -481,15 +482,20 @@ function createDeliveryResolutionService({
         resolvedAt: clock(),
       }, session);
       await repository.updateCycle(incident.cycleId, { status: 'Closed' }, session);
-      await repository.createOutbox({
-        identityKey: `delivery-failed:${String(incident._id)}`,
+      const occurredAt = new Date(clock());
+      const businessEventId = `delivery-failed:${String(incident._id)}`;
+      await repository.createOutbox(canonicalEnvelope({
+        identityKey: `notification:${businessEventId}:customer`,
+        businessEventId,
         eventType: 'DELIVERY_FAILED',
-        payload: {
-          orderId: String(order._id),
-          incidentId: String(incident._id),
-          refundObligationKey: refund?.obligationKey || null,
-        },
-      }, session);
+        aggregateType: 'DeliveryIncident',
+        aggregateId: String(incident._id),
+        occurredAt,
+        recipientId: String(order.customerId),
+        targetCollection: 'Order',
+        targetId: String(order._id),
+        displayValues: { orderCode: order.orderCode || String(order._id) },
+      }, () => occurredAt), session);
       await auditLogger?.log?.({
         userId: staffId,
         action: 'DELIVERY_FAILURE_RESOLVED',

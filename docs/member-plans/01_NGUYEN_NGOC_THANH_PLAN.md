@@ -346,3 +346,13 @@ Nguyễn Ngọc Thành phụ trách triển khai và tích hợp SL-007 trên br
 
 Release evidence được ghi tại `docs/reviews/SL-007_RELEASE_AUDIT.md`,
 `docs/reviews/SL-007_G3_TRACEABILITY.md` và `docs/reviews/SL-007_HANDOFF.md`.
+
+## Implementation Addendum 2026-07-25 - SL-009 integration
+
+Nguyễn Ngọc Thành hoàn tất Audit, DomainOutbox, EmailOutbox, migration và final
+integration của SL-009. Các domain command bắt buộc hiện commit state, Audit và
+canonical outbox trong cùng MongoDB transaction; Email delivery dùng lease
+fencing, tối đa năm attempt và không rollback business truth. Thành review
+Notification của Huy, Reports/Settings của Cường, chạy full regression và quản
+lý handoff/merge. Evidence nằm tại `docs/reviews/SL-009_G3_TRACEABILITY.md`,
+`docs/reviews/SL-009_RELEASE_AUDIT.md` và `docs/reviews/SL-009_HANDOFF.md`.

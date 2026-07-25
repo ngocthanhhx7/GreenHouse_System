@@ -13,11 +13,10 @@ const RefundPending = require('../models/refundPending.model');
 const OrderReservation = require('../models/orderReservation.model');
 const DomainOutbox = require('../models/domainOutbox.model');
 const ReturnRefundRequest = require('../models/returnRefundRequest.model');
-const User = require('../models/user.model');
 const UserAddress = require('../models/userAddress.model');
 const { createPayOSGateway } = require('../config/payos');
 const { logAudit } = require('../utils/auditLogger');
-const { createEmailOutboxService } = require('./email.service');
+const { canonicalEnvelope } = require('./domainEventProducer.service');
 const { systemSettingService } = require('./systemSetting.service');
 const { lowStockAlertLifecycle } = require('./lowStockAlertLifecycle.service');
 
@@ -474,15 +473,6 @@ function createModelOrderRepository() {
   };
 }
 
-function createModelCustomerRepository() {
-  return {
-    async findEmail(customerId) {
-      const user = await User.findById(customerId).select('email').lean();
-      return user ? user.email : null;
-    },
-  };
-}
-
 function createModelAddressRepository() {
   return {
     async findByIdForUser(userId, id) {
@@ -499,8 +489,6 @@ function createOrderService({
   inventoryRepository = createModelInventoryRepository(),
   orderRepository = createModelOrderRepository(),
   auditLogger = { log: logAudit },
-  customerRepository = null,
-  emailOutboxService = null,
   addressRepository = createModelAddressRepository(),
   settingsService = systemSettingService,
   payosGateway = createPayOSGateway(),
@@ -794,14 +782,6 @@ function createOrderService({
       const existingAfterAddressResolution = await loadExisting(customerId, idempotencyKey, checkoutRequestHash);
       if (existingAfterAddressResolution) return existingAfterAddressResolution;
 
-      let paymentDeadlineAt = null;
-      if (paymentMethod === 'ONLINE') {
-        const settings = await settingsService.listSettings();
-        const configuredTimeout = Number(settings.PAYMENT_TIMEOUT_MINUTES ?? settings.paymentTimeoutMinutes);
-        const paymentTimeoutMinutes = Number.isInteger(configuredTimeout) && configuredTimeout > 0 ? configuredTimeout : 15;
-        paymentDeadlineAt = new Date(clock().getTime() + paymentTimeoutMinutes * 60 * 1000);
-      }
-
       let result;
       try {
         result = await transactionManager.withTransaction(async (session) => {
@@ -845,6 +825,27 @@ function createOrderService({
           const lines = await buildOrderLines(cartItems, expectedItems, session);
           const totalAmount = lines.reduce((sum, line) => sum + line.subtotal, 0);
           const initialPaymentStatus = paymentMethod === 'COD' ? 'Unpaid' : 'Pending';
+          const orderCreatedAt = new Date(clock());
+          let paymentDeadlineAt = null;
+          let paymentTimeoutMinutesSnapshot = null;
+          let paymentTimeoutSettingVersion = null;
+          if (paymentMethod === 'ONLINE') {
+            const snapshot = settingsService.getCurrentSnapshot
+              ? await settingsService.getCurrentSnapshot(session)
+              : await settingsService.listSettings(session);
+            const configuredTimeout = Number(
+              snapshot?.values?.PAYMENT_TIMEOUT_MINUTES
+              ?? snapshot?.current?.values?.PAYMENT_TIMEOUT_MINUTES
+              ?? snapshot?.PAYMENT_TIMEOUT_MINUTES,
+            );
+            paymentTimeoutMinutesSnapshot = Number.isInteger(configuredTimeout)
+              && configuredTimeout >= 5
+              && configuredTimeout <= 60
+              ? configuredTimeout
+              : 15;
+            paymentTimeoutSettingVersion = Number(snapshot?.version ?? snapshot?.current?.version ?? 0);
+            paymentDeadlineAt = new Date(orderCreatedAt.getTime() + paymentTimeoutMinutesSnapshot * 60 * 1000);
+          }
           const order = await orderRepository.createOrder(
             {
               orderCode: generateOrderCode(),
@@ -859,6 +860,9 @@ function createOrderService({
               paymentStatus: initialPaymentStatus,
               orderStatus: 'Pending',
               paymentDeadlineAt,
+              paymentTimeoutMinutesSnapshot,
+              paymentTimeoutSettingVersion,
+              createdAt: orderCreatedAt,
               ...deliverySnapshot,
             },
             session
@@ -903,6 +907,41 @@ function createOrderService({
             ? await cartRepository.clearExactCart(cartId, cartVersion, session)
             : await cartRepository.clearExactCart(cartId, session);
           if (!clearedCart) throw new ApiError(409, 'Cart was changed during checkout. Please retry with a new key.');
+          if (!orderRepository.enqueuePostCommitWork) {
+            throw new Error('Canonical DomainOutbox repository is required for checkout');
+          }
+          const businessEventId = `order:${String(order._id)}:received`;
+          await auditLogger.log({
+            actorType: 'User',
+            actorId: customerId,
+            actorRole: 'Customer',
+            source: 'Order',
+            action: 'ORDER_CREATE',
+            targetType: 'Order',
+            targetId: String(order._id),
+            outcome: 'Success',
+            businessEventId,
+            correlationId: idempotencyKey,
+            reason: 'Customer submitted checkout',
+            newState: 'Pending',
+            safeFacts: {
+              orderCode: order.orderCode,
+              paymentMethod: order.paymentMethod,
+            },
+            timestamp: orderCreatedAt,
+          }, session);
+          await orderRepository.enqueuePostCommitWork(canonicalEnvelope({
+            identityKey: `notification:${businessEventId}:customer`,
+            businessEventId,
+            eventType: 'ORDER_RECEIVED',
+            aggregateType: 'Order',
+            aggregateId: String(order._id),
+            occurredAt: orderCreatedAt,
+            recipientId: String(customerId),
+            targetCollection: 'Order',
+            targetId: String(order._id),
+            displayValues: { orderCode: order.orderCode },
+          }, () => orderCreatedAt), session);
           return { order, lines, inventories, replay: false };
         });
       } catch (error) {
@@ -916,37 +955,6 @@ function createOrderService({
       if (!result.replay) {
         for (const inventory of result.inventories) {
           await lowStockLifecycle?.evaluate?.(inventory, { eventKey: `order-reservation:${result.order._id}` });
-        }
-        await auditLogger.log({
-          userId: customerId,
-          action: 'ORDER_CREATE',
-          targetEntity: 'Order',
-          targetId: String(result.order._id),
-          description: `Order created: ${result.order.orderCode}`,
-        });
-        try {
-          const recipient = customerRepository ? await customerRepository.findEmail(customerId) : null;
-          if (recipient && emailOutboxService) {
-            await emailOutboxService.enqueue({
-              eventType: 'ORDER_CREATED',
-              idempotencyKey: `ORDER_CREATED:${result.order._id}`,
-              recipient,
-              payload: {
-                orderId: String(result.order._id),
-                orderCode: result.order.orderCode,
-                totalAmount: result.order.totalAmount,
-                paymentMethod: result.order.paymentMethod,
-              },
-            });
-          }
-        } catch (error) {
-            await auditLogger.log({
-              userId: customerId,
-              action: 'EMAIL_OUTBOX_ENQUEUE_FAILED',
-              targetEntity: 'Order',
-              targetId: String(result.order._id),
-              description: `Order email enqueue failed after commit: ${error.message}`,
-            });
         }
       }
       return toOrderResponse(result.order, result.lines);
@@ -1083,14 +1091,40 @@ function createOrderService({
           }
           if (released) inventories.push(released);
         }
-        await schedulePostCommitWork('ORDER_CANCEL_AUDIT', {
-          userId: customerId,
+        if (!orderRepository.enqueuePostCommitWork) {
+          throw new Error('Canonical DomainOutbox repository is required for cancellation');
+        }
+        const cancelledAt = new Date(clock());
+        const businessEventId = `order:${String(orderId)}:cancelled:${idempotencyKey}`;
+        await auditLogger.log({
+          actorType: 'User',
+          actorId: customerId,
+          actorRole: 'Customer',
+          source: 'Order',
           action: 'ORDER_CANCEL',
-          targetEntity: 'Order',
+          targetType: 'Order',
           targetId: String(orderId),
-          description: `Order cancelled: ${order.orderCode}`,
-          eventId: `ORDER_CANCEL:${String(orderId)}:${idempotencyKey}`,
+          outcome: 'Success',
+          businessEventId,
+          correlationId: idempotencyKey,
+          reason: cancelReason,
+          previousState: order.orderStatus,
+          newState: 'Cancelled',
+          safeFacts: { orderCode: order.orderCode },
+          timestamp: cancelledAt,
         }, session);
+        await orderRepository.enqueuePostCommitWork(canonicalEnvelope({
+          identityKey: `notification:${businessEventId}:customer`,
+          businessEventId,
+          eventType: 'ORDER_CANCELLED',
+          aggregateType: 'Order',
+          aggregateId: String(orderId),
+          occurredAt: cancelledAt,
+          recipientId: String(customerId),
+          targetCollection: 'Order',
+          targetId: String(orderId),
+          displayValues: { orderCode: order.orderCode },
+        }, () => cancelledAt), session);
         return {
           cancelled,
           orderCode: order.orderCode,
@@ -1124,8 +1158,6 @@ function createOrderService({
 module.exports = {
   createOrderService,
   orderService: createOrderService({
-    customerRepository: createModelCustomerRepository(),
-    emailOutboxService: createEmailOutboxService(),
     lowStockLifecycle: lowStockAlertLifecycle,
   }),
 };

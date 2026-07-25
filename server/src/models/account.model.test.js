@@ -30,10 +30,10 @@ describe('account model contracts', () => {
     assert.deepEqual(defaultIndex[1].partialFilterExpression, { isDefault: true });
   });
 
-  it('supports notification read audit and soft deletion', () => {
-    ['readAt', 'deletedAt'].forEach((field) => assertPath(Notification, field));
+  it('supports notification read audit and retained archive history', () => {
+    ['state', 'readAt', 'archivedAt'].forEach((field) => assertPath(Notification, field));
     const inboxIndex = Notification.schema.indexes().find(
-      ([fields]) => fields.userId === 1 && fields.deletedAt === 1 && fields.createdAt === -1
+      ([fields]) => fields.userId === 1 && fields.channel === 1 && fields.state === 1 && fields.createdAt === -1 && fields._id === -1
     );
     assert.ok(inboxIndex);
   });

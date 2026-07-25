@@ -8,6 +8,7 @@ const {
   requiredText,
   sameId,
 } = require('./fulfillmentValidation');
+const { canonicalEnvelope } = require('./domainEventProducer.service');
 
 const DELIVERY_EVENT_TYPES = new Set([
   'ATTEMPT_FAILED',
@@ -28,6 +29,28 @@ const ACTIVE_DELIVERY_EVENT_TYPES = new Set([
   'DAMAGED',
 ]);
 const ACTIVE_SHIPMENT_STATUSES = new Set(['HandedOff', 'AttemptFailed']);
+
+function customerNotificationOutbox({
+  identityKey,
+  eventType,
+  order,
+  shipment,
+  occurredAt,
+}) {
+  const businessEventId = String(identityKey);
+  return canonicalEnvelope({
+    identityKey: `notification:${businessEventId}:customer`,
+    businessEventId,
+    eventType,
+    aggregateType: 'Shipment',
+    aggregateId: String(shipment._id),
+    occurredAt,
+    recipientId: String(order.customerId),
+    targetCollection: 'Order',
+    targetId: String(order._id),
+    displayValues: { orderCode: order.orderCode || String(order._id) },
+  }, () => occurredAt);
+}
 
 function isDuplicateKey(error) {
   return Number(error?.code) === 11000 || error?.codeName === 'DuplicateKey';
@@ -287,11 +310,13 @@ function createFulfillmentCommandService({
         if (!updatedOrder) throw new ApiError(409, 'Order changed during Carrier handoff');
       }
       await repository.updateCycle(cycle._id, { status: 'HandedOff' }, session);
-      await repository.createOutbox({
+      await repository.createOutbox(customerNotificationOutbox({
         identityKey: `shipment:${String(event._id)}:ORDER_SHIPPED`,
         eventType: 'ORDER_SHIPPED',
-        payload: { orderId: String(order._id), shipmentId: String(shipment._id) },
-      }, session);
+        order,
+        shipment,
+        occurredAt: handoff.handedOffAt,
+      }), session);
       await auditLogger?.log?.({
         userId: staffId,
         action: 'ORDER_HANDED_TO_CARRIER',
@@ -397,13 +422,16 @@ function createFulfillmentCommandService({
         updatedShipment = await repository.updateShipment(shipment._id, {
           status: eventType === 'ATTEMPT_FAILED' ? 'AttemptFailed' : shipment.status,
         }, session);
-        await repository.createOutbox({
+        const notificationType = eventType === 'ATTEMPT_FAILED'
+          ? 'DELIVERY_ATTEMPT_FAILED'
+          : 'DELIVERY_RESCHEDULED';
+        await repository.createOutbox(customerNotificationOutbox({
           identityKey: `shipment-event:${String(event._id)}:${eventType}`,
-          eventType: eventType === 'ATTEMPT_FAILED'
-            ? 'DELIVERY_ATTEMPT_FAILED'
-            : 'DELIVERY_RESCHEDULED',
-          payload: { orderId: String(order._id), shipmentId: String(shipment._id), eventId: String(event._id) },
-        }, session);
+          eventType: notificationType,
+          order,
+          shipment,
+          occurredAt,
+        }), session);
       } else if (eventType === 'DELIVERED') {
         if (order.orderStatus !== 'Shipped') throw new ApiError(409, 'Delivery requires a Shipped order');
         const deadline = addDays(occurredAt, 5);
@@ -507,11 +535,13 @@ function createFulfillmentCommandService({
           terminalEventId: event._id,
         }, session);
         await repository.updateCycle(shipment.cycleId, { status: 'Delivered' }, session);
-        await repository.createOutbox({
+        await repository.createOutbox(customerNotificationOutbox({
           identityKey: `shipment-event:${String(event._id)}:ORDER_DELIVERED`,
           eventType: 'ORDER_DELIVERED',
-          payload: { orderId: String(order._id), shipmentId: String(shipment._id), eventId: String(event._id) },
-        }, session);
+          order,
+          shipment,
+          occurredAt,
+        }), session);
       } else if (eventType === 'RETURNED_TO_SHOP') {
         updatedShipment = await repository.updateShipment(shipment._id, {
           status: 'ReturnedToShop',

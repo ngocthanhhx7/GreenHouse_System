@@ -1,376 +1,284 @@
 const assert = require('node:assert/strict');
 const { describe, it } = require('node:test');
 
-const { createNotificationService } = require('./notification.service');
-const Notification = require('../models/notification.model');
+const { createModelNotificationRepository, createNotificationService } = require('./notification.service');
 
-describe('notification service', () => {
-  it('records payment status notification with pending delivery status', async () => {
-    const saved = [];
-    const service = createNotificationService({
-      notificationRepository: {
-        async create(data) {
-          saved.push(data);
-          return { _id: 'noti-1', ...data };
-        },
-      },
-    });
+function fixture() {
+  const now = new Date('2030-07-25T00:00:00.000Z');
+  const rows = [
+    { _id: 'notification-1', userId: 'customer-1', type: 'ORDER_SHIPPED', templateKey: 'ORDER_SHIPPED', displayValues: { orderCode: 'ORD-001' }, channel: 'InApp', state: 'Unread', createdAt: now, targetCollection: 'Order', targetId: 'order-1' },
+    { _id: 'notification-2', userId: 'customer-1', type: 'ORDER_DELIVERED', templateKey: 'ORDER_DELIVERED', displayValues: { orderCode: 'ORD-002' }, channel: 'InApp', state: 'Read', readAt: now, createdAt: now },
+    { _id: 'notification-3', userId: 'customer-1', type: 'SUPPORT_RESOLVED', templateKey: 'SUPPORT_RESOLVED', displayValues: { ticketCode: 'SUP-001' }, channel: 'InApp', state: 'Archived', readAt: now, archivedAt: now, createdAt: now },
+    { _id: 'notification-4', userId: 'customer-2', type: 'ORDER_SHIPPED', templateKey: 'ORDER_SHIPPED', displayValues: { orderCode: 'OTHER' }, channel: 'InApp', state: 'Unread', createdAt: now },
+  ];
+  const repository = {
+    async listByUser(userId, options) {
+      return { items: rows.filter((row) => row.userId === userId && (options.status === 'archived' ? row.state === 'Archived' : row.state !== 'Archived') && (options.status !== 'unread' || row.state === 'Unread')), nextCursor: null };
+    },
+    async countUnread(userId) { return rows.filter((row) => row.userId === userId && row.state === 'Unread').length; },
+    async findByIdForUser(userId, id) { return rows.find((row) => row.userId === userId && row._id === id) || null; },
+    async markAsReadForUser(userId, id, at) {
+      const row = rows.find((entry) => entry.userId === userId && entry._id === id);
+      if (!row) return null;
+      if (row.state === 'Unread') Object.assign(row, { state: 'Read', readAt: at });
+      return row;
+    },
+    async archiveForUser(userId, id, at) {
+      const row = rows.find((entry) => entry.userId === userId && entry._id === id);
+      if (!row) return null;
+      if (row.state === 'Unread') return { conflict: 'Unread' };
+      if (row.state === 'Read') Object.assign(row, { state: 'Archived', archivedAt: at });
+      return row;
+    },
+  };
+  return { rows, repository, now };
+}
 
-    const result = await service.notifyPaymentStatus({
-      userId: 'customer-1',
-      orderCode: 'ORD-1',
-      paymentStatus: 'Paid',
-    });
+describe('SL-009 Notification service', () => {
+  it('AT-179 lists active, unread, and archived owner-only pages with unread count', async () => {
+    const { repository } = fixture();
+    const service = createNotificationService({ notificationRepository: repository, notificationIdValidator: () => true });
 
-    assert.equal(result.type, 'PAYMENT_STATUS');
-    assert.equal(result.deliveryStatus, 'Pending');
-    assert.equal(saved[0].userId, 'customer-1');
+    const active = await service.listMyNotifications('customer-1', { status: 'active' });
+    assert.deepEqual(active.items.map((item) => item.id), ['notification-1', 'notification-2']);
+    assert.deepEqual(active.items.map((item) => item.channel), ['InApp', 'InApp']);
+    assert.deepEqual((await service.listMyNotifications('customer-1', { status: 'unread' })).items.map((item) => item.id), ['notification-1']);
+    assert.deepEqual((await service.listMyNotifications('customer-1', { status: 'archived' })).items.map((item) => item.id), ['notification-3']);
+    assert.equal((await service.listMyNotifications('customer-1', { status: 'archived' })).unreadCount, 1);
   });
 
-  it('queues a payment notification idempotently when a callback event identity is supplied', async () => {
-    const saved = [];
-    const service = createNotificationService({
-      notificationRepository: {
-        async createIdempotent(data) {
-          const existing = saved.find((entry) => entry.eventId === data.eventId);
-          if (existing) return existing;
-          const created = { _id: `noti-${saved.length + 1}`, ...data };
-          saved.push(created);
-          return created;
-        },
-      },
-    });
-    const input = {
-      userId: 'customer-1',
-      orderCode: 'ORD-1',
-      paymentStatus: 'Paid',
-      eventId: 'PAYMENT_CALLBACK:event-1:NOTIFICATION',
-    };
+  it('AT-179 enforces Unread -> Read -> Archived, idempotency, and no unread archive', async () => {
+    const { repository, now } = fixture();
+    const service = createNotificationService({ notificationRepository: repository, notificationIdValidator: () => true, clock: () => now });
 
-    const first = await service.notifyPaymentStatus(input);
-    const replay = await service.notifyPaymentStatus(input);
+    const read = await service.markAsRead('customer-1', 'notification-1');
+    const readReplay = await service.markAsRead('customer-1', 'notification-1');
+    assert.equal(read.state, 'Read');
+    assert.equal(readReplay.readAt, read.readAt);
 
-    assert.equal(first.id, replay.id);
-    assert.equal(saved.length, 1);
-    assert.equal(saved[0].eventId, input.eventId);
-  });
-
-  it('lists only notifications for the current user with unread count', async () => {
-    const notifications = [
-      { _id: 'noti-1', userId: 'customer-1', type: 'PAYMENT_STATUS', channel: 'InApp', subject: 'Paid', content: 'Paid', deliveryStatus: 'Sent', isRead: false },
-      { _id: 'noti-2', userId: 'customer-1', type: 'ORDER_STATUS', channel: 'InApp', subject: 'Shipped', content: 'Shipped', deliveryStatus: 'Sent', isRead: true },
-      { _id: 'noti-3', userId: 'customer-2', type: 'PAYMENT_STATUS', channel: 'InApp', subject: 'Other', content: 'Other', deliveryStatus: 'Sent', isRead: false },
-    ];
-    const service = createNotificationService({
-      notificationRepository: {
-        async listByUser(userId) {
-          return notifications.filter((notification) => notification.userId === userId);
-        },
-      },
-    });
-
-    const result = await service.listMyNotifications('customer-1');
-
-    assert.equal(result.total, 2);
-    assert.equal(result.unreadCount, 1);
-    assert.deepEqual(result.items.map((item) => item.id), ['noti-1', 'noti-2']);
-  });
-
-  it('marks only the current user notification as read', async () => {
-    const notifications = [
-      { _id: 'noti-1', userId: 'customer-1', type: 'PAYMENT_STATUS', channel: 'InApp', subject: 'Paid', content: 'Paid', deliveryStatus: 'Sent', isRead: false },
-    ];
-    const service = createNotificationService({
-      notificationRepository: {
-        async markAsReadForUser(userId, id) {
-          const notification = notifications.find((entry) => entry._id === id && entry.userId === userId);
-          if (!notification) return null;
-          const data = { isRead: true };
-          Object.assign(notification, data);
-          return notification;
-        },
-      },
-    });
-
-    const result = await service.markAsRead('customer-1', 'noti-1');
-
-    assert.equal(result.isRead, true);
-  });
-
-  it('rejects marking another user notification as read', async () => {
-    const service = createNotificationService({
-      notificationRepository: {
-        async markAsReadForUser() {
-          return null;
-        },
-      },
-    });
+    const archived = await service.archiveNotification('customer-1', 'notification-1');
+    const archiveReplay = await service.archiveNotification('customer-1', 'notification-1');
+    const readAfterArchiveReplay = await service.markAsRead('customer-1', 'notification-1');
+    assert.equal(archived.state, 'Archived');
+    assert.equal(archiveReplay.archivedAt, archived.archivedAt);
+    assert.equal(readAfterArchiveReplay.state, 'Archived');
+    assert.equal(readAfterArchiveReplay.archivedAt, archived.archivedAt);
 
     await assert.rejects(
-      () => service.markAsRead('customer-1', 'noti-2'),
-      /Notification not found/
+      () => service.archiveNotification('customer-2', 'notification-4'),
+      (error) => error.statusCode === 409 && error.errorCode === 'NOTIFICATION_UNREAD_CANNOT_ARCHIVE'
     );
   });
 
-  it('creates only one in-app notification for the same business event', async () => {
-    const notifications = [];
-    const service = createNotificationService({
-      notificationRepository: {
-        async createIdempotent(data) {
-          const existing = notifications.find((item) => item.userId === data.userId && item.eventId === data.eventId);
-          if (existing) return existing;
-          const notification = { _id: `noti-${notifications.length + 1}`, ...data };
-          notifications.push(notification);
-          return notification;
-        },
-      },
-    });
+  it('AT-179 discloses the same generic not-found for malformed and foreign notification IDs', async () => {
+    const { repository } = fixture();
+    const service = createNotificationService({ notificationRepository: repository, notificationIdValidator: (id) => id !== 'malformed' });
 
-    const first = await service.createInAppNotification({
-      userId: 'customer-1', type: 'STOCK_EXPORT', subject: 'Exported', content: 'Done', eventId: 'stock-export:export-1',
-    });
-    const replay = await service.createInAppNotification({
-      userId: 'customer-1', type: 'STOCK_EXPORT', subject: 'Exported', content: 'Done', eventId: 'stock-export:export-1',
-    });
-    const secondRecipient = await service.createInAppNotification({
-      userId: 'customer-2', type: 'STOCK_EXPORT', subject: 'Exported', content: 'Done', eventId: 'stock-export:export-1',
-    });
-
-    assert.equal(first.id, replay.id);
-    assert.notEqual(first.id, secondRecipient.id);
-    assert.equal(first.eventId, 'stock-export:export-1');
-    assert.equal(notifications.length, 2);
+    for (const id of ['malformed', 'notification-4', 'missing']) {
+      await assert.rejects(
+        () => service.getNotification('customer-1', id),
+        (error) => error.statusCode === 404 && error.message === 'Notification not found'
+      );
+    }
   });
 
-  it('passes the caller Mongo session through the service idempotent create path', async () => {
-    const session = { id: 'exchange-session' };
-    let receivedSession;
+  it('AT-180 resolves a target only after notification ownership is established', async () => {
+    const { repository } = fixture();
+    const calls = [];
+    const service = createNotificationService({
+      notificationRepository: repository,
+      notificationIdValidator: () => true,
+      targetResolver: { async resolve(actor, target) { calls.push({ actor, target }); return { href: '/orders/order-1' }; } },
+    });
+
+    assert.deepEqual(await service.resolveTarget({ id: 'customer-1', role: 'Customer' }, 'notification-1'), { href: '/orders/order-1' });
+    assert.deepEqual(calls, [{ actor: { id: 'customer-1', role: 'Customer' }, target: { collection: 'Order', id: 'order-1' } }]);
+    await assert.rejects(() => service.resolveTarget({ id: 'customer-2', role: 'Customer' }, 'notification-1'), /Notification not found/);
+    assert.equal(calls.length, 1);
+  });
+
+  it('AT-177 treats the legacy customer-addressed stock export event as packed audit-only', async () => {
+    const rows = [];
     const service = createNotificationService({
       notificationRepository: {
-        async createIdempotent(data, repositorySession) {
-          receivedSession = repositorySession;
-          return { _id: 'noti-session-1', ...data };
+        async findActiveUserById() {
+          return { _id: 'customer-1', email: 'customer@example.com', role: 'Customer' };
+        },
+        async createTuple(data) {
+          const row = { _id: `notification-${rows.length + 1}`, ...data };
+          rows.push(row);
+          return row;
         },
       },
+    });
+
+    const result = await service.publishDomainEvent({
+      businessEventId: 'stock-export:order-1',
+      type: 'STOCK_EXPORT',
+      recipientId: 'customer-1',
+    });
+
+    assert.deepEqual(result, []);
+    assert.deepEqual(rows, []);
+  });
+
+  it('AT-176 sends identity security events only by email when the account is inaccessible', async () => {
+    const rows = [];
+    const enqueued = [];
+    const service = createNotificationService({
+      notificationRepository: {
+        async findActiveUserById() { return null; },
+        async createTuple(data) {
+          const row = { _id: `notification-${rows.length + 1}`, ...data };
+          rows.push(row);
+          return row;
+        },
+      },
+      emailOutboxService: {
+        async enqueue(data) { enqueued.push(data); return { _id: 'email-1' }; },
+      },
+    });
+
+    const result = await service.publishDomainEvent({
+      businessEventId: 'security:user-disabled',
+      type: 'PASSWORD_RESET_COMPLETED',
+      recipientId: 'disabled-user',
+      recipientEmail: 'disabled@example.com',
+    });
+
+    assert.deepEqual(result.map((item) => item.channel), ['Email']);
+    assert.deepEqual(rows.map((item) => item.channel), ['Email']);
+    assert.equal(enqueued.length, 1);
+  });
+
+  it('AT-176 expands legacy customer producer calls through the exact Email plus InApp policy', async () => {
+    const rows = [];
+    const enqueued = [];
+    const service = createNotificationService({
+      notificationRepository: {
+        async findActiveUserById() {
+          return { _id: 'customer-1', email: 'customer@example.com', role: 'Customer' };
+        },
+        async createTuple(data) {
+          const row = { _id: `notification-${rows.length + 1}`, ...data };
+          rows.push(row);
+          return row;
+        },
+      },
+      emailOutboxService: { async enqueue(data) { enqueued.push(data); return data; } },
     });
 
     await service.createInAppNotification({
       userId: 'customer-1',
-      type: 'EXCHANGE_COMPLETED',
-      subject: 'Completed',
-      content: 'Completed atomically',
-      eventId: 'EXCHANGE_COMPLETED:exchange-1',
-    }, session);
-
-    assert.equal(receivedSession, session);
-  });
-
-  it('creates the in-app notification in the caller Mongo session', async () => {
-    const originalFindOne = Notification.findOne;
-    const originalCreate = Notification.create;
-    const session = { id: 'exchange-session' };
-    let receivedDocuments;
-    let receivedOptions;
-    Notification.findOne = () => ({
-      session(receivedSession) {
-        assert.equal(receivedSession, session);
-        return this;
-      },
-      async lean() { return null; },
-    });
-    Notification.create = async (documents, options) => {
-      receivedDocuments = documents;
-      receivedOptions = options;
-      return [{ _id: '507f1f77bcf86cd799439011', ...documents[0] }];
-    };
-
-    try {
-      const service = createNotificationService();
-      await service.createInAppNotification({
-        userId: '507f1f77bcf86cd799439012',
-        type: 'EXCHANGE_COMPLETED',
-        subject: 'Completed',
-        content: 'Completed atomically',
-        eventId: 'EXCHANGE_COMPLETED:507f1f77bcf86cd799439013',
-      }, session);
-    } finally {
-      Notification.findOne = originalFindOne;
-      Notification.create = originalCreate;
-    }
-
-    assert.equal(Array.isArray(receivedDocuments), true);
-    assert.equal(receivedDocuments[0].type, 'EXCHANGE_COMPLETED');
-    assert.equal(receivedOptions.session, session);
-  });
-
-  it('pre-reads an idempotent in-app notification in the caller session before creating', async () => {
-    const originalFindOne = Notification.findOne;
-    const originalCreate = Notification.create;
-    const session = { id: 'exchange-session' };
-    const operations = [];
-    Notification.findOne = (filter) => {
-      operations.push({ kind: 'find', filter });
-      return {
-        session(receivedSession) {
-          assert.equal(receivedSession, session);
-          return this;
-        },
-        async lean() {
-          return {
-            _id: '507f1f77bcf86cd799439011',
-            userId: '507f1f77bcf86cd799439012',
-            type: 'EXCHANGE_COMPLETED',
-            channel: 'InApp',
-            subject: 'Completed',
-            content: 'Completed once',
-            deliveryStatus: 'Sent',
-            eventId: 'EXCHANGE_COMPLETED:exchange-1',
-          };
-        },
-      };
-    };
-    Notification.create = async () => {
-      operations.push({ kind: 'create' });
-      throw new Error('create must not run when the session pre-read finds the event');
-    };
-
-    try {
-      const service = createNotificationService();
-      const result = await service.createInAppNotification({
-        userId: '507f1f77bcf86cd799439012',
-        type: 'EXCHANGE_COMPLETED',
-        subject: 'Completed',
-        content: 'Completed once',
-        eventId: 'EXCHANGE_COMPLETED:exchange-1',
-      }, session);
-      assert.equal(result.id, '507f1f77bcf86cd799439011');
-    } finally {
-      Notification.findOne = originalFindOne;
-      Notification.create = originalCreate;
-    }
-
-    assert.deepEqual(operations.map((item) => item.kind), ['find']);
-  });
-
-  it('does not query an aborted session after a duplicate create error', async () => {
-    const originalFindOne = Notification.findOne;
-    const originalCreate = Notification.create;
-    const session = { id: 'exchange-session' };
-    const operations = [];
-    Notification.findOne = () => {
-      operations.push('find');
-      return {
-        session(receivedSession) {
-          assert.equal(receivedSession, session);
-          return this;
-        },
-        async lean() { return null; },
-      };
-    };
-    Notification.create = async () => {
-      operations.push('create');
-      const error = new Error('duplicate notification event');
-      error.code = 11000;
-      throw error;
-    };
-
-    try {
-      const service = createNotificationService();
-      await assert.rejects(
-        service.createInAppNotification({
-          userId: '507f1f77bcf86cd799439012',
-          type: 'EXCHANGE_COMPLETED',
-          subject: 'Completed',
-          content: 'Completed once',
-          eventId: 'EXCHANGE_COMPLETED:exchange-1',
-        }, session),
-        (error) => error.code === 11000
-      );
-    } finally {
-      Notification.findOne = originalFindOne;
-      Notification.create = originalCreate;
-    }
-
-    assert.deepEqual(operations, ['find', 'create']);
-  });
-
-  it('lists unread notifications with an opaque cursor and target metadata', async () => {
-    const service = createNotificationService({
-      notificationRepository: {
-        async listByUser(userId, options) {
-          assert.equal(userId, 'customer-1');
-          assert.equal(options.status, 'unread');
-          assert.equal(options.limit, 5);
-          return {
-            items: [{
-              _id: '507f1f77bcf86cd799439011', userId, type: 'ORDER_STATUS', channel: 'InApp', subject: 'Đã giao hàng',
-              content: 'Đơn hàng đã được giao.', deliveryStatus: 'Sent', isRead: false,
-              targetCollection: 'Order', targetId: '507f1f77bcf86cd799439012', createdAt: new Date('2026-07-20T00:00:00.000Z'),
-            }],
-            nextCursor: 'cursor-2',
-          };
-        },
-        async countUnread() { return 3; },
-      },
-      notificationIdValidator: () => true,
+      type: 'ORDER_SHIPPED',
+      eventId: 'shipment:order-1:shipped',
+      displayValues: { orderCode: 'ORD-001' },
+      targetCollection: 'Order',
+      targetId: '507f1f77bcf86cd799439011',
     });
 
-    const result = await service.listMyNotifications('customer-1', { status: 'unread', limit: 5 });
-    assert.equal(result.items[0].targetCollection, 'Order');
-    assert.equal(result.items[0].targetId, '507f1f77bcf86cd799439012');
-    assert.equal(result.unreadCount, 3);
-    assert.equal(result.nextCursor, 'cursor-2');
+    assert.deepEqual(rows.map((row) => row.channel), ['Email', 'InApp']);
+    assert.equal(enqueued.length, 1);
   });
 
-  it('returns notification detail only to its owner', async () => {
+  it('AT-181 fails closed for wrong recipient roles and keeps disabled Customers out of InApp', async () => {
+    const scenarios = [
+      [{ _id: 'staff-1', email: 'staff@example.com', role: 'Staff' }, 'ORDER_SHIPPED', []],
+      [{ _id: 'staff-1', email: 'staff@example.com', role: 'Staff' }, 'LOW_STOCK_OPENED', []],
+      [{ _id: 'customer-1', email: 'customer@example.com', role: 'Customer', status: 'Disabled' }, 'ORDER_SHIPPED', ['Email']],
+    ];
+
+    for (const [recipient, type, expectedChannels] of scenarios) {
+      const rows = [];
+      const service = createNotificationService({
+        notificationRepository: {
+          async findRecipientById() { return recipient; },
+          async createTuple(data) { const row = { _id: `notification-${rows.length + 1}`, ...data }; rows.push(row); return row; },
+        },
+        emailOutboxService: { async enqueue() {} },
+      });
+      await service.publishDomainEvent({
+        businessEventId: `event:${type}:${recipient._id}`,
+        type,
+        recipientId: recipient._id,
+        displayValues: type === 'ORDER_SHIPPED' ? { orderCode: 'ORD-001' } : { productName: 'Chảo' },
+      });
+      assert.deepEqual(rows.map((row) => row.channel), expectedChannels);
+    }
+  });
+
+  it('AT-181 preserves a missing guest user id as empty for email-only identity events', async () => {
+    const rows = [];
     const service = createNotificationService({
       notificationRepository: {
-        async findByIdForUser(userId, id) {
-          if (userId !== 'customer-1') return null;
-          return { _id: id, userId, type: 'ORDER_STATUS', channel: 'InApp', subject: 'Chi tiết', content: 'Nội dung', deliveryStatus: 'Sent', isRead: true };
-        },
+        async findRecipientById() { return null; },
+        async createTuple(data) { const row = { _id: 'notification-1', ...data }; rows.push(row); return row; },
       },
-      notificationIdValidator: () => true,
+      emailOutboxService: { async enqueue() {} },
     });
 
-    assert.equal((await service.getNotification('customer-1', 'noti-1')).subject, 'Chi tiết');
-    await assert.rejects(() => service.getNotification('customer-2', 'noti-1'), /Notification not found/);
+    await service.publishDomainEvent({
+      businessEventId: 'identity:guest:completed',
+      type: 'ACCOUNT_REGISTRATION_COMPLETED',
+      recipient: { email: 'guest@example.com' },
+    });
+
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].channel, 'Email');
+    assert.equal(rows[0].userId, null);
+    assert.equal(rows[0].recipientIdentity, 'email:guest@example.com');
+    assert.doesNotMatch(JSON.stringify(rows), /undefined/);
   });
 
-  it('prevents deleting unread notifications with a stable business error code', async () => {
+  it('AT-181 rejects an ambiguous direct-recipient plus role-broadcast envelope', async () => {
     const service = createNotificationService({
       notificationRepository: {
-        async findByIdForUser() {
-          return { _id: 'noti-1', userId: 'customer-1', isRead: false };
-        },
+        async listActiveUsersByRole() { return []; },
+        async createTuple(data) { return { _id: 'notification-1', ...data }; },
       },
-      notificationIdValidator: () => true,
     });
 
     await assert.rejects(
-      () => service.deleteNotification('customer-1', 'noti-1'),
-      (error) => error.statusCode === 409 && error.errorCode === 'NOTIFICATION_UNREAD_CANNOT_DELETE'
+      () => service.publishDomainEvent({
+        businessEventId: 'damage:decision:1',
+        type: 'DAMAGE_DECIDED',
+        recipientRole: 'WarehouseManager',
+        recipientId: 'staff-1',
+        displayValues: { quantity: 1 },
+      }),
+      /exactly one recipient selector/i
     );
   });
 
-  it('soft deletes a read notification owned by the current user', async () => {
-    let deletedAt = null;
-    const notification = { _id: 'noti-1', userId: 'customer-1', type: 'ORDER_STATUS', channel: 'InApp', subject: 'Read', content: 'Read', deliveryStatus: 'Sent', isRead: true };
-    const service = createNotificationService({
-      notificationRepository: {
-        async findByIdForUser() { return notification; },
-        async softDeleteForUser(userId, id, date) {
-          assert.equal(userId, 'customer-1');
-          assert.equal(id, 'noti-1');
-          deletedAt = date;
-          return { ...notification, deletedAt: date };
-        },
+  it('AT-176 uses one atomic tuple upsert without duplicate-key recovery inside the caller transaction', async () => {
+    const calls = [];
+    const document = { _id: 'notification-1', businessEventId: 'event-1', recipientIdentity: 'user:user-1', type: 'ORDER_SHIPPED', channel: 'InApp' };
+    const model = {
+      findOne() { throw new Error('preflight reads race and must not be used'); },
+      create() { throw new Error('insert plus duplicate recovery must not be used'); },
+      findOneAndUpdate(filter, update, options) {
+        calls.push({ filter, update, options });
+        return { async lean() { return document; } };
       },
-      notificationIdValidator: () => true,
-    });
+    };
+    const repository = createModelNotificationRepository({ notificationModel: model });
+    const session = { id: 'mongo-session-1' };
 
-    const result = await service.deleteNotification('customer-1', 'noti-1');
-    assert.ok(deletedAt instanceof Date);
-    assert.ok(result.deletedAt);
+    assert.equal(await repository.createTuple(document, session), document);
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0].update, { $setOnInsert: document });
+    assert.equal(calls[0].options.upsert, true);
+    assert.equal(calls[0].options.session, session);
+  });
+
+  it('AT-179 repository read replay returns the current Archived state instead of not-found', async () => {
+    const archived = { _id: '507f1f77bcf86cd799439011', state: 'Archived', readAt: new Date(), archivedAt: new Date() };
+    const model = {
+      findOneAndUpdate() { return { async lean() { return null; } }; },
+      findOne() { return { async lean() { return archived; } }; },
+    };
+    const repository = createModelNotificationRepository({ notificationModel: model });
+
+    assert.equal(await repository.markAsReadForUser('507f1f77bcf86cd799439012', archived._id, new Date()), archived);
   });
 });

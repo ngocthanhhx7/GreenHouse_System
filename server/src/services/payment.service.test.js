@@ -35,6 +35,7 @@ function createPaymentRepository() {
   ];
   const events = [];
   const refunds = [];
+  const outbox = [];
 
   return {
     orders,
@@ -42,6 +43,7 @@ function createPaymentRepository() {
     attempts,
     events,
     refunds,
+    outbox,
     async findOrderById(id) { return orders.find((order) => order._id === id) || null; },
     async findPaymentByOrder(id) { return payments.find((payment) => payment.orderId === id) || null; },
     async updatePayment(id, data) {
@@ -129,6 +131,35 @@ function createPaymentRepository() {
       const refund = { _id: `refund-${refunds.length + 1}`, ...data };
       refunds.push(refund);
       return refund;
+    },
+    async enqueuePostCommitWork(data) {
+      const existing = outbox.find((entry) => entry.identityKey === data.identityKey);
+      if (existing) return existing;
+      const created = { _id: `outbox-${outbox.length + 1}`, ...data };
+      outbox.push(created);
+      return created;
+    },
+    async listPendingPostCommitWork(eventTypes) {
+      return outbox.filter((entry) => (
+        eventTypes.includes(entry.eventType)
+        && ['Pending', 'Failed'].includes(entry.status)
+      ));
+    },
+    async claimPostCommitWork(id, _staleBefore, now) {
+      const entry = outbox.find((candidate) => candidate._id === id);
+      if (!entry || !['Pending', 'Failed'].includes(entry.status)) return null;
+      Object.assign(entry, { status: 'Processing', processingStartedAt: now });
+      return entry;
+    },
+    async markPostCommitWorkDone(id) {
+      const entry = outbox.find((candidate) => candidate._id === id);
+      if (entry) entry.status = 'Completed';
+      return entry;
+    },
+    async markPostCommitWorkFailed(id) {
+      const entry = outbox.find((candidate) => candidate._id === id);
+      if (entry) entry.status = 'Failed';
+      return entry;
     },
   };
 }
@@ -394,7 +425,11 @@ describe('payment service', () => {
     );
     assert.equal(paymentRepository.events.length, 2);
     assert.equal(auditLogger.entries.length, 2);
-    assert.equal(notificationService.notifications.length, 2);
+    assert.equal(notificationService.notifications.length, 0);
+    assert.equal(
+      paymentRepository.outbox.filter((entry) => entry.eventType === 'PAYMENT_STATUS').length,
+      2,
+    );
   });
 
   it('acknowledges a verified payOS webhook used to validate an unknown order code', async () => {
@@ -423,7 +458,8 @@ describe('payment service', () => {
     assert.equal(paymentRepository.attempts[0].paymentStatus, 'Paid');
     assert.equal(paymentRepository.events.length, 1);
     assert.equal(auditLogger.entries[0].action, 'PAYMENT_CALLBACK_PAID');
-    assert.equal(notificationService.notifications[0].paymentStatus, 'Paid');
+    assert.equal(notificationService.notifications.length, 0);
+    assert.equal(paymentRepository.outbox[0].payload.displayValues.paymentStatus, 'Paid');
   });
 
   it('claims only payment callback events from the shared domain outbox', async () => {
@@ -494,7 +530,7 @@ describe('payment service', () => {
     assert.equal(paymentRepository.orders[0].paymentStatus, 'Pending');
   });
 
-  it('commits callback business writes atomically and publishes side effects only after commit', async () => {
+  it('commits callback state, mandatory audit, and canonical outbox in one transaction', async () => {
     const session = { id: 'payment-callback-session' };
     const seenSessions = [];
     let insideTransaction = false;
@@ -522,8 +558,9 @@ describe('payment service', () => {
     };
     const transactionalAuditLogger = {
       entries: [],
-      async log(input) {
-        assert.equal(insideTransaction, false, 'audit publication must run after the business transaction commits');
+      async log(input, receivedSession) {
+        assert.equal(insideTransaction, true, 'mandatory audit must run inside the business transaction');
+        assert.equal(receivedSession, session);
         this.entries.push(input);
       },
     };
@@ -573,10 +610,13 @@ describe('payment service', () => {
       'the callback is marked processed only after post-commit effects are queued',
     );
     assert.equal(transactionalAuditLogger.entries.length, 1);
-    assert.equal(transactionalNotificationService.notifications.length, 1);
+    assert.equal(transactionalNotificationService.notifications.length, 0);
+    assert.equal(paymentRepository.outbox.length, 1);
+    assert.equal(paymentRepository.outbox[0].eventType, 'PAYMENT_STATUS');
+    assert.equal(paymentRepository.outbox[0].payloadSchemaVersion, 1);
   });
 
-  it('persists callback outbox work inside the transaction and drains it only after commit', async () => {
+  it('persists one canonical callback outbox event inside the transaction', async () => {
     const outbox = [];
     let insideTransaction = false;
     const session = { id: 'durable-outbox-session' };
@@ -636,15 +676,24 @@ describe('payment service', () => {
     });
 
     assert.equal(result.paymentStatus, 'Paid');
-    assert.equal(outbox.length, 2);
-    assert.ok(outbox.every((item) => item.status === 'Completed'));
+    assert.equal(outbox.length, 1);
+    assert.equal(outbox[0].status, 'Pending');
+    assert.equal(outbox[0].eventType, 'PAYMENT_STATUS');
+    assert.equal(outbox[0].payloadSchemaVersion, 1);
     assert.equal(durableAudit.entries.length, 1);
-    assert.equal(durableNotifications.notifications.length, 1);
+    assert.equal(durableNotifications.notifications.length, 0);
     assert.equal(paymentRepository.events[0].eventStatus, 'Processed');
   });
 
   it('does not publish transaction-local callback work when commit fails', async () => {
-    const rollbackAudit = createAuditLogger();
+    const rollbackAudit = {
+      entries: [],
+      sessions: [],
+      async log(entry, session) {
+        this.entries.push(entry);
+        this.sessions.push(session);
+      },
+    };
     const rollbackNotifications = createNotificationService();
     paymentRepository.enqueuePostCommitWork = async (data) => ({
       _id: `transaction-local-${data.eventType}`,
@@ -679,30 +728,20 @@ describe('payment service', () => {
     );
     await rollbackService.drainPostCommitWork();
 
-    assert.equal(rollbackAudit.entries.length, 0);
+    assert.deepEqual(rollbackAudit.sessions, [{ id: 'rolled-back-session' }]);
     assert.equal(rollbackNotifications.notifications.length, 0);
   });
 
-  it('retries idempotent post-commit effects after notification enqueue fails without repeating business writes', async () => {
-    const auditEvents = new Map();
-    let notificationAttempts = 0;
+  it('AT-175 fails the callback transaction when mandatory DomainOutbox persistence fails', async () => {
+    paymentRepository.enqueuePostCommitWork = async () => {
+      throw new Error('canonical outbox unavailable');
+    };
     const resilientService = createPaymentService({
       paymentRepository,
       callbackSecret: 'test-callback-secret',
       payosGateway,
-      callbackProcessingLeaseMs: 1,
-      auditLogger: {
-        async log(input) {
-          if (!auditEvents.has(input.eventId)) auditEvents.set(input.eventId, input);
-        },
-      },
-      notificationService: {
-        async notifyPaymentStatus(input) {
-          notificationAttempts += 1;
-          if (notificationAttempts === 1) throw new Error('notification queue unavailable');
-          return input;
-        },
-      },
+      auditLogger,
+      notificationService,
       transactionManager: { async withTransaction(work) { return work({ id: 'retry-session' }); } },
     });
     const input = {
@@ -715,19 +754,12 @@ describe('payment service', () => {
       callbackSecret: 'test-callback-secret',
     };
 
-    await assert.rejects(() => resilientService.handlePaymentCallback(input), /notification queue unavailable/);
-    assert.equal(paymentRepository.orders[0].paymentStatus, 'Paid');
-    assert.equal(paymentRepository.attempts[0].paymentStatus, 'Paid');
+    await assert.rejects(
+      () => resilientService.handlePaymentCallback(input),
+      /canonical outbox unavailable/,
+    );
     assert.equal(paymentRepository.events[0].eventStatus, 'Processing');
-
-    paymentRepository.events[0].processingStartedAt = new Date(Date.now() - 1000);
-    const replayed = await resilientService.handlePaymentCallback(input);
-
-    assert.equal(replayed.paymentStatus, 'Paid');
-    assert.equal(paymentRepository.events[0].eventStatus, 'Processed');
-    assert.equal(auditEvents.size, 1);
-    assert.equal(notificationAttempts, 2);
-    assert.equal(paymentRepository.refunds.length, 0);
+    assert.equal(notificationService.notifications.length, 0);
   });
 
   it('records duplicate callback once and does not repeat mutation, audit, notification, or refund', async () => {
@@ -737,7 +769,8 @@ describe('payment service', () => {
     assert.equal(second.paymentStatus, first.paymentStatus);
     assert.equal(paymentRepository.events.length, 1);
     assert.equal(auditLogger.entries.length, 1);
-    assert.equal(notificationService.notifications.length, 1);
+    assert.equal(notificationService.notifications.length, 0);
+    assert.equal(paymentRepository.outbox.length, 1);
     assert.equal(paymentRepository.refunds.length, 0);
   });
 
@@ -766,7 +799,7 @@ describe('payment service', () => {
     assert.equal(result.paymentStatus, 'Paid');
     assert.equal(paymentRepository.events[0].eventStatus, 'Processed');
     assert.equal(auditLogger.entries.length, 1);
-    assert.equal(notificationService.notifications.length, 1);
+    assert.equal(notificationService.notifications.length, 0);
   });
 
   it('does not run side effects twice when another worker owns a callback event', async () => {
@@ -830,7 +863,7 @@ describe('payment service', () => {
     assert.equal(paymentRepository.refunds[0].obligationType, 'PAYMENT_REVERSAL');
     assert.equal(paymentRepository.refunds[0].obligationKey, 'PAYMENT_REVERSAL:attempt-1');
     assert.equal(auditLogger.entries.length, 1);
-    assert.equal(notificationService.notifications.length, 1);
+    assert.equal(notificationService.notifications.length, 0);
   });
 
   it('keeps every standalone refund-obligation write in the callback transaction', async () => {
@@ -987,7 +1020,7 @@ describe('payment service', () => {
       [{ obligationType: 'PAYMENT_REVERSAL', obligationKey: 'PAYMENT_REVERSAL:attempt-1' }]
     );
     assert.equal(auditLogger.entries.length, 1);
-    assert.equal(notificationService.notifications.length, 1);
+    assert.equal(notificationService.notifications.length, 0);
   });
 
   it('preserves primary Paid after paid-order cancellation and refunds a distinct later paid attempt as excess', async () => {
@@ -1030,7 +1063,7 @@ describe('payment service', () => {
       [{ obligationType: 'EXCESS_PAYMENT', obligationKey: 'EXCESS_PAYMENT:attempt-2' }]
     );
     assert.equal(auditLogger.entries.length, 1);
-    assert.equal(notificationService.notifications.length, 1);
+    assert.equal(notificationService.notifications.length, 0);
   });
 
   it('rejects callback amount mismatch and missing callback identity', async () => {

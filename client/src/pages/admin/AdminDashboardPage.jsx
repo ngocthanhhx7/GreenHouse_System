@@ -3,47 +3,94 @@ import { Link } from 'react-router-dom';
 
 import { adminService } from '../../services/adminService.js';
 import { formatCurrency, translateOrderStatus } from '../../utils/formatters.js';
-import { buildAdminOverviewQuery } from './adminDashboardQuery.js';
 
-function StatBox({ label, value, icon }) {
+const EVENT_LABELS = {
+  created: 'Đơn được tạo',
+  confirmed: 'Đã xác nhận',
+  shipped: 'Đã bàn giao vận chuyển',
+  delivered: 'Đã giao',
+  cancelled: 'Đã hủy',
+  returned: 'Đã trả hàng',
+};
+
+function displayMetric(value, formatter = (entry) => String(entry)) {
+  if (value === null || value === undefined || value === '') return '—';
+  if (typeof value === 'number' && !Number.isFinite(value)) return '—';
+  return formatter(value);
+}
+
+function formatDateTime(value) {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+  return new Intl.DateTimeFormat('vi-VN', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+    timeZone: 'Asia/Ho_Chi_Minh',
+  }).format(date);
+}
+
+function MetricBox({ label, value, hint }) {
   return (
-    <div className="metric-box">
-      <div className="metric-box-top">
-        <span className="metric-label">{label}</span>
-        {icon && <span className="metric-icon">{icon}</span>}
-      </div>
+    <article className="metric-box">
+      <span className="metric-label">{label}</span>
       <strong className="metric-value">{value}</strong>
-    </div>
+      {hint && <small className="text-secondary">{hint}</small>}
+    </article>
   );
 }
 
-// Fallback when backend returns no data (e.g. empty DB)
-const DEMO_REPORT = {
-  orders: {
-    total: 0,
-    delivered: 0,
-    returned: 0,
-    byStatus: {},
-  },
-  revenue: { grossSales: 0, refunded: 0, netSales: 0 },
-  products: { total: 0 },
-  inventory: { totalRecords: 0, lowStock: 0 },
-  support: { total: 0, open: 0, resolved: 0 },
-  reviews: { total: 0, averageRating: 0 },
-};
+function ReportSection({ title, description, children }) {
+  return (
+    <section className="card mb-4">
+      <div className="card-body">
+        <div className="page-heading">
+          <div>
+            <h2 className="h4 mb-1">{title}</h2>
+            {description && <p className="text-secondary mb-0">{description}</p>}
+          </div>
+        </div>
+        {children}
+      </div>
+    </section>
+  );
+}
+
+function KeyValueTable({ rows, labelHeading = 'Chỉ số', valueHeading = 'Giá trị' }) {
+  if (!rows.length) return <p className="text-secondary mb-0">Không có dữ liệu phù hợp.</p>;
+  return (
+    <div className="table-responsive">
+      <table className="table align-middle">
+        <thead>
+          <tr>
+            <th>{labelHeading}</th>
+            <th>{valueHeading}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(([label, value]) => (
+            <tr key={label}>
+              <td>{label}</td>
+              <td>{displayMetric(value)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
 
 export default function AdminDashboardPage() {
   const [report, setReport] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [dates, setDates] = useState({ from: '', to: '' });
-  const [appliedPeriod, setAppliedPeriod] = useState({ from: '', to: '' });
+  const [activeMode, setActiveMode] = useState('currentMonth');
   const isMountedRef = useRef(false);
   const requestSequenceRef = useRef(0);
 
-  const loadReport = useCallback((period = {}) => {
+  const loadReport = useCallback((params = {}, mode = 'currentMonth') => {
     const requestId = ++requestSequenceRef.current;
-    const params = buildAdminOverviewQuery(period) ? period : {};
     setReport(null);
     setError('');
     setLoading(true);
@@ -51,11 +98,15 @@ export default function AdminDashboardPage() {
       .getOverviewReport(params)
       .then((data) => {
         if (!isMountedRef.current || requestId !== requestSequenceRef.current) return;
-        setReport(data || DEMO_REPORT);
+        if (!data || typeof data !== 'object') {
+          throw new Error('Máy chủ không trả về dữ liệu báo cáo hợp lệ.');
+        }
+        setReport(data);
+        setActiveMode(mode);
       })
-      .catch((err) => {
+      .catch((requestError) => {
         if (!isMountedRef.current || requestId !== requestSequenceRef.current) return;
-        setError(err.message);
+        setError(requestError.message || 'Không thể tải báo cáo.');
       })
       .finally(() => {
         if (!isMountedRef.current || requestId !== requestSequenceRef.current) return;
@@ -72,147 +123,274 @@ export default function AdminDashboardPage() {
     };
   }, [loadReport]);
 
-  function handleApply(event) {
+  function handlePeriod(event) {
     event.preventDefault();
-    if (dates.from && dates.to && dates.from > dates.to) {
-      requestSequenceRef.current += 1;
-      setReport(null);
-      setError('Từ ngày phải trước hoặc bằng đến ngày.');
-      setLoading(false);
+    if (!dates.from || !dates.to) {
+      setError('Vui lòng chọn đầy đủ ngày bắt đầu và ngày kết thúc.');
       return;
     }
-    setAppliedPeriod(dates);
-    loadReport(dates);
+    if (dates.from > dates.to) {
+      setError('Ngày bắt đầu phải trước hoặc bằng ngày kết thúc.');
+      return;
+    }
+    loadReport({ mode: 'period', from: dates.from, to: dates.to }, 'period');
   }
 
-  function handleClear() {
-    const allTime = { from: '', to: '' };
-    setDates(allTime);
-    setAppliedPeriod(allTime);
-    loadReport();
+  function handleCurrentMonth() {
+    setDates({ from: '', to: '' });
+    loadReport({}, 'currentMonth');
   }
 
-  const appliedPeriodLabel = appliedPeriod.from && appliedPeriod.to
-    ? `Từ ${appliedPeriod.from} đến ${appliedPeriod.to}`
-    : appliedPeriod.from
-      ? `Từ ${appliedPeriod.from}`
-      : appliedPeriod.to
-        ? `Đến ${appliedPeriod.to}`
-        : '';
+  function handleAllTime() {
+    setDates({ from: '', to: '' });
+    loadReport({ mode: 'allTime' }, 'allTime');
+  }
+
+  const periodEvents = Object.entries(report?.orders?.periodEvents || {})
+    .map(([key, value]) => [EVENT_LABELS[key] || key, value]);
+  const currentOrderStates = Object.entries(report?.orders?.currentSnapshot?.byStatus || {})
+    .map(([key, value]) => [translateOrderStatus(key), value]);
+  const inventoryMovements = Object.entries(report?.inventory?.periodMovements?.byType || {});
+  const productRows = report?.products?.gross?.items || [];
+  const staffRows = report?.staff?.items || [];
 
   return (
     <div className="surface">
       <div className="page-heading">
-        <h1>Tổng quan quản trị</h1>
+        <div>
+          <p className="text-uppercase text-secondary mb-1">SL-009 · Báo cáo quản trị</p>
+          <h1>Tổng quan vận hành</h1>
+          <p className="text-secondary mb-0">
+            Sự kiện trong kỳ được tách khỏi ảnh chụp trạng thái hiện tại.
+          </p>
+        </div>
         <div className="table-actions">
-          <Link className="btn btn-outline-success" to="/admin/audit-logs">
-            Nhật ký hệ thống
-          </Link>
-          <Link className="btn btn-outline-success" to="/admin/settings">
-            Cấu hình
-          </Link>
-          <Link className="btn btn-outline-success" to="/admin/accounts">
-            Tài khoản
-          </Link>
+          <Link className="btn btn-outline-success" to="/admin/audit-logs">Nhật ký hệ thống</Link>
+          <Link className="btn btn-outline-success" to="/admin/settings">Cấu hình</Link>
+          <Link className="btn btn-outline-success" to="/admin/accounts">Tài khoản</Link>
         </div>
       </div>
-      <form className="table-actions mb-3" onSubmit={handleApply}>
-        <label>
-          Từ ngày
-          <input
-            type="date"
-            className="form-control"
-            value={dates.from}
-            onChange={(event) => setDates((current) => ({ ...current, from: event.target.value }))}
-          />
-        </label>
-        <label>
-          Đến ngày
-          <input
-            type="date"
-            className="form-control"
-            value={dates.to}
-            onChange={(event) => setDates((current) => ({ ...current, to: event.target.value }))}
-          />
-        </label>
-        <button type="submit" className="btn btn-success">Áp dụng</button>
-        <button type="button" className="btn btn-outline-secondary" onClick={handleClear}>Xóa lọc</button>
+
+      <form className="card card-body mb-4" onSubmit={handlePeriod}>
+        <div className="table-actions align-items-end">
+          <label className="form-label mb-0">
+            Từ ngày
+            <input
+              type="date"
+              className="form-control"
+              value={dates.from}
+              onChange={(event) => setDates((current) => ({ ...current, from: event.target.value }))}
+            />
+          </label>
+          <label className="form-label mb-0">
+            Đến ngày
+            <input
+              type="date"
+              className="form-control"
+              value={dates.to}
+              onChange={(event) => setDates((current) => ({ ...current, to: event.target.value }))}
+            />
+          </label>
+          <button type="submit" className="btn btn-success">Xem khoảng ngày</button>
+          <button type="button" className="btn btn-outline-success" onClick={handleCurrentMonth}>
+            Tháng hiện tại
+          </button>
+          <button type="button" className="btn btn-outline-secondary" onClick={handleAllTime}>
+            Toàn thời gian
+          </button>
+        </div>
+        <small className="text-secondary mt-2">
+          Chế độ: {activeMode === 'allTime' ? 'Toàn thời gian' : activeMode === 'period' ? 'Khoảng ngày' : 'Tháng hiện tại'}
+        </small>
       </form>
-      {appliedPeriodLabel && <p className="text-secondary">Kỳ báo cáo: {appliedPeriodLabel}</p>}
+
       <div aria-busy={loading}>
-        {loading && <div className="page-center" role="status" aria-live="polite">Đang tải báo cáo...</div>}
-        {error && <div className="alert alert-danger" role="alert">{error}</div>}
-        {report && !loading && (
-        <>
-          <div className="metrics-grid mb-4">
-            <StatBox
-              label="Đơn hàng"
-              value={report.orders?.total ?? 0}
-              icon={<svg className="metric-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 11V5a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v14"/><polyline points="16 11 22 11 22 17"/><path d="M8 19h8"/></svg>}
-            />
-            <StatBox
-              label="Đã giao"
-              value={report.orders?.delivered ?? 0}
-              icon={<svg className="metric-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>}
-            />
-            <StatBox
-              label="Doanh thu đã thanh toán"
-              value={formatCurrency(report.revenue?.grossSales ?? 0)}
-              icon={<svg className="metric-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>}
-            />
-            <StatBox label="Doanh thu thuần" value={formatCurrency(report.revenue?.netSales ?? 0)} />
-            <StatBox
-              label="Đã hoàn tiền"
-              value={formatCurrency(report.revenue?.refunded ?? 0)}
-              icon={<svg className="metric-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7"/><polyline points="17 14 21 18 21 10"/><line x1="7" y1="14" x2="7.01" y2="14"/></svg>}
-            />
-            <StatBox
-              label="Sản phẩm hiện có"
-              value={report.products?.total ?? 0}
-              icon={<svg className="metric-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>}
-            />
-            <StatBox
-              label="Sắp hết hiện tại"
-              value={report.inventory?.lowStock ?? 0}
-              icon={<svg className="metric-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>}
-            />
-            <StatBox
-              label="Hỗ trợ đang mở"
-              value={report.support?.open ?? 0}
-              icon={<svg className="metric-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>}
-            />
-            <StatBox
-              label="Đánh giá TB"
-              value={Number(report.reviews?.averageRating ?? 0).toFixed(1)}
-              icon={<svg className="metric-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>}
-            />
+        {loading && (
+          <div className="page-center" role="status" aria-live="polite">
+            Đang tổng hợp báo cáo...
           </div>
-          <h2>Trạng thái đơn hàng</h2>
-          {Object.keys(report.orders?.byStatus || {}).length > 0 ? (
-            <div className="table-responsive">
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>Trạng thái</th>
-                    <th>Số lượng</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {Object.entries(report.orders.byStatus).map(([status, count]) => (
-                    <tr key={status}>
-                      <td>{translateOrderStatus(status)}</td>
-                      <td>{count}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+        )}
+        {error && <div className="alert alert-danger" role="alert">{error}</div>}
+
+        {report && !loading && (
+          <>
+            <div className="alert alert-light border" aria-label="Nguồn gốc báo cáo">
+              <strong>Tạo lúc:</strong> {formatDateTime(report.meta?.generatedAt)}
+              {' · '}
+              <strong>Dữ liệu tại thời điểm:</strong> {formatDateTime(report.meta?.dataAsOf)}
+              {' · '}
+              <strong>Múi giờ:</strong> {displayMetric(report.meta?.timezone)}
             </div>
-          ) : (
-            <p className="text-secondary">Chưa có đơn hàng. Hãy thêm sản phẩm và kiểm tra trải nghiệm catalog trước.</p>
-          )}
-        </>
+
+            <div className="metrics-grid mb-4">
+              <MetricBox
+                label="Doanh thu gộp"
+                value={displayMetric(report.revenue?.grossSales, formatCurrency)}
+                hint="CompletedSale hợp lệ trong kỳ"
+              />
+              <MetricBox
+                label="Đã hoàn tiền"
+                value={displayMetric(report.revenue?.refunds, formatCurrency)}
+                hint="Theo thời điểm hoàn tiền"
+              />
+              <MetricBox
+                label="Doanh thu thuần"
+                value={displayMetric(report.revenue?.netSales, formatCurrency)}
+                hint="Có thể âm"
+              />
+              <MetricBox
+                label="Đơn đang xử lý"
+                value={displayMetric(report.orders?.currentSnapshot?.backlog)}
+                hint="Ảnh chụp hiện tại"
+              />
+              <MetricBox
+                label="Sắp hết hàng"
+                value={displayMetric(report.inventory?.currentSnapshot?.lowStockCount)}
+                hint="Ảnh chụp hiện tại"
+              />
+              <MetricBox
+                label="Yêu cầu hỗ trợ đang mở"
+                value={displayMetric(report.support?.open)}
+                hint="Ảnh chụp hiện tại"
+              />
+            </div>
+
+            <ReportSection
+              title="Đơn hàng"
+              description="Sự kiện được tính theo thời điểm riêng; trạng thái là ảnh chụp tại dataAsOf."
+            >
+              <div className="row g-4">
+                <div className="col-lg-6">
+                  <h3 className="h6">Sự kiện trong kỳ</h3>
+                  <KeyValueTable rows={periodEvents} />
+                </div>
+                <div className="col-lg-6">
+                  <h3 className="h6">Trạng thái hiện tại</h3>
+                  <KeyValueTable rows={currentOrderStates} labelHeading="Trạng thái" valueHeading="Số đơn" />
+                </div>
+              </div>
+            </ReportSection>
+
+            <ReportSection
+              title="Sản phẩm đã bán"
+              description="Tên, SKU, số lượng và giá trị lấy từ dòng đơn hàng bất biến."
+            >
+              {productRows.length ? (
+                <div className="table-responsive">
+                  <table className="table align-middle">
+                    <thead>
+                      <tr>
+                        <th>Sản phẩm tại thời điểm bán</th>
+                        <th>SKU</th>
+                        <th>Trạng thái hiện tại</th>
+                        <th>Số lượng</th>
+                        <th>Giá trị</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {productRows.map((item) => (
+                        <tr key={`${item.productId}-${item.productSkuSnapshot}`}>
+                          <td>{displayMetric(item.productNameSnapshot)}</td>
+                          <td>{displayMetric(item.productSkuSnapshot)}</td>
+                          <td>{displayMetric(item.currentStatus)}</td>
+                          <td>{displayMetric(item.units)}</td>
+                          <td>{displayMetric(item.value, formatCurrency)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : <p className="text-secondary mb-0">Không có CompletedSale trong kỳ.</p>}
+            </ReportSection>
+
+            <div className="row g-4 mb-4">
+              <div className="col-lg-6">
+                <ReportSection
+                  title="Khách hàng"
+                  description="Quần thể hiện tại và hành vi trong kỳ được hiển thị riêng."
+                >
+                  <KeyValueTable rows={[
+                    ['Khách hàng mới', report.customers?.period?.newCustomers],
+                    ['Khách đã đặt hàng', report.customers?.period?.orderingCustomers],
+                    ['Khách có CompletedSale', report.customers?.period?.completedSaleCustomers],
+                    ['Tổng khách hiện tại', report.customers?.currentSnapshot?.total],
+                  ]} />
+                </ReportSection>
+              </div>
+              <div className="col-lg-6">
+                <ReportSection
+                  title="Kho"
+                  description="Ảnh chụp số lượng hiện tại và biến động có dấu trong kỳ."
+                >
+                  <KeyValueTable rows={[
+                    ['Sellable', report.inventory?.currentSnapshot?.totals?.sellable],
+                    ['Reserved', report.inventory?.currentSnapshot?.totals?.reserved],
+                    ['Quarantined', report.inventory?.currentSnapshot?.totals?.quarantined],
+                    ['Damaged', report.inventory?.currentSnapshot?.totals?.damaged],
+                    ['Available', report.inventory?.currentSnapshot?.totals?.available],
+                  ]} />
+                  <h3 className="h6 mt-3">Biến động trong kỳ</h3>
+                  <KeyValueTable
+                    rows={inventoryMovements.map(([type, facts]) => [
+                      type,
+                      `${displayMetric(facts.count)} lần · ${displayMetric(facts.signedQuantity)}`,
+                    ])}
+                  />
+                </ReportSection>
+              </div>
+            </div>
+
+            <ReportSection
+              title="Nhân viên hỗ trợ"
+              description="Chỉ số có mẫu số rõ ràng; dữ liệu thiếu được giữ là dấu gạch ngang."
+            >
+              {staffRows.length ? (
+                <div className="table-responsive">
+                  <table className="table align-middle">
+                    <thead>
+                      <tr>
+                        <th>Nhân viên</th>
+                        <th>Trạng thái</th>
+                        <th>Thao tác thành công</th>
+                        <th>Phản hồi đầu tiên</th>
+                        <th>Giải quyết</th>
+                        <th>Thiếu thời điểm</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {staffRows.map((item) => (
+                        <tr key={item.staffId}>
+                          <td>{displayMetric(item.fullName)}</td>
+                          <td>{displayMetric(item.currentStatus)}</td>
+                          <td>{displayMetric(item.workload?.successfulActions)}</td>
+                          <td>
+                            {displayMetric(item.support?.firstResponse?.averageMinutes)}
+                            {' phút / '}
+                            {displayMetric(item.support?.firstResponse?.qualifyingCount)}
+                          </td>
+                          <td>
+                            {displayMetric(item.support?.resolution?.averageMinutes)}
+                            {' phút / '}
+                            {displayMetric(item.support?.resolution?.qualifyingCount)}
+                          </td>
+                          <td>
+                            {displayMetric(item.support?.missingFirstResponseCount)}
+                            {' phản hồi · '}
+                            {displayMetric(item.support?.missingResolutionCount)}
+                            {' giải quyết'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : <p className="text-secondary mb-0">Không có nhân viên phù hợp.</p>}
+            </ReportSection>
+          </>
         )}
       </div>
     </div>
   );
 }
+
+export { displayMetric };

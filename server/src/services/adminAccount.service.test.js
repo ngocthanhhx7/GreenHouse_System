@@ -47,7 +47,20 @@ function createState() {
       },
       async handleDisabledAccount(input, session) { return { activeAssignments: [], ...input, session }; },
     },
-    auditLogger: { async log(entry, session) { audits.push({ ...entry, session }); } },
+    auditLogger: {
+      async log(entry, session) {
+        audits.push({
+          ...entry,
+          replayBinding: entry.after?.commandFingerprint
+            ? { commandFingerprint: entry.after.commandFingerprint }
+            : undefined,
+          commandResult: entry.after?.result
+            ? structuredClone(entry.after.result)
+            : undefined,
+          session,
+        });
+      },
+    },
     transactionManager: {
       sessions: [],
       async withTransaction(work) {
@@ -192,6 +205,13 @@ describe('Admin account governance', () => {
       expectedVersion: 3,
       idempotencyKey: 'durable-disable',
     });
+    state.audits[0] = {
+      ...state.audits[0],
+      replayBinding: {
+        commandFingerprint: state.audits[0].after.commandFingerprint,
+      },
+    };
+    delete state.audits[0].after;
 
     const restartedService = createAdminAccountService(state);
     const replay = await restartedService.changeStatus({
@@ -207,6 +227,122 @@ describe('Admin account governance', () => {
     assert.equal(replay.user.status, 'Disabled');
     assert.equal(state.audits.length, 1);
     assert.equal(state.sessionService.revoked.length, 1);
+  });
+
+  it('replays an actual legacy audit row with only after.commandFingerprint', async () => {
+    const state = createState();
+    const options = { ...state };
+    const command = {
+      actorUserId: 'admin-1',
+      targetUserId: 'customer-1',
+      nextStatus: 'Disabled',
+      reason: 'Legacy security lock',
+      expectedVersion: 3,
+      idempotencyKey: 'legacy-disable',
+    };
+    const first = await createAdminAccountService(options).changeStatus(command);
+    delete state.audits[0].replayBinding;
+    delete state.audits[0].commandResult;
+
+    const replay = await createAdminAccountService(options).changeStatus(command);
+
+    assert.equal(replay.alreadyProcessed, true);
+    assert.equal(replay.user.id, first.user.id);
+    assert.equal(state.audits.length, 1);
+  });
+
+  it('replays the immutable original Admin result after later account transitions', async () => {
+    const state = createState();
+    state.assignmentService.handleDisabledAccount = async () => ({
+      activeAssignments: [{
+        sliceId: 'SL-008_SUPPORT',
+        detail: { entity: 'SupportRequest', activeStatuses: ['InProgress'] },
+      }],
+      assignmentCheckUnavailable: false,
+      recoveries: [{ sliceId: 'SL-008_SUPPORT', recovered: true }],
+    });
+    const command = {
+      actorUserId: 'admin-1',
+      targetUserId: 'customer-1',
+      nextStatus: 'Disabled',
+      reason: 'Stable replay',
+      expectedVersion: 3,
+      idempotencyKey: 'stable-result',
+    };
+    const original = await createAdminAccountService(state).changeStatus(command);
+    state.audits[0].commandResult = structuredClone(original);
+    delete state.audits[0].after;
+
+    const changedUser = state.users.find((user) => user._id === 'customer-1');
+    changedUser.fullName = 'Later Name';
+    changedUser.status = 'Active';
+    changedUser.version = 5;
+
+    const replay = await createAdminAccountService(state).changeStatus(command);
+
+    assert.equal(replay.alreadyProcessed, true);
+    assert.deepEqual(
+      {
+        user: replay.user,
+        revokedSessions: replay.revokedSessions,
+        handoff: replay.handoff,
+      },
+      original
+    );
+  });
+
+  it('isolates durable replay evidence from mutations to an earlier response', async () => {
+    const state = createState();
+    state.assignmentService.handleDisabledAccount = async () => ({
+      activeAssignments: [],
+      assignmentCheckUnavailable: false,
+      recoveries: [{ sliceId: 'SL-008_SUPPORT', recovered: true }],
+    });
+    const service = createAdminAccountService(state);
+    const command = {
+      actorUserId: 'admin-1',
+      targetUserId: 'customer-1',
+      nextStatus: 'Disabled',
+      reason: 'Mutation isolation',
+      expectedVersion: 3,
+      idempotencyKey: 'mutation-isolation',
+    };
+    const first = await service.changeStatus(command);
+    first.user.status = 'Active';
+    first.user.fullName = 'Mutated Caller Copy';
+    first.handoff.recoveries[0].recovered = false;
+
+    const replay = await service.changeStatus(command);
+
+    assert.equal(replay.alreadyProcessed, true);
+    assert.equal(replay.user.status, 'Disabled');
+    assert.equal(replay.user.fullName, 'Customer');
+    assert.equal(replay.handoff.recoveries[0].recovered, true);
+    assert.notEqual(replay.user, first.user);
+    assert.notEqual(replay.handoff, first.handoff);
+  });
+
+  it('returns a correctly encoded message when stable replay evidence is unavailable', async () => {
+    const state = createState();
+    const command = {
+      actorUserId: 'admin-1',
+      targetUserId: 'customer-1',
+      nextStatus: 'Disabled',
+      reason: 'Unavailable replay',
+      expectedVersion: 3,
+      idempotencyKey: 'unavailable-replay',
+    };
+    await createAdminAccountService(state).changeStatus(command);
+    delete state.audits[0].commandResult;
+    delete state.audits[0].after;
+
+    await assert.rejects(
+      () => createAdminAccountService(state).changeStatus(command),
+      (error) => (
+        error.errorCode === 'IDEMPOTENCY_REPLAY_UNAVAILABLE'
+        && error.message === 'Không thể phục hồi kết quả lệnh quản trị trước đó.'
+      )
+    );
   });
 
   it('does not replay the same raw key onto a different command target', async () => {
@@ -246,6 +382,13 @@ describe('Admin account governance', () => {
       expectedVersion: 2,
       idempotencyKey: 'durable-transfer',
     });
+    state.audits[0] = {
+      ...state.audits[0],
+      replayBinding: {
+        commandFingerprint: state.audits[0].after.commandFingerprint,
+      },
+    };
+    delete state.audits[0].after;
 
     const restartedService = createAdminAccountService(state);
     const replay = await restartedService.transferRole({
@@ -317,15 +460,16 @@ describe('Admin account governance', () => {
     state.repository.findAuditByEventId = async (eventId) => {
       lookupCount += 1;
       if (lookupCount <= 2) return null;
+      const committedUser = state.users.find((user) => user._id === 'customer-1');
+      committedUser.status = 'Disabled';
+      committedUser.version = 4;
       return {
         eventId,
         userId: 'admin-1',
         action: 'ACCOUNT_STATUS_DISABLED',
         targetId: 'customer-1',
-        after: {
-          commandFingerprint,
-          result: winner,
-        },
+        replayBinding: { commandFingerprint },
+        commandResult: winner,
       };
     };
     state.repository.updateStatus = async () => null;

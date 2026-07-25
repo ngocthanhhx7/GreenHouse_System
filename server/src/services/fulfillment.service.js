@@ -36,29 +36,6 @@ const FULFILLMENT_NOTIFICATION_EVENT_TYPES = [
   'DELIVERY_FAILED',
 ];
 
-const FULFILLMENT_NOTIFICATION_COPY = {
-  ORDER_SHIPPED: {
-    subject: (code) => `Order ${code} has shipped`,
-    content: (code) => `Order ${code} was handed to the carrier. Tracking evidence is now available.`,
-  },
-  DELIVERY_ATTEMPT_FAILED: {
-    subject: (code) => `Delivery attempt for ${code} was unsuccessful`,
-    content: (code) => `The latest delivery attempt for order ${code} was unsuccessful. Check the order timeline for evidence and the next action.`,
-  },
-  DELIVERY_RESCHEDULED: {
-    subject: (code) => `Delivery for ${code} was rescheduled`,
-    content: (code) => `A new carrier schedule was recorded for order ${code}. Check the order timeline for the recorded update.`,
-  },
-  ORDER_DELIVERED: {
-    subject: (code) => `Order ${code} was delivered`,
-    content: (code) => `Physical delivery was recorded for order ${code}. Your applicable after-sales deadlines are shown on the order.`,
-  },
-  DELIVERY_FAILED: {
-    subject: (code) => `Order ${code} reached delivery-failure resolution`,
-    content: (code) => `Order ${code} could not be delivered. Check the order for the recorded resolution and any independent refund obligation.`,
-  },
-};
-
 function withOptionalSession(query, session) {
   return session ? query.session(session) : query;
 }
@@ -219,6 +196,7 @@ function createModelRepository() {
       return withOptionalSession(
         DomainOutbox.find({
           eventType: { $in: eventTypes },
+          payloadSchemaVersion: { $ne: 1 },
           $or: [
             { status: { $in: ['Pending', 'Failed'] } },
             { status: 'Processing', processingStartedAt: { $lte: staleBefore } },
@@ -232,6 +210,7 @@ function createModelRepository() {
         DomainOutbox.findOneAndUpdate(
           {
             _id: id,
+            payloadSchemaVersion: { $ne: 1 },
             $or: [
               { status: { $in: ['Pending', 'Failed'] } },
               { status: 'Processing', processingStartedAt: { $lte: staleBefore } },
@@ -447,16 +426,14 @@ function createFulfillmentService(options = {}) {
   const notificationPublisher = options.notificationPublisher || notificationService;
 
   async function runPostCommitWork(item) {
-    const copy = FULFILLMENT_NOTIFICATION_COPY[item.eventType];
-    if (!copy) return;
+    if (!FULFILLMENT_NOTIFICATION_EVENT_TYPES.includes(item.eventType)) return;
     const order = await dependencies.repository.findOrderById(item.payload?.orderId);
     if (!order) throw new Error(`Fulfillment notification Order not found: ${item.payload?.orderId || ''}`);
     const orderCode = order.orderCode || String(order._id);
     await notificationPublisher.createInAppNotification({
       userId: order.customerId,
       type: item.eventType,
-      subject: copy.subject(orderCode),
-      content: copy.content(orderCode),
+      displayValues: { orderCode },
       eventId: `FULFILLMENT:${String(item.identityKey)}`,
       targetCollection: 'Order',
       targetId: order._id,

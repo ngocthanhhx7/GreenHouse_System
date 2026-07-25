@@ -411,3 +411,13 @@ Nguyen Quang Huy owns downstream Notification consumption. Nguyen Ngoc Thanh
 retains final review/integration and EmailOutbox/Gmail ownership. Target backup,
 migration execution, zero-write second run and authenticated browser walkthrough
 remain deployment-owner actions.
+
+## Implementation Addendum 2026-07-25 - SL-009 Reports and Settings
+
+Lê Vũ Cường hoàn tất Admin Reports và System Settings của SL-009. Reports dùng
+Asia/Ho_Chi_Minh, event-time measures, immutable Gross/Refund/Net facts và tách
+current snapshot. Settings chỉ cho phép `PAYMENT_TIMEOUT_MINUTES` và
+`LOW_STOCK_DEFAULT_THRESHOLD`, dùng version/CAS/idempotency/reason và commit
+Audit + reevaluation outbox atomically. `RETURN_WINDOW_DAYS` không còn là
+setting hợp lệ; Product threshold override của Warehouse vẫn thắng global
+default.
