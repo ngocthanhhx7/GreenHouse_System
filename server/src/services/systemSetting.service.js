@@ -218,9 +218,17 @@ function createSystemSettingService({
         const claimed = await repository.claimReevaluation(item._id, staleBefore, new Date(clock()));
         if (!claimed) continue;
         try {
+          const claimedVersion = Number(claimed.payload.version);
+          const currentApproved = repository.listVersions
+            ? currentFrom((await repository.listVersions(1))[0])
+            : null;
+          if (currentApproved && currentApproved.version > claimedVersion) {
+            await repository.completeReevaluation(claimed._id, claimed.processingStartedAt);
+            continue;
+          }
           await lowStockLifecycle.evaluateAll({
-            eventKey: `system-settings:${claimed.payload.version}`,
-            settingVersion: Number(claimed.payload.version),
+            eventKey: `system-settings:${claimedVersion}`,
+            settingVersion: claimedVersion,
             globalThreshold: Number(claimed.payload.values.LOW_STOCK_DEFAULT_THRESHOLD),
           });
           await repository.completeReevaluation(claimed._id, claimed.processingStartedAt);

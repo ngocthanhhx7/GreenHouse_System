@@ -175,6 +175,63 @@ describe('versioned system setting service', () => {
     }]);
   });
 
+  it('skips a stale v1 reclaim after v2 has already applied, preserving monotonic effects', async () => {
+    let now = new Date('2026-07-25T00:01:00.000Z');
+    const reevaluations = [];
+    const completed = [];
+    const outboxes = [
+      {
+        _id: 'outbox-v1', status: 'Processing',
+        processingStartedAt: new Date('2026-07-25T00:00:30.000Z'),
+        payload: { version: 1, values: { PAYMENT_TIMEOUT_MINUTES: 15, LOW_STOCK_DEFAULT_THRESHOLD: 4 } },
+      },
+      {
+        _id: 'outbox-v2', status: 'Pending', processingStartedAt: null,
+        payload: { version: 2, values: { PAYMENT_TIMEOUT_MINUTES: 15, LOW_STOCK_DEFAULT_THRESHOLD: 9 } },
+      },
+    ];
+    const repository = {
+      async listVersions() {
+        return [{ version: 2, effectiveAt: new Date('2026-07-25T00:00:45.000Z'), values: { PAYMENT_TIMEOUT_MINUTES: 15, LOW_STOCK_DEFAULT_THRESHOLD: 9 } }];
+      },
+      async listPendingReevaluations(staleBefore) {
+        return outboxes.filter((entry) => (
+          ['Pending', 'Failed'].includes(entry.status)
+          || (entry.status === 'Processing' && entry.processingStartedAt <= staleBefore)
+        ));
+      },
+      async claimReevaluation(id, staleBefore, claimedAt) {
+        const entry = outboxes.find((item) => item._id === id);
+        const claimable = ['Pending', 'Failed'].includes(entry.status)
+          || (entry.status === 'Processing' && entry.processingStartedAt <= staleBefore);
+        if (!claimable) return null;
+        entry.status = 'Processing';
+        entry.processingStartedAt = claimedAt;
+        return { ...entry };
+      },
+      async completeReevaluation(id) {
+        const entry = outboxes.find((item) => item._id === id);
+        entry.status = 'Completed';
+        completed.push(id);
+      },
+      async failReevaluation() { assert.fail('stale reclaim must complete without applying or failing'); },
+    };
+    const worker = createSystemSettingService({
+      repository,
+      lowStockLifecycle: { async evaluateAll(context) { reevaluations.push(context); } },
+      clock: () => new Date(now),
+    });
+
+    await worker.drainPostCommitWork();
+    assert.deepEqual(reevaluations.map((entry) => entry.settingVersion), [2]);
+
+    now = new Date('2026-07-25T00:02:31.000Z');
+    await worker.drainPostCommitWork();
+
+    assert.deepEqual(reevaluations.map((entry) => entry.settingVersion), [2]);
+    assert.deepEqual(completed, ['outbox-v2', 'outbox-v1']);
+  });
+
   it('classifies a concurrent same-key/different-facts winner as idempotency reuse', async () => {
     const raceRepository = createRepository();
     const raceService = createSystemSettingService({

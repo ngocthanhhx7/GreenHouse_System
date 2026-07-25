@@ -10,8 +10,10 @@ const mongoose = require('mongoose');
 
 const AuditLog = require('../models/auditLog.model');
 const DomainOutbox = require('../models/domainOutbox.model');
+const LowStockAlert = require('../models/lowStockAlert.model');
 const SystemSetting = require('../models/systemSetting.model');
 const SystemSettingVersion = require('../models/systemSettingVersion.model');
+const { createLowStockAlertLifecycle } = require('./lowStockAlertLifecycle.service');
 const { createSystemSettingService } = require('./systemSetting.service');
 
 const MONGOD_PATH = 'C:\\Program Files\\MongoDB\\Server\\8.2\\bin\\mongod.exe';
@@ -128,12 +130,14 @@ it('AT-204 transactionally rolls back Audit/outbox failures and serializes same/
     await Promise.all([
       AuditLog.createCollection(),
       DomainOutbox.createCollection(),
+      LowStockAlert.createCollection(),
       SystemSetting.createCollection(),
       SystemSettingVersion.createCollection(),
     ]);
     await Promise.all([
       AuditLog.syncIndexes(),
       DomainOutbox.syncIndexes(),
+      LowStockAlert.syncIndexes(),
       SystemSetting.syncIndexes(),
       SystemSettingVersion.syncIndexes(),
     ]);
@@ -191,6 +195,38 @@ it('AT-204 transactionally rolls back Audit/outbox failures and serializes same/
     assert.equal(await SystemSettingVersion.countDocuments(), 2);
     assert.equal(await AuditLog.countDocuments(), 2);
     assert.equal(await DomainOutbox.countDocuments(), 2);
+
+    const productId = new mongoose.Types.ObjectId();
+    const inventoryId = new mongoose.Types.ObjectId();
+    const open = await LowStockAlert.create({
+      productId,
+      inventoryId,
+      status: 'Open',
+      availableQuantity: 9,
+      effectiveThreshold: 10,
+      settingVersion: 2,
+      openedAt: new Date('2026-07-25T01:03:00.000Z'),
+      crossingKey: 'system-settings:2',
+    });
+    const staleResult = await createLowStockAlertLifecycle().evaluate({
+      _id: inventoryId,
+      productId,
+      sellableQuantity: 9,
+      reservedQuantity: 0,
+      inventoryHealth: 'Normal',
+      lowStockThresholdOverride: null,
+    }, {
+      eventKey: 'system-settings:1',
+      settingVersion: 1,
+      globalThreshold: 4,
+      replay: true,
+    });
+    const persistedOpen = await LowStockAlert.findById(open._id).lean();
+    assert.equal(staleResult.staleSettingVersion, true);
+    assert.equal(persistedOpen.status, 'Open');
+    assert.equal(persistedOpen.settingVersion, 2);
+    assert.equal(persistedOpen.effectiveThreshold, 10);
+    assert.equal(persistedOpen.crossingKey, 'system-settings:2');
   } finally {
     await mongoose.disconnect().catch(() => {});
     await stopMongo(child);

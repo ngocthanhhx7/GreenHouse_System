@@ -9,6 +9,18 @@ function productIdOf(inventory) {
   return inventory.productId && inventory.productId._id ? inventory.productId._id : inventory.productId;
 }
 
+function settingVersionGuard(data = {}) {
+  const version = Number(data.settingVersion);
+  if (!Number.isInteger(version) || version < 0) return {};
+  return {
+    $or: [
+      { settingVersion: { $exists: false } },
+      { settingVersion: null },
+      { settingVersion: { $lte: version } },
+    ],
+  };
+}
+
 function createModelRepository() {
   return {
     async listInventories() { return require('../models/inventory.model').find({}).lean(); },
@@ -20,6 +32,10 @@ function createModelRepository() {
       const product = await Product.findById(productId).select('name').lean();
       return product?.name || '';
     },
+    async findLatestSettingVersion() {
+      const version = await SystemSettingVersion.findOne({}).sort({ version: -1 }).select('version').lean();
+      return version ? Number(version.version) : 0;
+    },
     async findOpen(productId) {
       return LowStockAlert.findOne({ productId, status: 'Open' }).lean();
     },
@@ -28,14 +44,14 @@ function createModelRepository() {
     },
     async refreshOpen(id, data) {
       return LowStockAlert.findOneAndUpdate(
-        { _id: id, status: 'Open' },
+        { _id: id, status: 'Open', ...settingVersionGuard(data) },
         { $set: data },
         { new: true, runValidators: true },
       ).lean();
     },
     async resolveOpen(id, data) {
       return LowStockAlert.findOneAndUpdate(
-        { _id: id, status: 'Open' },
+        { _id: id, status: 'Open', ...settingVersionGuard(data) },
         { $set: { status: 'Resolved', ...data } },
         { new: true, runValidators: true },
       ).lean();
@@ -91,7 +107,8 @@ function createLowStockAlertLifecycle({
     const claimedGlobalThreshold = Number(context.globalThreshold);
     const hasClaimedGlobalThreshold = Number.isInteger(claimedGlobalThreshold) && claimedGlobalThreshold >= 0;
     const claimedSettingVersion = Number(context.settingVersion);
-    const settingVersionPatch = Number.isInteger(claimedSettingVersion) && claimedSettingVersion >= 0
+    const hasClaimedSettingVersion = Number.isInteger(claimedSettingVersion) && claimedSettingVersion >= 0;
+    const settingVersionPatch = hasClaimedSettingVersion
       ? { settingVersion: claimedSettingVersion }
       : {};
     const effectiveThreshold = inventory.lowStockThresholdOverride !== null
@@ -101,6 +118,25 @@ function createLowStockAlertLifecycle({
         ? claimedGlobalThreshold
         : Number(await repository.findDefaultThreshold?.() ?? inventory.lowStockThreshold ?? DEFAULT_THRESHOLD);
     const open = await repository.findOpen(productId);
+    const latestApprovedVersion = hasClaimedSettingVersion && repository.findLatestSettingVersion
+      ? Number(await repository.findLatestSettingVersion())
+      : null;
+    const persistedSettingVersion = Number(open?.settingVersion);
+    const newerVersionExists = hasClaimedSettingVersion && (
+      (Number.isInteger(latestApprovedVersion) && latestApprovedVersion > claimedSettingVersion)
+      || (Number.isInteger(persistedSettingVersion) && persistedSettingVersion > claimedSettingVersion)
+    );
+    if (newerVersionExists) {
+      return {
+        alert: open || null,
+        opened: false,
+        resolved: false,
+        replay: true,
+        staleSettingVersion: true,
+        availableQuantity,
+        effectiveThreshold: open ? Number(open.effectiveThreshold) : effectiveThreshold,
+      };
+    }
 
     if (availableQuantity <= effectiveThreshold) {
       const patch = {
@@ -112,6 +148,20 @@ function createLowStockAlertLifecycle({
       };
       if (open) {
         const refreshed = await repository.refreshOpen(open._id, patch);
+        if (!refreshed && hasClaimedSettingVersion) {
+          const winner = await repository.findOpen(productId);
+          if (Number(winner?.settingVersion) > claimedSettingVersion) {
+            return {
+              alert: winner,
+              opened: false,
+              resolved: false,
+              replay: true,
+              staleSettingVersion: true,
+              availableQuantity,
+              effectiveThreshold: Number(winner.effectiveThreshold),
+            };
+          }
+        }
         return {
           alert: refreshed || open,
           opened: false,

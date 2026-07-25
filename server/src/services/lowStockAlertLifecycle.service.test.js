@@ -162,4 +162,40 @@ describe('low stock alert lifecycle', () => {
     assert.equal(global.alert.settingVersion, 8, 'later non-setting evaluations must not erase version provenance');
     assert.equal(fallbackReads, 1);
   });
+
+  it('does not let a stale claimed setting version refresh or resolve a newer open lifecycle', async () => {
+    const repository = createRepository();
+    repository.alerts.push({
+      _id: 'alert-newer',
+      productId: 'product-1',
+      inventoryId: 'inventory-1',
+      status: 'Open',
+      availableQuantity: 9,
+      effectiveThreshold: 10,
+      settingVersion: 2,
+      crossingKey: 'system-settings:2',
+    });
+    const lifecycle = createLowStockAlertLifecycle({ repository });
+
+    const result = await lifecycle.evaluate({
+      _id: 'inventory-1',
+      productId: 'product-1',
+      sellableQuantity: 9,
+      reservedQuantity: 0,
+      inventoryHealth: 'Normal',
+      lowStockThresholdOverride: null,
+    }, {
+      eventKey: 'system-settings:1',
+      settingVersion: 1,
+      globalThreshold: 4,
+      replay: true,
+    });
+
+    assert.equal(result.staleSettingVersion, true);
+    assert.equal(result.resolved, false);
+    assert.equal(repository.alerts[0].status, 'Open');
+    assert.equal(repository.alerts[0].effectiveThreshold, 10);
+    assert.equal(repository.alerts[0].settingVersion, 2);
+    assert.equal(repository.alerts[0].crossingKey, 'system-settings:2');
+  });
 });
