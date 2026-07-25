@@ -383,3 +383,10 @@ hình `OPERATIONAL_EVIDENCE_CLAIM_SECRET`; secret thật không được commit.
 Traceability, handoff và release evidence được ghi tại
 `docs/reviews/OPERATIONAL_EVIDENCE_G3_TRACEABILITY.md`,
 `OPERATIONAL_EVIDENCE_HANDOFF.md` và `OPERATIONAL_EVIDENCE_RELEASE_AUDIT.md`.
+
+## UI Addendum 2026-07-25 - Dashboard Brand Mark
+
+Operational dashboards now use the approved local GreenHome favicon asset in
+the internal topbar instead of the placeholder `⌁` glyph. The image remains
+visible and correctly sized on desktop and mobile; no remote asset or generated
+logo is introduced. Evidence is recorded in the dashboard-logo review artifacts.
