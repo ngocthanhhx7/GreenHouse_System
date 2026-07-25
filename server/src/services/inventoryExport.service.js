@@ -341,6 +341,43 @@ function createInventoryExportService({
           throw new ApiError(409, 'Stock export requires order items', [], 'EXPORT_INVALID_REQUEST');
         }
 
+        const reservations = await repository.listOrderReservations(claimed.orderId, session);
+        const detailIds = new Set(details.map((detail) => String(detail._id)));
+        const activeReservations = reservations.filter((row) => row.status === 'Reserved');
+        if (activeReservations.some((row) => !detailIds.has(String(row.orderDetailId)))) {
+          throw new ApiError(
+            409,
+            'Order contains a reservation that does not belong to an order line',
+            [],
+            'EXPORT_RESERVATION_MISSING',
+          );
+        }
+
+        for (const detail of details) {
+          const quantity = Number(detail.quantity);
+          if (!Number.isInteger(quantity) || quantity <= 0) {
+            throw new ApiError(
+              409,
+              'Stock export requires positive integer quantities',
+              [],
+              'EXPORT_INVALID_REQUEST',
+            );
+          }
+          const matches = activeReservations.filter((row) => (
+            String(row.orderDetailId) === String(detail._id)
+            && String(row.productId) === String(detail.productId)
+            && Number(row.quantity) === quantity
+          ));
+          if (matches.length !== 1) {
+            throw new ApiError(
+              409,
+              'Order reservation lineage is missing or does not match the order line',
+              [],
+              'EXPORT_RESERVATION_MISSING',
+            );
+          }
+        }
+
         for (const detail of details) {
           const quantity = Number(detail.quantity);
           const inventory = await repository.findInventoryByProductId(detail.productId, session);
@@ -352,8 +389,12 @@ function createInventoryExportService({
               'EXPORT_INVENTORY_RECONCILIATION_REQUIRED',
             );
           }
+          if (!inventory) {
+            throw new ApiError(409, 'Insufficient stock for export', [], 'EXPORT_STOCK_INSUFFICIENT');
+          }
+          const stock = Number(inventory.stockQuantity ?? inventory.sellableQuantity ?? 0);
           const sellable = Number(inventory?.sellableQuantity ?? inventory?.stockQuantity ?? 0);
-          if (!inventory || sellable < quantity) {
+          if (stock < quantity || sellable < quantity) {
             throw new ApiError(409, 'Insufficient stock for export', [], 'EXPORT_STOCK_INSUFFICIENT');
           }
           if (Number(inventory.reservedQuantity || 0) < quantity) {
@@ -367,6 +408,8 @@ function createInventoryExportService({
           const reservation = await repository.claimOrderReservationConsumption(
             order._id,
             detail._id,
+            detail.productId,
+            quantity,
             session,
           );
           if (!reservation) {
@@ -379,6 +422,8 @@ function createInventoryExportService({
           }
           const before = await repository.findInventoryByProductId(detail.productId, session);
           const beforeSellable = Number(before.sellableQuantity ?? before.stockQuantity ?? 0);
+          const beforeReserved = Number(before.reservedQuantity || 0);
+          const beforeAvailable = beforeSellable - beforeReserved;
           const after = await repository.captureReservation(
             detail.productId,
             quantity,
@@ -389,6 +434,16 @@ function createInventoryExportService({
             throw new ApiError(409, 'Stock export requires a full reservation', [], 'EXPORT_RESERVATION_MISSING');
           }
           const afterSellable = Number(after.sellableQuantity ?? after.stockQuantity ?? 0);
+          const afterReserved = Number(after.reservedQuantity || 0);
+          const afterAvailable = afterSellable - afterReserved;
+          if (afterAvailable !== beforeAvailable) {
+            throw new ApiError(
+              409,
+              'Stock export would make available quantity inconsistent',
+              [],
+              'EXPORT_INVENTORY_INVARIANT',
+            );
+          }
           await repository.createTransaction({
             productId: before.productId && before.productId._id ? before.productId._id : before.productId,
             orderId: order._id,

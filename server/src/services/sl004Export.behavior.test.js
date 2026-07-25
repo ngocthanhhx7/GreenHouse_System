@@ -386,6 +386,29 @@ describe('SL-004 exact stock export behavior', () => {
     assert.equal(harness.state.transactions.length, 0);
   });
 
+  it('allows only one concurrent export command to consume the request', async () => {
+    const harness = createHarness();
+    const results = await Promise.allSettled([
+      harness.service.processStockExport('warehouse-1', 'export-1', {
+        idempotencyKey: 'export-concurrent-1',
+      }),
+      harness.service.processStockExport('warehouse-2', 'export-1', {
+        idempotencyKey: 'export-concurrent-2',
+      }),
+    ]);
+
+    assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
+    assert.equal(results.filter((result) => result.status === 'rejected').length, 1);
+    assert.ok(
+      ['EXPORT_ALREADY_PROCESSING', 'EXPORT_STALE_STATE'].includes(
+        results.find((result) => result.status === 'rejected').reason.errorCode,
+      ),
+    );
+    assert.equal(harness.state.request.status, 'Completed');
+    assert.equal(harness.state.transactions.length, 2);
+    assert.deepEqual(harness.state.inventories.map((entry) => [entry.stockQuantity, entry.reservedQuantity]), [[8, 0], [4, 0]]);
+  });
+
   it('P1 processes a separately identified resend export while the same Order remains Shipped', async () => {
     const { service, state } = createHarness({
       requestKind: 'Resend',
