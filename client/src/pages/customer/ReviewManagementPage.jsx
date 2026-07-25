@@ -1,83 +1,338 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 
+import { resolveMediaUrl } from '../../services/apiClient.js';
+import { orderService } from '../../services/orderService.js';
 import { reviewService } from '../../services/reviewService.js';
+import { buildReviewWorkspace } from './reviewWorkspace.js';
+import '../../styles/modules/customer-reviews.css';
+
+function commandKey(prefix) {
+  if (globalThis.crypto?.randomUUID) return `${prefix}-${globalThis.crypto.randomUUID()}`;
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function errorText(error, fallback = 'Không thể thực hiện thao tác đánh giá.') {
+  return error?.message || fallback;
+}
+
+function errorFields(error) {
+  return Object.fromEntries(
+    (error?.errors || []).filter((item) => item?.field).map((item) => [item.field, item.message]),
+  );
+}
+
+function publicationLabel(review) {
+  if (review.moderationStatus === 'HiddenByStaff') return 'Đang được ẩn để kiểm tra';
+  return review.publicationStatus === 'Withdrawn' ? 'Bạn đã ẩn đánh giá' : 'Đang hiển thị công khai';
+}
+
+function formatDate(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat('vi-VN', { dateStyle: 'medium' }).format(date);
+}
+
+function StarInput({ value, onChange, name }) {
+  return (
+    <div className="review-star-input" role="radiogroup" aria-label="Chọn số sao">
+      {[1, 2, 3, 4, 5].map((rating) => (
+        <label key={rating} className={rating <= value ? 'selected' : ''}>
+          <input
+            type="radio"
+            name={name}
+            value={rating}
+            checked={value === rating}
+            onChange={() => onChange(rating)}
+            aria-label={`${rating} sao`}
+          />
+          <span aria-hidden="true">★</span>
+        </label>
+      ))}
+    </div>
+  );
+}
 
 export default function ReviewManagementPage() {
-  const [ownReviews, setOwnReviews] = useState([]);
-  const [ownReviewPage, setOwnReviewPage] = useState({ page: 1, pageSize: 20, totalPages: 1, total: 0 });
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
-  const [error, setError] = useState('');
+  const [searchParams] = useSearchParams();
+  const preferredOrderId = searchParams.get('orderId') || '';
+  const [activeTab, setActiveTab] = useState('pending');
+  const [workspace, setWorkspace] = useState({ pending: [], completed: [] });
+  const [forms, setForms] = useState({});
+  const [editForms, setEditForms] = useState({});
+  const [pending, setPending] = useState({});
+  const [errors, setErrors] = useState({});
+  const [pageError, setPageError] = useState('');
+  const [loading, setLoading] = useState(true);
+  const pendingKeys = useRef(new Set());
 
-  async function loadOwn() {
+  const loadWorkspace = useCallback(async () => {
+    setPageError('');
+    const summaries = await orderService.listMyOrders();
+    const orders = Array.isArray(summaries) ? summaries : summaries?.items || summaries?.orders || [];
+    const detailedOrders = await Promise.all(orders.map(async (order) => {
+      if (Array.isArray(order.details) && order.details.length) return order;
+      const id = order.id || order._id;
+      if (!id) return { ...order, details: [] };
+      try {
+        return await orderService.getOrder(id);
+      } catch (_error) {
+        return { ...order, details: [] };
+      }
+    }));
+    const ownPage = await reviewService.listOwn({ page: 1, pageSize: 50 });
+    const next = buildReviewWorkspace(detailedOrders, ownPage?.items || []);
+    if (preferredOrderId) {
+      next.pending.sort((left, right) => (
+        Number(String(right.orderId) === preferredOrderId)
+        - Number(String(left.orderId) === preferredOrderId)
+      ));
+    }
+    setWorkspace(next);
+  }, [preferredOrderId]);
+
+  useEffect(() => {
+    let current = true;
+    loadWorkspace()
+      .catch((error) => {
+        if (current) setPageError(errorText(error, 'Không thể tải danh sách đánh giá của bạn.'));
+      })
+      .finally(() => {
+        if (current) setLoading(false);
+      });
+    return () => { current = false; };
+  }, [loadWorkspace]);
+
+  function begin(key) {
+    if (pendingKeys.current.has(key)) return false;
+    pendingKeys.current.add(key);
+    setPending((current) => ({ ...current, [key]: true }));
+    return true;
+  }
+
+  function finish(key) {
+    pendingKeys.current.delete(key);
+    setPending((current) => ({ ...current, [key]: false }));
+  }
+
+  async function submitCreate(event, item) {
+    event.preventDefault();
+    const key = `createReview:${item.orderDetailId}`;
+    if (!begin(key)) return;
+    const form = forms[item.orderDetailId] || { rating: 5, content: '' };
+    setErrors((current) => ({ ...current, [key]: {} }));
     try {
-      const result = await reviewService.listOwn({ page, pageSize });
-      setOwnReviews(result?.items || []);
-      setOwnReviewPage(result || {});
-    } catch (err) {
-      setError(err.message || 'Không thể tải đánh giá của bạn.');
+      await reviewService.createReview(item.productId, {
+        orderDetailId: item.orderDetailId,
+        rating: Number(form.rating),
+        content: form.content || undefined,
+        expectedVersion: 0,
+      }, { idempotencyKey: commandKey('review-create') });
+      await loadWorkspace();
+      setActiveTab('completed');
+    } catch (error) {
+      setPageError(errorText(error));
+      setErrors((current) => ({ ...current, [key]: errorFields(error) }));
+    } finally {
+      finish(key);
     }
   }
 
-  async function refreshOwnReviews() {
-    return reviewService.listOwn({ page, pageSize });
+  async function submitUpdate(event, review) {
+    event.preventDefault();
+    const key = `updateReview:${review.id}`;
+    if (!begin(key)) return;
+    const form = editForms[review.id] || { rating: review.rating, content: review.content || '' };
+    setErrors((current) => ({ ...current, [key]: {} }));
+    try {
+      await reviewService.updateReview(review.id, {
+        rating: Number(form.rating),
+        content: form.content || undefined,
+        expectedVersion: Number(review.version),
+      }, { idempotencyKey: commandKey('review-update') });
+      await loadWorkspace();
+    } catch (error) {
+      setPageError(errorText(error));
+      setErrors((current) => ({ ...current, [key]: errorFields(error) }));
+    } finally {
+      finish(key);
+    }
   }
 
-  useEffect(() => {
-    loadOwn();
-  }, [page, pageSize]);
+  async function setPublication(review, publicationStatus) {
+    const key = `setPublication:${publicationStatus}:${review.id}`;
+    if (!begin(key)) return;
+    try {
+      await reviewService.setPublication(review.id, {
+        publicationStatus,
+        expectedVersion: Number(review.version),
+      }, { idempotencyKey: commandKey('review-publication') });
+      await loadWorkspace();
+    } catch (error) {
+      setPageError(errorText(error));
+    } finally {
+      finish(key);
+    }
+  }
 
-  const totalPages = Math.max(1, Number(ownReviewPage.totalPages || 0));
+  const items = activeTab === 'pending' ? workspace.pending : workspace.completed;
 
   return (
-    <div className="page-shell">
-      <div className="page-heading">
+    <div className="customer-review-center">
+      <div className="page-heading customer-review-heading">
         <div>
-          <span className="eyebrow">Tài khoản</span>
-          <h1>Quản lý đánh giá</h1>
+          <span className="eyebrow">Đơn mua đã hoàn thành</span>
+          <h1>Đánh giá của tôi</h1>
+          <p>Chia sẻ trải nghiệm riêng cho từng sản phẩm bạn đã nhận.</p>
         </div>
-        <span className="text-secondary">{Number(ownReviewPage.total || ownReviews.length)} đánh giá</span>
+        <Link className="btn btn-outline-success" to="/orders">Xem đơn hàng</Link>
       </div>
-      {error && <div className="alert alert-danger" role="alert">{error}</div>}
-      <section className="surface" aria-live="polite">
-        {ownReviews.map((review) => (
-          <article className="border-bottom py-3" key={review.id}>
-            <div className="d-flex justify-content-between">
-              <strong>{review.rating}/5</strong>
-              <span className="small">Phiên bản {review.version ?? 0}</span>
+
+      <nav className="review-tabs" aria-label="Trạng thái đánh giá">
+        <button type="button" className={activeTab === 'pending' ? 'active' : ''} onClick={() => setActiveTab('pending')}>
+          Chờ đánh giá <span>{workspace.pending.length}</span>
+        </button>
+        <button type="button" className={activeTab === 'completed' ? 'active' : ''} onClick={() => setActiveTab('completed')}>
+          Đã đánh giá <span>{workspace.completed.length}</span>
+        </button>
+      </nav>
+
+      {loading && <div className="review-state-card" role="status">Đang tải danh sách đánh giá…</div>}
+      {pageError && <div className="alert alert-danger" role="alert">{pageError}</div>}
+
+      {!loading && (
+        <div className="review-purchase-list" aria-live="polite">
+          {activeTab === 'pending' && items.map((item) => {
+            const form = forms[item.orderDetailId] || { rating: 5, content: '' };
+            const key = `createReview:${item.orderDetailId}`;
+            const fieldErrors = errors[key] || {};
+            return (
+              <article className="review-purchase-card" key={item.orderDetailId}>
+                <div className="review-product-summary">
+                  <div className="review-product-image">
+                    {item.productImage ? <img src={resolveMediaUrl(item.productImage)} alt="" /> : <span>GH</span>}
+                  </div>
+                  <div>
+                    <span>{item.orderCode}{item.deliveredAt ? ` · Đã giao ${formatDate(item.deliveredAt)}` : ''}</span>
+                    <h2>{item.productName}</h2>
+                    <small>SKU: {item.sku || 'Chưa cập nhật'}</small>
+                  </div>
+                </div>
+                <form className="review-editor" onSubmit={(event) => submitCreate(event, item)}>
+                  <label>Chất lượng sản phẩm</label>
+                  <StarInput
+                    name={`rating-${item.orderDetailId}`}
+                    value={form.rating}
+                    onChange={(rating) => setForms((current) => ({
+                      ...current,
+                      [item.orderDetailId]: { ...form, rating },
+                    }))}
+                  />
+                  {fieldErrors.rating && <small className="text-danger">{fieldErrors.rating}</small>}
+                  <label htmlFor={`content-${item.orderDetailId}`}>Nội dung đánh giá</label>
+                  <textarea
+                    id={`content-${item.orderDetailId}`}
+                    maxLength={1000}
+                    rows={4}
+                    value={form.content}
+                    placeholder="Sản phẩm có đúng mô tả và hữu ích với căn bếp của bạn không?"
+                    onChange={(event) => setForms((current) => ({
+                      ...current,
+                      [item.orderDetailId]: { ...form, content: event.target.value.slice(0, 1000) },
+                    }))}
+                  />
+                  <div className="review-editor-footer">
+                    <small>{form.content.length} / 1000</small>
+                    <button className="btn btn-success" type="submit" data-sl008-action="createReview" disabled={Boolean(pending[key])}>
+                      {pending[key] ? 'Đang gửi…' : 'Gửi đánh giá'}
+                    </button>
+                  </div>
+                  {fieldErrors.content && <small className="text-danger">{fieldErrors.content}</small>}
+                  {fieldErrors.orderDetailId && <small className="text-danger">{fieldErrors.orderDetailId}</small>}
+                </form>
+              </article>
+            );
+          })}
+
+          {activeTab === 'completed' && items.map((review) => {
+            const edit = editForms[review.id] || { rating: review.rating, content: review.content || '' };
+            const updateKey = `updateReview:${review.id}`;
+            return (
+              <article className="review-purchase-card" key={review.id}>
+                <div className="review-product-summary">
+                  <div className="review-product-image">
+                    {review.productImage ? <img src={resolveMediaUrl(review.productImage)} alt="" /> : <span>GH</span>}
+                  </div>
+                  <div>
+                    <span>{review.orderCode || 'Đơn mua GreenHome'}</span>
+                    <h2>{review.productName}</h2>
+                    <small>{publicationLabel(review)}</small>
+                  </div>
+                </div>
+                <form className="review-editor" onSubmit={(event) => submitUpdate(event, review)}>
+                  <label>Điểm đánh giá</label>
+                  <StarInput
+                    name={`edit-rating-${review.id}`}
+                    value={edit.rating}
+                    onChange={(rating) => setEditForms((current) => ({
+                      ...current,
+                      [review.id]: { ...edit, rating },
+                    }))}
+                  />
+                  <label htmlFor={`edit-content-${review.id}`}>Nội dung</label>
+                  <textarea
+                    id={`edit-content-${review.id}`}
+                    maxLength={1000}
+                    rows={4}
+                    value={edit.content}
+                    onChange={(event) => setEditForms((current) => ({
+                      ...current,
+                      [review.id]: { ...edit, content: event.target.value.slice(0, 1000) },
+                    }))}
+                  />
+                  <div className="review-editor-footer">
+                    <small>{edit.content.length} / 1000</small>
+                    <div>
+                      {review.publicationStatus === 'Published' ? (
+                        <button
+                          type="button"
+                          className="btn btn-outline-secondary btn-sm"
+                          data-sl008-action="setPublication:Withdrawn"
+                          disabled={Boolean(pending[`setPublication:Withdrawn:${review.id}`])}
+                          onClick={() => setPublication(review, 'Withdrawn')}
+                        >
+                          Ẩn đánh giá
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          className="btn btn-outline-secondary btn-sm"
+                          data-sl008-action="setPublication:Published"
+                          disabled={Boolean(pending[`setPublication:Published:${review.id}`])}
+                          onClick={() => setPublication(review, 'Published')}
+                        >
+                          Hiển thị lại
+                        </button>
+                      )}
+                      <button type="submit" className="btn btn-outline-success btn-sm" data-sl008-action="updateReview" disabled={Boolean(pending[updateKey])}>
+                        {pending[updateKey] ? 'Đang lưu…' : 'Lưu thay đổi'}
+                      </button>
+                    </div>
+                  </div>
+                </form>
+              </article>
+            );
+          })}
+
+          {!items.length && (
+            <div className="review-state-card">
+              <strong>{activeTab === 'pending' ? 'Không có sản phẩm chờ đánh giá.' : 'Bạn chưa gửi đánh giá nào.'}</strong>
+              <p>{activeTab === 'pending' ? 'Sản phẩm sẽ xuất hiện sau khi đơn hàng được giao thành công.' : 'Hãy đánh giá sản phẩm trong các đơn đã hoàn thành.'}</p>
             </div>
-            <p>{review.content || 'Không có nội dung'}</p>
-            <dl className="small mb-0">
-              <dt>Customer publication</dt>
-              <dd>{review.publicationStatus}</dd>
-              <dt>Staff moderation</dt>
-              <dd>{review.moderationStatus}</dd>
-              <dt>Lịch sử</dt>
-              <dd>
-                {review.historySummary?.contentEntries ?? 0} nội dung · {review.historySummary?.publicationEntries ?? 0} publication · {review.historySummary?.moderationEntries ?? 0} moderation
-              </dd>
-            </dl>
-          </article>
-        ))}
-        {!ownReviews.length && <p className="text-secondary">Bạn chưa có đánh giá nào.</p>}
-      </section>
-      <div className="d-flex align-items-center gap-2 mt-3" aria-label="Phân trang đánh giá của bạn">
-        <label htmlFor="ownReviewPageSize">Hiển thị</label>
-        <select
-          id="ownReviewPageSize"
-          name="pageSize"
-          value={pageSize}
-          onChange={(event) => {
-            setPageSize(Number(event.target.value));
-            setPage(1);
-          }}
-        >
-          {[10, 20, 50].map((size) => <option key={size} value={size}>{size}</option>)}
-        </select>
-        <span className="text-secondary">Trang {page}/{totalPages}</span>
-        <button type="button" className="btn btn-sm btn-outline-secondary" onClick={() => setPage((value) => Math.max(1, value - 1))} disabled={page <= 1}>Trước</button>
-        <button type="button" className="btn btn-sm btn-outline-secondary" onClick={() => setPage((value) => Math.min(totalPages, value + 1))} disabled={page >= totalPages}>Sau</button>
-      </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
