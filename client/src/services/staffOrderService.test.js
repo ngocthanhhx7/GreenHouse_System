@@ -34,12 +34,14 @@ describe('client staff order service', () => {
     await service.listOrders({ status: 'Pending', page: 2 });
   });
 
-  it('confirms staff orders through the staff endpoint', async () => {
+  it('sends the confirmation key as a header and excludes it from the body', async () => {
     const service = createStaffOrderService({
       baseUrl: 'http://api.test/api',
       fetcher: async (url, options) => {
         assert.equal(url, 'http://api.test/api/staff/orders/order-1/confirm');
         assert.equal(options.method, 'POST');
+        assert.equal(options.headers['Idempotency-Key'], 'staff-confirm-001');
+        assert.deepEqual(JSON.parse(options.body), { note: 'Reviewed' });
         return {
           ok: true,
           json: async () => ({ success: true, data: { orderStatus: 'Confirmed' } }),
@@ -47,7 +49,10 @@ describe('client staff order service', () => {
       },
     });
 
-    const result = await service.confirmOrder('order-1', { note: 'Reviewed' });
+    const result = await service.confirmOrder('order-1', {
+      note: 'Reviewed',
+      idempotencyKey: 'staff-confirm-001',
+    });
 
     assert.equal(result.orderStatus, 'Confirmed');
   });

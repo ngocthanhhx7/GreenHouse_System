@@ -7,6 +7,7 @@ const orderRoutes = require('./order.routes');
 const staffOrderRoutes = require('./staffOrder.routes');
 const inventoryRoutes = require('./inventory.routes');
 const fulfillmentRoutes = require('./fulfillment.routes');
+const { errorHandler } = require('../middlewares/error.middleware');
 
 async function withHttpServer(actor, callback) {
   const app = express();
@@ -20,6 +21,7 @@ async function withHttpServer(actor, callback) {
   app.use('/api', staffOrderRoutes);
   app.use('/api', inventoryRoutes);
   app.use('/api', fulfillmentRoutes);
+  app.use(errorHandler);
 
   const server = http.createServer(app);
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -57,5 +59,22 @@ describe('Phase 2 business guard route matrix', () => {
         },
       );
     }
+  });
+
+  it('requires the confirmation idempotency header after Staff RBAC succeeds', async () => {
+    await withHttpServer(
+      { id: 'staff-1', role: 'Staff', status: 'Active' },
+      async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/api/staff/orders/order-1/confirm`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ note: 'Reviewed' }),
+        });
+        const payload = await response.json();
+
+        assert.equal(response.status, 400);
+        assert.equal(payload.errorCode, 'STAFF_CONFIRM_IDEMPOTENCY_KEY_REQUIRED');
+      },
+    );
   });
 });
