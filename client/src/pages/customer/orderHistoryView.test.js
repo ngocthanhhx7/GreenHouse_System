@@ -16,8 +16,10 @@ describe('customer order history projection', () => {
     assert.equal(orderTabFor({ orderStatus: 'Pending', paymentStatus: 'Pending', paymentMethod: 'ONLINE' }), 'payment');
     assert.equal(orderTabFor({ orderStatus: 'Pending', paymentStatus: 'Unpaid', paymentMethod: 'COD' }), 'pending');
     assert.equal(orderTabFor({ orderStatus: 'Confirmed' }), 'processing');
+    assert.equal(orderTabFor({ orderStatus: 'StockExportRequested' }), 'processing');
     assert.equal(orderTabFor({ orderStatus: 'Packed' }), 'processing');
     assert.equal(orderTabFor({ orderStatus: 'Shipped' }), 'shipping');
+    assert.equal(orderTabFor({ orderStatus: 'DeliveryFailed' }), 'shipping');
     assert.equal(orderTabFor({ orderStatus: 'Delivered' }), 'completed');
     assert.equal(orderTabFor({ orderStatus: 'Cancelled' }), 'cancelled');
   });
@@ -42,6 +44,12 @@ describe('customer order history projection', () => {
     assert.equal(payment.canPay, true);
     assert.equal(payment.canCancel, true);
     assert.equal(payment.canReview, false);
+    assert.equal(getOrderActions({
+      id: 'paid-pending',
+      orderStatus: 'Pending',
+      paymentStatus: 'Paid',
+      paymentMethod: 'ONLINE',
+    }).canCancel, true);
     assert.equal(getOrderActions({ id: 'b', orderStatus: 'Delivered' }).canReview, true);
   });
 });

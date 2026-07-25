@@ -11,8 +11,8 @@ export const ORDER_TABS = [
 export function orderTabFor(order = {}) {
   if (['Cancelled', 'Returned'].includes(order.orderStatus)) return 'cancelled';
   if (order.orderStatus === 'Delivered') return 'completed';
-  if (order.orderStatus === 'Shipped') return 'shipping';
-  if (['Confirmed', 'Packed'].includes(order.orderStatus)) return 'processing';
+  if (['Shipped', 'DeliveryFailed'].includes(order.orderStatus)) return 'shipping';
+  if (['Confirmed', 'StockExportRequested', 'Packed'].includes(order.orderStatus)) return 'processing';
   if (
     order.orderStatus === 'Pending'
     && order.paymentMethod === 'ONLINE'
@@ -34,7 +34,7 @@ export function getOrderActions(order = {}, now = new Date()) {
       && order.paymentStatus !== 'Paid'
       && beforeDeadline,
     canCancel: order.orderStatus === 'Pending'
-      && ['Unpaid', 'Pending', 'Failed'].includes(order.paymentStatus),
+      && ['Unpaid', 'Pending', 'Failed', 'Paid'].includes(order.paymentStatus),
     canReview: order.orderStatus === 'Delivered',
   };
 }
