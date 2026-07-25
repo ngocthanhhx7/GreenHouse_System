@@ -61,6 +61,9 @@ export function createReturnRefundService({ baseUrl = DEFAULT_BASE_URL, fetcher 
     async listMyRequests() {
       return request('/return-refunds/my');
     },
+    async listBanks() {
+      return request('/return-refunds/banks');
+    },
     async listStaffRequests(params = {}) {
       const query = buildQuery(params);
       return request(`/staff/return-refunds${query ? `?${query}` : ''}`);
@@ -94,9 +97,16 @@ export function createReturnRefundService({ baseUrl = DEFAULT_BASE_URL, fetcher 
       });
     },
     async submitDestination(id, input) {
+      const safeInput = {
+        bankCode: input?.bankCode,
+        accountNumber: input?.accountNumber,
+        accountHolderName: input?.accountHolderName,
+        confirmed: input?.confirmed,
+        idempotencyKey: input?.idempotencyKey,
+      };
       return request(`/return-refunds/${id}/destination`, {
         method: 'POST',
-        body: JSON.stringify(input),
+        body: JSON.stringify(safeInput),
       });
     },
     async verifyDestination(id, input) {

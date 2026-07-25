@@ -433,8 +433,7 @@ describe('return/refund service', () => {
 
   async function submitAndVerifyDestination(requestId) {
     const destination = await service.submitDestination('customer-1', requestId, {
-      bankName: 'Test Bank',
-      bankBin: '970422',
+      bankCode: 'MB',
       accountNumber: '0123456789',
       accountHolderName: 'Nguyen Van A',
       confirmed: true,
@@ -724,36 +723,85 @@ describe('return/refund service', () => {
     const requestId = await approveRequest();
     await assert.rejects(
       () => service.submitDestination('customer-1', requestId, {
-        bankName: 'Test Bank', accountNumber: '0123456789', accountHolderName: 'Nguyen Van A',
+        bankCode: 'MB', accountNumber: '0123456789', accountHolderName: 'Nguyen Van A',
         idempotencyKey: 'destination-request-001',
       }),
       /confirm/i,
     );
     const destination = await service.submitDestination('customer-1', requestId, {
-      bankName: 'Test Bank', accountNumber: '0123456789', accountHolderName: 'Nguyen Van A',
+      bankCode: 'MB', accountNumber: '0123456789', accountHolderName: 'Nguyen Van A',
       confirmed: true, idempotencyKey: 'destination-request-001',
     });
     assert.equal(destination.maskedAccountNumber, '****6789');
+    assert.equal(destination.bankName, 'MBBank');
+    assert.equal(Object.hasOwn(destination, 'bankBin'), false);
     assert.equal(Object.hasOwn(destination, 'accountNumberEncrypted'), false);
+    assert.equal(repository.destinations[0].bankName, 'MBBank');
+    assert.equal(repository.destinations[0].bankBin, '970422');
     assert.notEqual(repository.destinations[0].accountNumberEncrypted, '0123456789');
     const replay = await service.submitDestination('customer-1', requestId, {
-      bankName: 'Test Bank', accountNumber: '0123456789', accountHolderName: 'Nguyen Van A',
+      bankCode: 'MB', accountNumber: '0123456789', accountHolderName: 'Nguyen Van A',
       confirmed: true, idempotencyKey: 'destination-request-001',
     });
     assert.equal(replay.replay, true);
     await assert.rejects(
       () => service.submitDestination('customer-1', requestId, {
-        bankName: 'Other Bank', accountNumber: '9999999999', accountHolderName: 'Other Name',
+        bankCode: 'VCB', accountNumber: '9999999999', accountHolderName: 'Other Name',
         confirmed: true, idempotencyKey: 'destination-request-001',
       }),
       /idempotency key.*different/i,
     );
   });
 
+  it('accepts only the safe exact destination payload and rejects unknown banks, coercion, and credential-shaped keys', async () => {
+    const requestId = await approveRequest();
+    const base = {
+      bankCode: 'MB',
+      accountNumber: '0123456789',
+      accountHolderName: 'Nguyen Van A',
+      confirmed: true,
+      idempotencyKey: 'destination-safe-001',
+    };
+
+    await assert.rejects(
+      () => service.submitDestination('customer-1', requestId, { ...base, bankCode: 'NOT_A_BANK' }),
+      /supported bank/i,
+    );
+    await assert.rejects(
+      () => service.submitDestination('customer-1', requestId, { ...base, bankCode: { toString: () => 'MB' } }),
+      /bankCode.*string/i,
+    );
+    await assert.rejects(
+      () => service.submitDestination('customer-1', requestId, { ...base, accountNumber: 123456789 }),
+      /accountNumber.*string/i,
+    );
+    await assert.rejects(
+      () => service.submitDestination('customer-1', requestId, { ...base, bankName: 'MBBank' }),
+      /bankName.*not accepted/i,
+    );
+    await assert.rejects(
+      () => service.submitDestination('customer-1', requestId, { ...base, bankBin: '970422' }),
+      /bankBin.*not accepted/i,
+    );
+    for (const unsafe of [
+      { PIN: '1234' },
+      { otp: '123456' },
+      { metadata: { Password: 'secret' } },
+      { extra: [{ cVv: '123' }] },
+      { banking: { passCode: 'secret' } },
+    ]) {
+      await assert.rejects(
+        () => service.submitDestination('customer-1', requestId, { ...base, ...unsafe }),
+        /credential/i,
+      );
+    }
+    assert.equal(repository.destinations.length, 0);
+  });
+
   it('denies destination access before approval or to another Customer without revealing financial data', async () => {
     const pending = await createRequest();
     const input = {
-      bankName: 'Test Bank', accountNumber: '0123456789', accountHolderName: 'Nguyen Van A',
+      bankCode: 'MB', accountNumber: '0123456789', accountHolderName: 'Nguyen Van A',
       confirmed: true, idempotencyKey: 'destination-access-001',
     };
     await assert.rejects(
@@ -772,19 +820,19 @@ describe('return/refund service', () => {
     const requestId = await approveRequest();
     await assert.rejects(
       () => service.submitDestination('customer-1', requestId, {
-        bankName: 'Test Bank', accountNumber: 'invalid', accountHolderName: 'Nguyen Van A',
+        bankCode: 'MB', accountNumber: 'invalid', accountHolderName: 'Nguyen Van A',
         confirmed: true, idempotencyKey: 'destination-invalid-001',
       }),
       /valid bank account/i,
     );
 
     const first = await service.submitDestination('customer-1', requestId, {
-      bankName: 'Test Bank', accountNumber: '0123456789', accountHolderName: 'Nguyen Van A',
+      bankCode: 'MB', accountNumber: '0123456789', accountHolderName: 'Nguyen Van A',
       confirmed: true, idempotencyKey: 'destination-version-001',
     });
     await assert.rejects(
       () => service.submitDestination('customer-1', requestId, {
-        bankName: 'Test Bank', accountNumber: '9999999999', accountHolderName: 'Nguyen Van A',
+        bankCode: 'MB', accountNumber: '9999999999', accountHolderName: 'Nguyen Van A',
         confirmed: true, idempotencyKey: 'destination-version-002',
       }),
       /must be rejected/i,
@@ -793,7 +841,7 @@ describe('return/refund service', () => {
       destinationId: first.id, status: 'Rejected', rejectionReason: 'Sai số tài khoản',
     });
     const corrected = await service.submitDestination('customer-1', requestId, {
-      bankName: 'Test Bank', accountNumber: '9999999999', accountHolderName: 'Nguyen Van A',
+      bankCode: 'MB', accountNumber: '9999999999', accountHolderName: 'Nguyen Van A',
       confirmed: true, idempotencyKey: 'destination-version-002',
     });
     assert.equal(corrected.version, 2);
@@ -804,7 +852,7 @@ describe('return/refund service', () => {
   it('lets Staff verify or reject but never edit Customer destination values', async () => {
     const requestId = await approveRequest();
     const destination = await service.submitDestination('customer-1', requestId, {
-      bankName: 'Test Bank', accountNumber: '0123456789', accountHolderName: 'Nguyen Van A',
+      bankCode: 'MB', accountNumber: '0123456789', accountHolderName: 'Nguyen Van A',
       confirmed: true, idempotencyKey: 'destination-request-001',
     });
     await assert.rejects(
@@ -819,6 +867,7 @@ describe('return/refund service', () => {
     const staff = await service.getStaffRequest(requestId);
     assert.equal(staff.destination.accountNumber, '0123456789');
     assert.equal(staff.destination.accountHolderName, 'NGUYEN VAN A');
+    assert.equal(staff.destination.bankBin, '970422');
 
     const staffQueue = await service.listStaffRequests();
     assert.equal(Object.hasOwn(staffQueue.items[0].destination, 'accountNumber'), false);
@@ -827,6 +876,7 @@ describe('return/refund service', () => {
     const customer = await service.listMyRequests('customer-1');
     assert.equal(Object.hasOwn(customer.items[0].destination, 'accountNumber'), false);
     assert.equal(Object.hasOwn(customer.items[0].destination, 'accountHolderName'), false);
+    assert.equal(Object.hasOwn(customer.items[0].destination, 'bankBin'), false);
 
     const warehouse = await service.getWarehouseRequest(requestId);
     assert.equal(Object.hasOwn(warehouse, 'destination'), false);

@@ -36,6 +36,7 @@ const {
   resolveActiveAfterSalesConflict,
   createActiveAfterSalesConflict,
 } = require('./afterSalesConflict.service');
+const { resolveBank } = require('../config/refundBankCatalog');
 
 const OPEN_STATUSES = [
   'New', 'Pending', 'AwaitingCODReconciliation', 'Approved',
@@ -151,6 +152,48 @@ function normalizeIdempotencyKey(value, fieldName = 'idempotencyKey') {
   return key;
 }
 
+const DESTINATION_INPUT_KEYS = new Set([
+  'bankCode',
+  'accountNumber',
+  'accountHolderName',
+  'confirmed',
+  'idempotencyKey',
+]);
+const CREDENTIAL_SHAPED_KEY = /(?:pin|otp|password|cvv|passcode)/i;
+
+function findCredentialShapedKey(value, seen = new WeakSet()) {
+  if (!value || typeof value !== 'object') return null;
+  if (seen.has(value)) return null;
+  seen.add(value);
+  for (const [key, nested] of Object.entries(value)) {
+    if (CREDENTIAL_SHAPED_KEY.test(key)) return key;
+    const found = findCredentialShapedKey(nested, seen);
+    if (found) return found;
+  }
+  return null;
+}
+
+function validateDestinationInputShape(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input) || Object.getPrototypeOf(input) !== Object.prototype) {
+    throw new ApiError(400, 'Refund destination input must be a plain object');
+  }
+  const credentialKey = findCredentialShapedKey(input);
+  if (credentialKey) {
+    throw new ApiError(400, 'Bank credentials are never accepted; do not send PIN, OTP, password, CVV, or passcode');
+  }
+  if (Object.prototype.hasOwnProperty.call(input, 'bankName')) {
+    throw new ApiError(400, 'bankName is not accepted; select a supported bankCode');
+  }
+  if (Object.prototype.hasOwnProperty.call(input, 'bankBin')) {
+    throw new ApiError(400, 'bankBin is not accepted; it is resolved securely by the server');
+  }
+  const unexpectedKey = Object.keys(input).find((key) => !DESTINATION_INPUT_KEYS.has(key));
+  if (unexpectedKey) throw new ApiError(400, `Unexpected refund destination field: ${unexpectedKey}`);
+  for (const key of ['bankCode', 'accountNumber', 'accountHolderName', 'idempotencyKey']) {
+    if (typeof input[key] !== 'string') throw new ApiError(400, `${key} must be a string`);
+  }
+}
+
 function normalizeRefundAmount(value, fieldName = 'amount') {
   const amount = Number(value);
   if (!Number.isSafeInteger(amount) || amount <= 0) throw new ApiError(400, `${fieldName} must be a positive integer`);
@@ -218,7 +261,6 @@ function toDestinationResponse(destination, audience = 'Customer') {
     id: String(destination._id),
     version: Number(destination.version),
     bankName: destination.bankName,
-    bankBin: destination.bankBin || '',
     maskedAccountNumber: destination.accountNumberLast4 ? `****${destination.accountNumberLast4}` : '',
     maskedAccountHolder: destination.accountHolderMasked,
     status: destination.status,
@@ -229,6 +271,7 @@ function toDestinationResponse(destination, audience = 'Customer') {
   };
 
   if (audience === 'Staff' && destination.accountNumberEncrypted && destination.accountHolderEncrypted) {
+    response.bankBin = destination.bankBin || '';
     response.accountNumber = decrypt(destination.accountNumberEncrypted);
     response.accountHolderName = decrypt(destination.accountHolderEncrypted);
   }
@@ -1245,19 +1288,29 @@ function createReturnRefundService({
       if (![...RECEIVABLE_STATUSES, ...RECEIVED_STATUSES].includes(request.status)) {
         throw new ApiError(409, 'Refund destination can only be submitted after approval and before completion');
       }
-      if (input.confirmed !== true && input.confirmDetails !== true) {
+      validateDestinationInputShape(input);
+      if (input.confirmed !== true) {
         throw new ApiError(400, 'Customer must confirm the refund destination details');
       }
-      const bankName = String(input.bankName || '').trim();
-      const bankBin = String(input.bankBin || '').trim();
-      const accountNumber = String(input.accountNumber || '').replace(/\s+/g, '');
-      const accountHolderName = String(input.accountHolderName || '').trim().replace(/\s+/g, ' ').toUpperCase();
-      if (!bankName || bankName.length > 120) throw new ApiError(400, 'A valid bank name is required');
-      if (bankBin && !/^[0-9]{6}$/.test(bankBin)) throw new ApiError(400, 'bankBin must contain exactly 6 digits');
+      const bank = resolveBank(input.bankCode);
+      if (!bank) throw new ApiError(400, 'A supported bankCode is required');
+      const accountNumber = input.accountNumber.replace(/\s+/g, '');
+      const accountHolderName = input.accountHolderName
+        .normalize('NFC')
+        .trim()
+        .replace(/\s+/g, ' ')
+        .toUpperCase();
       if (!/^[0-9]{6,24}$/.test(accountNumber)) throw new ApiError(400, 'A valid bank account number is required');
-      if (accountHolderName.length < 2 || accountHolderName.length > 120) throw new ApiError(400, 'A valid account holder name is required');
+      if (
+        accountHolderName.length < 2
+        || accountHolderName.length > 120
+        || !/^[\p{L}\p{M} .'’-]+$/u.test(accountHolderName)
+        || (accountHolderName.match(/\p{L}/gu) || []).length < 2
+      ) {
+        throw new ApiError(400, 'A valid account holder name is required');
+      }
       const idempotencyKey = normalizeIdempotencyKey(input.idempotencyKey);
-      const destinationFingerprint = fingerprint(`${bankName}|${bankBin}|${accountNumber}|${accountHolderName}`);
+      const destinationFingerprint = fingerprint(`${bank.code}|${bank.bin}|${accountNumber}|${accountHolderName}`);
 
       const replay = repository.findDestinationByIdempotencyKey
         ? await repository.findDestinationByIdempotencyKey(request._id, idempotencyKey)
@@ -1281,8 +1334,8 @@ function createReturnRefundService({
             customerId,
             version: Number(latest?.version || 0) + 1,
             supersedesId: latest?._id || null,
-            bankName,
-            bankBin,
+            bankName: bank.name,
+            bankBin: bank.bin,
             accountNumberEncrypted: encrypt(accountNumber),
             accountHolderEncrypted: encrypt(accountHolderName),
             accountNumberLast4: accountNumber.slice(-4),

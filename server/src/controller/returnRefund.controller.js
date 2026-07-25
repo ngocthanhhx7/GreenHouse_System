@@ -16,6 +16,7 @@ async function createCustomerRequest(req, res, next) {
 
 async function listMyRequests(req, res, next) {
   try {
+    preventSensitiveCaching(res);
     return sendSuccess(res, await returnRefundService.listMyRequests(req.user.id));
   } catch (error) {
     return next(error);
@@ -101,6 +102,7 @@ async function recordHandoffProof(req, res, next) {
 
 async function submitDestination(req, res, next) {
   try {
+    preventSensitiveCaching(res);
     return sendSuccess(res, await returnRefundService.submitDestination(req.user.id, req.params.id, req.body), 'Refund destination submitted', 201);
   } catch (error) {
     return next(error);
