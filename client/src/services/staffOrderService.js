@@ -89,7 +89,12 @@ export function createStaffOrderService({ baseUrl = DEFAULT_BASE_URL, fetcher } 
       });
     },
     async markCodCollected(id, input = {}) {
-      throw new Error('Thao tác thu COD thủ công không còn được hỗ trợ; cần bằng chứng Carrier.');
+      const { idempotencyKey, ...payload } = input;
+      return request(`/staff/orders/${id}/cod-collection`, {
+        method: 'POST',
+        headers: { 'Idempotency-Key': idempotencyKey },
+        body: JSON.stringify(payload),
+      });
     },
     async finalizeCodRecovery(id, input = {}) {
       return request(`/staff/orders/${id}/cod-recovery`, {

@@ -38,6 +38,15 @@ function blankEvent() {
   };
 }
 
+function blankCodEvidence() {
+  return {
+    customerCollectedAmount: '',
+    collectionTiming: 'AT_DELIVERY',
+    occurredAt: toLocalDateTimeValue(),
+    evidenceReference: '',
+  };
+}
+
 function validateHandoffDraft(draft) {
   const errors = {};
   if (!draft.carrierName.trim()) errors.carrierName = 'Vui lòng nhập đơn vị vận chuyển.';
@@ -57,6 +66,24 @@ function validateShipmentEventDraft(draft) {
   }
   if (['CORRECTION', 'DISPUTED'].includes(draft.eventType) && !draft.replacesEventId.trim()) {
     errors.replacesEventId = 'Vui lòng chọn sự kiện cần thay thế.';
+  }
+  return errors;
+}
+
+function validateCodEvidenceDraft(draft, expectedAmount, { allowPartial = false } = {}) {
+  const errors = {};
+  if (!draft.evidenceReference.trim()) errors.codEvidenceReference = 'Vui lòng nhập bằng chứng thu COD.';
+  if (!draft.occurredAt || Number.isNaN(new Date(draft.occurredAt).getTime())) {
+    errors.codEvidenceOccurredAt = 'Vui lòng chọn thời điểm thu COD hợp lệ.';
+  }
+  if (!['AT_DELIVERY', 'AFTER_DELIVERY'].includes(draft.collectionTiming)) {
+    errors.codEvidenceTiming = 'Vui lòng chọn thời điểm thu COD hợp lệ.';
+  }
+  if (allowPartial) {
+    const amount = Number(draft.customerCollectedAmount);
+    if (!Number.isSafeInteger(amount) || amount < 0 || amount >= expectedAmount) {
+      errors.customerCollectedAmount = 'Số tiền thực nhận phải là số nguyên từ 0 đến dưới CODExpectedAmount.';
+    }
   }
   return errors;
 }
@@ -83,6 +110,7 @@ export default function StaffOrderDetailPage() {
   const [checklist, setChecklist] = useState([]);
   const [handoff, setHandoff] = useState(blankHandoff);
   const [shipmentEvent, setShipmentEvent] = useState(blankEvent);
+  const [codEvidence, setCodEvidence] = useState(blankCodEvidence);
   const [destination, setDestination] = useState({
     receiverName: '',
     receiverPhone: '',
@@ -214,6 +242,59 @@ export default function StaffOrderDetailPage() {
         : 'Đã thêm sự kiện vào lịch sử vận chuyển.',
     );
     if (result) setShipmentEvent(blankEvent());
+  }
+
+  function submitFullCodCollection() {
+    const expectedAmount = Number(order.codExpectedAmount);
+    const errors = validateCodEvidenceDraft(codEvidence, expectedAmount);
+    if (!Number.isSafeInteger(expectedAmount) || expectedAmount < 0) {
+      errors.codExpectedAmount = 'Đơn hàng chưa có CODExpectedAmount hợp lệ.';
+    }
+    if (Object.keys(errors).length) {
+      setFieldErrors(errors);
+      setError('Vui lòng kiểm tra bằng chứng và thời điểm thu đủ COD.');
+      return;
+    }
+    return runAction(
+      () => staffOrderService.markCodCollected(order.id, {
+        customerCollectedAmount: expectedAmount,
+        collectionTiming: codEvidence.collectionTiming,
+        occurredAt: new Date(codEvidence.occurredAt).toISOString(),
+        evidenceReference: codEvidence.evidenceReference.trim(),
+        idempotencyKey: idempotencyKey(`cod-full:${order.id}`),
+      }),
+      'Đã ghi nhận Staff thu đủ COD; Payment chuyển sang Paid.',
+    ).then((result) => {
+      if (result) setCodEvidence(blankCodEvidence());
+      return result;
+    });
+  }
+
+  function submitPartialCodCollection() {
+    const expectedAmount = Number(order.codExpectedAmount);
+    const errors = validateCodEvidenceDraft(codEvidence, expectedAmount, { allowPartial: true });
+    if (!Number.isSafeInteger(expectedAmount) || expectedAmount < 1) {
+      errors.codExpectedAmount = 'Đơn hàng chưa có CODExpectedAmount hợp lệ.';
+    }
+    if (Object.keys(errors).length) {
+      setFieldErrors(errors);
+      setError('Vui lòng kiểm tra số tiền thực nhận và bằng chứng thu COD.');
+      return;
+    }
+    const observedAmount = Number(codEvidence.customerCollectedAmount);
+    return runAction(
+      () => staffOrderService.markCodCollected(order.id, {
+        customerCollectedAmount: observedAmount,
+        collectionTiming: codEvidence.collectionTiming,
+        occurredAt: new Date(codEvidence.occurredAt).toISOString(),
+        evidenceReference: codEvidence.evidenceReference.trim(),
+        idempotencyKey: idempotencyKey(`cod-observed:${order.id}`),
+      }),
+      'Đã ghi nhận số tiền COD thực nhận; đơn hàng vẫn Unpaid và đã mở đối soát.',
+    ).then((result) => {
+      if (result) setCodEvidence(blankCodEvidence());
+      return result;
+    });
   }
 
   if (!order && !error) return <div className="page-center">Đang tải đơn hàng...</div>;
@@ -405,6 +486,97 @@ export default function StaffOrderDetailPage() {
               {order.codRecoveryReceiptId && <div>codRecoveryReceiptId: {order.codRecoveryReceiptId}</div>}
             </div>
           )}
+
+          {order.paymentMethod === 'COD'
+            && order.orderStatus === 'Delivered'
+            && order.paymentStatus === 'Unpaid'
+            && !order.customerCollectionEvidenceId
+            && (
+              <section className="border rounded p-3 mt-4">
+                <h2 className="h5">Ghi nhận thu COD thủ công</h2>
+                <p className="text-secondary mb-3">
+                  Staff là người ghi nhận bằng chứng trong phiên bản hiện tại vì hệ thống chưa tích hợp Carrier.
+                  CODExpectedAmount do hệ thống cố định; không nhập lại số tiền cho luồng thu đủ.
+                </p>
+                <div className="row g-2">
+                  <label className="col-md-4">
+                    <span className="form-label">Thời điểm thu COD</span>
+                    <select
+                      className={`form-select ${fieldErrors.codEvidenceTiming ? 'is-invalid' : ''}`}
+                      value={codEvidence.collectionTiming}
+                      onChange={(event) => setCodEvidence({ ...codEvidence, collectionTiming: event.target.value })}
+                    >
+                      <option value="AT_DELIVERY">Khi giao hàng</option>
+                      <option value="AFTER_DELIVERY">Sau khi giao hàng</option>
+                    </select>
+                    {fieldErrors.codEvidenceTiming && <span className="invalid-feedback">{fieldErrors.codEvidenceTiming}</span>}
+                  </label>
+                  <label className="col-md-4">
+                    <span className="form-label">Thời điểm ghi nhận</span>
+                    <input
+                      className={`form-control ${fieldErrors.codEvidenceOccurredAt ? 'is-invalid' : ''}`}
+                      type="datetime-local"
+                      value={codEvidence.occurredAt}
+                      onChange={(event) => setCodEvidence({ ...codEvidence, occurredAt: event.target.value })}
+                      required
+                    />
+                    {fieldErrors.codEvidenceOccurredAt && <span className="invalid-feedback">{fieldErrors.codEvidenceOccurredAt}</span>}
+                  </label>
+                  <label className="col-md-4">
+                    <span className="form-label">Bằng chứng thu COD</span>
+                    <input
+                      className={`form-control ${fieldErrors.codEvidenceReference ? 'is-invalid' : ''}`}
+                      value={codEvidence.evidenceReference}
+                      onChange={(event) => setCodEvidence({ ...codEvidence, evidenceReference: event.target.value })}
+                      placeholder="Ví dụ: staff-pod-001"
+                      required
+                    />
+                    {fieldErrors.codEvidenceReference && <span className="invalid-feedback">{fieldErrors.codEvidenceReference}</span>}
+                  </label>
+                </div>
+
+                <div className="d-flex flex-wrap gap-2 mt-3">
+                  <button
+                    className="btn btn-success"
+                    type="button"
+                    disabled={submitting}
+                    onClick={submitFullCodCollection}
+                  >
+                    Ghi nhận thu đủ COD ({formatCurrency(order.codExpectedAmount)})
+                  </button>
+                </div>
+
+                <hr />
+                <p className="text-secondary">
+                  Nếu thu thiếu hoặc không thu, nhập đúng số tiền thực nhận. Hệ thống giữ Payment ở Unpaid và mở CODDiscrepancy để Staff xử lý tiếp.
+                </p>
+                <div className="row g-2 align-items-end">
+                  <label className="col-md-4">
+                    <span className="form-label">Số tiền thực nhận khi thu thiếu/không thu</span>
+                    <input
+                      className={`form-control ${fieldErrors.customerCollectedAmount ? 'is-invalid' : ''}`}
+                      type="number"
+                      min="0"
+                      max={Math.max(0, Number(order.codExpectedAmount) - 1)}
+                      step="1"
+                      value={codEvidence.customerCollectedAmount}
+                      onChange={(event) => setCodEvidence({ ...codEvidence, customerCollectedAmount: event.target.value })}
+                    />
+                    {fieldErrors.customerCollectedAmount && <span className="invalid-feedback">{fieldErrors.customerCollectedAmount}</span>}
+                  </label>
+                  <div className="col-md-8">
+                    <button
+                      className="btn btn-outline-warning"
+                      type="button"
+                      disabled={submitting}
+                      onClick={submitPartialCodCollection}
+                    >
+                      Ghi nhận thu thiếu/không thu
+                    </button>
+                  </div>
+                </div>
+              </section>
+            )}
 
           {fulfillment.incidents?.length > 0 && (
             <section className="border rounded p-3 mt-4">

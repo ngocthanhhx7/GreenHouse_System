@@ -1,13 +1,14 @@
 const mongoose = require('mongoose');
 
-// Append-only evidence supplied by the Carrier integration. Collection money and
-// Carrier remittance are deliberately different event types and projections.
+// Append-only evidence supplied by either the optional Carrier integration or
+// authorized Staff manual reconciliation. Collection money and Carrier
+// remittance are deliberately different event types and projections.
 const codEvidenceSchema = new mongoose.Schema(
   {
     orderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Order', required: true },
     eventId: { type: String, required: true, trim: true, maxlength: 160 },
     eventType: { type: String, enum: ['COLLECTION', 'SETTLEMENT'], required: true },
-    source: { type: String, enum: ['CARRIER', 'STAFF_RECONCILIATION'], default: 'CARRIER', required: true },
+    source: { type: String, enum: ['CARRIER', 'STAFF_EVIDENCE', 'STAFF_RECONCILIATION'], default: 'CARRIER', required: true },
     customerCollectedAmount: {
       type: Number,
       min: 0,

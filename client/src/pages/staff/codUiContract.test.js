@@ -6,8 +6,10 @@ const staffOrderSource = readFileSync(new URL('./StaffOrderDetailPage.jsx', impo
 const refundDetailSource = readFileSync(new URL('./ReturnRefundDetailPage.jsx', import.meta.url), 'utf8');
 
 describe('Staff COD and refund UI contract', () => {
-  it('does not let Staff manually mark COD as collected', () => {
-    assert.doesNotMatch(staffOrderSource, /markCodCollected|Đã thu COD/);
+  it('lets Staff record manual COD evidence without choosing a normal payment amount', () => {
+    assert.match(staffOrderSource, /markCodCollected/);
+    assert.match(staffOrderSource, /Ghi nhận.*COD|thu đủ COD/i);
+    assert.match(staffOrderSource, /CODExpectedAmount|codExpectedAmount/);
     assert.doesNotMatch(staffOrderSource, /goodsRecoveryEvidenceId/);
     assert.match(staffOrderSource, /codDiscrepancyStatus/);
     assert.match(staffOrderSource, /codRecoveryReceiptId/);

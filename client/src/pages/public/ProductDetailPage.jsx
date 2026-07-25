@@ -93,6 +93,10 @@ export default function ProductDetailPage() {
               <button className="btn btn-success me-2" type="button" onClick={addToCart} disabled={isOutOfStock}>
                 {isOutOfStock ? 'Tạm hết hàng' : 'Thêm vào giỏ hàng'}
               </button>
+            ) : user ? (
+              <span className="btn btn-secondary me-2 disabled" role="button" aria-disabled="true">
+                Chỉ khách hàng mới mua được
+              </span>
             ) : (
               <Link
                 className="btn btn-success me-2"

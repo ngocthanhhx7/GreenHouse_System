@@ -78,7 +78,11 @@ function createOrderRepository() {
       return request;
     },
     async findCompletedStockExportRequest(orderId) {
-      return exports.find((entry) => entry.orderId === orderId && (entry.status === 'Exported' || entry.exportedAt)) || null;
+      return exports.find((entry) => entry.orderId === orderId && (
+        entry.status === 'Completed'
+        || entry.status === 'Exported'
+        || entry.exportedAt
+      )) || null;
     },
     async createStockExportRequest(data, session) {
       const request = { _id: `export-${exports.length + 1}`, status: 'Pending', exportedAt: null, ...data };
@@ -130,6 +134,24 @@ describe('staff order service', () => {
     const result = await service.listOrders({ status: 'Pending' });
     assert.equal(result.items.length, 2);
     assert.deepEqual(result.items.map((item) => item.orderCode).sort(), ['ORD-1', 'ORD-2']);
+  });
+
+  it('returns the completed stock export so Staff can continue to packing', async () => {
+    orderRepository.orders[0].orderStatus = 'Confirmed';
+    orderRepository.exports.push({
+      _id: 'export-completed',
+      orderId: 'order-1',
+      cycleId: 'cycle-1',
+      requestKind: 'Initial',
+      status: 'Completed',
+      exportedAt: new Date('2026-07-01T08:00:00Z'),
+    });
+
+    const result = await service.getOrder('order-1');
+
+    assert.equal(result.orderStatus, 'Confirmed');
+    assert.equal(result.stockExportRequest.status, 'Completed');
+    assert.equal(result.stockExportRequest.id, 'export-completed');
   });
 
   it('atomically confirms a pending order and creates its initial cycle and single stock export request', async () => {

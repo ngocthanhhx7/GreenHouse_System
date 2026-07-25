@@ -13,6 +13,22 @@ async function recordCollection(req, res, next) {
   }
 }
 
+async function recordStaffCollection(req, res, next) {
+  try {
+    const body = {
+      ...(req.body || {}),
+      eventId: req.body?.eventId || req.get('Idempotency-Key'),
+    };
+    return sendSuccess(
+      res,
+      await codReconciliationService.recordStaffCollectionEvidence(req.user.id, req.params.id, body),
+      'Staff COD collection evidence recorded',
+    );
+  } catch (error) {
+    return next(error);
+  }
+}
+
 async function recordSettlement(req, res, next) {
   try {
     return sendSuccess(
@@ -68,6 +84,7 @@ async function getRecoveryCandidate(req, res, next) {
 
 module.exports = {
   recordCollection,
+  recordStaffCollection,
   recordSettlement,
   recordGoodsRecovery,
   finalizeRecovery,

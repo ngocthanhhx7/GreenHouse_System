@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 
 import useAuth from '../../hooks/useAuth.js';
-import { safeReturnPath } from '../../utils/authNavigation.js';
+import { safeReturnPath, safeRoleReturnPath } from '../../utils/authNavigation.js';
 
 export default function LoginPage() {
   const location = useLocation();
@@ -15,7 +15,7 @@ export default function LoginPage() {
   useEffect(() => {
     if (!isAuthenticated || !user?.role) return;
     const dashboardPath = getDashboardPath(user.role);
-    navigate(safeReturnPath(location.state?.from, dashboardPath), { replace: true });
+    navigate(safeRoleReturnPath(location.state?.from, user.role, dashboardPath), { replace: true });
   }, [getDashboardPath, isAuthenticated, location.state?.from, navigate, user]);
 
   async function handleSubmit(event) {

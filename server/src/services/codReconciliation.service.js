@@ -134,9 +134,17 @@ function createModelRepository() {
 function normalizeEventId(value) {
   const eventId = String(value || '').trim();
   if (!eventId || eventId.length > MAX_EVENT_ID_LENGTH || !/^[A-Za-z0-9._:-]+$/.test(eventId)) {
-    throw new ApiError(400, 'A valid Carrier eventId is required');
+    throw new ApiError(400, 'A valid COD evidence eventId is required');
   }
   return eventId;
+}
+
+function normalizeCollectionSource(value) {
+  const source = String(value || 'CARRIER').trim();
+  if (!['CARRIER', 'STAFF_EVIDENCE'].includes(source)) {
+    throw new ApiError(400, 'Collection evidence source is invalid');
+  }
+  return source;
 }
 
 function normalizeAmount(value, fieldName) {
@@ -165,7 +173,7 @@ function expectedAmount(order) {
 
 function assertCodOrder(order) {
   if (!order) throw new ApiError(404, 'Order not found');
-  if (order.paymentMethod !== 'COD') throw new ApiError(400, 'Only COD orders support Carrier COD evidence');
+  if (order.paymentMethod !== 'COD') throw new ApiError(400, 'Only COD orders support COD collection evidence');
 }
 
 function hasOwn(input, key) {
@@ -235,12 +243,14 @@ function createCodReconciliationService({
     if (!existing) return null;
     const existingAmount = eventType === 'COLLECTION' ? Number(existing.customerCollectedAmount) : Number(existing.carrierSettlementAmount);
     if (String(existing.orderId) !== String(orderId) || existing.eventType !== eventType || existingAmount !== amount) {
-      throw new ApiError(409, 'Carrier eventId was already used for different COD evidence');
+      throw new ApiError(409, 'COD evidence eventId was already used for different evidence');
     }
     return { event: existing, idempotentReplay: true };
   }
 
-  async function recordCollectionEvidence(orderId, input = {}) {
+  async function recordCollectionEvidence(orderId, input = {}, options = {}) {
+    const source = normalizeCollectionSource(options.source);
+    const actorId = options.actorId || null;
     const eventId = normalizeEventId(input.eventId);
     if (hasOwn(input, 'carrierSettlementAmount')) throw new ApiError(400, 'Collection evidence cannot contain Carrier settlement amount');
     const amount = normalizeAmount(input.customerCollectedAmount, 'customerCollectedAmount');
@@ -261,7 +271,7 @@ function createCodReconciliationService({
 
       const order = await loadOrder(orderId, session);
       const expected = expectedAmount(order);
-      if (order.orderStatus !== 'Delivered') throw new ApiError(409, 'Carrier collection evidence requires a Delivered order');
+      if (order.orderStatus !== 'Delivered') throw new ApiError(409, 'COD collection evidence requires a Delivered order');
       if (amount > expected) throw new ApiError(400, 'Customer collection cannot exceed fixed COD expected amount');
       const priorCollection = await repository.findCollectionEvidenceByOrder(order._id, session);
       if (priorCollection) throw new ApiError(409, 'Only one COD collection evidence is allowed; split COD is not supported');
@@ -271,7 +281,7 @@ function createCodReconciliationService({
         orderId: order._id,
         eventId,
         eventType: 'COLLECTION',
-        source: 'CARRIER',
+        source,
         customerCollectedAmount: amount,
         collectionTiming,
         occurredAt,
@@ -311,7 +321,7 @@ function createCodReconciliationService({
       } else if (!fullCollection && heldRequest) {
         await repository.updateRequest(heldRequest._id, {
           status: 'CODRecoveryInProgress',
-          holdReason: 'Carrier evidence confirms Customer under-collection; waiting for complete Warehouse goods recovery.',
+          holdReason: 'Customer under-collection evidence confirmed; waiting for complete Warehouse goods recovery.',
           handledAt: new Date(clock()),
         }, session);
       }
@@ -331,8 +341,21 @@ function createCodReconciliationService({
       if (!result) throw error;
     }
 
-    if (!result.idempotentReplay) await writeAudit(null, 'CARRIER_COD_COLLECTION_RECORDED', result.order, `Recorded Carrier Customer-collection evidence ${eventId}`);
+    if (!result.idempotentReplay) {
+      const auditAction = source === 'STAFF_EVIDENCE'
+        ? 'STAFF_COD_COLLECTION_RECORDED'
+        : 'CARRIER_COD_COLLECTION_RECORDED';
+      const sourceLabel = source === 'STAFF_EVIDENCE' ? 'Staff manual' : 'Carrier';
+      await writeAudit(actorId, auditAction, result.order, `Recorded ${sourceLabel} Customer-collection evidence ${eventId}`);
+    }
     return result;
+  }
+
+  async function recordStaffCollectionEvidence(staffId, orderId, input = {}) {
+    return recordCollectionEvidence(orderId, input, {
+      source: 'STAFF_EVIDENCE',
+      actorId: staffId,
+    });
   }
 
   async function recordSettlementEvidence(orderId, input = {}) {
@@ -626,6 +649,7 @@ function createCodReconciliationService({
 
   return {
     recordCollectionEvidence,
+    recordStaffCollectionEvidence,
     recordSettlementEvidence,
     recordGoodsRecovery,
     finalizeRecovery,

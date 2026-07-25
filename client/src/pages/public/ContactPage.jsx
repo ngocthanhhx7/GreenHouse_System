@@ -45,6 +45,7 @@ const contactItems = [
 const EMPTY_FORM = {
   name: '',
   email: '',
+  phone: '',
   subject: '',
   message: '',
 };
@@ -148,6 +149,18 @@ export default function ContactPage() {
               />
             </label>
           </div>
+          <label htmlFor="contactPhone">
+            Số điện thoại <span className="contact-optional">(không bắt buộc)</span>
+            <input
+              id="contactPhone"
+              name="phone"
+              type="tel"
+              value={form.phone}
+              onChange={handleChange}
+              maxLength="20"
+              placeholder="0856 464 980"
+            />
+          </label>
           <label htmlFor="contactSubject">
             Chủ đề
             <input

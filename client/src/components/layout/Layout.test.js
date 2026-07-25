@@ -42,6 +42,18 @@ describe('role layout separation contract', () => {
     assert.doesNotMatch(internalTopbar, /<span aria-hidden="true">⌄<\/span>/);
   });
 
+  it('clears dashboard authentication before opening the login page', () => {
+    const logoutIndex = internalTopbar.indexOf('await logout();');
+    const loginNavigationIndex = internalTopbar.indexOf("navigate('/login', { replace: true });");
+
+    assert.ok(logoutIndex >= 0);
+    assert.ok(loginNavigationIndex >= 0);
+    assert.ok(
+      logoutIndex < loginNavigationIndex,
+      'dashboard logout must clear AuthContext before LoginPage can redirect the previous user',
+    );
+  });
+
   it('selects navigation only from the signed-in role group', () => {
     assert.match(sidebar, /const links = ROLE_LINKS\[user\?\.role\] \|\| ROLE_LINKS\.Customer/);
     assert.match(sidebar, /links\.map/);
