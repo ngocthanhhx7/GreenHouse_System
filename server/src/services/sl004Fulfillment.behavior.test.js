@@ -1033,7 +1033,7 @@ describe('SL-004 packing, shipment and delivery behavior', () => {
       source: 'STAFF_EVIDENCE',
       occurredAt: '2026-07-24T10:00:00.000Z',
       evidenceReference: 'carrier-attempt-proof',
-      reason: 'Receiver unavailable',
+      reason: 'CUSTOMER_UNREACHABLE',
     };
     await service.recordShipmentEvent({ actorType: 'Staff', actorId: 'staff-1' }, shipment._id, input);
     const replay = await service.recordShipmentEvent({ actorType: 'Staff', actorId: 'staff-1' }, shipment._id, input);
@@ -1174,6 +1174,7 @@ describe('SL-004 packing, shipment and delivery behavior', () => {
         source: 'STAFF_EVIDENCE',
         occurredAt: '2026-07-25T10:00:00.000Z',
         evidenceReference: 'carrier-return-proof',
+        reason: 'OTHER_DELIVERY_FAILURE',
       },
     );
     assert.equal(state.order.orderStatus, 'Shipped');
@@ -1250,6 +1251,7 @@ describe('SL-004 packing, shipment and delivery behavior', () => {
         source: 'STAFF_EVIDENCE',
         occurredAt: '2026-07-25T10:00:00.000Z',
         evidenceReference: 'returned-queue-proof',
+        reason: 'OTHER_DELIVERY_FAILURE',
       },
     );
 
@@ -1646,6 +1648,7 @@ describe('SL-004 packing, shipment and delivery behavior', () => {
             source: 'STAFF_EVIDENCE',
             occurredAt: '2026-07-24T11:00:00.000Z',
             evidenceReference: 'invalid-post-delivery-terminal',
+            ...(eventType === 'RETURNED_TO_SHOP' ? { reason: 'OTHER_DELIVERY_FAILURE' } : {}),
             irrecoverable: true,
           },
         ),
@@ -1728,6 +1731,7 @@ describe('SL-004 packing, shipment and delivery behavior', () => {
         source: 'STAFF_EVIDENCE',
         occurredAt: '2026-07-25T10:00:00.000Z',
         evidenceReference: 'receipt-audit-returned-proof',
+        reason: 'OTHER_DELIVERY_FAILURE',
       },
     );
     const receiptInventory = structuredClone(receipt.state.inventories);
@@ -1764,6 +1768,7 @@ describe('SL-004 packing, shipment and delivery behavior', () => {
           source: 'STAFF_EVIDENCE',
           occurredAt: '2026-07-25T10:00:00.000Z',
           evidenceReference: 'event-audit-proof',
+          reason: 'CUSTOMER_UNREACHABLE',
         },
       ),
       /injected audit write failure/,
@@ -1875,6 +1880,7 @@ describe('SL-004 packing, shipment and delivery behavior', () => {
         source: 'STAFF_EVIDENCE',
         occurredAt: '2026-07-25T10:00:00.000Z',
         evidenceReference: 'event-duplicate-proof',
+        reason: 'CUSTOMER_UNREACHABLE',
       },
     );
     assert.equal(event.idempotentReplay, true);
@@ -1892,6 +1898,7 @@ describe('SL-004 packing, shipment and delivery behavior', () => {
         source: 'STAFF_EVIDENCE',
         occurredAt: '2026-07-25T10:00:00.000Z',
         evidenceReference: 'receipt-race-returned-proof',
+        reason: 'OTHER_DELIVERY_FAILURE',
       },
     );
     receipt.raceControl.receipt = true;

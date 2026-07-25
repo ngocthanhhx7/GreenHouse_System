@@ -489,7 +489,6 @@ function createFulfillmentCommandService({
     const reason = optionalText(input.reason);
     if (
       actor.actorType === 'Staff'
-      && evidenceReferences.length > 0
       && STAFF_EVENTS_REQUIRING_FAILURE_REASON.has(eventType)
       && !STAFF_DELIVERY_FAILURE_REASONS.has(reason)
     ) {

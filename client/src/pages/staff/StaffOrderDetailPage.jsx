@@ -34,6 +34,7 @@ function blankHandoff() {
     trackingReference: '',
     handedOffAt: toLocalDateTimeValue(),
     evidenceReference: '',
+    note: '',
   };
 }
 
@@ -429,6 +430,15 @@ export default function StaffOrderDetailPage() {
                     {fieldErrors[field] && <span className="invalid-feedback">{fieldErrors[field]}</span>}
                   </label>
                 ))}
+                <label className="col-12">
+                  <span className="form-label">Ghi chú bàn giao (không bắt buộc)</span>
+                  <textarea
+                    className="form-control"
+                    maxLength={1000}
+                    value={handoff.note}
+                    onChange={(event) => setHandoff({ ...handoff, note: event.target.value })}
+                  />
+                </label>
               </div>
               <button className="btn btn-success mt-3" type="button" disabled={submitting} onClick={submitHandoff}>
                 Xác nhận bàn giao và bắt đầu giao hàng
@@ -440,6 +450,7 @@ export default function StaffOrderDetailPage() {
             <section className="border rounded p-3 mt-4">
               <h2 className="h5">Lịch sử giao hàng</h2>
               <p><strong>{shipment.carrierName}</strong> · {shipment.trackingReference}</p>
+              {shipment.note && <p className="text-secondary">Ghi chú bàn giao: {shipment.note}</p>}
               <ul>{shipmentHistory.map((entry) => (
                 <li className="mb-2" key={entry.id}>
                   <span>{entry.eventType} · {entry.occurredAt}{entry.reason ? ` · ${entry.reason}` : ''}</span>
