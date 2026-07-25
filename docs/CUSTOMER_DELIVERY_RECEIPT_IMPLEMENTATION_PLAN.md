@@ -20,6 +20,9 @@
   commands were absent, then GREEN at 6/6 after the index-only migration.
 - The duplicate command-identity P1 was observed RED at 6/7, then GREEN at 7/7
   after fail-closed preflight was added.
+- The bounded/read-only migration quality expansion was observed RED at 5/9,
+  then GREEN at 9/9. A disposable MongoDB 8.2 database retained the exact empty
+  collection list `[] -> []` across dry-run.
 - Task 5 client count remains pending the isolated client task's final evidence;
   this document deliberately does not estimate it.
 - The current combined server receipt-targeted command passed 270/270; it is not

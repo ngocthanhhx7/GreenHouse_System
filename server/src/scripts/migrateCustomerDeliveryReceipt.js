@@ -65,19 +65,12 @@ function hasExactDefinition(index, spec) {
     && JSON.stringify(comparableOptions(index)) === JSON.stringify(comparableOptions(spec));
 }
 
-function duplicateIdentity(rows, keyFor) {
-  const seen = new Set();
-  for (const row of rows) {
-    const identity = keyFor(row);
-    if (!identity) continue;
-    if (seen.has(identity)) return true;
-    seen.add(identity);
-  }
-  return false;
-}
-
-async function readAll(collection) {
-  return collection.find({}).toArray();
+async function countConflictGroups(collection, pipeline) {
+  const rows = await collection.aggregate(
+    [...pipeline, { $count: 'conflictGroups' }],
+    { allowDiskUse: false },
+  ).toArray();
+  return Number(rows[0]?.conflictGroups || 0);
 }
 
 async function readIndexes(collection) {
@@ -116,61 +109,94 @@ function createMigrationRepository({ collections = defaultCollections() } = {}) 
 
   return {
     async preflight() {
-      const [receipts, shipments, duplicateCommandGroups] = await Promise.all([
-        readAll(collections.receipts),
-        readAll(collections.shipments),
-        collections.receipts.aggregate([
+      const [
+        duplicateCommandGroups,
+        duplicateTerminalGroups,
+        duplicateInitialGroups,
+        unsafeGuardDocuments,
+        shipmentsMissingGuard,
+      ] = await Promise.all([
+        countConflictGroups(collections.receipts, [
           {
             $group: {
               _id: {
                 customerId: '$customerId',
                 idempotencyKey: '$idempotencyKey',
               },
-              ids: { $push: '$_id' },
               count: { $sum: 1 },
             },
           },
           { $match: { count: { $gt: 1 } } },
-        ]).toArray(),
+        ]),
+        countConflictGroups(collections.receipts, [
+          { $match: { outcome: 'RECEIVED' } },
+          {
+            $group: {
+              _id: '$orderId',
+              count: { $sum: 1 },
+            },
+          },
+          { $match: { count: { $gt: 1 } } },
+        ]),
+        countConflictGroups(collections.receipts, [
+          { $match: { supersedesId: null } },
+          {
+            $group: {
+              _id: '$orderId',
+              count: { $sum: 1 },
+            },
+          },
+          { $match: { count: { $gt: 1 } } },
+        ]),
+        countConflictGroups(collections.shipments, [
+          { $match: { customerReceiptGuardVersion: { $exists: true } } },
+          {
+            $match: {
+              $expr: {
+                $or: [
+                  { $not: [{ $isNumber: '$customerReceiptGuardVersion' }] },
+                  { $lt: ['$customerReceiptGuardVersion', 0] },
+                ],
+              },
+            },
+          },
+          {
+            $group: {
+              _id: '$_id',
+              count: { $sum: 1 },
+            },
+          },
+        ]),
+        collections.shipments.countDocuments({
+          customerReceiptGuardVersion: { $exists: false },
+        }),
       ]);
 
-      if (duplicateCommandGroups.length) {
-        const receiptIds = duplicateCommandGroups
-          .flatMap((group) => group.ids || [])
-          .map(String)
-          .sort();
+      if (duplicateCommandGroups) {
         throw migrationError('CUSTOMER_DELIVERY_RECEIPT_COMMAND_AMBIGUOUS', {
-          conflictGroups: duplicateCommandGroups.length,
-          duplicateReceiptCount: receiptIds.length,
-          receiptIds,
+          conflictGroups: duplicateCommandGroups,
         });
       }
-      if (duplicateIdentity(
-        receipts.filter((receipt) => receipt?.outcome === 'RECEIVED'),
-        (receipt) => String(receipt.orderId || ''),
-      )) {
-        throw migrationError('CUSTOMER_DELIVERY_RECEIPT_TERMINAL_AMBIGUOUS');
+      if (duplicateTerminalGroups) {
+        throw migrationError('CUSTOMER_DELIVERY_RECEIPT_TERMINAL_AMBIGUOUS', {
+          conflictGroups: duplicateTerminalGroups,
+        });
       }
-      if (duplicateIdentity(
-        receipts.filter((receipt) => receipt?.supersedesId === null || receipt?.supersedesId === undefined),
-        (receipt) => String(receipt.orderId || ''),
-      )) {
-        throw migrationError('CUSTOMER_DELIVERY_RECEIPT_INITIAL_AMBIGUOUS');
+      if (duplicateInitialGroups) {
+        throw migrationError('CUSTOMER_DELIVERY_RECEIPT_INITIAL_AMBIGUOUS', {
+          conflictGroups: duplicateInitialGroups,
+        });
       }
-
-      const unsafeGuard = shipments.some((shipment) => {
-        if (!Object.hasOwn(shipment, 'customerReceiptGuardVersion')) return false;
-        const value = shipment.customerReceiptGuardVersion;
-        return !Number.isFinite(value) || value < 0;
-      });
-      if (unsafeGuard) throw migrationError('CUSTOMER_DELIVERY_RECEIPT_GUARD_AMBIGUOUS');
+      if (unsafeGuardDocuments) {
+        throw migrationError('CUSTOMER_DELIVERY_RECEIPT_GUARD_AMBIGUOUS', {
+          conflictGroups: unsafeGuardDocuments,
+        });
+      }
 
       const indexPlan = await inspectIndexes();
       return {
         missingIndexes: indexPlan.missing,
-        shipmentsMissingGuard: shipments.filter(
-          (shipment) => !Object.hasOwn(shipment, 'customerReceiptGuardVersion'),
-        ).length,
+        shipmentsMissingGuard,
       };
     },
 
@@ -278,6 +304,7 @@ async function runCli({
   const options = parseCliArgs(argv);
   loadEnv();
   mongooseClient.set('autoIndex', false);
+  mongooseClient.set('autoCreate', false);
   await connect(process.env.MONGODB_URI, { mongooseClient, requireTransactions: false });
   try {
     const result = await migrate(options);

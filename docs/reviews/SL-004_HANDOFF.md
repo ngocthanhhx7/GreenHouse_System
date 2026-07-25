@@ -105,6 +105,8 @@ The Customer-facing completion boundary is now separate from physical delivery:
 Local evidence known at this handoff: model/schema 11 passing assertions,
 service variants 46 and 32, API/projection 90, after-sales 161, and migration
 RED 0/6 to GREEN 6/6, followed by command-identity P1 RED 6/7 to GREEN 7/7.
+The bounded/read-only quality expansion was RED 5/9 then GREEN 9/9; a
+disposable MongoDB 8.2 dry-run preserved the collection list `[] -> []`.
 The isolated client task's final count and the combined
 full-suite/build results are pending final integration and must be recorded
 there, not guessed here.

@@ -56,6 +56,10 @@ Indexes:
 - partial `{ outcome, createdAt }` for operational non-receipt review.
 
 No migration may backfill `RECEIVED`. Index creation must have preflight, dry-run, apply, verify, and a zero-write second run.
+Dry-run disables both Mongoose automatic index and collection creation before
+connecting; it must leave an empty target database's collection list unchanged.
+Conflict preflight uses bounded server-side counts and never loads receipt
+reasons or an unbounded list of document IDs.
 
 ## 4. Commands and projections
 
