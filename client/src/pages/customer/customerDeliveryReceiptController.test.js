@@ -300,6 +300,105 @@ describe('customer delivery receipt controller', () => {
       returns: { items: [] },
     });
   });
+
+  it('keeps a newer failure fail-closed when an older success resolves last', async () => {
+    const olderExchange = deferred();
+    let caseState = 'loading';
+    const controller = createDeliveryReceiptController({
+      createKey: () => 'key',
+      submitCommand: async () => ({}),
+      reloadCanonical: async () => ({}),
+    });
+    const epoch = controller.setOrderId('order-a');
+    const olderToken = controller.beginAncillaryRefresh('order-a', epoch);
+    const olderRefresh = loadOrderAncillary({
+      orderId: 'order-a',
+      isCurrent: () => controller.isCurrentAncillaryRefresh(olderToken),
+      getFulfillment: async () => ({ cycles: [] }),
+      listExchanges: () => olderExchange.promise,
+      listReturns: async () => ({ items: [] }),
+      onAfterSalesCases: () => { caseState = 'ready-from-older'; },
+      onAfterSalesUnavailable: () => { caseState = 'unavailable-from-older'; },
+    });
+
+    const newerToken = controller.beginAncillaryRefresh('order-a', epoch);
+    const newerRefresh = loadOrderAncillary({
+      orderId: 'order-a',
+      isCurrent: () => controller.isCurrentAncillaryRefresh(newerToken),
+      getFulfillment: async () => ({ cycles: [] }),
+      listExchanges: async () => { throw new Error('newer failure'); },
+      listReturns: async () => ({ items: [] }),
+      onAfterSalesCases: () => { caseState = 'ready-from-newer'; },
+      onAfterSalesUnavailable: () => { caseState = 'unavailable-from-newer'; },
+    });
+
+    await newerRefresh;
+    assert.equal(caseState, 'unavailable-from-newer');
+    olderExchange.resolve({ items: [] });
+    await olderRefresh;
+    assert.equal(caseState, 'unavailable-from-newer');
+  });
+
+  it('keeps a newer success when an older failure resolves last', async () => {
+    const olderExchange = deferred();
+    let caseState = 'loading';
+    const controller = createDeliveryReceiptController({
+      createKey: () => 'key',
+      submitCommand: async () => ({}),
+      reloadCanonical: async () => ({}),
+    });
+    const epoch = controller.setOrderId('order-a');
+    const olderToken = controller.beginAncillaryRefresh('order-a', epoch);
+    const olderRefresh = loadOrderAncillary({
+      orderId: 'order-a',
+      isCurrent: () => controller.isCurrentAncillaryRefresh(olderToken),
+      getFulfillment: async () => ({ cycles: [] }),
+      listExchanges: () => olderExchange.promise,
+      listReturns: async () => ({ items: [] }),
+      onAfterSalesCases: () => { caseState = 'ready-from-older'; },
+      onAfterSalesUnavailable: () => { caseState = 'unavailable-from-older'; },
+    });
+
+    const newerToken = controller.beginAncillaryRefresh('order-a', epoch);
+    const newerRefresh = loadOrderAncillary({
+      orderId: 'order-a',
+      isCurrent: () => controller.isCurrentAncillaryRefresh(newerToken),
+      getFulfillment: async () => ({ cycles: [] }),
+      listExchanges: async () => ({ items: [] }),
+      listReturns: async () => ({ items: [] }),
+      onAfterSalesCases: () => { caseState = 'ready-from-newer'; },
+      onAfterSalesUnavailable: () => { caseState = 'unavailable-from-newer'; },
+    });
+
+    await newerRefresh;
+    assert.equal(caseState, 'ready-from-newer');
+    olderExchange.reject(new Error('older failure'));
+    await olderRefresh;
+    assert.equal(caseState, 'ready-from-newer');
+  });
+
+  it('invalidates ancillary refresh tokens across route and mount lifecycles', () => {
+    const controller = createDeliveryReceiptController({
+      createKey: () => 'key',
+      submitCommand: async () => ({}),
+      reloadCanonical: async () => ({}),
+    });
+    const firstEpoch = controller.setOrderId('order-a');
+    const routeToken = controller.beginAncillaryRefresh('order-a', firstEpoch);
+    controller.setOrderId('order-b');
+    assert.equal(controller.isCurrentAncillaryRefresh(routeToken), false);
+    assert.equal(controller.beginAncillaryRefresh('order-a', firstEpoch), null);
+
+    const secondEpoch = controller.getEpoch();
+    const unmountToken = controller.beginAncillaryRefresh('order-b', secondEpoch);
+    controller.unmount();
+    assert.equal(controller.isCurrentAncillaryRefresh(unmountToken), false);
+
+    controller.mount();
+    const remountEpoch = controller.setOrderId('order-b');
+    const remountToken = controller.beginAncillaryRefresh('order-b', remountEpoch);
+    assert.equal(controller.isCurrentAncillaryRefresh(remountToken), true);
+  });
 });
 
 describe('delivery receipt dialog keyboard contract', () => {

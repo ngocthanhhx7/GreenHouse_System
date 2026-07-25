@@ -70,5 +70,7 @@ describe('customer delivery receipt UI contract', () => {
     assert.match(source, /afterSalesCasesStatus === 'ready'/);
     assert.match(source, /Không thể xác minh trạng thái yêu cầu đổi\/trả/);
     assert.match(source, /onAfterSalesUnavailable/);
+    assert.match(source, /beginAncillaryRefresh\(orderId, epoch\)/);
+    assert.match(source, /isCurrentAncillaryRefresh\(refreshToken\)/);
   });
 });

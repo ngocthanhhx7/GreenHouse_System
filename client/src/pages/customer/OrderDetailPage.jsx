@@ -94,10 +94,14 @@ export default function OrderDetailPage() {
   }
 
   function refreshAncillary(orderId, epoch) {
+    const refreshToken = deliveryReceiptController.current.beginAncillaryRefresh(orderId, epoch);
+    if (!refreshToken) return Promise.resolve({ stale: true });
     setAfterSalesCasesStatus('loading');
     return loadOrderAncillary({
       orderId,
-      isCurrent: () => deliveryReceiptController.current?.isCurrentOrder(orderId, epoch),
+      isCurrent: () => (
+        deliveryReceiptController.current?.isCurrentAncillaryRefresh(refreshToken)
+      ),
       getFulfillment: (value) => orderService.getFulfillment(value),
       listExchanges: () => exchangeService.listMyRequests(),
       listReturns: () => returnRefundService.listMyRequests(),

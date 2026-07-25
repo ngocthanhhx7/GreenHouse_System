@@ -29,6 +29,7 @@ export function createDeliveryReceiptController({
   let currentOrderId = '';
   let idempotencyKey = '';
   let activeToken = null;
+  let ancillaryRefreshSequence = 0;
 
   function isCurrent(token) {
     return mounted
@@ -50,11 +51,13 @@ export function createDeliveryReceiptController({
   return {
     mount() {
       mounted = true;
+      ancillaryRefreshSequence += 1;
       return epoch;
     },
 
     setOrderId(orderId) {
       epoch += 1;
+      ancillaryRefreshSequence += 1;
       currentOrderId = String(orderId || '');
       idempotencyKey = createKey(currentOrderId);
       activeToken = null;
@@ -77,6 +80,27 @@ export function createDeliveryReceiptController({
 
     getIdempotencyKey() {
       return idempotencyKey;
+    },
+
+    beginAncillaryRefresh(orderId, expectedEpoch = epoch) {
+      const normalizedOrderId = String(orderId || '');
+      if (!mounted || expectedEpoch !== epoch || normalizedOrderId !== currentOrderId) {
+        return null;
+      }
+      const token = {
+        sequence: ++ancillaryRefreshSequence,
+        orderId: normalizedOrderId,
+        epoch: expectedEpoch,
+      };
+      return token;
+    },
+
+    isCurrentAncillaryRefresh(token) {
+      return mounted
+        && Boolean(token)
+        && token.sequence === ancillaryRefreshSequence
+        && token.epoch === epoch
+        && token.orderId === currentOrderId;
     },
 
     async submit({
@@ -133,6 +157,7 @@ export function createDeliveryReceiptController({
     unmount() {
       mounted = false;
       epoch += 1;
+      ancillaryRefreshSequence += 1;
       activeToken = null;
     },
   };
