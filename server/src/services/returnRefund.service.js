@@ -436,9 +436,10 @@ function toResponse(
     const payoutMethod = refundPending?.payoutMethod || null;
     const operationKey = refundPending?.payoutOperationKey || '';
     const mayStart = ['NotStarted', 'Failed'].includes(payoutStatus);
-    const unresolvedPayOS = ['Processing', 'Unknown'].includes(payoutStatus)
-      && payoutMethod === 'PayOS'
+    const unresolvedOperation = ['Processing', 'Unknown'].includes(payoutStatus)
       && Boolean(operationKey);
+    const unresolvedPayOS = unresolvedOperation && payoutMethod === 'PayOS';
+    const unresolvedManual = unresolvedOperation && payoutMethod === 'Manual';
     const staffAudience = audience === 'Staff' || audience === 'StaffList';
     const requestReady = RECEIVED_STATUSES.includes(request.status);
     const canStart = staffAudience && requestReady && destinationCapability.ready && mayStart;
@@ -452,7 +453,9 @@ function toResponse(
         evidence: safeEvidence,
         canStartPayOS: canStart && payOSConfigured,
         canRecordManualSuccess: canStart,
+        canReconcileOperation: unresolvedOperation,
         canReconcilePayOS: unresolvedPayOS,
+        canReconcileManual: unresolvedManual,
         requiresManualPayOSResolution: unresolvedPayOS,
       };
       response.capabilities = {
@@ -714,11 +717,12 @@ function createModelRepository() {
     async findPayoutEvidenceByIdempotencyKey(idempotencyKey, session) {
       return withOptionalSession(RefundPayoutEvidence.findOne({ idempotencyKey }), session).lean();
     },
-    async findSuccessfulPayoutEvidence(requestId, session) {
-      return withOptionalSession(RefundPayoutEvidence.findOne({ returnRefundRequestId: requestId, status: 'Succeeded' }).sort({ createdAt: -1 }), session).lean();
-    },
-    async findLatestPayoutEvidence(requestId, session) {
-      return withOptionalSession(RefundPayoutEvidence.findOne({ returnRefundRequestId: requestId }).sort({ createdAt: -1 }), session).lean();
+    async findPayoutEvidenceForOperation(refundPendingId, payoutOperationKey, session) {
+      if (!refundPendingId || !payoutOperationKey) return null;
+      return withOptionalSession(RefundPayoutEvidence.findOne({
+        refundPendingId,
+        payoutOperationKey,
+      }).sort({ createdAt: -1 }), session).lean();
     },
     async createPayoutEvidence(data, session) {
       const [created] = await RefundPayoutEvidence.create([data], session ? { session } : undefined);
@@ -760,7 +764,7 @@ function createReturnRefundService({
   async function loadRequest(id, session) {
     const request = await repository.findRequestById(id, session);
     if (!request) throw new ApiError(404, 'Return/refund request not found');
-    const [order, details, items, destination, refundPending, payoutEvidence, payoutIncident] = await Promise.all([
+    const [order, details, items, destination, refundPending, payoutIncident] = await Promise.all([
       repository.findOrderById(request.orderId, session),
       repository.listOrderDetails(request.orderId, session),
       repository.listReturnItems(request._id, session),
@@ -768,10 +772,17 @@ function createReturnRefundService({
       repository.findRefundPendingByRequestId
         ? repository.findRefundPendingByRequestId(request._id, session)
         : null,
-      repository.findLatestPayoutEvidence ? repository.findLatestPayoutEvidence(request._id, session) : null,
       repository.findLatestPayoutIncident ? repository.findLatestPayoutIncident(request._id, session) : null,
     ]);
     if (!order) throw new ApiError(404, 'Related order not found');
+    const payoutEvidence = refundPending?.payoutOperationKey
+      && repository.findPayoutEvidenceForOperation
+      ? await repository.findPayoutEvidenceForOperation(
+        refundPending._id,
+        refundPending.payoutOperationKey,
+        session
+      )
+      : null;
     return { request, order, details, items, destination, refundPending, payoutEvidence, payoutIncident };
   }
 
@@ -867,8 +878,10 @@ function createReturnRefundService({
       status: 'Refunded',
       payoutStatus: 'Succeeded',
       payoutMethod: evidence.method === 'PAYOS' ? 'PayOS' : 'Manual',
-      payoutStartedAt: refund.payoutStartedAt || evidence.occurredAt,
-      payoutOperationKey: refund.payoutOperationKey || evidence.idempotencyKey,
+      payoutStartedAt: refund.payoutOperationKey === evidence.payoutOperationKey && refund.payoutStartedAt
+        ? refund.payoutStartedAt
+        : evidence.occurredAt,
+      payoutOperationKey: evidence.payoutOperationKey,
       payoutProviderReference: evidence.providerReference,
       destinationId: loaded.request.verifiedDestinationId,
       payoutEvidenceId: evidence._id,
@@ -1013,6 +1026,10 @@ function createReturnRefundService({
     input = {},
     { trustedPayOS = false, allowPriorUnresolved = false } = {}
   ) {
+    if (Object.prototype.hasOwnProperty.call(input, 'evidenceKind')
+      || Object.prototype.hasOwnProperty.call(input, 'reconcilesOperationKey')) {
+      throw new ApiError(400, 'Reconciliation metadata is reserved for the dedicated trusted reconciliation command');
+    }
     const loaded = await loadRequest(id);
     const { request, order, payoutIncident } = loaded;
     const idempotencyKey = normalizeIdempotencyKey(input.idempotencyKey);
@@ -1066,6 +1083,9 @@ function createReturnRefundService({
     if (['Processing', 'Unknown'].includes(refund.payoutStatus) && !allowPriorUnresolved && !authorizedCorrectivePayout) {
       throw new ApiError(409, 'The previous payout attempt must be reconciled before another attempt');
     }
+    const payoutOperationKey = trustedPayOS && input.operationKey
+      ? normalizeIdempotencyKey(input.operationKey, 'operationKey')
+      : idempotencyKey;
 
     const snapshotHash = hash([
       destination._id, destination.version, destination.bankName, destination.bankBin || '',
@@ -1081,8 +1101,9 @@ function createReturnRefundService({
           amount: expectedAmount,
           currency: order.currency || 'VND',
           idempotencyKey,
-          evidenceKind: input.evidenceKind || 'PAYOUT_EXECUTION',
-          reconcilesOperationKey: String(input.reconcilesOperationKey || '').trim(),
+          payoutOperationKey,
+          evidenceKind: 'PAYOUT_EXECUTION',
+          reconcilesOperationKey: '',
           method,
           providerReference,
           status,
@@ -1109,9 +1130,11 @@ function createReturnRefundService({
             status: ['Processing', 'Unknown'].includes(status) ? 'HandedOff' : 'RefundPending',
             payoutStatus: status,
             payoutMethod: method === 'PAYOS' ? 'PayOS' : 'Manual',
-            payoutStartedAt: refund.payoutStartedAt || occurredAt,
+            payoutStartedAt: refund.payoutOperationKey === payoutOperationKey && refund.payoutStartedAt
+              ? refund.payoutStartedAt
+              : occurredAt,
             destinationId: destination._id,
-            payoutOperationKey: input.operationKey || refund.payoutOperationKey || idempotencyKey,
+            payoutOperationKey,
             payoutProviderReference: providerReference,
           }, session);
         }
@@ -1766,9 +1789,7 @@ function createReturnRefundService({
         throw new ApiError(409, 'A payout recovery incident is already open for this request');
       }
       const cause = String(input.cause || '').trim();
-      const evidence = cause === 'CUSTOMER_CONFIRMED_DESTINATION'
-        ? await repository.findSuccessfulPayoutEvidence(request._id)
-        : payoutEvidence;
+      const evidence = payoutEvidence;
       if (!evidence || !['Succeeded', 'Unknown'].includes(evidence.status)) {
         throw new ApiError(409, 'A successful or mismatched payout evidence record is required before opening recovery');
       }
@@ -1934,7 +1955,9 @@ function createReturnRefundService({
     async completeRefund(staffId, id, input = {}) {
       const loaded = await loadRequest(id);
       const { request, order } = loaded;
-      const successfulEvidence = await repository.findSuccessfulPayoutEvidence(request._id);
+      const successfulEvidence = loaded.payoutEvidence?.status === 'Succeeded'
+        ? loaded.payoutEvidence
+        : null;
       if (request.status === 'Completed') {
         if (!successfulEvidence || !request.completionEvidenceId) throw new ApiError(409, 'Completed request is missing verified payout evidence');
         return respond(id, 'Staff', true);

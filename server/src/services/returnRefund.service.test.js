@@ -258,11 +258,11 @@ function createRepository() {
     async findPayoutEvidenceByIdempotencyKey(idempotencyKey) {
       return state.payoutEvidence.find((entry) => entry.idempotencyKey === idempotencyKey) || null;
     },
-    async findSuccessfulPayoutEvidence(requestId) {
-      return state.payoutEvidence.find((entry) => entry.returnRefundRequestId === requestId && entry.status === 'Succeeded') || null;
-    },
-    async findLatestPayoutEvidence(requestId) {
-      return state.payoutEvidence.filter((entry) => entry.returnRefundRequestId === requestId).at(-1) || null;
+    async findPayoutEvidenceForOperation(refundPendingId, payoutOperationKey) {
+      return state.payoutEvidence.filter((entry) => (
+        entry.refundPendingId === refundPendingId
+        && entry.payoutOperationKey === payoutOperationKey
+      )).at(-1) || null;
     },
     async createPayoutEvidence(data) {
       if (await this.findPayoutEvidenceByIdempotencyKey(data.idempotencyKey)) throw duplicateError();
@@ -474,7 +474,9 @@ describe('return/refund service', () => {
       evidence: null,
       canStartPayOS: false,
       canRecordManualSuccess: false,
+      canReconcileOperation: true,
       canReconcilePayOS: true,
+      canReconcileManual: false,
       requiresManualPayOSResolution: true,
     });
     assert.deepEqual(response.capabilities, { payOSConfigured: true, manualPayout: true });
@@ -483,6 +485,7 @@ describe('return/refund service', () => {
       _id: 'stale-evidence-1',
       returnRefundRequestId: requestId,
       refundPendingId: repository.refunds[0]._id,
+      payoutOperationKey: 'payos-lost-response-001',
       method: 'MANUAL',
       status: 'Failed',
       providerReference: 'SAFE-REFERENCE',
@@ -500,6 +503,21 @@ describe('return/refund service', () => {
     assert.equal(response.payout.canRecordManualSuccess, false);
     assert.equal(response.payout.canReconcilePayOS, true);
     assert.equal(response.payout.requiresManualPayOSResolution, true);
+
+    repository.payoutEvidence.push({
+      _id: 'other-operation-evidence',
+      returnRefundRequestId: requestId,
+      refundPendingId: 'another-refund-obligation',
+      payoutOperationKey: 'another-operation',
+      method: 'PAYOS',
+      status: 'Succeeded',
+      providerReference: 'OTHER-REFERENCE',
+      occurredAt: new Date('2026-07-23T10:01:00Z'),
+      createdAt: new Date('2026-07-23T10:01:00Z'),
+    });
+    response = await service.getStaffRequest(requestId);
+    assert.equal(response.payout.evidence.id, 'stale-evidence-1');
+    assert.equal(JSON.stringify(response).includes('OTHER-REFERENCE'), false);
   });
 
   it('derives payout actions from authoritative state, verified destination and server configuration', async () => {
@@ -533,6 +551,51 @@ describe('return/refund service', () => {
     assert.equal(response.payout.canStartPayOS, false);
     assert.equal(response.payout.canRecordManualSuccess, false);
     assert.equal(response.payout.canReconcilePayOS, false);
+  });
+
+  it('keeps unresolved Manual operations recoverable without enabling a second payout', async () => {
+    const requestId = await prepareReceivedRequest({ verifyDestination: true });
+    Object.assign(repository.refunds[0], {
+      payoutStatus: 'Unknown',
+      payoutMethod: 'Manual',
+      payoutOperationKey: 'manual-unknown-001',
+      payoutStartedAt: now,
+    });
+    const response = await service.getStaffRequest(requestId);
+    assert.equal(response.payout.canStartPayOS, false);
+    assert.equal(response.payout.canRecordManualSuccess, false);
+    assert.equal(response.payout.canReconcileOperation, true);
+    assert.equal(response.payout.canReconcilePayOS, false);
+    assert.equal(response.payout.canReconcileManual, true);
+    assert.equal(response.payout.requiresManualPayOSResolution, false);
+  });
+
+  it('rejects caller-controlled reconciliation metadata on generic payout evidence', async () => {
+    const requestId = await prepareReceivedRequest({ verifyDestination: true });
+    const baseInput = {
+      idempotencyKey: 'payout-boundary-001',
+      method: 'MANUAL',
+      providerReference: 'bank-boundary-001',
+      status: 'Succeeded',
+      occurredAt: now,
+      reconciliationNote: 'Verified transfer receipt',
+    };
+    await assert.rejects(
+      () => service.recordPayoutEvidence('staff-1', requestId, {
+        ...baseInput,
+        evidenceKind: 'OPERATION_RECONCILIATION',
+      }),
+      (error) => error.statusCode === 400 && /reconciliation metadata/i.test(error.message),
+    );
+    await assert.rejects(
+      () => service.recordPayoutEvidence('staff-1', requestId, {
+        ...baseInput,
+        idempotencyKey: 'payout-boundary-002',
+        reconcilesOperationKey: 'different-operation',
+      }),
+      (error) => error.statusCode === 400 && /reconciliation metadata/i.test(error.message),
+    );
+    assert.equal(repository.payoutEvidence.length, 0);
   });
 
   it('creates exactly one New request with evidence and never exposes a refund amount', async () => {
