@@ -245,7 +245,8 @@ function createInventoryService({
     let defaultThreshold = 5;
     try {
       const settings = thresholdProvider && await thresholdProvider.listSettings();
-      if (settings?.LOW_STOCK_DEFAULT_THRESHOLD !== undefined) defaultThreshold = Number(settings.LOW_STOCK_DEFAULT_THRESHOLD);
+      const settingValues = settings?.current?.values || settings;
+      if (settingValues?.LOW_STOCK_DEFAULT_THRESHOLD !== undefined) defaultThreshold = Number(settingValues.LOW_STOCK_DEFAULT_THRESHOLD);
     } catch (_) { /* keep legacy fallback when settings are unavailable */ }
     for (const product of products) {
       const existing = await repository.findInventoryByProductId(product._id);
@@ -256,8 +257,9 @@ function createInventoryService({
     if (inventory.lowStockThresholdOverride !== undefined && inventory.lowStockThresholdOverride !== null) return inventory;
     try {
       const settings = thresholdProvider && await thresholdProvider.listSettings();
-      if (settings?.LOW_STOCK_DEFAULT_THRESHOLD !== undefined) {
-        return { ...inventory, effectiveThreshold: Number(settings.LOW_STOCK_DEFAULT_THRESHOLD), lowStockThreshold: Number(settings.LOW_STOCK_DEFAULT_THRESHOLD) };
+      const settingValues = settings?.current?.values || settings;
+      if (settingValues?.LOW_STOCK_DEFAULT_THRESHOLD !== undefined) {
+        return { ...inventory, effectiveThreshold: Number(settingValues.LOW_STOCK_DEFAULT_THRESHOLD), lowStockThreshold: Number(settingValues.LOW_STOCK_DEFAULT_THRESHOLD) };
       }
     } catch (_) { /* fallback to persisted legacy threshold */ }
     return inventory;
@@ -355,7 +357,7 @@ function createInventoryService({
       if (threshold === null && thresholdProvider?.listSettings) {
         try {
           const settings = await thresholdProvider.listSettings();
-          fallbackThreshold = Number(settings?.LOW_STOCK_DEFAULT_THRESHOLD ?? 0);
+          fallbackThreshold = Number((settings?.current?.values || settings)?.LOW_STOCK_DEFAULT_THRESHOLD ?? 0);
         } catch (_) { /* leave zero only when settings are unavailable */ }
       }
       const updated = await repository.updateInventory(id, { lowStockThreshold: threshold === null ? fallbackThreshold : threshold, lowStockThresholdOverride: threshold, lastUpdatedBy: userId }, null);

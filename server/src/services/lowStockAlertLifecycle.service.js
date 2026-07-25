@@ -1,6 +1,6 @@
 const LowStockAlert = require('../models/lowStockAlert.model');
 const Product = require('../models/product.model');
-const SystemSetting = require('../models/systemSetting.model');
+const SystemSettingVersion = require('../models/systemSettingVersion.model');
 const { notificationService } = require('./notification.service');
 
 const DEFAULT_THRESHOLD = 5;
@@ -13,8 +13,8 @@ function createModelRepository() {
   return {
     async listInventories() { return require('../models/inventory.model').find({}).lean(); },
     async findDefaultThreshold() {
-      const setting = await SystemSetting.findOne({ key: 'LOW_STOCK_DEFAULT_THRESHOLD' }).lean();
-      return setting ? Number(setting.value) : DEFAULT_THRESHOLD;
+      const version = await SystemSettingVersion.findOne({}).sort({ version: -1 }).lean();
+      return version ? Number(version.values.LOW_STOCK_DEFAULT_THRESHOLD) : DEFAULT_THRESHOLD;
     },
     async findProductName(productId) {
       const product = await Product.findById(productId).select('name').lean();

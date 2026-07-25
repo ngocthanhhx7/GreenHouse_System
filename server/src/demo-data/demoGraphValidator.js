@@ -4,7 +4,7 @@ const EXPECTED_COUNTS = Object.freeze({
   paymentAttempts: 22, paymentCallbacks: 10, invoices: 10, stockExports: 15,
   inventoryTransactions: 37, replenishments: 6, damageReports: 3, returnRequests: 5,
   returnItems: 4, refundPendings: 3, supportRequests: 10, reviews: 16,
-  notifications: 40, systemSettings: 3, auditLogs: 60,
+  notifications: 40, systemSettings: 2, auditLogs: 60,
 });
 const { DEMO_IMAGE_MANIFEST } = require('./demoImageManifest');
 
@@ -310,8 +310,8 @@ function validateDemoGraph(graph) {
   if (dateValues.some((value) => !Number.isFinite(Date.parse(value)) || Date.parse(value) > Date.parse('2026-07-22T00:00:00.000Z'))) fail('Thời gian demo không hợp lệ hoặc nằm trong tương lai.');
 
   const settings = graph.systemSettings.map((item) => item.key).sort();
-  const expectedSettings = ['LOW_STOCK_DEFAULT_THRESHOLD', 'PAYMENT_TIMEOUT_MINUTES', 'RETURN_WINDOW_DAYS'];
-  if (JSON.stringify(settings) !== JSON.stringify(expectedSettings)) fail('SystemSettings phải dùng đúng ba khóa canonical.');
+  const expectedSettings = ['LOW_STOCK_DEFAULT_THRESHOLD', 'PAYMENT_TIMEOUT_MINUTES'];
+  if (JSON.stringify(settings) !== JSON.stringify(expectedSettings)) fail('SystemSettings phải dùng đúng hai khóa canonical.');
 
   const activeCarts = graph.carts.filter((cart) => cart.status === 'Active');
   if (new Set(activeCarts.map((cart) => cart.customerKey)).size !== activeCarts.length) fail('mỗi customer chỉ có một giỏ Active.');

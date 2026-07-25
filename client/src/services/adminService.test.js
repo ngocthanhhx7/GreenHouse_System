@@ -30,20 +30,29 @@ describe('client admin service', () => {
     await service.getOverviewReport({ from: '2026-07-01', to: '2026-07-31' });
   });
 
-  it('updates admin system settings', async () => {
+  it('sends a versioned complete settings command with its idempotency identity', async () => {
     const service = createAdminService({
       baseUrl: 'http://api.test/api',
       fetcher: async (url, options) => {
         assert.equal(url, 'http://api.test/api/admin/settings');
         assert.equal(options.method, 'PATCH');
-        assert.deepEqual(JSON.parse(options.body), { lowStockDefaultThreshold: 10 });
-        return { ok: true, json: async () => ({ success: true, data: { lowStockDefaultThreshold: 10 } }) };
+        assert.equal(options.headers['Idempotency-Key'], 'settings-client-001');
+        assert.deepEqual(JSON.parse(options.body), {
+          expectedVersion: 3,
+          reason: 'Cập nhật ngưỡng kho',
+          values: { PAYMENT_TIMEOUT_MINUTES: 20, LOW_STOCK_DEFAULT_THRESHOLD: 10 },
+        });
+        return { ok: true, json: async () => ({ success: true, data: { current: { version: 4 } } }) };
       },
     });
 
-    const result = await service.updateSettings({ lowStockDefaultThreshold: 10 });
+    const result = await service.updateSettings({
+      expectedVersion: 3,
+      reason: 'Cập nhật ngưỡng kho',
+      values: { PAYMENT_TIMEOUT_MINUTES: 20, LOW_STOCK_DEFAULT_THRESHOLD: 10 },
+    }, 'settings-client-001');
 
-    assert.equal(result.lowStockDefaultThreshold, 10);
+    assert.equal(result.current.version, 4);
   });
 
   it('fetches admin audit logs with query filters', async () => {

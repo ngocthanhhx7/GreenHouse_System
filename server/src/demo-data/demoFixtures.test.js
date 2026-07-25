@@ -26,7 +26,7 @@ const EXPECTED_COUNTS = {
   supportRequests: 10,
   reviews: 16,
   notifications: 40,
-  systemSettings: 3,
+  systemSettings: 2,
   auditLogs: 60,
 };
 
@@ -70,7 +70,6 @@ describe('deterministic demo fixture graph', () => {
     assert.deepEqual(DEMO_GRAPH.systemSettings.map((setting) => setting.key).sort(), [
       'LOW_STOCK_DEFAULT_THRESHOLD',
       'PAYMENT_TIMEOUT_MINUTES',
-      'RETURN_WINDOW_DAYS',
     ]);
     const timestamps = DEMO_GRAPH.orders.map((order) => Date.parse(order.createdAt));
     assert.ok(timestamps.every(Number.isFinite));

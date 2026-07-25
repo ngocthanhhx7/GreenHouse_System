@@ -60,7 +60,10 @@ describe('demo data seed config', () => {
     assert.ok(DEMO_RETURN_REFUND_SPECS.some((request) => request.orderCode === 'GH-DEMO-1004'));
     assert.ok(DEMO_SUPPORT_SPECS.some((request) => request.orderCode === 'GH-DEMO-1004'));
     assert.ok(DEMO_REVIEW_SPECS.every((review) => DEMO_PRODUCTS.some((product) => product.name === review.productName)));
-    assert.ok(DEMO_SETTING_SPECS.some((setting) => setting.key === 'lowStockDefaultThreshold'));
+    assert.deepEqual(DEMO_SETTING_SPECS.map((setting) => setting.key).sort(), [
+      'LOW_STOCK_DEFAULT_THRESHOLD',
+      'PAYMENT_TIMEOUT_MINUTES',
+    ]);
     const scriptSource = readFileSync(path.join(__dirname, 'seedDemoData.js'), 'utf8');
     assert.doesNotMatch(scriptSource, /requestSpec\.requestCode/);
     assert.match(scriptSource, /DEMO_IMAGE_MANIFEST/);

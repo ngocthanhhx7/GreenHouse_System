@@ -11,7 +11,20 @@ async function listSettings(req, res, next) {
 
 async function updateSettings(req, res, next) {
   try {
-    return sendSuccess(res, await systemSettingService.updateSettings(req.user.id, req.body), 'System settings updated');
+    return sendSuccess(res, await systemSettingService.updateSettings(
+      req.user.id,
+      req.body,
+      req.get('Idempotency-Key'),
+      { role: req.user.role },
+    ), 'System settings updated');
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function listHistory(req, res, next) {
+  try {
+    return sendSuccess(res, await systemSettingService.listHistory());
   } catch (error) {
     return next(error);
   }
@@ -20,4 +33,5 @@ async function updateSettings(req, res, next) {
 module.exports = {
   listSettings,
   updateSettings,
+  listHistory,
 };

@@ -33,9 +33,10 @@ export function createAdminService({ baseUrl = DEFAULT_BASE_URL, fetcher } = {})
     async getSettings() {
       return request('/admin/settings');
     },
-    async updateSettings(input) {
+    async updateSettings(input, idempotencyKey) {
       return request('/admin/settings', {
         method: 'PATCH',
+        headers: { 'Idempotency-Key': idempotencyKey },
         body: JSON.stringify(input),
       });
     },

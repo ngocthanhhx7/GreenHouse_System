@@ -256,14 +256,14 @@ const DEMO_REVIEW_SPECS = [
 
 const DEMO_SETTING_SPECS = [
   {
-    key: 'lowStockDefaultThreshold',
-    value: 5,
-    description: 'Default low-stock threshold for new inventory records',
+    key: 'PAYMENT_TIMEOUT_MINUTES',
+    value: 15,
+    description: 'Maximum minutes an online payment can remain pending',
   },
   {
-    key: 'returnWindowDays',
-    value: 7,
-    description: 'Allowed customer return/refund window in days',
+    key: 'LOW_STOCK_DEFAULT_THRESHOLD',
+    value: 5,
+    description: 'Default low-stock threshold for new inventory records',
   },
 ];
 

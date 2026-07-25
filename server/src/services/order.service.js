@@ -797,8 +797,8 @@ function createOrderService({
       let paymentDeadlineAt = null;
       if (paymentMethod === 'ONLINE') {
         const settings = await settingsService.listSettings();
-        const configuredTimeout = Number(settings.PAYMENT_TIMEOUT_MINUTES ?? settings.paymentTimeoutMinutes);
-        const paymentTimeoutMinutes = Number.isInteger(configuredTimeout) && configuredTimeout > 0 ? configuredTimeout : 15;
+        const configuredTimeout = Number(settings?.current?.values?.PAYMENT_TIMEOUT_MINUTES ?? settings?.PAYMENT_TIMEOUT_MINUTES);
+        const paymentTimeoutMinutes = Number.isInteger(configuredTimeout) && configuredTimeout >= 5 && configuredTimeout <= 60 ? configuredTimeout : 15;
         paymentDeadlineAt = new Date(clock().getTime() + paymentTimeoutMinutes * 60 * 1000);
       }
 

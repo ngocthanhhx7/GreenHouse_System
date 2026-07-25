@@ -351,7 +351,6 @@ const notifications = Array.from({ length: 40 }, (_, index) => {
 
 const systemSettings = [
   { key: 'PAYMENT_TIMEOUT_MINUTES', value: 15, description: 'Số phút tối đa chờ thanh toán trực tuyến.', updatedByKey: 'user-admin' },
-  { key: 'RETURN_WINDOW_DAYS', value: 7, description: 'Số ngày khách hàng được gửi yêu cầu đổi trả.', updatedByKey: 'user-admin' },
   { key: 'LOW_STOCK_DEFAULT_THRESHOLD', value: 5, description: 'Ngưỡng cảnh báo sắp hết mặc định.', updatedByKey: 'user-admin' },
 ];
 

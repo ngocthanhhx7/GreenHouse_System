@@ -17,6 +17,7 @@ const { orderService } = require('./services/order.service');
 const { paymentService } = require('./services/payment.service');
 const { fulfillmentService } = require('./services/fulfillment.service');
 const { notificationOutboxService } = require('./services/notificationOutbox.service');
+const { systemSettingService } = require('./services/systemSetting.service');
 const { createDomainOutboxWorker } = require('./workers/domainOutbox.worker');
 
 const PORT = process.env.PORT || 5000;
@@ -38,6 +39,7 @@ async function startServer() {
       orderPaymentExpiryService,
       fulfillmentService,
       notificationOutboxService,
+      systemSettingService,
     ],
   });
   emailWorker.start();
