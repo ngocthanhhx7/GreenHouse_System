@@ -4,6 +4,7 @@ const { productMediaService } = require('../services/productMedia.service');
 const { returnEvidenceAccessService } = require('../services/returnEvidence.service');
 const { uploadService, validateReturnEvidenceBatch } = require('../services/upload.service');
 const { returnEvidenceClaim } = require('../utils/returnEvidenceClaim');
+const { operationalEvidenceClaim } = require('../utils/operationalEvidenceClaim');
 const { sendSuccess } = require('../utils/apiResponse');
 
 async function uploadProductImages(req, res, next) {
@@ -53,6 +54,44 @@ async function uploadReturnEvidence(req, res, next) {
     return sendSuccess(res, { items: claimedItems }, 'After-sales evidence uploaded', 201);
   } catch (error) {
     if (items.length) await Promise.all(items.map((item) => uploadService.removeManagedFile(item.url).catch(() => {})));
+    return next(error);
+  }
+}
+
+async function uploadOperationalEvidence(req, res, next) {
+  let items = [];
+  try {
+    if (!req.files || !req.files.length) throw new ApiError(400, 'Cần tải lên ít nhất 1 ảnh dẫn chứng');
+    validateReturnEvidenceBatch(req.files);
+    items = await uploadService.storeImages(req.files, 'operational-evidence');
+    return sendSuccess(res, {
+      items: items.map((item) => ({ ...item, url: operationalEvidenceClaim.sign(item.url, item.size) })),
+    }, 'Đã tải ảnh dẫn chứng vận hành', 201);
+  } catch (error) {
+    if (items.length) await Promise.all(items.map((item) => uploadService.removeManagedFile(item.url).catch(() => {})));
+    return next(error);
+  }
+}
+
+async function getOperationalEvidence(req, res, next) {
+  try {
+    const query = new URLSearchParams(req.query || {}).toString();
+    const requested = `/api/operational-evidence/${String(req.params.filename || '')}${query ? `?${query}` : ''}`;
+    const verified = operationalEvidenceClaim.verify(requested);
+    const managed = uploadService.resolveManagedFile(verified.url, 'operational-evidence');
+    res.set({
+      'Cache-Control': 'private, no-store',
+      'Content-Type': managed.mimeType,
+      'Content-Disposition': `inline; filename="${managed.filename}"`,
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Security-Policy': "default-src 'none'; sandbox",
+    });
+    return res.sendFile(managed.path, (error) => {
+      if (!error) return;
+      if (!res.headersSent) return next(new ApiError(404, 'Không tìm thấy ảnh dẫn chứng'));
+      return next(error);
+    });
+  } catch (error) {
     return next(error);
   }
 }
@@ -128,7 +167,9 @@ module.exports = {
   uploadProductImages,
   uploadAvatar,
   uploadReturnEvidence,
+  uploadOperationalEvidence,
   getReturnEvidence,
+  getOperationalEvidence,
   getProductImage,
   deleteAvatar,
   deleteProductImage,
