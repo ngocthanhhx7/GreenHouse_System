@@ -36,6 +36,8 @@ function roleMenuLinks(role, getWorkspacePath) {
   if (role === 'Customer') {
     return [
       ...baseLinks,
+      { to: '/orders', label: 'Đơn hàng của tôi' },
+      { to: '/reviews', label: 'Đánh giá của tôi' },
       { to: '/return-refunds', label: 'Đổi trả / hoàn tiền' },
       { to: '/support', label: 'Yêu cầu hỗ trợ' },
     ];

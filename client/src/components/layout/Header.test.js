@@ -32,7 +32,8 @@ describe('shared header design contract', () => {
     assert.match(header, /to: '\/notifications'/);
     assert.match(header, /avatar-menu/);
     assert.match(header, /roleMenuLinks/);
-    assert.equal((header.match(/to: '\/orders'/g) || []).length, 0);
+    assert.equal((header.match(/\{ to: '\/orders', label: 'Đơn hàng của tôi' \}/g) || []).length, 1);
+    assert.equal((header.match(/\{ to: '\/reviews', label: 'Đánh giá của tôi' \}/g) || []).length, 1);
   });
 
   it('logs out and replaces the current location with login', () => {
