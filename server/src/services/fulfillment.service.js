@@ -19,6 +19,7 @@ const ReturnRefundRequest = require('../models/returnRefundRequest.model');
 const Shipment = require('../models/shipment.model');
 const ShipmentDestinationVersion = require('../models/shipmentDestinationVersion.model');
 const ShipmentEvent = require('../models/shipmentEvent.model');
+const CustomerDeliveryReceipt = require('../models/customerDeliveryReceipt.model');
 const StockExportRequest = require('../models/stockExportRequest.model');
 const { logAudit } = require('../utils/auditLogger');
 const {
@@ -27,6 +28,7 @@ const {
 const { createDeliveryResolutionService } = require('./deliveryResolution.service');
 const { createFulfillmentCommandService } = require('./fulfillmentCommand.service');
 const { notificationService } = require('./notification.service');
+const { projectCustomerDelivery } = require('./customerDeliveryProjection');
 
 const FULFILLMENT_NOTIFICATION_EVENT_TYPES = [
   'ORDER_SHIPPED',
@@ -66,6 +68,12 @@ function createModelRepository() {
   return {
     async findOrderById(id, session) {
       return withOptionalSession(Order.findById(id), session).lean();
+    },
+    async findLatestDeliveryReceiptByOrder(orderId, session) {
+      return withOptionalSession(
+        CustomerDeliveryReceipt.findOne({ orderId }).sort({ createdAt: -1, _id: -1 }),
+        session,
+      ).lean();
     },
     async listOrderDetails(orderId, session) {
       return withOptionalSession(OrderDetail.find({ orderId }).sort({ createdAt: 1 }), session).lean();
@@ -499,8 +507,10 @@ function createFulfillmentService(options = {}) {
     }
     const cycles = await dependencies.repository.listCyclesByOrder(orderId);
     const cycleViews = [];
+    let latestShipment = null;
     for (const cycle of cycles) {
       const shipment = await dependencies.repository.findShipmentByCycle(cycle._id);
+      if (shipment) latestShipment = shipment;
       const [events, destinations] = shipment
         ? await Promise.all([
           dependencies.repository.listShipmentEvents(shipment._id),
@@ -545,6 +555,9 @@ function createFulfillmentService(options = {}) {
       });
     }
     const incidents = await dependencies.repository.listIncidentsByOrder(orderId);
+    const latestReceipt = dependencies.repository.findLatestDeliveryReceiptByOrder
+      ? await dependencies.repository.findLatestDeliveryReceiptByOrder(orderId)
+      : null;
     const details = await dependencies.repository.listOrderDetails(orderId);
     let exactResendStockAvailable = details.length > 0;
     for (const detail of details) {
@@ -569,6 +582,7 @@ function createFulfillmentService(options = {}) {
         deliveredAt: order.deliveredAt,
         returnDeadlineAt: order.returnDeadlineAt,
         exchangeDeadlineAt: order.exchangeDeadlineAt,
+        ...projectCustomerDelivery(order, latestShipment, latestReceipt),
       },
       cycles: cycleViews,
       incidents: incidents.map((incident) => ({
