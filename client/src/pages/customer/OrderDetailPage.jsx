@@ -315,36 +315,36 @@ export default function OrderDetailPage() {
       {order && (
         <>
           <section className="border rounded p-3 mb-4" aria-labelledby="fulfillment-heading">
-            <h2 className="h5" id="fulfillment-heading">Fulfillment &amp; shipment</h2>
+            <h2 className="h5" id="fulfillment-heading">Xử lý &amp; Giao hàng</h2>
             <p className="text-secondary">Không có bản đồ hoặc theo dõi trực tiếp; đây là lịch sử bằng chứng Carrier đã ghi nhận.</p>
             {(fulfillment.cycles || []).map((cycle) => (
               <article className="border-top py-3" key={cycle.id}>
-                <h3 className="h6">Cycle {cycle.cycleNumber} · {cycle.cycleType} · {cycle.status}</h3>
+                <h3 className="h6">Lượt giao {cycle.cycleNumber} · {cycle.cycleType} · {cycle.status}</h3>
                 {cycle.shipment && (
                   <p>
-                    <strong>{cycle.shipment.carrierName}</strong> · trackingReference {cycle.shipment.trackingReference}
+                    <strong>{cycle.shipment.carrierName}</strong> · Mã vận đơn {cycle.shipment.trackingReference}
                   </p>
                 )}
-                <h4 className="h6">Shipment history</h4>
+                <h4 className="h6">Lịch sử giao hàng</h4>
                 <ul>{(cycle.events || []).map((shipmentEvent) => (
                   <li key={shipmentEvent.id}>{shipmentEvent.eventType} · {shipmentEvent.occurredAt}</li>
                 ))}</ul>
-                <h4 className="h6">Destination history · destinationVersion</h4>
+                <h4 className="h6">Lịch sử địa chỉ giao hàng</h4>
                 <ol>{(cycle.destinations || []).map((destinationVersion) => (
                   <li key={destinationVersion.id}>
-                    ShipmentDestinationVersion {destinationVersion.version}: {destinationVersion.receiverName}, {destinationVersion.shippingAddress}
+                    Phiên bản {destinationVersion.version}: {destinationVersion.receiverName}, {destinationVersion.shippingAddress}
                   </li>
                 ))}</ol>
               </article>
             ))}
             <p>
-              Return deadline: {order.returnDeadlineAt || '—'} · Exchange deadline: {order.exchangeDeadlineAt || '—'}
+              Hạn trả hàng: {order.returnDeadlineAt || '—'} · Hạn đổi hàng: {order.exchangeDeadlineAt || '—'}
             </p>
 
             {['Confirmed', 'Packed', 'Shipped'].includes(order.orderStatus) && (
               <form className="border-top pt-3" onSubmit={submitDestinationCorrection}>
-                <h3 className="h6">Destination correction</h3>
-                <p>Staff/Carrier sẽ xác thực bản mới; lịch sử destination trước đó luôn được giữ nguyên.</p>
+                <h3 className="h6">Đính chính địa chỉ giao hàng</h3>
+                <p>Nhân viên/Đơn vị vận chuyển sẽ xác thực địa chỉ mới; lịch sử địa chỉ trước đó luôn được giữ nguyên.</p>
                 <div className="row g-2">
                   {Object.keys(destinationCorrection).map((field) => (
                     <label className="col-md-6" key={field}>{field}
@@ -353,7 +353,7 @@ export default function OrderDetailPage() {
                   ))}
                 </div>
                 <button className="btn btn-outline-success mt-3" type="submit" disabled={isSubmittingFulfillment}>
-                  {isSubmittingFulfillment ? 'Đang gửi…' : 'Gửi destination correction'}
+                  {isSubmittingFulfillment ? 'Đang gửi…' : 'Gửi đính chính địa chỉ'}
                 </button>
               </form>
             )}
