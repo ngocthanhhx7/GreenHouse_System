@@ -81,6 +81,14 @@ export default function LoginPage() {
                 disabled={submitting}
               />
             </label>
+            <p className="auth-password-help">
+              <Link
+                to="/forgot-password"
+                state={{ from: safeReturnPath(location.state?.from, '/') }}
+              >
+                Quên mật khẩu?
+              </Link>
+            </p>
           </div>
 
           <button className="auth-submit" type="submit" disabled={submitting}>
