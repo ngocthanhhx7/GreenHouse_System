@@ -5,6 +5,7 @@ import { cartService } from '../../services/cartService.js';
 import { createCartCommandRetryStore } from '../../services/cartCommandRetry.js';
 import { useCart } from '../../contexts/CartContext.jsx';
 import { formatCurrency } from '../../utils/formatters.js';
+import { translateApiError } from '../../utils/errorMessages.js';
 
 const ISSUE_LABELS = {
   PriceChanged: 'Giá đã thay đổi; vui lòng kiểm tra giá hiện tại.',
@@ -17,6 +18,8 @@ export default function CartPage() {
   const { cart, refreshCart, runCartMutation } = useCart();
   const [error, setError] = useState('');
   const [pendingItemId, setPendingItemId] = useState('');
+  const [isLoading, setIsLoading] = useState(true);
+  const [quantityDrafts, setQuantityDrafts] = useState({});
   const cartCommandRetries = useRef(createCartCommandRetryStore());
 
   async function loadCart() {
@@ -24,7 +27,9 @@ export default function CartPage() {
     try {
       await refreshCart();
     } catch (err) {
-      setError(err.message);
+      setError(translateApiError(err));
+    } finally {
+      setIsLoading(false);
     }
   }
 
@@ -32,14 +37,25 @@ export default function CartPage() {
     loadCart();
   }, []);
 
-  async function updateQuantity(item, quantity) {
+  async function commitQuantity(item, rawValue) {
+    const quantity = Number(rawValue);
+    setQuantityDrafts((current) => {
+      const next = { ...current };
+      delete next[item.id];
+      return next;
+    });
+    if (!Number.isFinite(quantity) || quantity < 1) {
+      setError('Số lượng không hợp lệ. Vui lòng nhập số nguyên dương.');
+      return;
+    }
+    if (quantity === item.quantity) return;
     setPendingItemId(item.id);
     setError('');
     try {
       await runCartMutation((currentCart) => {
         const operation = `update:${item.id}`;
         const command = cartCommandRetries.current.acquire(operation, {
-          quantity: Number(quantity),
+          quantity,
           expectedVersion: Number(currentCart.version || 0),
         });
         return cartService.updateItem(item.id, command.facts, { idempotencyKey: command.idempotencyKey })
@@ -49,7 +65,7 @@ export default function CartPage() {
           });
       });
     } catch (err) {
-      setError(err.message);
+      setError(translateApiError(err));
       if (err.errorCode === 'CART_VERSION_CONFLICT') await refreshCart().catch(() => {});
     } finally {
       setPendingItemId('');
@@ -72,7 +88,7 @@ export default function CartPage() {
           });
       });
     } catch (err) {
-      setError(err.message);
+      setError(translateApiError(err));
       if (err.errorCode === 'CART_VERSION_CONFLICT') await refreshCart().catch(() => {});
     } finally {
       setPendingItemId('');
@@ -89,7 +105,11 @@ export default function CartPage() {
         <Link className="btn btn-outline-success" to="/products">Tiếp tục mua sắm</Link>
       </div>
       {error && <div className="alert alert-danger">{error}</div>}
-      {!cart.items.length ? (
+      {isLoading ? (
+        <div className="empty-state">
+          <h2>Đang tải giỏ hàng...</h2>
+        </div>
+      ) : !cart.items.length ? (
         <div className="empty-state">
           <h2>Giỏ hàng đang trống</h2>
           <p>Hãy thêm một vài sản phẩm bếp phù hợp trước khi thanh toán.</p>
@@ -120,9 +140,10 @@ export default function CartPage() {
                         type="number"
                         min="1"
                         max={item.maxOrderableQuantity}
-                        value={item.quantity}
+                        value={quantityDrafts[item.id] ?? item.quantity}
                         disabled={pending}
-                        onChange={(event) => updateQuantity(item, event.target.value)}
+                        onChange={(event) => setQuantityDrafts((current) => ({ ...current, [item.id]: event.target.value }))}
+                        onBlur={(event) => commitQuantity(item, event.target.value)}
                       />
                       {(item.issues || []).map((issue) => (
                         <small className="field-error d-block" key={issue.code}>
@@ -141,7 +162,7 @@ export default function CartPage() {
                       )}
                       {formatCurrency(item.unitPrice)}
                     </td>
-                    <td>{formatCurrency(item.unitPrice * item.quantity || item.subtotal)}</td>
+                    <td>{formatCurrency(item.subtotal ?? (item.unitPrice * item.quantity))}</td>
                     <td>
                       <button className="btn btn-outline-danger btn-sm" type="button" disabled={pending} onClick={() => removeItem(item)}>
                         {pending ? 'Đang xử lý...' : 'Xóa'}
