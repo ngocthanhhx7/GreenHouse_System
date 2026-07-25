@@ -113,6 +113,19 @@ const orderSchema = new mongoose.Schema(
       default: null,
       immutable: true,
     },
+    paymentTimeoutMinutesSnapshot: {
+      type: Number,
+      default: null,
+      min: 5,
+      max: 60,
+      immutable: true,
+    },
+    paymentTimeoutSettingVersion: {
+      type: Number,
+      default: null,
+      min: 0,
+      immutable: true,
+    },
     orderStatus: {
       type: String,
       enum: ['Pending', 'Confirmed', 'Packed', 'Shipped', 'Delivered', 'DeliveryFailed', 'Cancelled', 'Returned'],

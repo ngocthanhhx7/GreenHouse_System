@@ -794,14 +794,6 @@ function createOrderService({
       const existingAfterAddressResolution = await loadExisting(customerId, idempotencyKey, checkoutRequestHash);
       if (existingAfterAddressResolution) return existingAfterAddressResolution;
 
-      let paymentDeadlineAt = null;
-      if (paymentMethod === 'ONLINE') {
-        const settings = await settingsService.listSettings();
-        const configuredTimeout = Number(settings?.current?.values?.PAYMENT_TIMEOUT_MINUTES ?? settings?.PAYMENT_TIMEOUT_MINUTES);
-        const paymentTimeoutMinutes = Number.isInteger(configuredTimeout) && configuredTimeout >= 5 && configuredTimeout <= 60 ? configuredTimeout : 15;
-        paymentDeadlineAt = new Date(clock().getTime() + paymentTimeoutMinutes * 60 * 1000);
-      }
-
       let result;
       try {
         result = await transactionManager.withTransaction(async (session) => {
@@ -845,6 +837,27 @@ function createOrderService({
           const lines = await buildOrderLines(cartItems, expectedItems, session);
           const totalAmount = lines.reduce((sum, line) => sum + line.subtotal, 0);
           const initialPaymentStatus = paymentMethod === 'COD' ? 'Unpaid' : 'Pending';
+          const orderCreatedAt = new Date(clock());
+          let paymentDeadlineAt = null;
+          let paymentTimeoutMinutesSnapshot = null;
+          let paymentTimeoutSettingVersion = null;
+          if (paymentMethod === 'ONLINE') {
+            const snapshot = settingsService.getCurrentSnapshot
+              ? await settingsService.getCurrentSnapshot(session)
+              : await settingsService.listSettings(session);
+            const configuredTimeout = Number(
+              snapshot?.values?.PAYMENT_TIMEOUT_MINUTES
+              ?? snapshot?.current?.values?.PAYMENT_TIMEOUT_MINUTES
+              ?? snapshot?.PAYMENT_TIMEOUT_MINUTES,
+            );
+            paymentTimeoutMinutesSnapshot = Number.isInteger(configuredTimeout)
+              && configuredTimeout >= 5
+              && configuredTimeout <= 60
+              ? configuredTimeout
+              : 15;
+            paymentTimeoutSettingVersion = Number(snapshot?.version ?? snapshot?.current?.version ?? 0);
+            paymentDeadlineAt = new Date(orderCreatedAt.getTime() + paymentTimeoutMinutesSnapshot * 60 * 1000);
+          }
           const order = await orderRepository.createOrder(
             {
               orderCode: generateOrderCode(),
@@ -859,6 +872,9 @@ function createOrderService({
               paymentStatus: initialPaymentStatus,
               orderStatus: 'Pending',
               paymentDeadlineAt,
+              paymentTimeoutMinutesSnapshot,
+              paymentTimeoutSettingVersion,
+              createdAt: orderCreatedAt,
               ...deliverySnapshot,
             },
             session

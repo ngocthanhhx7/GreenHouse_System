@@ -88,16 +88,25 @@ function createLowStockAlertLifecycle({
     const availableQuantity = inventory.inventoryHealth === 'ReconciliationRequired'
       ? 0
       : Math.max(0, sellableQuantity - reservedQuantity);
+    const claimedGlobalThreshold = Number(context.globalThreshold);
+    const hasClaimedGlobalThreshold = Number.isInteger(claimedGlobalThreshold) && claimedGlobalThreshold >= 0;
+    const claimedSettingVersion = Number(context.settingVersion);
+    const settingVersionPatch = Number.isInteger(claimedSettingVersion) && claimedSettingVersion >= 0
+      ? { settingVersion: claimedSettingVersion }
+      : {};
     const effectiveThreshold = inventory.lowStockThresholdOverride !== null
       && inventory.lowStockThresholdOverride !== undefined
       ? Number(inventory.lowStockThresholdOverride)
-      : Number(await repository.findDefaultThreshold?.() ?? inventory.lowStockThreshold ?? DEFAULT_THRESHOLD);
+      : hasClaimedGlobalThreshold
+        ? claimedGlobalThreshold
+        : Number(await repository.findDefaultThreshold?.() ?? inventory.lowStockThreshold ?? DEFAULT_THRESHOLD);
     const open = await repository.findOpen(productId);
 
     if (availableQuantity <= effectiveThreshold) {
       const patch = {
         availableQuantity,
         effectiveThreshold,
+        ...settingVersionPatch,
         lastEvaluatedAt: now,
         crossingKey: context.eventKey || open?.crossingKey || '',
       };
@@ -159,6 +168,7 @@ function createLowStockAlertLifecycle({
     const resolved = await repository.resolveOpen(open._id, {
       availableQuantity,
       effectiveThreshold,
+      ...settingVersionPatch,
       resolvedAt: now,
       lastEvaluatedAt: now,
       crossingKey: context.eventKey || open.crossingKey || '',

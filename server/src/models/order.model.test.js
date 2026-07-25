@@ -25,6 +25,17 @@ describe('SL-003 Order persistence contract', () => {
     assert.equal(order.toJSON().paymentDeadlineAt.toISOString(), deadline.toISOString());
   });
 
+  it('stores the immutable payment-timeout setting snapshot used to derive the deadline', () => {
+    const minutesPath = Order.schema.path('paymentTimeoutMinutesSnapshot');
+    const versionPath = Order.schema.path('paymentTimeoutSettingVersion');
+
+    assert.equal(minutesPath.options.immutable, true);
+    assert.equal(minutesPath.options.min, 5);
+    assert.equal(minutesPath.options.max, 60);
+    assert.equal(versionPath.options.immutable, true);
+    assert.equal(versionPath.options.min, 0);
+  });
+
   it('stores trimmed checkout and cancellation replay identities with empty defaults', () => {
     const fields = ['checkoutRequestHash', 'cancelIdempotencyKey', 'cancelRequestHash'];
     for (const field of fields) {

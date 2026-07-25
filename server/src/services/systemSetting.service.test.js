@@ -7,7 +7,7 @@ function createRepository() {
   const versions = [];
   return {
     versions,
-    async listVersions() { return [...versions].sort((a, b) => b.version - a.version); },
+    async listVersions(limit = 20) { return [...versions].sort((a, b) => b.version - a.version).slice(0, limit); },
     async findByIdempotencyKey(key) { return versions.find((entry) => entry.idempotencyKey === key) || null; },
     async appendVersion(data) {
       if (versions.some((entry) => entry.version === data.version)) {
@@ -105,7 +105,148 @@ describe('versioned system setting service', () => {
     }, 'settings-stale-001');
     await assert.rejects(() => service.updateSettings('admin-1', {
       expectedVersion: 0, reason: 'Lan sau', values: { PAYMENT_TIMEOUT_MINUTES: 25, LOW_STOCK_DEFAULT_THRESHOLD: 5 },
-    }, 'settings-stale-002'), /stale/i);
+    }, 'settings-stale-002'), (error) => {
+      assert.equal(error.errorCode, 'SETTINGS_VERSION_STALE');
+      assert.deepEqual(error.data.current, {
+        version: 1,
+        effectiveAt: new Date('2026-07-25T00:00:00.000Z'),
+        values: { PAYMENT_TIMEOUT_MINUTES: 20, LOW_STOCK_DEFAULT_THRESHOLD: 5 },
+      });
+      return true;
+    });
     assert.equal(repository.versions.length, 1);
+  });
+
+  it('returns the complete bounded history, including values, after a save', async () => {
+    for (let version = 1; version <= 3; version += 1) {
+      repository.versions.push({
+        _id: `version-${version}`,
+        version,
+        values: { PAYMENT_TIMEOUT_MINUTES: 15 + version, LOW_STOCK_DEFAULT_THRESHOLD: version },
+        reason: `Version ${version}`,
+        effectiveAt: new Date(`2026-07-2${version}T00:00:00.000Z`),
+        updatedBy: 'admin-1',
+        idempotencyKey: `settings-history-${version}`,
+        requestHash: String(version).repeat(64),
+      });
+    }
+
+    const result = await service.updateSettings('admin-1', {
+      expectedVersion: 3,
+      reason: 'Version 4',
+      values: { PAYMENT_TIMEOUT_MINUTES: 25, LOW_STOCK_DEFAULT_THRESHOLD: 8 },
+    }, 'settings-history-4');
+
+    assert.deepEqual(result.history.map((item) => item.version), [4, 3, 2, 1]);
+    assert.deepEqual(result.history[0].values, {
+      PAYMENT_TIMEOUT_MINUTES: 25,
+      LOW_STOCK_DEFAULT_THRESHOLD: 8,
+    });
+  });
+
+  it('passes the claimed settings version and threshold through post-commit reevaluation', async () => {
+    const reevaluations = [];
+    const claimed = {
+      _id: 'outbox-7',
+      processingStartedAt: new Date('2026-07-25T00:00:00.000Z'),
+      payload: {
+        version: 7,
+        values: { PAYMENT_TIMEOUT_MINUTES: 30, LOW_STOCK_DEFAULT_THRESHOLD: 11 },
+      },
+    };
+    const worker = createSystemSettingService({
+      repository: {
+        async listVersions() { return []; },
+        async listPendingReevaluations() { return [{ _id: 'outbox-7' }]; },
+        async claimReevaluation() { return claimed; },
+        async completeReevaluation() {},
+        async failReevaluation() { assert.fail('reevaluation must not fail'); },
+      },
+      lowStockLifecycle: { async evaluateAll(context) { reevaluations.push(context); } },
+      clock: () => new Date('2026-07-25T00:00:00.000Z'),
+    });
+
+    await worker.drainPostCommitWork();
+
+    assert.deepEqual(reevaluations, [{
+      eventKey: 'system-settings:7',
+      settingVersion: 7,
+      globalThreshold: 11,
+    }]);
+  });
+
+  it('classifies a concurrent same-key/different-facts winner as idempotency reuse', async () => {
+    const raceRepository = createRepository();
+    const raceService = createSystemSettingService({
+      repository: {
+        ...raceRepository,
+        async appendVersion(data) {
+          raceRepository.versions.push({
+            ...data,
+            _id: 'winner',
+            requestHash: 'f'.repeat(64),
+          });
+          const error = new Error('duplicate idempotency key');
+          error.code = 11000;
+          throw error;
+        },
+      },
+      transactionManager: { async withTransaction(work) { return work({ id: 'race-session' }); } },
+      auditLogger: { async log() {} },
+      outboxPublisher: { async publish() {} },
+      clock: () => new Date('2026-07-25T00:00:00.000Z'),
+    });
+
+    await assert.rejects(() => raceService.updateSettings('admin-1', {
+      expectedVersion: 0,
+      reason: 'Different losing facts',
+      values: { PAYMENT_TIMEOUT_MINUTES: 20, LOW_STOCK_DEFAULT_THRESHOLD: 5 },
+    }, 'settings-race-same-key'), (error) => {
+      assert.equal(error.errorCode, 'IDEMPOTENCY_KEY_REUSED');
+      return true;
+    });
+  });
+
+  it('returns the safe current result when a different-key version race loses', async () => {
+    const raceRepository = createRepository();
+    const winner = {
+      _id: 'winner',
+      version: 1,
+      values: { PAYMENT_TIMEOUT_MINUTES: 45, LOW_STOCK_DEFAULT_THRESHOLD: 12 },
+      reason: 'Concurrent winner',
+      effectiveAt: new Date('2026-07-25T00:00:00.000Z'),
+      updatedBy: 'admin-2',
+      idempotencyKey: 'settings-race-winner',
+      requestHash: 'f'.repeat(64),
+    };
+    const raceService = createSystemSettingService({
+      repository: {
+        ...raceRepository,
+        async appendVersion() {
+          raceRepository.versions.push(winner);
+          const error = new Error('duplicate version');
+          error.code = 11000;
+          throw error;
+        },
+      },
+      transactionManager: { async withTransaction(work) { return work({ id: 'race-session' }); } },
+      auditLogger: { async log() {} },
+      outboxPublisher: { async publish() {} },
+      clock: () => new Date('2026-07-25T00:00:00.000Z'),
+    });
+
+    await assert.rejects(() => raceService.updateSettings('admin-1', {
+      expectedVersion: 0,
+      reason: 'Losing command',
+      values: { PAYMENT_TIMEOUT_MINUTES: 20, LOW_STOCK_DEFAULT_THRESHOLD: 5 },
+    }, 'settings-race-loser'), (error) => {
+      assert.equal(error.errorCode, 'SETTINGS_VERSION_STALE');
+      assert.deepEqual(error.data.current, {
+        version: 1,
+        effectiveAt: winner.effectiveAt,
+        values: winner.values,
+      });
+      return true;
+    });
   });
 });

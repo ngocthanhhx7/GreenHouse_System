@@ -124,8 +124,8 @@ function createSystemSettingService({
   lowStockLifecycle = defaultLowStockLifecycle,
   clock = () => new Date(),
 } = {}) {
-  async function load() {
-    const versions = await repository.listVersions(HISTORY_LIMIT);
+  async function load(session) {
+    const versions = await repository.listVersions(HISTORY_LIMIT, session);
     return { current: currentFrom(versions[0]), history: versions.map(historyItem) };
   }
 
@@ -135,9 +135,20 @@ function createSystemSettingService({
     return { current, history: page.history, ...(replay ? { replay: true } : {}) };
   }
 
+  function staleVersionError(current) {
+    return new ApiError(
+      409,
+      'The supplied expectedVersion is stale',
+      [],
+      'SETTINGS_VERSION_STALE',
+      { current },
+    );
+  }
+
   return {
     async listSettings() { return load(); },
     async getCurrentValues() { return (await load()).current.values; },
+    async getCurrentSnapshot(session) { return (await load(session)).current; },
     async listHistory() { return (await load()).history; },
     async updateSettings(adminId, input = {}, idempotencyKey, actor = {}) {
       const command = validateCommand(input, idempotencyKey);
@@ -153,9 +164,9 @@ function createSystemSettingService({
             if (replay.requestHash !== command.requestHash) throw new ApiError(409, 'Idempotency-Key was already used with different facts', [], 'IDEMPOTENCY_KEY_REUSED');
             return resultFor(replay, true);
           }
-          const versions = await repository.listVersions(1, session);
+          const versions = await repository.listVersions(HISTORY_LIMIT - 1, session);
           const current = currentFrom(versions[0]);
-          if (command.expectedVersion !== current.version) throw new ApiError(409, 'The supplied expectedVersion is stale', [], 'SETTINGS_VERSION_STALE', { currentVersion: current.version });
+          if (command.expectedVersion !== current.version) throw staleVersionError(current);
           const effectiveAt = new Date(clock());
           const version = await repository.appendVersion({
             version: current.version + 1,
@@ -190,7 +201,10 @@ function createSystemSettingService({
         if (error?.code === 11000) {
           const winner = await repository.findByIdempotencyKey(idempotencyKey);
           if (winner && winner.requestHash === command.requestHash) return resultFor(winner, true);
-          throw new ApiError(409, 'The supplied expectedVersion is stale', [], 'SETTINGS_VERSION_STALE');
+          if (winner) {
+            throw new ApiError(409, 'Idempotency-Key was already used with different facts', [], 'IDEMPOTENCY_KEY_REUSED');
+          }
+          throw staleVersionError((await load()).current);
         }
         throw error;
       }
@@ -204,7 +218,11 @@ function createSystemSettingService({
         const claimed = await repository.claimReevaluation(item._id, staleBefore, new Date(clock()));
         if (!claimed) continue;
         try {
-          await lowStockLifecycle.evaluateAll({ eventKey: `system-settings:${claimed.payload.version}` });
+          await lowStockLifecycle.evaluateAll({
+            eventKey: `system-settings:${claimed.payload.version}`,
+            settingVersion: Number(claimed.payload.version),
+            globalThreshold: Number(claimed.payload.values.LOW_STOCK_DEFAULT_THRESHOLD),
+          });
           await repository.completeReevaluation(claimed._id, claimed.processingStartedAt);
         } catch (error) {
           await repository.failReevaluation(claimed._id, claimed.processingStartedAt, error);

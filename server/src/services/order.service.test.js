@@ -317,6 +317,45 @@ describe('order service', () => {
     assert.equal(orderRepository.attempts.length, 0);
   });
 
+  it('AT-201 reads and snapshots the timeout version inside the Order transaction at create time', async () => {
+    const transactionSession = { id: 'order-setting-transaction' };
+    const settingReads = [];
+    const localOrderRepository = createOrderRepository();
+    const localCartRepository = createCartRepository();
+    const createdAt = new Date('2026-07-23T09:00:00.000Z');
+    const service = createOrderService({
+      transactionManager: { async withTransaction(work) { return work(transactionSession); } },
+      cartRepository: localCartRepository,
+      productRepository: createProductRepository(),
+      inventoryRepository: { async reserve() { return {}; } },
+      orderRepository: localOrderRepository,
+      addressRepository: createAddressRepository(),
+      auditLogger: { async log() {} },
+      settingsService: {
+        async getCurrentSnapshot(session) {
+          settingReads.push(session);
+          return {
+            version: 7,
+            effectiveAt: new Date('2026-07-23T08:59:00.000Z'),
+            values: { PAYMENT_TIMEOUT_MINUTES: 30, LOW_STOCK_DEFAULT_THRESHOLD: 5 },
+          };
+        },
+      },
+      clock: () => new Date(createdAt),
+    });
+
+    const result = await service.placeOrder('customer-1', checkoutInput({
+      paymentMethod: 'ONLINE',
+      idempotencyKey: 'checkout-setting-snapshot-001',
+    }));
+
+    assert.deepEqual(settingReads, [transactionSession]);
+    assert.equal(result.paymentDeadlineAt, '2026-07-23T09:30:00.000Z');
+    assert.equal(localOrderRepository.orders[0].createdAt.toISOString(), createdAt.toISOString());
+    assert.equal(localOrderRepository.orders[0].paymentTimeoutMinutesSnapshot, 30);
+    assert.equal(localOrderRepository.orders[0].paymentTimeoutSettingVersion, 7);
+  });
+
   it('rejects a stale displayed line price before reserving stock', async () => {
     await assert.rejects(
       () => orderService.placeOrder('customer-1', checkoutInput({

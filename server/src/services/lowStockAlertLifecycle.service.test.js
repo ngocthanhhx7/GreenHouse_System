@@ -122,4 +122,44 @@ describe('low stock alert lifecycle', () => {
     assert.match(rendered.content, /5/);
     assert.doesNotMatch(`${rendered.subject} ${rendered.content}`, /\{[A-Za-z]+\}/);
   });
+
+  it('uses the claimed global setting version while preserving the Product override', async () => {
+    const repository = createRepository();
+    let fallbackReads = 0;
+    repository.findDefaultThreshold = async () => { fallbackReads += 1; return 5; };
+    const lifecycle = createLowStockAlertLifecycle({ repository });
+    const base = {
+      _id: 'inventory-global',
+      productId: 'product-global',
+      sellableQuantity: 9,
+      reservedQuantity: 0,
+      inventoryHealth: 'Normal',
+      lowStockThresholdOverride: null,
+    };
+
+    const global = await lifecycle.evaluate(base, {
+      eventKey: 'system-settings:8',
+      settingVersion: 8,
+      globalThreshold: 10,
+    });
+    const override = await lifecycle.evaluate({
+      ...base,
+      _id: 'inventory-override',
+      productId: 'product-override',
+      lowStockThresholdOverride: 3,
+    }, {
+      eventKey: 'system-settings:8',
+      settingVersion: 8,
+      globalThreshold: 10,
+    });
+    await lifecycle.evaluate({ ...base, sellableQuantity: 8 }, { eventKey: 'inventory:later' });
+
+    assert.equal(global.effectiveThreshold, 10);
+    assert.equal(global.opened, true);
+    assert.equal(global.alert.settingVersion, 8);
+    assert.equal(override.effectiveThreshold, 3);
+    assert.equal(override.opened, false);
+    assert.equal(global.alert.settingVersion, 8, 'later non-setting evaluations must not erase version provenance');
+    assert.equal(fallbackReads, 1);
+  });
 });
