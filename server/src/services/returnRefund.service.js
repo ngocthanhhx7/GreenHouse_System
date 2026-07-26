@@ -36,6 +36,7 @@ const {
   resolveActiveAfterSalesConflict,
   createActiveAfterSalesConflict,
 } = require('./afterSalesConflict.service');
+const { resolveBank } = require('../config/refundBankCatalog');
 const {
   createCustomerDeliveryReceiptPolicy,
 } = require('./customerDeliveryReceiptPolicy');
@@ -153,6 +154,224 @@ function normalizeIdempotencyKey(value, fieldName = 'idempotencyKey') {
   return key;
 }
 
+const DESTINATION_INPUT_KEYS = new Set([
+  'bankCode',
+  'accountNumber',
+  'accountHolderName',
+  'confirmed',
+  'idempotencyKey',
+]);
+const PAYOUT_RECONCILIATION_INPUT_KEYS = new Set([
+  'operationKey',
+  'outcome',
+  'transferReference',
+  'transferredAt',
+  'note',
+  'confirmed',
+  'idempotencyKey',
+]);
+const MANUAL_PAYOUT_INPUT_KEYS = new Set([
+  'transferReference',
+  'transferredAt',
+  'note',
+  'confirmed',
+  'idempotencyKey',
+]);
+const CREDENTIAL_SHAPED_KEY = /(?:pin|otp|password|cvv|passcode)/i;
+const DESTINATION_PAYLOAD_LIMITS = Object.freeze({
+  maxDepth: 8,
+  maxNodes: 128,
+  maxKeys: 256,
+  maxKeyLength: 128,
+});
+
+function findCredentialShapedKey(value) {
+  const seen = new WeakSet();
+  const queue = [{ value, depth: 0 }];
+  let visitedNodes = 0;
+  let visitedKeys = 0;
+
+  while (queue.length) {
+    const current = queue.shift();
+    if (!current.value || typeof current.value !== 'object' || seen.has(current.value)) continue;
+    if (current.depth > DESTINATION_PAYLOAD_LIMITS.maxDepth) {
+      throw new ApiError(400, 'Refund destination payload is too deep or complex');
+    }
+    seen.add(current.value);
+    visitedNodes += 1;
+    if (visitedNodes > DESTINATION_PAYLOAD_LIMITS.maxNodes) {
+      throw new ApiError(400, 'Refund destination payload is too deep or complex');
+    }
+
+    let keys;
+    try {
+      keys = Object.keys(current.value);
+    } catch {
+      throw new ApiError(400, 'Refund destination payload must contain plain data');
+    }
+    visitedKeys += keys.length;
+    if (visitedKeys > DESTINATION_PAYLOAD_LIMITS.maxKeys) {
+      throw new ApiError(400, 'Refund destination payload is too deep or complex');
+    }
+
+    for (const key of keys) {
+      if (key.length > DESTINATION_PAYLOAD_LIMITS.maxKeyLength) {
+        throw new ApiError(400, 'Refund destination payload contains an invalid field name');
+      }
+      if (CREDENTIAL_SHAPED_KEY.test(key)) return key;
+      let descriptor;
+      try {
+        descriptor = Object.getOwnPropertyDescriptor(current.value, key);
+      } catch {
+        throw new ApiError(400, 'Refund destination payload must contain plain data');
+      }
+      if (!descriptor || !Object.prototype.hasOwnProperty.call(descriptor, 'value')) {
+        throw new ApiError(400, 'Refund destination payload must contain plain data');
+      }
+      if (descriptor.value && typeof descriptor.value === 'object') {
+        queue.push({ value: descriptor.value, depth: current.depth + 1 });
+      }
+    }
+  }
+  return null;
+}
+
+function validateDestinationInputShape(input) {
+  let prototype;
+  try {
+    prototype = input && typeof input === 'object' ? Object.getPrototypeOf(input) : null;
+  } catch {
+    throw new ApiError(400, 'Refund destination input must be a plain object');
+  }
+  if (!input || typeof input !== 'object' || Array.isArray(input) || prototype !== Object.prototype) {
+    throw new ApiError(400, 'Refund destination input must be a plain object');
+  }
+  const credentialKey = findCredentialShapedKey(input);
+  if (credentialKey) {
+    throw new ApiError(400, 'Bank credentials are never accepted; do not send PIN, OTP, password, CVV, or passcode');
+  }
+  if (Object.prototype.hasOwnProperty.call(input, 'bankName')) {
+    throw new ApiError(400, 'bankName is not accepted; select a supported bankCode');
+  }
+  if (Object.prototype.hasOwnProperty.call(input, 'bankBin')) {
+    throw new ApiError(400, 'bankBin is not accepted; it is resolved securely by the server');
+  }
+  const unexpectedKey = Object.keys(input).find((key) => !DESTINATION_INPUT_KEYS.has(key));
+  if (unexpectedKey) throw new ApiError(400, `Unexpected refund destination field: ${unexpectedKey}`);
+  for (const key of ['bankCode', 'accountNumber', 'accountHolderName', 'idempotencyKey']) {
+    if (typeof input[key] !== 'string') throw new ApiError(400, `${key} must be a string`);
+  }
+}
+
+function normalizePayoutReconciliationInput(input, clock) {
+  let prototype;
+  try {
+    prototype = input && typeof input === 'object' ? Object.getPrototypeOf(input) : null;
+  } catch {
+    throw new ApiError(400, 'Payout reconciliation input must be a plain object');
+  }
+  if (!input || typeof input !== 'object' || Array.isArray(input) || prototype !== Object.prototype) {
+    throw new ApiError(400, 'Payout reconciliation input must be a plain object');
+  }
+  const credentialKey = findCredentialShapedKey(input);
+  if (credentialKey) {
+    throw new ApiError(400, 'Bank credentials are never accepted; do not send PIN, OTP, password, CVV, or passcode');
+  }
+  const unexpectedKey = Object.keys(input).find((key) => !PAYOUT_RECONCILIATION_INPUT_KEYS.has(key));
+  if (unexpectedKey) throw new ApiError(400, `Unexpected payout reconciliation field: ${unexpectedKey}`);
+  if (input.transferredAt === undefined || input.transferredAt === null || input.transferredAt === '') {
+    throw new ApiError(400, 'transferredAt is required for reconciliation');
+  }
+  for (const key of [
+    'operationKey',
+    'outcome',
+    'transferReference',
+    'transferredAt',
+    'note',
+    'idempotencyKey',
+  ]) {
+    if (typeof input[key] !== 'string') throw new ApiError(400, `${key} must be a string`);
+  }
+
+  const operationKey = normalizeIdempotencyKey(input.operationKey, 'operationKey');
+  const idempotencyKey = normalizeIdempotencyKey(input.idempotencyKey);
+  const outcome = String(input.outcome || '').trim();
+  if (!['Succeeded', 'Failed', 'Unknown'].includes(outcome)) {
+    throw new ApiError(400, 'Reconciliation outcome must be Succeeded, Failed, or Unknown');
+  }
+  const transferReference = String(input.transferReference || '').trim();
+  if (!transferReference || transferReference.length > 256) {
+    throw new ApiError(400, 'A valid transfer reference is required for reconciliation');
+  }
+  const transferredAt = normalizeDate(input.transferredAt, 'transferredAt', clock);
+  if (transferredAt.getTime() > new Date(clock()).getTime()) {
+    throw new ApiError(400, 'transferredAt cannot be in the future');
+  }
+  const note = String(input.note || '').trim();
+  if (note.length < 20 || note.length > 1000) {
+    throw new ApiError(400, 'Reconciliation note must contain 20-1000 characters');
+  }
+  if (input.confirmed !== true) {
+    throw new ApiError(400, 'Staff must explicitly confirm the reconciliation outcome');
+  }
+  return {
+    operationKey,
+    outcome,
+    transferReference,
+    transferredAt,
+    note,
+    idempotencyKey,
+  };
+}
+
+function normalizeManualPayoutInput(input, clock) {
+  let prototype;
+  try {
+    prototype = input && typeof input === 'object' ? Object.getPrototypeOf(input) : null;
+  } catch {
+    throw new ApiError(400, 'Manual payout input must be a plain object');
+  }
+  if (!input || typeof input !== 'object' || Array.isArray(input) || prototype !== Object.prototype) {
+    throw new ApiError(400, 'Manual payout input must be a plain object');
+  }
+  const credentialKey = findCredentialShapedKey(input);
+  if (credentialKey) {
+    throw new ApiError(400, 'Bank credentials are never accepted; do not send PIN, OTP, password, CVV, or passcode');
+  }
+  const unexpectedKey = Object.keys(input).find((key) => !MANUAL_PAYOUT_INPUT_KEYS.has(key));
+  if (unexpectedKey) throw new ApiError(400, `Unexpected manual payout field: ${unexpectedKey}`);
+  for (const key of ['transferReference', 'transferredAt', 'note', 'idempotencyKey']) {
+    if (typeof input[key] !== 'string') throw new ApiError(400, `${key} must be a string`);
+  }
+
+  const transferReference = input.transferReference.trim();
+  if (transferReference.length < 3
+    || transferReference.length > 256
+    || !/^[A-Za-z0-9._:/-]+$/.test(transferReference)) {
+    throw new ApiError(400, 'transferReference must contain 3-256 safe characters');
+  }
+  if (input.transferredAt.trim() === '') throw new ApiError(400, 'transferredAt is required');
+  const transferredAt = normalizeDate(input.transferredAt, 'transferredAt', clock);
+  if (transferredAt.getTime() > new Date(clock()).getTime()) {
+    throw new ApiError(400, 'transferredAt cannot be in the future');
+  }
+  const note = input.note.trim();
+  if (note.length < 20 || note.length > 1000) {
+    throw new ApiError(400, 'Manual payout note must contain 20-1000 characters');
+  }
+  if (input.confirmed !== true) {
+    throw new ApiError(400, 'Staff must explicitly confirm the manual payout evidence');
+  }
+  return {
+    idempotencyKey: normalizeIdempotencyKey(input.idempotencyKey),
+    method: 'MANUAL',
+    providerReference: transferReference,
+    status: 'Succeeded',
+    occurredAt: transferredAt,
+    reconciliationNote: note,
+  };
+}
+
 function normalizeRefundAmount(value, fieldName = 'amount') {
   const amount = Number(value);
   if (!Number.isSafeInteger(amount) || amount <= 0) throw new ApiError(400, `${fieldName} must be a positive integer`);
@@ -220,7 +439,6 @@ function toDestinationResponse(destination, audience = 'Customer') {
     id: String(destination._id),
     version: Number(destination.version),
     bankName: destination.bankName,
-    bankBin: destination.bankBin || '',
     maskedAccountNumber: destination.accountNumberLast4 ? `****${destination.accountNumberLast4}` : '',
     maskedAccountHolder: destination.accountHolderMasked,
     status: destination.status,
@@ -238,16 +456,36 @@ function toDestinationResponse(destination, audience = 'Customer') {
   return response;
 }
 
+function payoutDestinationCapability(destination) {
+  if (!destination) {
+    return { ready: false, issueCode: 'DESTINATION_MISSING' };
+  }
+  if (destination.status !== 'Verified') {
+    return { ready: false, issueCode: 'DESTINATION_NOT_VERIFIED' };
+  }
+  if (!/^[0-9]{6}$/.test(String(destination.bankBin || ''))) {
+    return { ready: false, issueCode: 'DESTINATION_ROUTE_UNAVAILABLE' };
+  }
+  if (!destination.accountNumberEncrypted || !destination.accountHolderEncrypted) {
+    return { ready: false, issueCode: 'DESTINATION_ACCOUNT_UNAVAILABLE' };
+  }
+  return { ready: true, issueCode: null };
+}
+
 function toPayoutResponse(evidence, audience) {
   if (!evidence) return null;
   const response = {
     id: String(evidence._id),
+    evidenceKind: evidence.evidenceKind || 'PAYOUT_EXECUTION',
     method: evidence.method,
     status: evidence.status,
     occurredAt: evidence.occurredAt,
     createdAt: evidence.createdAt,
   };
-  if (audience === 'Staff') response.providerReference = evidence.providerReference;
+  if (audience === 'Staff') {
+    response.providerReference = evidence.providerReference;
+    response.reconcilesOperationKey = evidence.reconcilesOperationKey || '';
+  }
   return response;
 }
 
@@ -265,7 +503,20 @@ function toPayoutIncidentResponse(incident) {
   };
 }
 
-function toResponse({ request, order, details = [], items = [], destination = null, payoutEvidence = null, payoutIncident = null }, audience = 'Staff') {
+function toResponse(
+  {
+    request,
+    order,
+    details = [],
+    items = [],
+    destination = null,
+    refundPending = null,
+    payoutEvidence = null,
+    payoutIncident = null,
+  },
+  audience = 'Staff',
+  { payOSConfigured = false } = {}
+) {
   const preAccountedByDetail = new Map((request.preAccountedItems || []).map((item) => [
     String(item.orderDetailId),
     Number(item.sellableQuantity || 0) + Number(item.damagedQuantity || 0),
@@ -294,7 +545,7 @@ function toResponse({ request, order, details = [], items = [], destination = nu
     inspectionNote: request.inspectionNote || '',
     completedBy: request.completedBy ? String(request.completedBy) : null,
     completedAt: request.completedAt || null,
-    payoutStatus: payoutEvidence?.status || null,
+    payoutStatus: refundPending?.payoutStatus || null,
     details: details.map((detail) => ({
       ...toObject(detail),
       remainingReturnQuantity: Math.max(
@@ -307,9 +558,45 @@ function toResponse({ request, order, details = [], items = [], destination = nu
   };
 
   if (audience !== 'Warehouse') {
+    const destinationCapability = payoutDestinationCapability(destination);
+    const payoutStatus = refundPending?.payoutStatus || null;
+    const payoutMethod = refundPending?.payoutMethod || null;
+    const operationKey = refundPending?.payoutOperationKey || '';
+    const mayStart = ['NotStarted', 'Failed'].includes(payoutStatus);
+    const unresolvedOperation = ['Processing', 'Unknown'].includes(payoutStatus)
+      && Boolean(operationKey);
+    const unresolvedPayOS = unresolvedOperation && payoutMethod === 'PayOS';
+    const unresolvedManual = unresolvedOperation && payoutMethod === 'Manual';
+    const staffAudience = audience === 'Staff' || audience === 'StaffList';
+    const requestReady = RECEIVED_STATUSES.includes(request.status);
+    const canStart = staffAudience && requestReady && destinationCapability.ready && mayStart;
+    const safeEvidence = toPayoutResponse(payoutEvidence, audience);
+    if (staffAudience) {
+      response.payout = {
+        status: payoutStatus,
+        method: payoutMethod,
+        operationKey,
+        startedAt: refundPending?.payoutStartedAt || null,
+        evidence: safeEvidence,
+        canStartPayOS: canStart && payOSConfigured,
+        canRecordManualSuccess: canStart,
+        canReconcileOperation: unresolvedOperation,
+        canReconcilePayOS: unresolvedPayOS,
+        canReconcileManual: unresolvedManual,
+        requiresManualPayOSResolution: unresolvedPayOS,
+      };
+      response.capabilities = {
+        payOSConfigured: Boolean(payOSConfigured),
+        manualPayout: true,
+      };
+    }
     response.destination = toDestinationResponse(destination, audience);
-    response.payoutEvidence = toPayoutResponse(payoutEvidence, audience);
+    response.payoutEvidence = safeEvidence;
     response.payoutIncident = toPayoutIncidentResponse(payoutIncident);
+    if (audience === 'Staff' || audience === 'StaffList') {
+      response.payoutDestinationReady = destinationCapability.ready;
+      response.payoutDestinationIssueCode = destinationCapability.issueCode;
+    }
   }
 
   response.order = order ? (audience === 'Warehouse' ? {
@@ -465,10 +752,17 @@ function createModelRepository() {
     async updateRefundPending(id, data, session) {
       return withOptionalSession(RefundPending.findByIdAndUpdate(id, { $set: data }, { new: true, runValidators: true }), session).lean();
     },
-    async claimPayoutStart(id, idempotencyKey, expectedOperationKey = '', allowRecovery = false, session) {
+    async claimPayoutStart(
+      id,
+      idempotencyKey,
+      expectedOperationKey = '',
+      allowRecovery = false,
+      payoutStartedAt = new Date(),
+      session
+    ) {
       const retryConditions = [
         { payoutStatus: { $in: ['NotStarted', 'Failed'] } },
-        { payoutStatus: 'Processing', payoutOperationKey: idempotencyKey },
+        { payoutStatus: { $in: ['Processing', 'Unknown'] }, payoutOperationKey: idempotencyKey },
       ];
       if (allowRecovery) {
         retryConditions.push({
@@ -486,7 +780,67 @@ function createModelRepository() {
           $set: {
             status: 'HandedOff',
             payoutStatus: 'Processing',
+            payoutMethod: 'PayOS',
+            payoutStartedAt,
             payoutOperationKey: idempotencyKey,
+          },
+        },
+        { new: true, runValidators: true }
+      ), session).lean();
+    },
+    async claimPayoutReconciliation(id, operationKey, data, session) {
+      return withOptionalSession(RefundPending.findOneAndUpdate(
+        {
+          _id: id,
+          status: { $ne: 'Refunded' },
+          payoutStatus: { $in: ['Processing', 'Unknown'] },
+          payoutOperationKey: operationKey,
+        },
+        { $set: data },
+        { new: true, runValidators: true }
+      ), session).lean();
+    },
+    async claimPayOSProviderResult(id, operationKey, data, session) {
+      return withOptionalSession(RefundPending.findOneAndUpdate(
+        {
+          _id: id,
+          status: { $ne: 'Refunded' },
+          payoutStatus: { $in: ['Processing', 'Unknown'] },
+          payoutMethod: 'PayOS',
+          payoutOperationKey: operationKey,
+        },
+        { $set: data },
+        { new: true, runValidators: true }
+      ), session).lean();
+    },
+    async claimManualPayoutStart(
+      id,
+      operationKey,
+      expectedOperationKey = '',
+      allowRecovery = false,
+      payoutStartedAt = new Date(),
+      session
+    ) {
+      const conditions = [{ payoutStatus: { $in: ['NotStarted', 'Failed'] } }];
+      if (allowRecovery) {
+        conditions.push({
+          payoutStatus: { $in: ['Processing', 'Unknown'] },
+          payoutOperationKey: expectedOperationKey,
+        });
+      }
+      return withOptionalSession(RefundPending.findOneAndUpdate(
+        {
+          _id: id,
+          status: { $ne: 'Refunded' },
+          $or: conditions,
+        },
+        {
+          $set: {
+            status: 'HandedOff',
+            payoutStatus: 'Processing',
+            payoutMethod: 'Manual',
+            payoutStartedAt,
+            payoutOperationKey: operationKey,
           },
         },
         { new: true, runValidators: true }
@@ -548,11 +902,13 @@ function createModelRepository() {
     async findPayoutEvidenceByIdempotencyKey(idempotencyKey, session) {
       return withOptionalSession(RefundPayoutEvidence.findOne({ idempotencyKey }), session).lean();
     },
-    async findSuccessfulPayoutEvidence(requestId, session) {
-      return withOptionalSession(RefundPayoutEvidence.findOne({ returnRefundRequestId: requestId, status: 'Succeeded' }).sort({ createdAt: -1 }), session).lean();
-    },
-    async findLatestPayoutEvidence(requestId, session) {
-      return withOptionalSession(RefundPayoutEvidence.findOne({ returnRefundRequestId: requestId }).sort({ createdAt: -1 }), session).lean();
+    async findPayoutEvidenceForOperation(refundPendingId, payoutOperationKey, method, session) {
+      if (!refundPendingId || !payoutOperationKey || !method) return null;
+      return withOptionalSession(RefundPayoutEvidence.findOne({
+        refundPendingId,
+        payoutOperationKey,
+        method,
+      }).sort({ createdAt: -1 }), session).lean();
     },
     async createPayoutEvidence(data, session) {
       const [created] = await RefundPayoutEvidence.create([data], session ? { session } : undefined);
@@ -595,20 +951,39 @@ function createReturnRefundService({
   async function loadRequest(id, session) {
     const request = await repository.findRequestById(id, session);
     if (!request) throw new ApiError(404, 'Return/refund request not found');
-    const [order, details, items, destination, payoutEvidence, payoutIncident] = await Promise.all([
+    const [order, details, items, destination, refundPending, payoutIncident] = await Promise.all([
       repository.findOrderById(request.orderId, session),
       repository.listOrderDetails(request.orderId, session),
       repository.listReturnItems(request._id, session),
       repository.findLatestDestination ? repository.findLatestDestination(request._id, session) : null,
-      repository.findLatestPayoutEvidence ? repository.findLatestPayoutEvidence(request._id, session) : null,
+      repository.findRefundPendingByRequestId
+        ? repository.findRefundPendingByRequestId(request._id, session)
+        : null,
       repository.findLatestPayoutIncident ? repository.findLatestPayoutIncident(request._id, session) : null,
     ]);
     if (!order) throw new ApiError(404, 'Related order not found');
-    return { request, order, details, items, destination, payoutEvidence, payoutIncident };
+    const evidenceMethod = refundPending?.payoutMethod === 'PayOS'
+      ? 'PAYOS'
+      : refundPending?.payoutMethod === 'Manual'
+        ? 'MANUAL'
+        : null;
+    const payoutEvidence = refundPending?.payoutOperationKey
+      && evidenceMethod
+      && repository.findPayoutEvidenceForOperation
+      ? await repository.findPayoutEvidenceForOperation(
+        refundPending._id,
+        refundPending.payoutOperationKey,
+        evidenceMethod,
+        session
+      )
+      : null;
+    return { request, order, details, items, destination, refundPending, payoutEvidence, payoutIncident };
   }
 
   async function respond(id, audience, replay = false) {
-    const response = toResponse(await loadRequest(id), audience);
+    const response = toResponse(await loadRequest(id), audience, {
+      payOSConfigured: Boolean(payosGateway?.isConfigured?.()),
+    });
     return replay ? { ...response, replay: true } : response;
   }
 
@@ -647,6 +1022,31 @@ function createReturnRefundService({
     } else if (eventPublisher?.createInAppNotification) {
       await eventPublisher.createInAppNotification({
         userId: event.recipientId,
+        ...event,
+        eventId: businessEventId,
+      }, session);
+    } else {
+      throw new Error('Return/refund Notification outbox publisher is required');
+    }
+  }
+
+  async function notifyStaffReconciliation(request, staffId, eventIdentity = '', session) {
+    const type = 'REFUND_PAYOUT_OPERATION_RECONCILED';
+    const businessEventId = `${type}:${String(request._id)}:${String(eventIdentity)}`;
+    const event = {
+      businessEventId,
+      recipientId: staffId,
+      type,
+      displayValues: { requestCode: request.requestCode || String(request._id) },
+      targetCollection: 'ReturnRefundRequest',
+      targetId: request._id,
+      occurredAt: new Date(clock()),
+    };
+    if (eventPublisher?.publishDomainEvent) {
+      await eventPublisher.publishDomainEvent(event, session);
+    } else if (eventPublisher?.createInAppNotification) {
+      await eventPublisher.createInAppNotification({
+        userId: staffId,
         ...event,
         eventId: businessEventId,
       }, session);
@@ -696,6 +1096,12 @@ function createReturnRefundService({
     const updatedRefund = await repository.updateRefundPending(refund._id, {
       status: 'Refunded',
       payoutStatus: 'Succeeded',
+      payoutMethod: evidence.method === 'PAYOS' ? 'PayOS' : 'Manual',
+      payoutStartedAt: refund.payoutOperationKey === evidence.payoutOperationKey && refund.payoutStartedAt
+        ? refund.payoutStartedAt
+        : evidence.occurredAt,
+      payoutOperationKey: evidence.payoutOperationKey,
+      payoutProviderReference: evidence.providerReference,
       destinationId: loaded.request.verifiedDestinationId,
       payoutEvidenceId: evidence._id,
       refundedAt: completedAt,
@@ -782,29 +1188,6 @@ function createReturnRefundService({
           openedAt,
         }, session);
 
-        if (responsibility === 'ShopOrProvider' && loaded.request.status === 'Completed') {
-          if (repository.reopenOrderLock) {
-            const reopenedLock = await repository.reopenOrderLock(
-              loaded.order._id,
-              loaded.request._id,
-              session
-            );
-            if (!reopenedLock) {
-              throw new ApiError(409, 'After-sales lock changed while payout recovery was being opened');
-            }
-          }
-          await repository.updateRequest(loaded.request._id, {
-            status: 'Received',
-            completionVoidedAt: openedAt,
-            completionVoidReason: reportReason,
-            handledAt: openedAt,
-          }, session);
-          await repository.updateRefundPending(refund._id, {
-            status: 'HandedOff',
-            payoutStatus: 'Unknown',
-          }, session);
-          await repository.updateOrder(loaded.order._id, { orderStatus: 'Delivered' }, session);
-        }
         await writeAudit(
           staffId,
           'REFUND_PAYOUT_INCIDENT_OPENED',
@@ -837,8 +1220,16 @@ function createReturnRefundService({
     staffId,
     id,
     input = {},
-    { trustedPayOS = false, allowPriorUnresolved = false } = {}
+    {
+      trustedPayOS = false,
+      trustedReconciliation = false,
+      allowPriorUnresolved = false,
+    } = {}
   ) {
+    if (Object.prototype.hasOwnProperty.call(input, 'evidenceKind')
+      || Object.prototype.hasOwnProperty.call(input, 'reconcilesOperationKey')) {
+      throw new ApiError(400, 'Reconciliation metadata is reserved for the dedicated trusted reconciliation command');
+    }
     const loaded = await loadRequest(id);
     const { request, order, payoutIncident } = loaded;
     const idempotencyKey = normalizeIdempotencyKey(input.idempotencyKey);
@@ -855,22 +1246,22 @@ function createReturnRefundService({
       const replayMatches = String(existing.method) === method
         && String(existing.providerReference) === String(input.providerReference || '').trim()
         && String(existing.status) === String(input.status || '').trim()
-        && Number(existing.amount) === expectedAmount;
+        && Number(existing.amount) === expectedAmount
+        && new Date(existing.occurredAt).getTime() === new Date(input.occurredAt).getTime()
+        && String(existing.reconciliationNote) === String(input.reconciliationNote || '').trim();
       if (!replayMatches) throw new ApiError(409, 'Payout idempotency key was reused with different evidence');
       return { ...toPayoutResponse(existing, 'Staff'), replay: true };
     }
-    if (request.status === 'Completed') throw new ApiError(409, 'Refund was already completed; use the original payout evidence');
+    if (request.status === 'Completed') {
+      throw new ApiError(
+        409,
+        'Refund payout is terminal; use the original payout evidence',
+        [],
+        'PAYOUT_TERMINAL_NO_RETRY'
+      );
+    }
     if (!RECEIVED_STATUSES.includes(request.status)) throw new ApiError(409, 'Request must be received or ready for refund before payout');
     if (!request.verifiedDestinationId) throw new ApiError(409, 'A verified refund destination is required before payout');
-    if (payoutIncident?.status === 'Open') {
-      if (payoutIncident.responsibility === 'Customer') {
-        throw new ApiError(409, 'Customer-responsibility recovery is open; no automatic second payout is allowed');
-      }
-      if (String(input.recoveryIncidentId || '') !== String(payoutIncident._id)) {
-        throw new ApiError(409, 'The open payout recovery incident must be explicitly reconciled before corrective payout');
-      }
-    }
-
     const destination = await repository.findDestinationById(request.verifiedDestinationId);
     if (!destination || destination.status !== 'Verified' || String(destination.returnRefundRequestId) !== String(request._id)) {
       throw new ApiError(409, 'The verified refund destination is no longer valid');
@@ -885,13 +1276,25 @@ function createReturnRefundService({
     if (method === 'MANUAL' && !reconciliationNote) throw new ApiError(400, 'Manual payout evidence requires a reconciliation note');
     const refund = await findRequestRefundObligation(request);
     if (!refund || String(refund.returnRefundRequestId || request._id) !== String(request._id)) throw new ApiError(409, 'Normal return refund obligation not found');
-    if (refund.status === 'Refunded') throw new ApiError(409, 'Refund payout was already completed');
-    const authorizedCorrectivePayout = payoutIncident?.status === 'Open'
-      && payoutIncident.responsibility === 'ShopOrProvider'
-      && String(input.recoveryIncidentId || '') === String(payoutIncident._id);
-    if (['Processing', 'Unknown'].includes(refund.payoutStatus) && !allowPriorUnresolved && !authorizedCorrectivePayout) {
+    if (refund.status === 'Refunded' || refund.payoutStatus === 'Succeeded') {
+      throw new ApiError(
+        409,
+        'Refund payout is terminal and cannot be paid again',
+        [],
+        'PAYOUT_TERMINAL_NO_RETRY'
+      );
+    }
+    const sameTrustedProviderOperation = trustedPayOS
+      && String(input.operationKey || '') === String(refund.payoutOperationKey || '');
+    if (payoutIncident?.status === 'Open' && !sameTrustedProviderOperation) {
+      throw new ApiError(409, 'An open payout incident is read-only and does not authorize a second payout');
+    }
+    if (['Processing', 'Unknown'].includes(refund.payoutStatus) && !allowPriorUnresolved) {
       throw new ApiError(409, 'The previous payout attempt must be reconciled before another attempt');
     }
+    const payoutOperationKey = trustedPayOS && input.operationKey
+      ? normalizeIdempotencyKey(input.operationKey, 'operationKey')
+      : idempotencyKey;
 
     const snapshotHash = hash([
       destination._id, destination.version, destination.bankName, destination.bankBin || '',
@@ -900,6 +1303,49 @@ function createReturnRefundService({
     let evidence;
     try {
       evidence = await transactionManager.withTransaction(async (session) => {
+        let payoutRefund = refund;
+        if (method === 'MANUAL') {
+          payoutRefund = repository.claimManualPayoutStart
+            ? await repository.claimManualPayoutStart(
+              refund._id,
+              payoutOperationKey,
+              refund.payoutOperationKey || '',
+              false,
+              occurredAt,
+              session
+            )
+            : null;
+          if (!payoutRefund) {
+            throw new ApiError(
+              409,
+              'Another payout attempt changed this refund obligation',
+              [],
+              'PAYOUT_OPERATION_CONFLICT'
+            );
+          }
+        }
+        if (method === 'PAYOS') {
+          payoutRefund = repository.claimPayOSProviderResult
+            ? await repository.claimPayOSProviderResult(
+              refund._id,
+              payoutOperationKey,
+              {
+                status: ['Processing', 'Unknown'].includes(status) ? 'HandedOff' : 'RefundPending',
+                payoutStatus: status,
+                payoutProviderReference: providerReference,
+              },
+              session
+            )
+            : null;
+          if (!payoutRefund) {
+            throw new ApiError(
+              409,
+              'The payout operation changed before the provider result was recorded',
+              [],
+              'PAYOUT_OPERATION_STALE'
+            );
+          }
+        }
         const created = await repository.createPayoutEvidence({
           returnRefundRequestId: request._id,
           refundPendingId: refund._id,
@@ -907,6 +1353,9 @@ function createReturnRefundService({
           amount: expectedAmount,
           currency: order.currency || 'VND',
           idempotencyKey,
+          payoutOperationKey,
+          evidenceKind: trustedReconciliation ? 'OPERATION_RECONCILIATION' : 'PAYOUT_EXECUTION',
+          reconcilesOperationKey: trustedReconciliation ? payoutOperationKey : '',
           method,
           providerReference,
           status,
@@ -917,23 +1366,24 @@ function createReturnRefundService({
           destinationSnapshotHash: snapshotHash,
         }, session);
         if (status === 'Succeeded') {
-          await finalizeSuccessfulPayout(staffId, loaded, refund, created, reconciliationNote || 'Verified payout evidence', session);
-          if (payoutIncident?.status === 'Open' && payoutIncident.responsibility === 'ShopOrProvider') {
-            const resolved = await repository.resolvePayoutIncident(payoutIncident._id, {
-              status: 'Resolved',
-              resolvedBy: staffId,
-              resolvedAt: new Date(clock()),
-              resolutionNote: reconciliationNote || 'Corrective payout evidence verified',
-              resolutionEvidenceId: created._id,
-            }, session);
-            if (!resolved) throw new ApiError(409, 'Payout recovery incident changed during corrective payout');
-          }
-        } else {
-          await repository.updateRefundPending(refund._id, {
+          await finalizeSuccessfulPayout(
+            staffId,
+            loaded,
+            payoutRefund,
+            created,
+            reconciliationNote || 'Verified payout evidence',
+            session
+          );
+        } else if (method === 'MANUAL') {
+          await repository.updateRefundPending(payoutRefund._id, {
             status: ['Processing', 'Unknown'].includes(status) ? 'HandedOff' : 'RefundPending',
             payoutStatus: status,
+            payoutMethod: method === 'PAYOS' ? 'PayOS' : 'Manual',
+            payoutStartedAt: payoutRefund.payoutOperationKey === payoutOperationKey && payoutRefund.payoutStartedAt
+              ? payoutRefund.payoutStartedAt
+              : occurredAt,
             destinationId: destination._id,
-            payoutOperationKey: input.operationKey || refund.payoutOperationKey || idempotencyKey,
+            payoutOperationKey,
             payoutProviderReference: providerReference,
           }, session);
         }
@@ -1246,19 +1696,29 @@ function createReturnRefundService({
       if (![...RECEIVABLE_STATUSES, ...RECEIVED_STATUSES].includes(request.status)) {
         throw new ApiError(409, 'Refund destination can only be submitted after approval and before completion');
       }
-      if (input.confirmed !== true && input.confirmDetails !== true) {
+      validateDestinationInputShape(input);
+      if (input.confirmed !== true) {
         throw new ApiError(400, 'Customer must confirm the refund destination details');
       }
-      const bankName = String(input.bankName || '').trim();
-      const bankBin = String(input.bankBin || '').trim();
-      const accountNumber = String(input.accountNumber || '').replace(/\s+/g, '');
-      const accountHolderName = String(input.accountHolderName || '').trim().replace(/\s+/g, ' ').toUpperCase();
-      if (!bankName || bankName.length > 120) throw new ApiError(400, 'A valid bank name is required');
-      if (bankBin && !/^[0-9]{6}$/.test(bankBin)) throw new ApiError(400, 'bankBin must contain exactly 6 digits');
+      const bank = resolveBank(input.bankCode);
+      if (!bank) throw new ApiError(400, 'A supported bankCode is required');
+      const accountNumber = input.accountNumber.replace(/\s+/g, '');
+      const accountHolderName = input.accountHolderName
+        .normalize('NFC')
+        .trim()
+        .replace(/\s+/g, ' ')
+        .toUpperCase();
       if (!/^[0-9]{6,24}$/.test(accountNumber)) throw new ApiError(400, 'A valid bank account number is required');
-      if (accountHolderName.length < 2 || accountHolderName.length > 120) throw new ApiError(400, 'A valid account holder name is required');
+      if (
+        accountHolderName.length < 2
+        || accountHolderName.length > 120
+        || !/^[\p{L}\p{M} .'’-]+$/u.test(accountHolderName)
+        || (accountHolderName.match(/\p{L}/gu) || []).length < 2
+      ) {
+        throw new ApiError(400, 'A valid account holder name is required');
+      }
       const idempotencyKey = normalizeIdempotencyKey(input.idempotencyKey);
-      const destinationFingerprint = fingerprint(`${bankName}|${bankBin}|${accountNumber}|${accountHolderName}`);
+      const destinationFingerprint = fingerprint(`${bank.code}|${bank.bin}|${accountNumber}|${accountHolderName}`);
 
       const replay = repository.findDestinationByIdempotencyKey
         ? await repository.findDestinationByIdempotencyKey(request._id, idempotencyKey)
@@ -1282,8 +1742,8 @@ function createReturnRefundService({
             customerId,
             version: Number(latest?.version || 0) + 1,
             supersedesId: latest?._id || null,
-            bankName,
-            bankBin,
+            bankName: bank.name,
+            bankBin: bank.bin,
             accountNumberEncrypted: encrypt(accountNumber),
             accountHolderEncrypted: encrypt(accountHolderName),
             accountNumberLast4: accountNumber.slice(-4),
@@ -1561,11 +2021,8 @@ function createReturnRefundService({
     },
 
     async recordPayoutEvidence(staffId, id, input = {}) {
-      const method = String(input.method || 'MANUAL').toUpperCase();
-      if (method !== 'PAYOS' && Object.prototype.hasOwnProperty.call(input, 'amount')) {
-        throw new ApiError(400, 'Refund amount is server-derived and must not be supplied by Staff');
-      }
-      return persistPayoutEvidence(staffId, id, { ...input, method });
+      const normalized = normalizeManualPayoutInput(input, clock);
+      return persistPayoutEvidence(staffId, id, normalized);
     },
 
     async reportPayoutIncident(staffId, id, input = {}) {
@@ -1576,9 +2033,7 @@ function createReturnRefundService({
         throw new ApiError(409, 'A payout recovery incident is already open for this request');
       }
       const cause = String(input.cause || '').trim();
-      const evidence = cause === 'CUSTOMER_CONFIRMED_DESTINATION'
-        ? await repository.findSuccessfulPayoutEvidence(request._id)
-        : payoutEvidence;
+      const evidence = payoutEvidence;
       if (!evidence || !['Succeeded', 'Unknown'].includes(evidence.status)) {
         throw new ApiError(409, 'A successful or mismatched payout evidence record is required before opening recovery');
       }
@@ -1606,6 +2061,199 @@ function createReturnRefundService({
       });
     },
 
+    async reconcilePayoutOperation(staffId, id, input = {}) {
+      const normalized = normalizePayoutReconciliationInput(input, clock);
+      const loaded = await loadRequest(id);
+      const { request, order, payoutIncident } = loaded;
+      const existing = await repository.findPayoutEvidenceByIdempotencyKey(normalized.idempotencyKey);
+      if (existing) {
+        if (String(existing.returnRefundRequestId) !== String(request._id)) {
+          throw new ApiError(409, 'Payout reconciliation idempotency key was used for another request');
+        }
+        const exactReplay = existing.evidenceKind === 'OPERATION_RECONCILIATION'
+          && String(existing.reconcilesOperationKey) === normalized.operationKey
+          && String(existing.status) === normalized.outcome
+          && String(existing.providerReference) === normalized.transferReference
+          && new Date(existing.occurredAt).getTime() === normalized.transferredAt.getTime()
+          && String(existing.reconciliationNote) === normalized.note;
+        if (!exactReplay) {
+          throw new ApiError(409, 'Payout reconciliation idempotency key was reused with different facts');
+        }
+        return {
+          ...toPayoutResponse(existing, 'Staff'),
+          request: await respond(id, 'Staff'),
+          replay: true,
+        };
+      }
+
+      if (!RECEIVED_STATUSES.includes(request.status)) {
+        throw new ApiError(409, 'Request must be received or ready for refund before payout reconciliation');
+      }
+      if (!request.verifiedDestinationId) {
+        throw new ApiError(409, 'A verified refund destination is required before payout reconciliation');
+      }
+      const refund = await findRequestRefundObligation(request);
+      if (!refund) throw new ApiError(409, 'Normal return refund obligation not found');
+      if (refund.status === 'Refunded' || refund.payoutStatus === 'Succeeded') {
+        throw new ApiError(409, 'Refund payout was already completed');
+      }
+      if (!['Processing', 'Unknown'].includes(refund.payoutStatus)
+        || String(refund.payoutOperationKey) !== normalized.operationKey) {
+        throw new ApiError(
+          409,
+          'The current payout operation changed; reload before reconciling',
+          [],
+          'PAYOUT_OPERATION_STALE'
+        );
+      }
+      if (refund.payoutStartedAt
+        && normalized.transferredAt.getTime() < new Date(refund.payoutStartedAt).getTime()) {
+        throw new ApiError(400, 'transferredAt cannot be before the payout operation started');
+      }
+      if (refund.payoutProviderReference
+        && String(refund.payoutProviderReference) !== normalized.transferReference) {
+        throw new ApiError(409, 'Transfer reference does not match the current payout operation');
+      }
+      const destination = await repository.findDestinationById(request.verifiedDestinationId);
+      if (!destination || destination.status !== 'Verified'
+        || String(destination.returnRefundRequestId) !== String(request._id)) {
+        throw new ApiError(409, 'The verified refund destination is no longer valid');
+      }
+      const method = refund.payoutMethod === 'PayOS'
+        ? 'PAYOS'
+        : refund.payoutMethod === 'Manual'
+          ? 'MANUAL'
+          : null;
+      if (!method) throw new ApiError(409, 'The current payout operation has no valid method');
+      const expectedAmount = normalizeRefundAmount(order.totalAmount, 'stored order total');
+      const snapshotHash = hash([
+        destination._id, destination.version, destination.bankName, destination.bankBin || '',
+        destination.accountNumberLast4, destination.accountHolderMasked,
+      ].join('|'));
+
+      let evidence;
+      try {
+        evidence = await transactionManager.withTransaction(async (session) => {
+          const created = await repository.createPayoutEvidence({
+            returnRefundRequestId: request._id,
+            refundPendingId: refund._id,
+            destinationId: destination._id,
+            amount: expectedAmount,
+            currency: order.currency || 'VND',
+            idempotencyKey: normalized.idempotencyKey,
+            payoutOperationKey: normalized.operationKey,
+            evidenceKind: 'OPERATION_RECONCILIATION',
+            reconcilesOperationKey: normalized.operationKey,
+            method,
+            providerReference: normalized.transferReference,
+            status: normalized.outcome,
+            recordedBy: staffId,
+            occurredAt: normalized.transferredAt,
+            reconciliationNote: normalized.note,
+            failureReason: normalized.outcome === 'Failed'
+              ? 'Staff verified that the current operation did not pay'
+              : '',
+            destinationSnapshotHash: snapshotHash,
+          }, session);
+          const nextRefundState = normalized.outcome === 'Failed'
+            ? { status: 'RefundPending', payoutStatus: 'Failed' }
+            : { status: 'HandedOff', payoutStatus: normalized.outcome };
+          const claimed = repository.claimPayoutReconciliation
+            ? await repository.claimPayoutReconciliation(
+              refund._id,
+              normalized.operationKey,
+              {
+                ...nextRefundState,
+                payoutProviderReference: normalized.transferReference,
+              },
+              session
+            )
+            : null;
+          if (!claimed) {
+            throw new ApiError(
+              409,
+              'The payout operation changed while reconciliation was being recorded',
+              [],
+              'PAYOUT_OPERATION_STALE'
+            );
+          }
+          if (normalized.outcome === 'Succeeded') {
+            await finalizeSuccessfulPayout(
+              staffId,
+              loaded,
+              claimed,
+              created,
+              normalized.note,
+              session
+            );
+          }
+          if (payoutIncident?.status === 'Open'
+            && payoutIncident.responsibility === 'ShopOrProvider'
+            && normalized.outcome !== 'Unknown') {
+            const resolved = await repository.resolvePayoutIncident(payoutIncident._id, {
+              status: 'Resolved',
+              resolvedBy: staffId,
+              resolvedAt: new Date(clock()),
+              resolutionNote: normalized.note,
+              resolutionEvidenceId: created._id,
+            }, session);
+            if (!resolved) {
+              throw new ApiError(
+                409,
+                'Payout recovery incident changed during reconciliation',
+                [],
+                'PAYOUT_OPERATION_STALE'
+              );
+            }
+          }
+          await writeAudit(
+            staffId,
+            'REFUND_PAYOUT_OPERATION_RECONCILED',
+            request._id,
+            `Staff reconciled payout operation as ${normalized.outcome}; destination values redacted`,
+            session
+          );
+          if (normalized.outcome === 'Succeeded') {
+            await notifyCustomer(request, 'RETURN_REFUND_COMPLETED', created._id, session);
+          } else {
+            await notifyStaffReconciliation(request, staffId, created._id, session);
+          }
+          return created;
+        });
+      } catch (error) {
+        if (error?.code === 11000) {
+          const replay = await repository.findPayoutEvidenceByIdempotencyKey(normalized.idempotencyKey);
+          if (replay && String(replay.returnRefundRequestId) === String(request._id)) {
+            const exactReplay = replay.evidenceKind === 'OPERATION_RECONCILIATION'
+              && String(replay.reconcilesOperationKey) === normalized.operationKey
+              && String(replay.status) === normalized.outcome
+              && String(replay.providerReference) === normalized.transferReference
+              && new Date(replay.occurredAt).getTime() === normalized.transferredAt.getTime()
+              && String(replay.reconciliationNote) === normalized.note;
+            if (exactReplay) {
+              return {
+                ...toPayoutResponse(replay, 'Staff'),
+                request: await respond(id, 'Staff'),
+                replay: true,
+              };
+            }
+          }
+          throw new ApiError(
+            409,
+            'Another payout result already completed this refund obligation',
+            [],
+            'PAYOUT_ALREADY_SUCCEEDED'
+          );
+        }
+        throw error;
+      }
+
+      return {
+        ...toPayoutResponse(evidence, 'Staff'),
+        request: await respond(id, 'Staff'),
+      };
+    },
+
     async startPayOSPayout(staffId, id, input = {}) {
       const idempotencyKey = normalizeIdempotencyKey(input.idempotencyKey);
       const existing = await repository.findPayoutEvidenceByIdempotencyKey(idempotencyKey);
@@ -1616,17 +2264,34 @@ function createReturnRefundService({
       }
 
       const loaded = await loadRequest(id);
-      const { request, order, payoutIncident } = loaded;
-      if (request.status === 'Completed') throw new ApiError(409, 'Refund was already completed');
+      const {
+        request, order, payoutIncident, refundPending: projectedRefund,
+      } = loaded;
+      const sameOperationRetry = ['Processing', 'Unknown'].includes(projectedRefund?.payoutStatus)
+        && String(projectedRefund?.payoutOperationKey || '') === idempotencyKey;
+      if (['Processing', 'Unknown'].includes(projectedRefund?.payoutStatus)
+        && !sameOperationRetry) {
+        throw new ApiError(
+          409,
+          'The previous payout attempt must be reconciled before another attempt',
+          [],
+          'PAYOUT_RECONCILIATION_REQUIRED'
+        );
+      }
+      if (request.status === 'Completed'
+        || projectedRefund?.status === 'Refunded'
+        || projectedRefund?.payoutStatus === 'Succeeded') {
+        throw new ApiError(
+          409,
+          'Refund payout is terminal and cannot be paid again',
+          [],
+          'PAYOUT_TERMINAL_NO_RETRY'
+        );
+      }
       if (!RECEIVED_STATUSES.includes(request.status)) throw new ApiError(409, 'Request must be received or ready for refund before payout');
       if (!request.verifiedDestinationId) throw new ApiError(409, 'A verified refund destination is required before payout');
-      if (payoutIncident?.status === 'Open') {
-        if (payoutIncident.responsibility === 'Customer') {
-          throw new ApiError(409, 'Customer-responsibility recovery is open; no automatic second payout is allowed');
-        }
-        if (String(input.recoveryIncidentId || '') !== String(payoutIncident._id)) {
-          throw new ApiError(409, 'The open payout recovery incident must be selected for corrective payout');
-        }
+      if (payoutIncident?.status === 'Open' && !sameOperationRetry) {
+        throw new ApiError(409, 'An open payout incident is read-only and does not authorize a second payout');
       }
       const destination = await repository.findDestinationById(request.verifiedDestinationId);
       if (!destination || destination.status !== 'Verified' || String(destination.returnRefundRequestId) !== String(request._id)) {
@@ -1639,34 +2304,107 @@ function createReturnRefundService({
       if (!payosGateway?.isConfigured?.()) throw new ApiError(503, 'payOS payout is not configured for this server');
       const refund = await findRequestRefundObligation(request);
       if (!refund || String(refund.returnRefundRequestId || request._id) !== String(request._id)) throw new ApiError(409, 'Normal return refund obligation not found');
-      if (refund.status === 'Refunded') throw new ApiError(409, 'Refund payout was already completed');
-      const correctiveRecovery = payoutIncident?.status === 'Open'
-        && payoutIncident.responsibility === 'ShopOrProvider'
-        && String(input.recoveryIncidentId || '') === String(payoutIncident._id);
-      if (['Processing', 'Unknown'].includes(refund.payoutStatus) && refund.payoutOperationKey !== idempotencyKey && !correctiveRecovery) {
+      if (refund.status === 'Refunded' || refund.payoutStatus === 'Succeeded') {
+        throw new ApiError(
+          409,
+          'Refund payout is terminal and cannot be paid again',
+          [],
+          'PAYOUT_TERMINAL_NO_RETRY'
+        );
+      }
+      if (['Processing', 'Unknown'].includes(refund.payoutStatus) && refund.payoutOperationKey !== idempotencyKey) {
         throw new ApiError(409, 'The previous payout attempt must be reconciled before another attempt');
       }
       const claimed = repository.claimPayoutStart
-        ? await repository.claimPayoutStart(refund._id, idempotencyKey, refund.payoutOperationKey || '', correctiveRecovery)
-        : await repository.updateRefundPending(refund._id, { status: 'HandedOff', payoutStatus: 'Processing', payoutOperationKey: idempotencyKey });
+        ? await repository.claimPayoutStart(
+          refund._id,
+          idempotencyKey,
+          refund.payoutOperationKey || '',
+          false,
+          refund.payoutStatus === 'Processing'
+            && refund.payoutOperationKey === idempotencyKey
+            && refund.payoutStartedAt
+            ? refund.payoutStartedAt
+            : new Date(clock())
+        )
+        : await repository.updateRefundPending(refund._id, {
+          status: 'HandedOff',
+          payoutStatus: 'Processing',
+          payoutMethod: 'PayOS',
+          payoutStartedAt: new Date(clock()),
+          payoutOperationKey: idempotencyKey,
+        });
       if (!claimed) throw new ApiError(409, 'Another payout attempt already owns this refund obligation');
 
       const expectedAmount = normalizeRefundAmount(order.totalAmount, 'stored order total');
       const accountNumber = decrypt(destination.accountNumberEncrypted);
-      const payout = await payosGateway.createPayout({
-        referenceId: request.requestCode,
-        amount: expectedAmount,
-        description: `Hoan tien ${request.requestCode}`.slice(0, 100),
-        toBin: destination.bankBin,
-        toAccountNumber: accountNumber,
-        idempotencyKey,
-      });
-      const outcome = classifyPayOSPayout(payout, {
-        referenceId: request.requestCode,
-        amount: expectedAmount,
-        toBin: destination.bankBin,
-        toAccountNumber: accountNumber,
-      });
+      let payout;
+      let outcome;
+      try {
+        payout = await payosGateway.createPayout({
+          referenceId: request.requestCode,
+          amount: expectedAmount,
+          description: `Hoan tien ${request.requestCode}`.slice(0, 100),
+          toBin: destination.bankBin,
+          toAccountNumber: accountNumber,
+          idempotencyKey,
+        });
+        outcome = classifyPayOSPayout(payout, {
+          referenceId: request.requestCode,
+          amount: expectedAmount,
+          toBin: destination.bankBin,
+          toAccountNumber: accountNumber,
+        });
+      } catch (_providerError) {
+        const safeProviderReference = `PAYOS-UNKNOWN-${hash(idempotencyKey).slice(0, 20)}`;
+        if (repository.claimPayoutReconciliation) {
+          const markedUnknown = await repository.claimPayoutReconciliation(
+            refund._id,
+            idempotencyKey,
+            {
+              status: 'HandedOff',
+              payoutStatus: 'Unknown',
+              payoutProviderReference: safeProviderReference,
+            }
+          );
+          if (!markedUnknown) {
+            throw new ApiError(
+              409,
+              'The payout operation changed while recording an unknown provider result',
+              [],
+              'PAYOUT_OPERATION_STALE'
+            );
+          }
+        }
+        const unknownEvidenceKey = `payos-unknown:${hash(idempotencyKey).slice(0, 32)}`;
+        await persistPayoutEvidence(staffId, id, {
+          idempotencyKey: unknownEvidenceKey,
+          operationKey: idempotencyKey,
+          method: 'PAYOS',
+          providerReference: safeProviderReference,
+          status: 'Unknown',
+          amount: expectedAmount,
+          occurredAt: new Date(clock()),
+          reconciliationNote: 'payOS request outcome is unknown; reconcile before another payout',
+          failureReason: 'Provider result was unavailable after the payout operation was claimed',
+          recoveryIncidentId: input.recoveryIncidentId
+            || (sameOperationRetry && payoutIncident?.status === 'Open' ? payoutIncident._id : undefined),
+        }, { trustedPayOS: true, allowPriorUnresolved: true });
+        const evidence = await repository.findPayoutEvidenceByIdempotencyKey(unknownEvidenceKey);
+        if (evidence) {
+          await openPayoutIncident(staffId, loaded, evidence, refund, {
+            idempotencyKey: `payos-unknown-incident:${hash(idempotencyKey).slice(0, 32)}`,
+            cause: 'STAFF_SYSTEM_PROVIDER_MISMATCH',
+            reason: 'payOS returned no reliable result after the payout operation was claimed',
+          });
+        }
+        throw new ApiError(
+          502,
+          'payOS payout result is unknown; retry only with the same operation key or reconcile it',
+          [],
+          'PAYOUT_RESULT_UNKNOWN'
+        );
+      }
       const result = await persistPayoutEvidence(staffId, id, {
         idempotencyKey,
         operationKey: idempotencyKey,
@@ -1677,7 +2415,8 @@ function createReturnRefundService({
         occurredAt: new Date(clock()),
         reconciliationNote: `payOS create response ${payout.approvalState || 'UNKNOWN'}`,
         failureReason: outcome.failureReason,
-        recoveryIncidentId: input.recoveryIncidentId,
+        recoveryIncidentId: input.recoveryIncidentId
+          || (sameOperationRetry && payoutIncident?.status === 'Open' ? payoutIncident._id : undefined),
       }, { trustedPayOS: true, allowPriorUnresolved: true });
       if (outcome.status === 'Unknown' && outcome.failureReason.includes('immutable refund amount or destination snapshot')) {
         const evidence = await repository.findPayoutEvidenceByIdempotencyKey(idempotencyKey);
@@ -1713,7 +2452,7 @@ function createReturnRefundService({
       });
       return persistPayoutEvidence(staffId, id, {
         idempotencyKey: `payos-reconcile:${outcome.providerEventKey}`,
-        operationKey: latest.idempotencyKey,
+        operationKey: latest.payoutOperationKey,
         method: 'PAYOS',
         providerReference: outcome.providerReference,
         status: outcome.status,
@@ -1722,13 +2461,19 @@ function createReturnRefundService({
         reconciliationNote: `payOS reconciliation ${payout.approvalState || 'UNKNOWN'}`,
         failureReason: outcome.failureReason,
         recoveryIncidentId: loaded.payoutIncident?.status === 'Open' ? loaded.payoutIncident._id : undefined,
-      }, { trustedPayOS: true, allowPriorUnresolved: true });
+      }, {
+        trustedPayOS: true,
+        trustedReconciliation: true,
+        allowPriorUnresolved: true,
+      });
     },
 
     async completeRefund(staffId, id, input = {}) {
       const loaded = await loadRequest(id);
       const { request, order } = loaded;
-      const successfulEvidence = await repository.findSuccessfulPayoutEvidence(request._id);
+      const successfulEvidence = loaded.payoutEvidence?.status === 'Succeeded'
+        ? loaded.payoutEvidence
+        : null;
       if (request.status === 'Completed') {
         if (!successfulEvidence || !request.completionEvidenceId) throw new ApiError(409, 'Completed request is missing verified payout evidence');
         return respond(id, 'Staff', true);

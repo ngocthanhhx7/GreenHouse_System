@@ -16,6 +16,10 @@ describe('return/refund route role boundaries', () => {
     assert.match(source, /router\.post\('\/return-refunds\/:id\/destination', authenticate, authorizeRoles\('Customer'\)/);
   });
 
+  it('exposes the public bank catalog only to an authenticated Customer', () => {
+    assert.match(source, /router\.get\('\/return-refunds\/banks', authenticate, authorizeRoles\('Customer'\), returnRefundController\.listPublicBanks\)/);
+  });
+
   it('keeps destination verification, expiry, manual evidence, and payOS payout reconciliation with Staff', () => {
     assert.match(source, /router\.patch\('\/staff\/return-refunds\/:id\/destination', authenticate, authorizeRoles\('Staff'\)/);
     assert.match(source, /router\.post\('\/staff\/return-refunds\/:id\/expire', authenticate, authorizeRoles\('Staff'\)/);
