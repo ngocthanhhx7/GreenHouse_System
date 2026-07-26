@@ -41,9 +41,14 @@ describe('staff refund payout UI contract', () => {
   });
 
   it('renders a Completed successful refund as read-only with no incident mutation control', () => {
-    assert.match(page, /\['Received', 'Completed'\]\.includes\(request\.status\)/);
+    assert.match(page, /\['Received', 'ReadyForRefund', 'Completed'\]\.includes\(request\.status\)/);
     assert.match(page, /payoutUi\.readOnly/);
     assert.doesNotMatch(page, /reportPayoutIncident|incidentReason|Báo cáo chi trả sai đích/);
+  });
+
+  it('keeps ReadyForRefund cancellation obligations actionable through the same payout panel', () => {
+    assert.match(page, /\['Received', 'ReadyForRefund', 'Completed'\]\.includes\(request\.status\)/);
+    assert.match(page, /request\.destination\?\.status === 'Verified'/);
   });
 
   it('guards every post-await task state write with the captured route command', () => {

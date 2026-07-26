@@ -217,7 +217,7 @@ export default function ReturnRefundDetailPage() {
         </div>}
       </section>}
       {request.payoutIncident && <div className={`alert ${request.payoutIncident.status === 'Open' ? 'alert-danger' : 'alert-secondary'} mt-3`}><strong>Hồ sơ recovery chi trả: {request.payoutIncident.status === 'Open' ? 'Đang mở' : 'Đã xử lý'}</strong><br />Trách nhiệm: {request.payoutIncident.responsibility === 'Customer' ? 'Customer — hệ thống không tự chi lần hai' : 'Shop/đơn vị chi trả — Customer không chịu trách nhiệm'}<br />Lý do: {request.payoutIncident.reportReason}</div>}
-      {['Received', 'Completed'].includes(request.status) && request.destination?.status === 'Verified' && <section className="border rounded p-3 mt-3 refund-payout-panel" aria-labelledby="payoutHeading">
+      {['Received', 'ReadyForRefund', 'Completed'].includes(request.status) && request.destination?.status === 'Verified' && <section className="border rounded p-3 mt-3 refund-payout-panel" aria-labelledby="payoutHeading">
         <h2 id="payoutHeading" className="h5">Chi trả hoàn tiền</h2>
         <p className="alert alert-info">Hệ thống tự tính giá trị hoàn tiền từ đơn hàng. Staff không nhập hoặc sửa số tiền.</p>
         {!request.payoutDestinationReady && <div className="alert alert-warning" role="status">Không thể dùng PayOS cho thông tin nhận tiền hiện tại{request.payoutDestinationIssueCode ? ` (${request.payoutDestinationIssueCode})` : ''}. Bạn vẫn có thể ghi nhận chuyển khoản thủ công đã đối soát.</div>}
@@ -258,7 +258,7 @@ export default function ReturnRefundDetailPage() {
         {payoutUi.readOnly && <div className="alert alert-success mb-0" role="status">Chi trả đã hoàn tất; hồ sơ chỉ còn ở chế độ xem.</div>}
         {!payoutUi.showMethodSelector && !payoutUi.showReconciliation && !payoutUi.readOnly && <div className="alert alert-secondary mb-0" role="status">Chưa có hành động chi trả được server cho phép ở trạng thái hiện tại.</div>}
       </section>}
-      {request.status === 'Received' && request.destination?.status !== 'Verified' && <div className="alert alert-warning mt-3">Chưa thể chi trả: cần thông tin nhận hoàn tiền đã được xác minh.</div>}
+      {['Received', 'ReadyForRefund'].includes(request.status) && request.destination?.status !== 'Verified' && <div className="alert alert-warning mt-3">Chưa thể chi trả: cần thông tin nhận hoàn tiền đã được xác minh.</div>}
       {request.status === 'Completed' && <div className="alert alert-success mt-3">Hồ sơ đã hoàn tất từ bằng chứng chi trả được xác minh.</div>}
     </>}
   </div>;
