@@ -140,9 +140,9 @@ export function createReturnRefundService({ baseUrl = DEFAULT_BASE_URL, fetcher 
           idempotencyKey: input?.idempotencyKey,
           operationKey: input?.operationKey,
           outcome: input?.outcome,
-          providerReference: input?.providerReference,
-          occurredAt: input?.occurredAt,
-          reconciliationNote: input?.reconciliationNote,
+          transferReference: input?.transferReference,
+          transferredAt: input?.transferredAt,
+          note: input?.note,
           confirmed: input?.confirmed === true,
         }),
       });

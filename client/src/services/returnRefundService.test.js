@@ -116,10 +116,27 @@ describe('client return/refund service', () => {
       pin: 'never-send',
     });
     await service.verifyDestination('refund-1', { destinationId: 'destination-1', status: 'Verified' });
-    await service.recordPayoutEvidence('refund-1', { idempotencyKey: 'payout-001' });
+    await service.recordPayoutEvidence('refund-1', {
+      idempotencyKey: 'payout-001',
+      transferReference: 'BANK-001',
+      transferredAt: '2026-07-26T10:00',
+      note: 'Đã kiểm tra chứng từ chuyển khoản thủ công.',
+      confirmed: true,
+    });
     await service.startPayOSPayout('refund-1', { idempotencyKey: 'payos-payout-001' });
     await service.reconcilePayOSPayout('refund-1');
-    await service.reconcilePayout('refund-1', { operationKey: 'operation-1', outcome: 'Unknown' });
+    await service.reconcilePayout('refund-1', {
+      idempotencyKey: 'reconcile-001',
+      operationKey: 'operation-1',
+      outcome: 'Unknown',
+      transferReference: 'BANK-001',
+      transferredAt: '2026-07-26T10:00',
+      note: 'Chưa đủ chứng từ để kết luận giao dịch.',
+      confirmed: true,
+      providerReference: 'must-not-cross-boundary',
+      occurredAt: 'must-not-cross-boundary',
+      reconciliationNote: 'must-not-cross-boundary',
+    });
     await service.reportPayoutIncident('refund-1', { cause: 'CUSTOMER_CONFIRMED_DESTINATION' });
 
     assert.deepEqual(calls.map((call) => call.url), [
@@ -138,6 +155,15 @@ describe('client return/refund service', () => {
       accountHolderName: 'NGUYEN VAN A',
       confirmed: true,
       idempotencyKey: 'destination-001',
+    });
+    assert.deepEqual(JSON.parse(calls[6].options.body), {
+      idempotencyKey: 'reconcile-001',
+      operationKey: 'operation-1',
+      outcome: 'Unknown',
+      transferReference: 'BANK-001',
+      transferredAt: '2026-07-26T10:00',
+      note: 'Chưa đủ chứng từ để kết luận giao dịch.',
+      confirmed: true,
     });
   });
 

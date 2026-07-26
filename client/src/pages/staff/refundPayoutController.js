@@ -79,11 +79,9 @@ export function createRefundPayoutController({
     },
     beginManual(requestId, form = {}) {
       return begin('MANUAL', requestId, {
-        method: 'MANUAL',
-        status: 'Succeeded',
-        providerReference: String(form.transferReference || '').trim(),
-        occurredAt: form.transferredAt,
-        reconciliationNote: String(form.note || '').trim(),
+        transferReference: String(form.transferReference || '').trim(),
+        transferredAt: form.transferredAt,
+        note: String(form.note || '').trim(),
         confirmed: form.confirmed === true,
       });
     },
@@ -91,9 +89,9 @@ export function createRefundPayoutController({
       return begin('RECONCILIATION', requestId, {
         operationKey,
         outcome: form.outcome,
-        providerReference: String(form.transferReference || '').trim(),
-        occurredAt: form.transferredAt,
-        reconciliationNote: String(form.note || '').trim(),
+        transferReference: String(form.transferReference || '').trim(),
+        transferredAt: form.transferredAt,
+        note: String(form.note || '').trim(),
         confirmed: form.confirmed === true,
       }, operationKey);
     },

@@ -39,7 +39,7 @@ describe('staff refund payout controller', () => {
     });
     assert.equal(controller.beginManual('refund-1', { transferReference: 'changed' }), null);
     assert.deepEqual(first.payload, {
-      idempotencyKey: 'key-1', method: 'MANUAL', status: 'Succeeded', providerReference: 'MB-001', occurredAt: '2026-07-26T10:00', reconciliationNote: 'Đã kiểm tra giao dịch hoàn tiền hợp lệ.', confirmed: true,
+      idempotencyKey: 'key-1', transferReference: 'MB-001', transferredAt: '2026-07-26T10:00', note: 'Đã kiểm tra giao dịch hoàn tiền hợp lệ.', confirmed: true,
     });
     assert.equal(controller.settle(first, { succeeded: false }), true);
     const retry = controller.beginManual('refund-1', { transferReference: 'MB-001', transferredAt: '2026-07-26T10:00', note: 'Đã kiểm tra giao dịch hoàn tiền hợp lệ.', confirmed: true });
@@ -53,14 +53,14 @@ describe('staff refund payout controller', () => {
     const controller = createRefundPayoutController({ createKey: () => 'stable-key' });
     const manual = controller.beginManual('refund-1', { transferReference: 'BANK-1', transferredAt: '2026-07-26T10:00', note: 'Đã đối soát giao dịch chuyển khoản thủ công.', confirmed: true });
     assert.equal(manual.kind, 'MANUAL');
-    assert.equal(manual.payload.method, 'MANUAL');
+    assert.equal(manual.payload.transferReference, 'BANK-1');
     assert.equal(controller.settle(manual, { succeeded: false }), true);
 
     const reconciliation = controller.beginReconciliation('refund-1', 'operation-current', {
       outcome: 'Unknown', transferReference: 'BANK-1', transferredAt: '2026-07-26T10:00', note: 'Chưa đủ chứng từ để kết luận giao dịch.', confirmed: true,
     });
     assert.deepEqual(reconciliation.payload, {
-      idempotencyKey: 'stable-key', operationKey: 'operation-current', outcome: 'Unknown', providerReference: 'BANK-1', occurredAt: '2026-07-26T10:00', reconciliationNote: 'Chưa đủ chứng từ để kết luận giao dịch.', confirmed: true,
+      idempotencyKey: 'stable-key', operationKey: 'operation-current', outcome: 'Unknown', transferReference: 'BANK-1', transferredAt: '2026-07-26T10:00', note: 'Chưa đủ chứng từ để kết luận giao dịch.', confirmed: true,
     });
   });
 
