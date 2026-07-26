@@ -1294,7 +1294,7 @@ describe('return/refund service', () => {
   it('does not let Staff decide a destination after the Return becomes terminal', async () => {
     const requestId = await approveRequest();
     const destination = await service.submitDestination('customer-1', requestId, {
-      bankName: 'Test Bank',
+      bankCode: 'MB',
       accountNumber: '0123456789',
       accountHolderName: 'Nguyen Van A',
       confirmed: true,
