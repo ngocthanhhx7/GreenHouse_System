@@ -9,12 +9,16 @@ export function getRefundPayoutUiState(request, selectedMethod) {
   const canReconcile = payout.canReconcileOperation === true;
   const readOnly = status === 'Succeeded' || request?.status === 'Completed';
   const canSelectMethod = canStart && !readOnly;
+  const showPayOSReconciliation = canReconcile
+    && payout.canReconcilePayOS === true
+    && !readOnly;
 
   return {
     showMethodSelector: canSelectMethod,
     showPayOS: canSelectMethod && selectedMethod === 'PayOS' && payout.canStartPayOS === true,
     showManual: canSelectMethod && selectedMethod === 'Manual' && payout.canRecordManualSuccess === true,
     showReconciliation: canReconcile && !readOnly,
+    showPayOSReconciliation,
     readOnly,
   };
 }
@@ -76,6 +80,9 @@ export function createRefundPayoutController({
     },
     beginPayOS(requestId) {
       return begin('PAYOS', requestId);
+    },
+    beginPayOSReconciliation(requestId) {
+      return begin('PAYOS_RECONCILIATION', requestId);
     },
     beginManual(requestId, form = {}) {
       return begin('MANUAL', requestId, {

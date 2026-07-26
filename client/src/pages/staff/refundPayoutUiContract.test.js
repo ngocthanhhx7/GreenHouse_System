@@ -18,11 +18,13 @@ describe('staff refund payout UI contract', () => {
 
   it('does not allow a new payout action while Processing or Unknown and reconciles the exact operation key', () => {
     assert.match(page, /payoutUi\.showReconciliation/);
+    assert.match(page, /payoutUi\.showPayOSReconciliation/);
     assert.match(page, /beginReconciliation\(id, operationKey, reconciliation\)/);
+    assert.match(page, /beginPayOSReconciliation\(id\)/);
     assert.match(page, /Mã lệnh đang khóa hồ sơ/);
     assert.match(page, /reconcilePayout\(id, payload\)/);
+    assert.match(page, /reconcilePayOSPayout\(id\)/);
     assert.match(service, /\/payout-reconciliation/);
-    assert.doesNotMatch(page, /reconcilePayOSPayout\(/);
   });
 
   it('keeps payout commands single-flight, idempotent, and reloads canonical state after a result or conflict', () => {
