@@ -85,7 +85,7 @@ describe('return/refund public bank catalog controller', () => {
     const routes = readFileSync(path.join(__dirname, '../routes/returnRefund.routes.js'), 'utf8');
     assert.match(
       routes,
-      /router\.post\('\/staff\/return-refunds\/:id\/payout-reconciliation', authenticate, authorizeRoles\('Staff'\), returnRefundController\.reconcilePayoutOperation\)/,
+      /router\.post\('\/staff\/return-refunds\/:id\/payout-reconciliation', authenticate, authorizeRoles\('Staff'\), validateObjectIdParam\(\), returnRefundController\.reconcilePayoutOperation\)/,
     );
   });
 });

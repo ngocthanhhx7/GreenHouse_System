@@ -13,9 +13,11 @@ describe('client damage report service contract', () => {
         return { ok: true, async json() { return { success: true, data: { ok: true } }; } };
       },
     });
+    await service.listStaffReports({ status: 'PendingReview', page: 2, pageSize: 20 });
     await service.createStaffReport({ inventoryId: 'inv-1', reportedQuantity: 1, evidence: [{ reference: 'x' }] });
     await service.decideWarehouseReport('damage-1', { confirmedQuantity: 1, decisionReason: 'Verified', evidence: [{ reference: 'y' }] });
-    assert.equal(calls[0].url, '/api/staff/damage-reports');
-    assert.equal(calls[1].url, '/api/warehouse/damage-reports/damage-1/decision');
+    assert.equal(calls[0].url, '/api/staff/damage-reports?status=PendingReview&page=2&pageSize=20');
+    assert.equal(calls[1].url, '/api/staff/damage-reports');
+    assert.equal(calls[2].url, '/api/warehouse/damage-reports/damage-1/decision');
   });
 });

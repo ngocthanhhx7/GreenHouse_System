@@ -74,7 +74,7 @@ const customerRoutes = [
 
 const staffRoutes = [
   { method: 'GET', path: '/api/staff/reviews' },
-  { method: 'PATCH', path: '/api/staff/reviews/review-1/moderation' },
+  { method: 'PATCH', path: '/api/staff/reviews/507f1f77bcf86cd799439011/moderation' },
 ];
 
 describe('SL-008 Review routes', () => {
@@ -86,7 +86,7 @@ describe('SL-008 Review routes', () => {
       { method: 'patch', path: '/reviews/:reviewId', handlers: 3 },
       { method: 'patch', path: '/reviews/:reviewId/publication', handlers: 3 },
       { method: 'get', path: '/staff/reviews', handlers: 3 },
-      { method: 'patch', path: '/staff/reviews/:reviewId/moderation', handlers: 3 },
+      { method: 'patch', path: '/staff/reviews/:reviewId/moderation', handlers: 4 },
     ]);
   });
 

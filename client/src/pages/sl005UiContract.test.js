@@ -17,7 +17,10 @@ describe('SL-005 inventory, damage, and replenishment UI contract', () => {
     assert.match(sidebarSource, /to: '\/staff\/damage-reports'/);
     assert.match(sidebarSource, /to: '\/warehouse\/damage-reports'/);
     assert.match(staffDamageSource, /createStaffReport/);
+    assert.match(staffDamageSource, /listStaffReports/);
     assert.match(staffDamageSource, /withdrawStaffReport/);
+    assert.match(staffDamageSource, /Trang trước/);
+    assert.match(staffDamageSource, /Trang sau/);
     assert.match(staffDamageSource, /idempotencyKey/);
     assert.match(staffDamageSource, /result\.replay/);
     assert.match(warehouseDamageSource, /decideWarehouseReport/);

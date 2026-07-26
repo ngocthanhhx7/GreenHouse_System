@@ -39,6 +39,13 @@ function makeHarness() {
       { _id: 'product-1', sku: 'SKU-001', stockQuantity: 2 },
       { _id: 'product-2', sku: 'SKU-002', stockQuantity: 1 },
     ],
+    payments: [{
+      _id: 'payment-1',
+      orderId: 'order-1',
+      paymentMethod: 'ONLINE',
+      paymentStatus: 'Paid',
+    }],
+    returnRequests: [],
     locks: [],
     cases: [],
     lines: [],
@@ -60,6 +67,7 @@ function makeHarness() {
     inventoryTransactions: [],
     notifications: [],
     audits: [],
+    staffQueueQueries: [],
   };
 
   const repository = {
@@ -67,6 +75,9 @@ function makeHarness() {
     snapshot: () => structuredClone(state),
     restore(snapshot) { Object.keys(snapshot).forEach((key) => { state[key] = snapshot[key]; }); },
     async findOrderById(id) { return state.orders.find((item) => item._id === id) || null; },
+    async findPaymentByOrderId(orderId) {
+      return state.payments.find((item) => item.orderId === orderId) || null;
+    },
     async findLatestCustomerDeliveryReceiptByOrder(orderId) {
       return state.customerDeliveryReceipts
         .filter((item) => item.orderId === orderId)
@@ -84,6 +95,17 @@ function makeHarness() {
     },
     async listCases(filter = {}) {
       return state.cases.filter((item) => !filter.customerId || item.customerId === filter.customerId);
+    },
+    async listStaffCasesPage(query = {}) {
+      state.staffQueueQueries.push(structuredClone(query));
+      const matching = state.cases.filter((item) => (
+        (!query.status || item.status === query.status)
+        && (!query.search || item.requestCode.toLowerCase().includes(query.search.toLowerCase()))
+      ));
+      return {
+        items: matching.slice(query.skip, query.skip + query.pageSize),
+        total: matching.length,
+      };
     },
     async listLines(caseId) { return state.lines.filter((item) => item.exchangeCaseId === caseId); },
     async listUnits(caseId) { return state.units.filter((item) => item.exchangeCaseId === caseId); },
@@ -109,6 +131,17 @@ function makeHarness() {
       return state.locks.find((item) => (
         item.orderId === orderId && ['Active', 'ClosedPermanently'].includes(item.status)
       )) || null;
+    },
+    async transferOrderLock(orderId, exchangeCaseId, returnRequestId) {
+      const lock = state.locks.find((item) => (
+        item.orderId === orderId
+        && item.caseType === 'EXCHANGE'
+        && item.caseId === exchangeCaseId
+        && item.status === 'Active'
+      ));
+      if (!lock) return null;
+      Object.assign(lock, { caseType: 'RETURN_REFUND', caseId: returnRequestId });
+      return lock;
     },
     async createCase(data) {
       const item = { _id: `exchange-${state.cases.length + 1}`, ...data };
@@ -281,6 +314,16 @@ function makeHarness() {
       const units = state.units.filter((item) => item.exchangeCaseId === caseId);
       units.forEach((unit) => { delete unit.exclusivePhysicalClaimKey; });
       return units.length;
+    },
+    async createConvertedReturn(data) {
+      const item = { _id: `return-${state.returnRequests.length + 1}`, ...data };
+      state.returnRequests.push(item);
+      return item;
+    },
+    async createConversion(data) {
+      const item = { _id: `conversion-${state.conversions.length + 1}`, ...data };
+      state.conversions.push(item);
+      return item;
     },
   };
 
@@ -487,6 +530,35 @@ describe('SL-002 Exchange service', () => {
       /idempotency key.*different|different.*command/i
     );
     assert.equal(harness.state.cases.length, 1);
+  });
+
+  it('bounds and searches the Staff Exchange queue by request code', async () => {
+    const request = await harness.service.createCustomerRequest('customer-1', validRequest({
+      idempotencyKey: 'exchange-staff-queue-0001',
+    }));
+    const page = await harness.service.listStaffRequests({
+      status: 'Submitted',
+      page: '1',
+      pageSize: '1',
+      search: request.requestCode.slice(-6),
+    });
+
+    assert.equal(page.total, 1);
+    assert.equal(page.items[0].id, request.id);
+    assert.equal(page.page, 1);
+    assert.equal(page.pageSize, 1);
+    assert.equal(page.totalPages, 1);
+    assert.deepEqual(harness.state.staffQueueQueries[0], {
+      status: 'Submitted',
+      page: 1,
+      pageSize: 1,
+      search: request.requestCode.slice(-6),
+      skip: 0,
+    });
+    await assert.rejects(
+      () => harness.service.listStaffRequests({ page: '0' }),
+      (error) => error.statusCode === 400,
+    );
   });
 
   it('rejects foreign, fractional, excessive, and free-form/money input', async () => {
@@ -1002,6 +1074,158 @@ describe('SL-002 Exchange service', () => {
     assert.equal(replay.idempotentReplay, true);
     assert.equal(harness.state.inventories[0].reservedQuantity, 0);
     assert.equal(harness.state.reservations[0].status, 'Released');
+  });
+
+  it('rolls Exchange cancellation back when its audit cannot be persisted', async () => {
+    const request = await harness.service.createCustomerRequest('customer-1', validRequest({
+      idempotencyKey: 'exchange-cancel-audit-0001',
+    }));
+    await harness.service.decideRequest('staff-1', request.id, {
+      idempotencyKey: 'decision-cancel-audit-0001',
+      decision: 'APPROVE',
+      responsibility: 'SHOP_FAULT',
+      reason: 'Lỗi Shop',
+    });
+    const before = structuredClone(harness.state);
+    const atomicService = harness.createService({
+      auditLogger: {
+        async log() {
+          throw new Error('exchange cancel audit unavailable');
+        },
+      },
+    });
+
+    await assert.rejects(
+      atomicService.cancelRequest('customer-1', request.id, {
+        idempotencyKey: 'cancel-exchange-audit-0001',
+      }),
+      /exchange cancel audit unavailable/,
+    );
+
+    assert.deepEqual(harness.state, before);
+  });
+
+  it('converts an initial exact-stock failure into a normal paid Return with payment lineage', async () => {
+    const request = await harness.service.createCustomerRequest('customer-1', validRequest({
+      idempotencyKey: 'exchange-convert-paid-0001',
+    }));
+    harness.state.inventories[0].stockQuantity = 0;
+    harness.state.products[0].stockQuantity = 0;
+    await harness.service.decideRequest('staff-1', request.id, {
+      idempotencyKey: 'decision-convert-paid-0001',
+      decision: 'APPROVE',
+      responsibility: 'SHOP_FAULT',
+      reason: 'Đủ điều kiện nhưng hết đúng SKU',
+    });
+
+    const result = await harness.service.chooseStockOption('customer-1', request.id, {
+      idempotencyKey: 'choice-convert-paid-0001',
+      choice: 'CONVERT_TO_RETURN',
+    });
+
+    assert.equal(result.status, 'ConvertedToReturnRefund');
+    assert.equal(harness.state.returnRequests.length, 1);
+    assert.equal(harness.state.returnRequests[0].status, 'New');
+    assert.equal(harness.state.returnRequests[0].paymentId, 'payment-1');
+    assert.equal(harness.state.locks[0].caseType, 'RETURN_REFUND');
+    assert.equal(harness.state.locks[0].caseId, harness.state.returnRequests[0]._id);
+  });
+
+  it('rolls Exchange-to-Return conversion back when its audit cannot be persisted', async () => {
+    const request = await harness.service.createCustomerRequest('customer-1', validRequest({
+      idempotencyKey: 'exchange-convert-audit-0001',
+    }));
+    harness.state.inventories[0].stockQuantity = 0;
+    harness.state.products[0].stockQuantity = 0;
+    await harness.service.decideRequest('staff-1', request.id, {
+      idempotencyKey: 'decision-convert-audit-0001',
+      decision: 'APPROVE',
+      responsibility: 'SHOP_FAULT',
+      reason: 'Đủ điều kiện nhưng hết đúng SKU',
+    });
+    const before = structuredClone(harness.state);
+    const atomicService = harness.createService({
+      auditLogger: {
+        async log() {
+          throw new Error('exchange conversion audit unavailable');
+        },
+      },
+    });
+
+    await assert.rejects(
+      atomicService.convertToReturn('customer-1', request.id, {
+        idempotencyKey: 'choice-convert-audit-0001',
+      }),
+      /exchange conversion audit unavailable/,
+    );
+
+    assert.deepEqual(harness.state, before);
+  });
+
+  it('keeps an unpaid COD Exchange conversion on reconciliation hold', async () => {
+    const request = await harness.service.createCustomerRequest('customer-1', validRequest({
+      idempotencyKey: 'exchange-convert-cod-hold-0001',
+    }));
+    harness.state.inventories[0].stockQuantity = 0;
+    harness.state.products[0].stockQuantity = 0;
+    await harness.service.decideRequest('staff-1', request.id, {
+      idempotencyKey: 'decision-convert-cod-hold-0001',
+      decision: 'APPROVE',
+      responsibility: 'SHOP_FAULT',
+      reason: 'Đủ điều kiện nhưng hết đúng SKU',
+    });
+    Object.assign(harness.state.orders[0], {
+      paymentMethod: 'COD',
+      paymentStatus: 'Unpaid',
+      codDiscrepancyStatus: 'Open',
+    });
+    Object.assign(harness.state.payments[0], {
+      paymentMethod: 'COD',
+      paymentStatus: 'Unpaid',
+    });
+
+    await harness.service.chooseStockOption('customer-1', request.id, {
+      idempotencyKey: 'choice-convert-cod-hold-0001',
+      choice: 'CONVERT_TO_RETURN',
+    });
+
+    assert.equal(harness.state.returnRequests.length, 1);
+    assert.equal(harness.state.returnRequests[0].status, 'AwaitingCODReconciliation');
+    assert.equal(harness.state.returnRequests[0].paymentId, 'payment-1');
+    assert.match(harness.state.returnRequests[0].holdReason, /COD/i);
+  });
+
+  it('fails closed when Exchange conversion sees unpaid COD without an open discrepancy', async () => {
+    const request = await harness.service.createCustomerRequest('customer-1', validRequest({
+      idempotencyKey: 'exchange-convert-invalid-cod-0001',
+    }));
+    harness.state.inventories[0].stockQuantity = 0;
+    harness.state.products[0].stockQuantity = 0;
+    await harness.service.decideRequest('staff-1', request.id, {
+      idempotencyKey: 'decision-convert-invalid-cod-0001',
+      decision: 'APPROVE',
+      responsibility: 'SHOP_FAULT',
+      reason: 'Đủ điều kiện nhưng hết đúng SKU',
+    });
+    Object.assign(harness.state.orders[0], {
+      paymentMethod: 'COD',
+      paymentStatus: 'Unpaid',
+      codDiscrepancyStatus: 'Resolved',
+    });
+    Object.assign(harness.state.payments[0], {
+      paymentMethod: 'COD',
+      paymentStatus: 'Unpaid',
+    });
+    const beforeConversion = structuredClone(harness.state);
+
+    await assert.rejects(
+      harness.service.chooseStockOption('customer-1', request.id, {
+        idempotencyKey: 'choice-convert-invalid-cod-0001',
+        choice: 'CONVERT_TO_RETURN',
+      }),
+      (error) => error.statusCode === 409 && /COD|discrepancy/i.test(error.message),
+    );
+    assert.deepEqual(harness.state, beforeConversion);
   });
 
   it('finalizes partial Warehouse acceptance atomically and keeps rejected units out of Inventory', async () => {
@@ -1921,6 +2145,45 @@ describe('SL-002 Exchange service', () => {
     assert.equal(resent.request.status, 'DeliveryIncident');
     assert.equal(resent.request.waitingFor, 'INCIDENT_RESEND_IN_TRANSIT');
     assert.equal(resent.request.incidentShipmentId, resent.shipment._id);
+  });
+
+  it('does not let Customer cancel an incident resend wait after physical handoff', async () => {
+    const request = await prepareInspectedExchange(harness, 'incident-cancel');
+    const line = harness.state.lines.find((item) => item.exchangeCaseId === request.id);
+    const outbound = await harness.service.createOutboundShipment('warehouse-1', request.id, {
+      idempotencyKey: 'shipment-incident-cancel-0001',
+      exchangeLineId: line._id,
+      direction: 'REPLACEMENT_TO_CUSTOMER',
+      quantity: 2,
+      carrierName: 'GHN',
+      trackingCode: 'GHN-INCIDENT-CANCEL-001',
+      shippedAt: harness.now,
+    });
+    await harness.service.recordCarrierShipmentEvent(outbound.shipment._id, {
+      eventId: 'carrier-incident-cancel-0001',
+      eventType: 'DAMAGED',
+      occurredAt: harness.now,
+      evidenceReference: 'carrier-proof-damaged-cancel',
+    });
+    const noStock = await harness.service.resendReplacement('staff-1', request.id, {
+      idempotencyKey: 'resend-no-stock-cancel-0001',
+      incidentShipmentId: outbound.shipment._id,
+      carrierName: 'Viettel Post',
+      trackingCode: 'VTP-NO-STOCK-CANCEL-001',
+      shippedAt: harness.now,
+    });
+    assert.equal(noStock.request.status, 'AwaitingExactStockChoice');
+    assert.equal(noStock.request.waitingFor, 'INCIDENT_RESEND');
+    assert.ok(noStock.request.handoffAt);
+
+    const beforeCancellation = structuredClone(harness.state);
+    await assert.rejects(
+      harness.service.cancelRequest('customer-1', request.id, {
+        idempotencyKey: 'cancel-after-handoff-0001',
+      }),
+      (error) => error.statusCode === 409 && /handoff/i.test(error.message),
+    );
+    assert.deepEqual(harness.state, beforeCancellation);
   });
 
   it('keeps Customer delivery disputes and Staff corrections append-only with an explicit event lineage', async () => {

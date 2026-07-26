@@ -153,6 +153,11 @@ export default function ReturnRefundDetailPage() {
     runPayoutCommand(command, (payload) => returnRefundService.startPayOSPayout(id, payload), 'Đã gửi lệnh chi PayOS. Hệ thống đã khóa thao tác mới cho đến khi có kết quả chính thức.');
   }
 
+  function reconcilePayOS() {
+    const command = controllerRef.current?.beginPayOSReconciliation(id);
+    runPayoutCommand(command, () => returnRefundService.reconcilePayOSPayout(id), 'Đã đối soát trạng thái lệnh chi PayOS.');
+  }
+
   function submitManual(event) {
     event.preventDefault();
     const errors = payoutFormErrors(manualPayout);
@@ -244,17 +249,23 @@ export default function ReturnRefundDetailPage() {
             <button className="btn btn-success mt-3" type="submit">Ghi nhận chi trả thủ công</button>
           </fieldset>
         </form>}
-        {payoutUi.showReconciliation && <form className="refund-payout-form mt-3" onSubmit={submitReconciliation}>
-          <fieldset disabled={busy}>
-            <legend>Đối soát lệnh chi trả đang chờ</legend>
-            <p className="mb-2">Mã lệnh đang khóa hồ sơ: <code>{payout.operationKey}</code></p>
-            <div className="refund-payout-grid"><div><label className="form-label" htmlFor="reconciliationOutcome">Kết quả</label><select id="reconciliationOutcome" className="form-select" value={reconciliation.outcome} onChange={(event) => setReconciliation((current) => ({ ...current, outcome: event.target.value }))}><option value="Succeeded">Đã chi thành công</option><option value="Failed">Chi thất bại</option><option value="Unknown">Chưa xác định</option></select></div><div><label className="form-label" htmlFor="reconciliationReference">Mã giao dịch / chứng từ</label><input id="reconciliationReference" className="form-control" value={reconciliation.transferReference} onChange={(event) => setReconciliation((current) => ({ ...current, transferReference: event.target.value }))} required /></div><div><label className="form-label" htmlFor="reconciliationAt">Thời điểm đối soát</label><input id="reconciliationAt" className="form-control" type="datetime-local" value={reconciliation.transferredAt} onChange={(event) => setReconciliation((current) => ({ ...current, transferredAt: event.target.value }))} required /></div></div>
-            <label className="form-label mt-2" htmlFor="reconciliationNote">Ghi chú đối soát</label><textarea id="reconciliationNote" className="form-control" minLength="20" maxLength="1000" value={reconciliation.note} onChange={(event) => setReconciliation((current) => ({ ...current, note: event.target.value }))} required />
-            <label className="form-check mt-3"><input className="form-check-input" type="checkbox" checked={reconciliation.confirmed} onChange={(event) => setReconciliation((current) => ({ ...current, confirmed: event.target.checked }))} /> <span className="form-check-label">Tôi xác nhận kết quả đối soát này thuộc đúng mã lệnh ở trên.</span></label>
-            {(fieldErrors.operationKey || fieldErrors.outcome || fieldErrors.transferReference || fieldErrors.transferredAt || fieldErrors.note || fieldErrors.confirmed) && <small className="text-danger d-block mt-2">{fieldErrors.operationKey || fieldErrors.outcome || fieldErrors.transferReference || fieldErrors.transferredAt || fieldErrors.note || fieldErrors.confirmed}</small>}
-            <button className="btn btn-outline-primary mt-3" type="submit">Ghi nhận kết quả đối soát</button>
-          </fieldset>
-        </form>}
+        {payoutUi.showReconciliation && <>
+          {payoutUi.showPayOSReconciliation && <div className="refund-payout-action mt-3">
+            <p>Kiểm tra trạng thái hiện tại của đúng lệnh PayOS đang khóa hồ sơ trước khi ghi nhận kết quả thủ công.</p>
+            <button className="btn btn-outline-primary" type="button" disabled={busy} onClick={reconcilePayOS}>Đối soát lại PayOS</button>
+          </div>}
+          <form className="refund-payout-form mt-3" onSubmit={submitReconciliation}>
+            <fieldset disabled={busy}>
+              <legend>Đối soát lệnh chi trả đang chờ</legend>
+              <p className="mb-2">Mã lệnh đang khóa hồ sơ: <code>{payout.operationKey}</code></p>
+              <div className="refund-payout-grid"><div><label className="form-label" htmlFor="reconciliationOutcome">Kết quả</label><select id="reconciliationOutcome" className="form-select" value={reconciliation.outcome} onChange={(event) => setReconciliation((current) => ({ ...current, outcome: event.target.value }))}><option value="Succeeded">Đã chi thành công</option><option value="Failed">Chi thất bại</option><option value="Unknown">Chưa xác định</option></select></div><div><label className="form-label" htmlFor="reconciliationReference">Mã giao dịch / chứng từ</label><input id="reconciliationReference" className="form-control" value={reconciliation.transferReference} onChange={(event) => setReconciliation((current) => ({ ...current, transferReference: event.target.value }))} required /></div><div><label className="form-label" htmlFor="reconciliationAt">Thời điểm đối soát</label><input id="reconciliationAt" className="form-control" type="datetime-local" value={reconciliation.transferredAt} onChange={(event) => setReconciliation((current) => ({ ...current, transferredAt: event.target.value }))} required /></div></div>
+              <label className="form-label mt-2" htmlFor="reconciliationNote">Ghi chú đối soát</label><textarea id="reconciliationNote" className="form-control" minLength="20" maxLength="1000" value={reconciliation.note} onChange={(event) => setReconciliation((current) => ({ ...current, note: event.target.value }))} required />
+              <label className="form-check mt-3"><input className="form-check-input" type="checkbox" checked={reconciliation.confirmed} onChange={(event) => setReconciliation((current) => ({ ...current, confirmed: event.target.checked }))} /> <span className="form-check-label">Tôi xác nhận kết quả đối soát này thuộc đúng mã lệnh ở trên.</span></label>
+              {(fieldErrors.operationKey || fieldErrors.outcome || fieldErrors.transferReference || fieldErrors.transferredAt || fieldErrors.note || fieldErrors.confirmed) && <small className="text-danger d-block mt-2">{fieldErrors.operationKey || fieldErrors.outcome || fieldErrors.transferReference || fieldErrors.transferredAt || fieldErrors.note || fieldErrors.confirmed}</small>}
+              <button className="btn btn-outline-primary mt-3" type="submit">Ghi nhận kết quả đối soát</button>
+            </fieldset>
+          </form>
+        </>}
         {payoutUi.readOnly && <div className="alert alert-success mb-0" role="status">Chi trả đã hoàn tất; hồ sơ chỉ còn ở chế độ xem.</div>}
         {!payoutUi.showMethodSelector && !payoutUi.showReconciliation && !payoutUi.readOnly && <div className="alert alert-secondary mb-0" role="status">Chưa có hành động chi trả được server cho phép ở trạng thái hiện tại.</div>}
       </section>}

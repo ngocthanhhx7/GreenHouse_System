@@ -12,6 +12,18 @@ function createRepository() {
   }];
   const payments = [{ _id: 'payment-1', orderId: 'order-1', paymentStatus: 'Unpaid', amount: 100 }];
   const attempts = [{ _id: 'attempt-1', orderId: 'order-1', paymentStatus: 'Unpaid', amount: 100 }];
+  const discrepancies = [{
+    _id: 'cod-discrepancy-1',
+    orderId: 'order-1',
+    shipmentId: 'shipment-1',
+    deliveryEventId: 'delivery-event-1',
+    expectedAmount: 100,
+    customerCollectedAmount: null,
+    carrierSettlementAmount: 0,
+    status: 'Open',
+    openedAt: deliveredAt,
+    resolvedAt: null,
+  }];
   const evidence = [];
   const details = [{ _id: 'detail-1', orderId: 'order-1', productId: 'product-1', quantity: 2 }];
   const recoveryReceipts = [];
@@ -26,7 +38,37 @@ function createRepository() {
   const refunds = [];
 
   return {
-    orders, payments, attempts, evidence, details, recoveryReceipts, requestUpdates, requests, refunds,
+    orders, payments, attempts, discrepancies, evidence, details, recoveryReceipts, requestUpdates, requests, refunds,
+    snapshot() {
+      return structuredClone({
+        orders,
+        payments,
+        attempts,
+        discrepancies,
+        evidence,
+        details,
+        recoveryReceipts,
+        requestUpdates,
+        requests,
+        refunds,
+      });
+    },
+    restore(snapshot) {
+      for (const [key, target] of Object.entries({
+        orders,
+        payments,
+        attempts,
+        discrepancies,
+        evidence,
+        details,
+        recoveryReceipts,
+        requestUpdates,
+        requests,
+        refunds,
+      })) {
+        target.splice(0, target.length, ...snapshot[key]);
+      }
+    },
     async findOrderById(id) { return orders.find((entry) => entry._id === id) || null; },
     async findEvidenceByEventId(eventId) { return evidence.find((entry) => entry.eventId === eventId) || null; },
     async findCollectionEvidenceByOrder(orderId) { return evidence.find((entry) => entry.orderId === orderId && entry.eventType === 'COLLECTION') || null; },
@@ -43,6 +85,15 @@ function createRepository() {
     async updatePayment(id, data) { const payment = payments.find((entry) => entry._id === id); Object.assign(payment, data); return payment; },
     async findLatestPaymentAttemptByOrder(orderId) { return attempts.find((entry) => entry.orderId === orderId) || null; },
     async updatePaymentAttempt(id, data) { const attempt = attempts.find((entry) => entry._id === id); Object.assign(attempt, data); return attempt; },
+    async findCodDiscrepancyByOrder(orderId) {
+      return discrepancies.find((entry) => entry.orderId === orderId) || null;
+    },
+    async updateCodDiscrepancyByOrder(orderId, data) {
+      const discrepancy = discrepancies.find((entry) => entry.orderId === orderId);
+      if (!discrepancy) return null;
+      Object.assign(discrepancy, data);
+      return discrepancy;
+    },
     async findHeldRequestByOrder(orderId) { return requests.find((entry) => entry.orderId === orderId && ['AwaitingCODReconciliation', 'CODRecoveryInProgress'].includes(entry.status)) || null; },
     async findTerminalClosedRequestByOrder(orderId) {
       return requests.find((entry) => entry.orderId === orderId && entry.status === 'ClosedByCODRecovery') || null;
@@ -75,6 +126,7 @@ describe('COD reconciliation service', () => {
   let lockFinds;
   let lockFindResult;
   let auditEntries;
+  let auditFailure;
 
   beforeEach(() => {
     repository = createRepository();
@@ -83,11 +135,27 @@ describe('COD reconciliation service', () => {
     lockFinds = [];
     lockFindResult = null;
     auditEntries = [];
+    auditFailure = null;
     service = createCodReconciliationService({
       repository,
-      transactionManager: { async withTransaction(work) { return work({ id: 'session-1' }); } },
+      transactionManager: {
+        async withTransaction(work) {
+          const snapshot = repository.snapshot();
+          try {
+            return await work({ id: 'session-1' });
+          } catch (error) {
+            repository.restore(snapshot);
+            throw error;
+          }
+        },
+      },
       clock: () => new Date('2026-07-23T12:00:00.000Z'),
-      auditLogger: { async log(entry) { auditEntries.push(entry); } },
+      auditLogger: {
+        async log(entry, session) {
+          if (auditFailure) throw auditFailure;
+          auditEntries.push({ ...entry, session });
+        },
+      },
       afterSalesLockService: {
         async release(payload, session) {
           lockReleases.push({ payload, session });
@@ -110,10 +178,29 @@ describe('COD reconciliation service', () => {
       evidenceReference: 'staff-pod-1',
     });
 
-    assert.equal(result.event.source, 'STAFF_EVIDENCE');
+    assert.equal(result.event.source, 'STAFF_RECORDED_CARRIER_EVIDENCE');
     assert.equal(result.order.paymentStatus, 'Paid');
     assert.equal(auditEntries[0].userId, 'staff-1');
     assert.equal(auditEntries[0].action, 'STAFF_COD_COLLECTION_RECORDED');
+    assert.deepEqual(auditEntries[0].session, { id: 'session-1' });
+  });
+
+  it('rolls COD collection evidence and payment projections back when audit persistence fails', async () => {
+    const before = repository.snapshot();
+    auditFailure = new Error('COD collection audit unavailable');
+
+    await assert.rejects(
+      () => service.recordStaffCollectionEvidence('staff-1', 'order-1', {
+        eventId: 'staff-collection-audit-failure',
+        customerCollectedAmount: 100,
+        collectionTiming: 'AT_DELIVERY',
+        occurredAt: '2026-07-23T10:01:00.000Z',
+        evidenceReference: 'staff-pod-audit-failure',
+      }),
+      /COD collection audit unavailable/,
+    );
+
+    assert.deepEqual(repository.snapshot(), before);
   });
 
   it('marks a full at-delivery Customer collection as Paid at DeliveredAt and releases a held request', async () => {
@@ -128,14 +215,25 @@ describe('COD reconciliation service', () => {
     assert.equal(repository.payments[0].paidAt.toISOString(), '2026-07-23T10:00:00.000Z');
     assert.equal(repository.orders[0].completedSaleAt.toISOString(), '2026-07-23T10:00:00.000Z');
     assert.equal(repository.orders[0].codDiscrepancyStatus, 'Resolved');
+    assert.equal(repository.discrepancies.length, 1);
+    assert.equal(repository.discrepancies[0].status, 'ResolvedCollectedAtDelivery');
+    assert.equal(repository.discrepancies[0].customerCollectedAmount, 100);
+    assert.equal(repository.discrepancies[0].resolvedAt.toISOString(), '2026-07-23T10:01:00.000Z');
     assert.equal(repository.requests[0].status, 'Pending');
 
+    Object.assign(repository.discrepancies[0], {
+      customerCollectedAmount: null,
+      status: 'Open',
+      resolvedAt: null,
+    });
     const replay = await service.recordCollectionEvidence('order-1', {
       eventId: 'collection-1', customerCollectedAmount: 100, collectionTiming: 'AT_DELIVERY',
       occurredAt: '2026-07-23T10:01:00.000Z', evidenceReference: 'pod-1',
     });
     assert.equal(replay.idempotentReplay, true);
     assert.equal(repository.evidence.length, 1);
+    assert.equal(repository.discrepancies[0].status, 'ResolvedCollectedAtDelivery');
+    assert.equal(repository.discrepancies[0].customerCollectedAmount, 100);
   });
 
   it('releases a held Exchange to Submitted only after full Customer collection', async () => {
@@ -188,6 +286,9 @@ describe('COD reconciliation service', () => {
     assert.equal(partial.order.paymentStatus, 'Unpaid');
     assert.equal(repository.orders[0].customerCollectedAmount, 40);
     assert.equal(repository.orders[0].codDiscrepancyStatus, 'Open');
+    assert.equal(repository.discrepancies[0].status, 'RecoveryRequired');
+    assert.equal(repository.discrepancies[0].customerCollectedAmount, 40);
+    assert.equal(repository.discrepancies[0].resolvedAt, null);
     await assert.rejects(
       () => service.recordCollectionEvidence('order-1', {
         eventId: 'collection-second', customerCollectedAmount: 60, collectionTiming: 'AFTER_DELIVERY',
@@ -269,6 +370,8 @@ describe('COD reconciliation service', () => {
     assert.equal(lockReleases.length, 0);
     assert.equal(repository.requests[0].recoveryRefundId, repository.refunds[0]._id);
     assert.equal(repository.requests[0].recoveryCompletedAt, null);
+    assert.equal(repository.discrepancies[0].status, 'RecoveryRefundPending');
+    assert.equal(repository.discrepancies[0].resolvedAt, null);
 
     const replay = await service.finalizeRecovery('staff-1', 'order-1', {
       goodsRecoveryReceiptId: receipt.receipt.receiptId, destinationVerified: true,
@@ -285,6 +388,8 @@ describe('COD reconciliation service', () => {
     });
     assert.equal(repository.requests[0].status, 'ClosedByCODRecovery');
     assert.ok(repository.requests[0].recoveryCompletedAt);
+    assert.equal(repository.discrepancies[0].status, 'ResolvedPartialRefunded');
+    assert.ok(repository.discrepancies[0].resolvedAt);
     assert.deepEqual(lockReleases, [{
       payload: {
         orderId: 'order-1',
@@ -295,6 +400,34 @@ describe('COD reconciliation service', () => {
       },
       session: { id: 'session-1' },
     }]);
+  });
+
+  it('rolls COD recovery closure back when its audit cannot be persisted', async () => {
+    await service.recordCollectionEvidence('order-1', {
+      eventId: 'collection-for-audit-rollback',
+      customerCollectedAmount: 40,
+      collectionTiming: 'AFTER_DELIVERY',
+      occurredAt: '2026-07-23T11:00:00.000Z',
+      evidenceReference: 'pod-audit-rollback',
+    });
+    const receipt = await service.recordGoodsRecovery('warehouse-1', 'order-1', {
+      receiptId: 'warehouse-audit-rollback',
+      evidenceReference: 'warehouse-photo-audit-rollback',
+      items: [{ orderDetailId: 'detail-1', receivedQuantity: 2 }],
+    });
+    const before = repository.snapshot();
+    auditFailure = new Error('COD recovery audit unavailable');
+
+    await assert.rejects(
+      () => service.finalizeRecovery('staff-1', 'order-1', {
+        goodsRecoveryReceiptId: receipt.receipt.receiptId,
+        destinationVerified: true,
+        destinationReference: 'destination-audit-rollback',
+      }),
+      /COD recovery audit unavailable/,
+    );
+
+    assert.deepEqual(repository.snapshot(), before);
   });
 
   it('does not finalize recovery when another Staff worker already claimed the closure', async () => {
@@ -332,6 +465,8 @@ describe('COD reconciliation service', () => {
     assert.equal(result.order.paymentStatus, 'Cancelled');
     assert.equal(repository.refunds.length, 0);
     assert.equal(repository.requests[0].status, 'ClosedByCODRecovery');
+    assert.equal(repository.discrepancies[0].status, 'ResolvedUncollected');
+    assert.ok(repository.discrepancies[0].resolvedAt);
     assert.deepEqual(lockReleases, [{
       payload: {
         orderId: 'order-1',

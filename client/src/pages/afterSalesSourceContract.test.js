@@ -32,6 +32,8 @@ describe('after-sales source contract', () => {
 
   it('uses pure workflow predicates instead of broad incident status checks', () => {
     assert.match(customerDetail, /workflowActions\.canWaitOrConvert/);
+    assert.match(customerDetail, /workflowActions\.canCancel/);
+    assert.doesNotMatch(customerDetail, /\[['"]Submitted['"],\s*['"]AwaitingExactStockChoice['"],\s*['"]WaitingForExactStock['"]\]\.includes\(request\.status\)/);
     assert.match(staffDetail, /workflowActions\.canRetryReservation/);
     assert.match(staffDetail, /workflowActions\.canResend/);
     assert.match(warehouseDetail, /workflowActions\.canCreateOutbound/);

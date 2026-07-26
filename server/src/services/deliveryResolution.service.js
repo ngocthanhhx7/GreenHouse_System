@@ -372,7 +372,15 @@ function createDeliveryResolutionService({
       if (!incident || !sameId(incident.orderId, orderId)) {
         throw new ApiError(404, 'Delivery incident not found');
       }
-      if (incident.resolutionCommandKey === commandKey && incident.status === 'Resolved') {
+      if (incident.status === 'Resolved') {
+        if (incident.resolutionCommandKey !== commandKey) {
+          throw new ApiError(
+            409,
+            'Delivery incident was already resolved by another command',
+            [],
+            'DELIVERY_INCIDENT_ALREADY_RESOLVED',
+          );
+        }
         const primaryAttempt = order.paymentStatus === 'Paid'
           ? await repository.findPrimaryPaidPaymentAttemptByOrder(order._id, session)
           : null;
@@ -414,7 +422,6 @@ function createDeliveryResolutionService({
       }
 
       const orderPatch = {
-        orderStatus: 'DeliveryFailed',
         moneyObligationsSettled: false,
         deliveryResolutionCommandKey: commandKey,
       };

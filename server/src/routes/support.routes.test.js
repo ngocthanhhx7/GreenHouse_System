@@ -23,12 +23,12 @@ describe('SL-008 Support routes', () => {
       { method: 'patch', path: '/support-requests/:id/withdraw', handlers: 3 },
       { method: 'post', path: '/support-requests/:id/reopen', handlers: 3 },
       { method: 'get', path: '/staff/support-requests', handlers: 3 },
-      { method: 'get', path: '/staff/support-requests/:id', handlers: 3 },
-      { method: 'post', path: '/staff/support-requests/:id/claim', handlers: 3 },
-      { method: 'post', path: '/staff/support-requests/:id/messages', handlers: 3 },
-      { method: 'patch', path: '/staff/support-requests/:id/priority', handlers: 3 },
-      { method: 'patch', path: '/staff/support-requests/:id/transfer', handlers: 3 },
-      { method: 'post', path: '/staff/support-requests/:id/resolve', handlers: 3 },
+      { method: 'get', path: '/staff/support-requests/:id', handlers: 4 },
+      { method: 'post', path: '/staff/support-requests/:id/claim', handlers: 4 },
+      { method: 'post', path: '/staff/support-requests/:id/messages', handlers: 4 },
+      { method: 'patch', path: '/staff/support-requests/:id/priority', handlers: 4 },
+      { method: 'patch', path: '/staff/support-requests/:id/transfer', handlers: 4 },
+      { method: 'post', path: '/staff/support-requests/:id/resolve', handlers: 4 },
     ]);
   });
 

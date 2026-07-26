@@ -12,22 +12,50 @@ describe('staff refund payout controller', () => {
       payout: { status: 'NotStarted', canStartPayOS: true, canRecordManualSuccess: true },
       capabilities: { payOSConfigured: true },
     }, 'PayOS');
-    assert.deepEqual(start, { showMethodSelector: true, showPayOS: true, showManual: false, showReconciliation: false, readOnly: false });
+    assert.deepEqual(start, {
+      showMethodSelector: true,
+      showPayOS: true,
+      showManual: false,
+      showReconciliation: false,
+      showPayOSReconciliation: false,
+      readOnly: false,
+    });
 
     const manual = getRefundPayoutUiState({
       payout: { status: 'Failed', canStartPayOS: true, canRecordManualSuccess: true },
       capabilities: { payOSConfigured: false },
     }, 'Manual');
-    assert.deepEqual(manual, { showMethodSelector: true, showPayOS: false, showManual: true, showReconciliation: false, readOnly: false });
+    assert.deepEqual(manual, {
+      showMethodSelector: true,
+      showPayOS: false,
+      showManual: true,
+      showReconciliation: false,
+      showPayOSReconciliation: false,
+      readOnly: false,
+    });
   });
 
   it('hides new payout actions for Processing and Unknown and exposes only exact-operation reconciliation', () => {
     for (const status of ['Processing', 'Unknown']) {
       const state = getRefundPayoutUiState({
-        payout: { status, operationKey: 'operation-1', canStartPayOS: false, canRecordManualSuccess: false, canReconcileOperation: true },
+        payout: {
+          status,
+          operationKey: 'operation-1',
+          canStartPayOS: false,
+          canRecordManualSuccess: false,
+          canReconcileOperation: true,
+          canReconcilePayOS: true,
+        },
         capabilities: { payOSConfigured: true },
       }, 'Manual');
-      assert.deepEqual(state, { showMethodSelector: false, showPayOS: false, showManual: false, showReconciliation: true, readOnly: false });
+      assert.deepEqual(state, {
+        showMethodSelector: false,
+        showPayOS: false,
+        showManual: false,
+        showReconciliation: true,
+        showPayOSReconciliation: true,
+        readOnly: false,
+      });
     }
   });
 
@@ -62,6 +90,15 @@ describe('staff refund payout controller', () => {
     assert.deepEqual(reconciliation.payload, {
       idempotencyKey: 'stable-key', operationKey: 'operation-current', outcome: 'Unknown', transferReference: 'BANK-1', transferredAt: '2026-07-26T10:00', note: 'Chưa đủ chứng từ để kết luận giao dịch.', confirmed: true,
     });
+  });
+
+  it('serializes a provider-status read without creating a new payout command', () => {
+    const controller = createRefundPayoutController({ createKey: () => 'provider-read-key' });
+    const command = controller.beginPayOSReconciliation('refund-1');
+    assert.equal(command.kind, 'PAYOS_RECONCILIATION');
+    assert.equal(controller.beginPayOSReconciliation('refund-1'), null);
+    assert.deepEqual(command.payload, { idempotencyKey: 'provider-read-key' });
+    assert.equal(controller.settle(command, { succeeded: false }), true);
   });
 
   it('rejects stale route loads and ignores settlements after unmount', () => {

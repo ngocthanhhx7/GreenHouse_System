@@ -18,6 +18,7 @@ describe('Staff COD and refund UI contract', () => {
     assert.match(staffOrderSource, /COLLECTED/);
     assert.match(staffOrderSource, /NOT_COLLECTED/);
     assert.match(staffOrderSource, /fulfillment\.capabilities\?\.manualCodReconciliation\s*===\s*true/);
+    assert.match(staffOrderSource, /source:\s*'STAFF_RECORDED_CARRIER_EVIDENCE'/);
     assert.doesNotMatch(staffOrderSource, /import\.meta\.env\.(?:MODE|PROD)/);
     assert.match(staffOrderSource, /Ghi nhận thu đủ COD \(\{formatCurrency\(order\.codExpectedAmount\)\}/);
     assert.doesNotMatch(staffOrderSource, /goodsRecoveryEvidenceId/);

@@ -629,7 +629,7 @@ function createFulfillmentService(options = {}) {
     return {
       ...projection,
       capabilities: {
-        manualCodReconciliation: dependencies.runtime !== 'production',
+        manualCodReconciliation: true,
       },
     };
   }

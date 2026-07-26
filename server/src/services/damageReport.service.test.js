@@ -16,10 +16,12 @@ function createRepository() {
   };
   const reports = [];
   const transactions = [];
+  const outbox = [];
   return {
     inventory,
     reports,
     transactions,
+    outbox,
     async listReports(query = {}) {
       return reports.filter((report) => !query.status || report.status === query.status);
     },
@@ -60,10 +62,61 @@ function createRepository() {
       transactions.push(data);
       return data;
     },
+    async enqueuePostCommitWork(data) {
+      const existing = outbox.find((entry) => entry.identityKey === data.identityKey);
+      if (existing) return existing;
+      outbox.push(data);
+      return data;
+    },
   };
 }
 
 describe('damage report service contract', () => {
+  it('lists only the current Staff member reports with bounded pagination', async () => {
+    const repository = createRepository();
+    repository.reports.push(
+      {
+        _id: 'damage-1',
+        inventoryId: 'inv-1',
+        productId: 'product-1',
+        reportedBy: 'staff-1',
+        quantity: 1,
+        reason: 'Cracked',
+        status: 'PendingReview',
+      },
+      {
+        _id: 'damage-2',
+        inventoryId: 'inv-1',
+        productId: 'product-1',
+        reportedBy: 'staff-2',
+        quantity: 1,
+        reason: 'Broken',
+        status: 'PendingReview',
+      },
+      {
+        _id: 'damage-3',
+        inventoryId: 'inv-1',
+        productId: 'product-1',
+        reportedBy: 'staff-1',
+        quantity: 1,
+        reason: 'Dented',
+        status: 'Withdrawn',
+      },
+    );
+    const service = createDamageReportService({ repository });
+
+    const firstPage = await service.listStaffReports('staff-1', { page: '1', pageSize: '1' });
+    const secondPage = await service.listStaffReports('staff-1', { page: '2', pageSize: '1' });
+
+    assert.equal(firstPage.total, 2);
+    assert.equal(firstPage.items.length, 1);
+    assert.equal(firstPage.items[0].reportedBy, 'staff-1');
+    assert.equal(firstPage.hasNextPage, true);
+    assert.equal(secondPage.items.length, 1);
+    assert.equal(secondPage.items[0].reportedBy, 'staff-1');
+    assert.equal(secondPage.hasPreviousPage, true);
+  });
+
   it('requires evidence and idempotency for staff reports', async () => {
     const service = createDamageReportService({
       repository: createRepository(),

@@ -17,7 +17,13 @@ const shipmentEventSchema = new mongoose.Schema(
     },
     source: {
       type: String,
-      enum: ['CARRIER', 'STAFF_EVIDENCE', 'CUSTOMER_DISPUTE', 'WAREHOUSE'],
+      enum: [
+        'CARRIER',
+        'STAFF_RECORDED_CARRIER_EVIDENCE',
+        'STAFF_EVIDENCE',
+        'CUSTOMER_DISPUTE',
+        'WAREHOUSE',
+      ],
       required: true,
       immutable: true,
     },

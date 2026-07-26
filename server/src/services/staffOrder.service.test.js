@@ -38,20 +38,34 @@ function createOrderRepository() {
   ];
   const refunds = [];
   const invoices = [];
+  const outbox = [];
   let reservedQuantity = 2;
   let releaseCalls = 0;
   const inventories = [{ productId: 'p1', stockQuantity: 10, reservedQuantity: 2, inventoryHealth: 'Normal' }];
   let cancelExportCalls = 0;
   const confirmationMutationSessions = [];
+  const queueQueries = [];
 
   return {
-    orders, exports, cycles, payments, attempts, refunds, invoices, reservations,
+    orders, exports, cycles, payments, attempts, refunds, invoices, reservations, outbox,
     get reservedQuantity() { return reservedQuantity; },
     get releaseCalls() { return releaseCalls; },
     get cancelExportCalls() { return cancelExportCalls; },
     inventories,
     confirmationMutationSessions,
+    queueQueries,
     async listOrders(query = {}) { return orders.filter((order) => !query.status || order.orderStatus === query.status); },
+    async listOrdersPage(query = {}) {
+      queueQueries.push(structuredClone(query));
+      const filtered = orders.filter((order) => (
+        (!query.status || order.orderStatus === query.status)
+        && (!query.search || order.orderCode.toLowerCase().includes(query.search.toLowerCase()))
+      ));
+      return {
+        items: filtered.slice(query.skip, query.skip + query.pageSize),
+        total: filtered.length,
+      };
+    },
     async findOrderById(id) { return orders.find((order) => order._id === id) || null; },
     async listOrderDetails(orderId) { return details.filter((detail) => detail.orderId === orderId); },
     async listReservationsByOrder(orderId) {
@@ -118,8 +132,57 @@ function createOrderRepository() {
     },
     async updatePaymentAttempt(id, data) { const attempt = attempts.find((entry) => entry._id === id); Object.assign(attempt, data); return attempt; },
     async upsertRefundPending(data) { let refund = refunds.find((entry) => data.obligationKey ? entry.obligationKey === data.obligationKey : entry.orderId === data.orderId && entry.obligationType === data.obligationType); if (!refund) { refund = { _id: `refund-${refunds.length + 1}`, ...data }; refunds.push(refund); } return refund; },
+    async enqueuePostCommitWork(data) {
+      const existing = outbox.find((entry) => entry.identityKey === data.identityKey);
+      if (existing) return existing;
+      const item = { _id: `outbox-${outbox.length + 1}`, ...data };
+      outbox.push(item);
+      return item;
+    },
     async findInvoiceByOrderId(orderId) { return invoices.find((invoice) => invoice.orderId === orderId) || null; },
     async createInvoice(data) { const invoice = { _id: `invoice-${invoices.length + 1}`, ...data }; invoices.push(invoice); return invoice; },
+    snapshot() {
+      return {
+        orders: structuredClone(orders),
+        exports: structuredClone(exports),
+        cycles: structuredClone(cycles),
+        payments: structuredClone(payments),
+        attempts: structuredClone(attempts),
+        refunds: structuredClone(refunds),
+        invoices: structuredClone(invoices),
+        reservations: structuredClone(reservations),
+        inventories: structuredClone(inventories),
+        outbox: structuredClone(outbox),
+        reservedQuantity,
+        releaseCalls,
+        cancelExportCalls,
+        confirmationMutationSessions: [...confirmationMutationSessions],
+      };
+    },
+    restore(snapshot) {
+      for (const [target, values] of [
+        [orders, snapshot.orders],
+        [exports, snapshot.exports],
+        [cycles, snapshot.cycles],
+        [payments, snapshot.payments],
+        [attempts, snapshot.attempts],
+        [refunds, snapshot.refunds],
+        [invoices, snapshot.invoices],
+        [reservations, snapshot.reservations],
+        [inventories, snapshot.inventories],
+        [outbox, snapshot.outbox],
+      ]) {
+        target.splice(0, target.length, ...values);
+      }
+      reservedQuantity = snapshot.reservedQuantity;
+      releaseCalls = snapshot.releaseCalls;
+      cancelExportCalls = snapshot.cancelExportCalls;
+      confirmationMutationSessions.splice(
+        0,
+        confirmationMutationSessions.length,
+        ...snapshot.confirmationMutationSessions,
+      );
+    },
   };
 }
 
@@ -136,25 +199,26 @@ describe('staff order service', () => {
   beforeEach(() => {
     orderRepository = createOrderRepository();
     auditLogger = createAuditLogger();
+    let transactionTail = Promise.resolve();
     service = createStaffOrderService({
       orderRepository,
       auditLogger,
       transactionManager: {
         async withTransaction(work) {
-          const orderSnapshot = structuredClone(orderRepository.orders);
-          const exportSnapshot = structuredClone(orderRepository.exports);
-          const cycleSnapshot = structuredClone(orderRepository.cycles);
+          const previousTransaction = transactionTail;
+          let releaseTransaction;
+          transactionTail = new Promise((resolve) => {
+            releaseTransaction = resolve;
+          });
+          await previousTransaction;
+          const snapshot = orderRepository.snapshot();
           try {
             return await work({ id: 'staff-test-session' });
           } catch (error) {
-            const currentKey = orderRepository.orders[0]?.staffConfirmIdempotencyKey || '';
-            const snapshotKey = orderSnapshot[0]?.staffConfirmIdempotencyKey || '';
-            if (currentKey === snapshotKey || error.message === 'audit unavailable') {
-              orderRepository.orders.splice(0, orderRepository.orders.length, ...orderSnapshot);
-              orderRepository.exports.splice(0, orderRepository.exports.length, ...exportSnapshot);
-              orderRepository.cycles.splice(0, orderRepository.cycles.length, ...cycleSnapshot);
-            }
+            orderRepository.restore(snapshot);
             throw error;
+          } finally {
+            releaseTransaction();
           }
         },
       },
@@ -166,6 +230,38 @@ describe('staff order service', () => {
     const result = await service.listOrders({ status: 'Pending' });
     assert.equal(result.items.length, 2);
     assert.deepEqual(result.items.map((item) => item.orderCode).sort(), ['ORD-1', 'ORD-2']);
+    assert.deepEqual(
+      {
+        page: result.page,
+        pageSize: result.pageSize,
+        totalPages: result.totalPages,
+        hasNextPage: result.hasNextPage,
+      },
+      { page: 1, pageSize: 20, totalPages: 1, hasNextPage: false },
+    );
+  });
+
+  it('bounds Staff order pagination and forwards a code search to the repository', async () => {
+    const result = await service.listOrders({
+      status: 'Pending',
+      page: '1',
+      pageSize: '1',
+      search: 'ORD-2',
+    });
+
+    assert.equal(result.total, 1);
+    assert.equal(result.items[0].orderCode, 'ORD-2');
+    assert.deepEqual(orderRepository.queueQueries[0], {
+      status: 'Pending',
+      page: 1,
+      pageSize: 1,
+      search: 'ORD-2',
+      skip: 0,
+    });
+    await assert.rejects(
+      () => service.listOrders({ pageSize: '500' }),
+      (error) => error.statusCode === 400,
+    );
   });
 
   it('requires an idempotency key before Staff confirmation', async () => {
@@ -475,6 +571,50 @@ describe('staff order service', () => {
     assert.equal(replay.orderStatus, 'Cancelled');
     assert.equal(replay.idempotentReplay, true);
     assert.equal(orderRepository.releaseCalls, 1);
+    assert.equal(orderRepository.outbox.length, 1);
+  });
+
+  it('rolls Staff cancellation back when the required audit cannot be persisted', async () => {
+    orderRepository.orders[0].orderStatus = 'Confirmed';
+    orderRepository.exports.push({
+      _id: 'export-open',
+      orderId: 'order-1',
+      requestedBy: 'staff-1',
+      status: 'Pending',
+      exportedAt: null,
+    });
+    const before = orderRepository.snapshot();
+    auditLogger.log = async () => {
+      throw new Error('cancel audit unavailable');
+    };
+
+    await assert.rejects(
+      () => service.cancelOrder('staff-1', 'order-1', {
+        idempotencyKey: 'staff-cancel-audit-001',
+        cancelReason: 'Customer requested cancellation',
+      }),
+      /cancel audit unavailable/,
+    );
+
+    assert.deepEqual(orderRepository.snapshot(), before);
+  });
+
+  it('rolls Staff cancellation back when the required notification outbox cannot be persisted', async () => {
+    orderRepository.orders[0].orderStatus = 'Confirmed';
+    const before = orderRepository.snapshot();
+    orderRepository.enqueuePostCommitWork = async () => {
+      throw new Error('cancel outbox unavailable');
+    };
+
+    await assert.rejects(
+      () => service.cancelOrder('staff-1', 'order-1', {
+        idempotencyKey: 'staff-cancel-outbox-001',
+        cancelReason: 'Customer requested cancellation',
+      }),
+      /cancel outbox unavailable/,
+    );
+
+    assert.deepEqual(orderRepository.snapshot(), before);
   });
 
   it('releases a confirmed unpaid COD reservation without creating a refund', async () => {

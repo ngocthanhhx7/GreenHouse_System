@@ -134,10 +134,11 @@ describe('SL-004 fulfillment and delivery UI contract', () => {
     assert.doesNotMatch(exportDetail, /refundAmount|destinationReference|payout|paymentStatus/i);
   });
 
-  it('AT-069 preserves primary payment and renders derived terminal DeliveryFailed results without a fee deduction', () => {
-    assert.match(staffOrder, /DeliveryFailed/);
+  it('AT-069 preserves primary payment and explains the terminal incident without rewriting Order status', () => {
+    assert.match(staffOrder, /giữ.*Shipped|Shipped.*sự cố/i);
     assert.match(staffOrder, /MoneyObligationsSettled|refund.*Pending|FAILED_DELIVERY/i);
     assert.match(staffOrder, /ShippingFee|shippingFee/);
+    assert.doesNotMatch(staffOrder, /Đã ghi nhận DeliveryFailed/);
     assert.doesNotMatch(staffOrder, /refundAmount|deduct.*shipping|shippingCharge/i);
   });
 

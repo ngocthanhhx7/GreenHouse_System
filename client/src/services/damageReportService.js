@@ -12,6 +12,10 @@ export function createDamageReportService({ baseUrl = DEFAULT_BASE_URL, fetcher 
     : apiRequest;
 
   return {
+    async listStaffReports(params = {}) {
+      const query = new URLSearchParams(params).toString();
+      return request(`/staff/damage-reports${query ? `?${query}` : ''}`);
+    },
     async createStaffReport(input) {
       return request('/staff/damage-reports', { method: 'POST', body: JSON.stringify(input) });
     },

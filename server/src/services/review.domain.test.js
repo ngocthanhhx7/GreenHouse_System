@@ -1,8 +1,10 @@
 const assert = require('node:assert/strict');
 const { describe, it } = require('node:test');
+const mongoose = require('mongoose');
 
 const {
   commandFingerprint,
+  toModerationDto,
 } = require('./review.domain');
 
 describe('Review canonical command facts', () => {
@@ -54,6 +56,35 @@ describe('Review canonical command facts', () => {
         ...base,
         command: { expectedVersion: 0, facts: { rating: 4 } },
       }),
+    );
+  });
+
+  it('serializes MongoDB ObjectIds as hexadecimal ids in Staff moderation data', () => {
+    const reviewId = new mongoose.Types.ObjectId('507f1f77bcf86cd799439011');
+    const productId = new mongoose.Types.ObjectId('507f1f77bcf86cd799439012');
+
+    assert.deepEqual(
+      toModerationDto({
+        _id: reviewId,
+        productId,
+        rating: 5,
+        content: 'Good',
+        publicationStatus: 'Published',
+        moderationStatus: 'Allowed',
+        version: 1,
+      }),
+      {
+        id: '507f1f77bcf86cd799439011',
+        productId: '507f1f77bcf86cd799439012',
+        rating: 5,
+        content: 'Good',
+        publicationStatus: 'Published',
+        moderationStatus: 'Allowed',
+        moderationReason: '',
+        version: 1,
+        createdAt: undefined,
+        updatedAt: undefined,
+      },
     );
   });
 });

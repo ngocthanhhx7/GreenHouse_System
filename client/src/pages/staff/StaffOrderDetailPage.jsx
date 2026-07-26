@@ -41,7 +41,7 @@ function blankHandoff() {
 function blankEvent() {
   return {
     eventType: 'DELIVERED',
-    source: 'STAFF_EVIDENCE',
+    source: 'STAFF_RECORDED_CARRIER_EVIDENCE',
     occurredAt: toLocalDateTimeValue(),
     evidenceReferences: [],
     codCollectionResult: '',
@@ -360,7 +360,7 @@ export default function StaffOrderDetailPage() {
           <div className="row g-3">
             <div className="col-md-6"><strong>Địa chỉ nhận hàng:</strong> {order.shippingAddress}</div>
             <div className="col-md-3"><strong>Phí vận chuyển:</strong> {formatCurrency(order.shippingFee)}</div>
-            <div className="col-md-3"><strong>Đã quyết toán nghĩa vụ tài chính:</strong> {String(order.moneyObligationsSettled ?? true)}</div>
+            <div className="col-md-3"><strong>Nghĩa vụ hoàn/thu hồi tiền:</strong> {order.moneyObligationsSettled === false ? 'Còn mở' : 'Không còn'}</div>
           </div>
 
           <div className="action-row mt-3">
@@ -678,14 +678,17 @@ export default function StaffOrderDetailPage() {
                   .filter((incident) => incident.customerChoice === 'TerminalRefund')
                   .map((incident) => <option key={incident.id} value={incident.id}>{incident.incidentType} · {incident.customerChoice || incident.status}</option>)}
               </select>
-              <p className="mt-2">FAILED_DELIVERY refund Pending được hệ thống suy ra; ShippingFee không bị khấu trừ.</p>
+              <p className="mt-2">
+                Sự cố được đóng nhưng đơn vẫn giữ ở bước Shipped.
+                Nghĩa vụ FAILED_DELIVERY refund Pending được hệ thống suy ra; ShippingFee không bị khấu trừ.
+              </p>
               <button className="btn btn-outline-danger" type="button" disabled={submitting || !resolutionIncidentId} onClick={() => runAction(
                 () => staffOrderService.resolveDeliveryFailure(order.id, {
                   incidentId: resolutionIncidentId,
                   idempotencyKey: idempotencyKey(`delivery-failed:${resolutionIncidentId}`),
                 }),
-                'Đã ghi nhận DeliveryFailed và nghĩa vụ tiền tương ứng.',
-              )}>Hoàn tất delivery failure</button>
+                'Đã đóng sự cố giao hàng; đơn vẫn ở Shipped và nghĩa vụ tiền đã được ghi nhận.',
+              )}>Hoàn tất sự cố giao hàng</button>
             </section>
           )}
 
