@@ -10,6 +10,7 @@ const IDENTITY_TYPES = new Set([
 
 const CUSTOMER_TYPES = new Set([
   'ORDER_RECEIVED', 'ORDER_CONFIRMED', 'ORDER_SHIPPED', 'ORDER_DELIVERED',
+  'ORDER_COMPLETED_BY_CUSTOMER', 'CUSTOMER_DELIVERY_DISPUTED',
   'ORDER_CANCELLED', 'ORDER_RETURNED', 'ORDER_PAYMENT_EXPIRED',
   'DELIVERY_ATTEMPT_FAILED', 'DELIVERY_RESCHEDULED', 'DELIVERY_FAILED',
   'PAYMENT_STATUS', 'PAYMENT_RECONCILED', 'REFUND_PENDING', 'REFUND_COMPLETED',
@@ -45,6 +46,18 @@ const INTERNAL_ROLES = Object.freeze({
 });
 
 const PACKED_TYPES = new Set(['PACKED', 'ORDER_PACKED']);
+const DIRECT_CUSTOMER_TYPES = new Set([
+  'ORDER_COMPLETED_BY_CUSTOMER',
+  'CUSTOMER_DELIVERY_DISPUTED',
+]);
+
+function assertNotificationRecipientSelector(typeValue, recipientSelector = {}) {
+  const type = String(typeValue || '').trim().toUpperCase();
+  if (!DIRECT_CUSTOMER_TYPES.has(type) || !recipientSelector.recipientRole) return;
+  const error = new Error('Notification event requires a direct recipient');
+  error.code = 'NOTIFICATION_DIRECT_RECIPIENT_REQUIRED';
+  throw error;
+}
 
 function resolveNotificationChannels(typeValue, recipient = {}) {
   const requestedType = String(typeValue || '').trim().toUpperCase();
@@ -73,4 +86,4 @@ function resolveNotificationChannels(typeValue, recipient = {}) {
   throw error;
 }
 
-module.exports = { resolveNotificationChannels };
+module.exports = { assertNotificationRecipientSelector, resolveNotificationChannels };

@@ -37,7 +37,7 @@ function EvidenceItem({ url, index, fetchEvidence }) {
 
 export default function AuthenticatedEvidenceList({
   urls = [],
-  label = 'Bằng chứng Customer',
+  label = 'Bằng chứng khách hàng',
   fetchEvidence = returnRefundService.fetchEvidence,
 }) {
   if (!urls.length) return null;

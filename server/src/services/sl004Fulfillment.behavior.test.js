@@ -52,6 +52,7 @@ function createHarness({ paymentMethod = 'ONLINE', paymentStatus = 'Paid', runti
     discrepancies: [],
     incidents: [],
     receipts: [],
+    customerDeliveryReceipts: [],
     inventories: [
       {
         _id: 'inventory-1',
@@ -132,6 +133,7 @@ function createHarness({ paymentMethod = 'ONLINE', paymentStatus = 'Paid', runti
   const repository = {
     state,
     async findOrderById(id) { return id === state.order._id ? state.order : null; },
+    async findLatestDeliveryReceiptByOrder() { return state.customerDeliveryReceipts?.at(-1) || null; },
     async listOrderDetails() { return state.details; },
     async findActiveCycleByOrder() { return state.cycles.at(-1) || null; },
     async findCycleById(id) { return state.cycles.find((entry) => entry._id === id) || null; },
@@ -1967,5 +1969,39 @@ describe('SL-004 packing, shipment and delivery behavior', () => {
       );
     }
     assert.equal(state.events.filter((event) => event.shipmentId === shipment._id).length, 1);
+  });
+
+  it('projects physical Delivered separately from Customer completion in fulfillment detail', async () => {
+    const awaiting = createHarness();
+    const { shipment } = await awaiting.handoff('customer-projection-handoff');
+    await awaiting.service.recordShipmentEvent(
+      { actorType: 'Staff', actorId: 'staff-1' },
+      shipment._id,
+      {
+        eventKey: 'customer-projection-delivered',
+        eventType: 'DELIVERED',
+        source: 'STAFF_EVIDENCE',
+        occurredAt: '2026-07-26T09:00:00.000Z',
+        evidenceReference: 'delivery-proof',
+      },
+    );
+
+    let projection = await awaiting.service.getCustomerFulfillment('customer-1', 'order-1');
+    assert.equal(projection.order.orderStatus, 'Delivered');
+    assert.equal(projection.order.customerOrderStatus, 'AwaitingCustomerConfirmation');
+    assert.deepEqual(projection.order.availableDeliveryActions, ['RECEIVED', 'NOT_RECEIVED']);
+    assert.equal(projection.order.afterSales.enabled, false);
+
+    awaiting.state.customerDeliveryReceipts.push({
+      outcome: 'RECEIVED',
+      reason: '',
+      respondedAt: new Date('2026-07-26T10:00:00.000Z'),
+      deliveryEventId: awaiting.state.shipments.at(-1).terminalEventId,
+    });
+    projection = await awaiting.service.getCustomerFulfillment('customer-1', 'order-1');
+    assert.equal(projection.order.orderStatus, 'Delivered');
+    assert.equal(projection.order.customerOrderStatus, 'Completed');
+    assert.equal(projection.order.deliveryReceipt.status, 'Received');
+    assert.equal(projection.order.afterSales.enabled, true);
   });
 });

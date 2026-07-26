@@ -4,6 +4,7 @@ import AuthenticatedEvidenceList from '../../components/returnRefund/Authenticat
 import { returnRefundService } from '../../services/returnRefundService.js';
 import { translateRequestStatus } from '../../utils/formatters.js';
 import { createRefundDestinationController } from './refundDestinationController.js';
+import { translateApiError } from '../../utils/errorMessages.js';
 
 function formatDate(value) {
   return value ? new Date(value).toLocaleString('vi-VN') : '-';
@@ -41,7 +42,7 @@ export default function ReturnRefundPage() {
       return true;
     } catch (err) {
       if (!controller.isCurrentRequestLoad(epoch)) return false;
-      setError(err.message);
+      setError(translateApiError(err));
       return false;
     }
   }
@@ -111,7 +112,7 @@ export default function ReturnRefundPage() {
       if (mayUpdate && reloaded) setMessage(successMessage);
     } catch (err) {
       mayUpdate = controller.settleAction(command);
-      if (mayUpdate) setError(err.message);
+      if (mayUpdate) setError(translateApiError(err));
     } finally {
       if (mayUpdate) setBusyId('');
     }
@@ -132,7 +133,7 @@ export default function ReturnRefundPage() {
       }
     } catch (err) {
       mayUpdate = controller.settleDestination(command, { succeeded: false });
-      if (mayUpdate) setError(err.message);
+      if (mayUpdate) setError(translateApiError(err));
     } finally {
       if (mayUpdate && controller.getSnapshot().alive) setBusyId('');
     }

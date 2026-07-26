@@ -6,6 +6,7 @@ const Order = require('../models/order.model');
 const OrderDetail = require('../models/orderDetail.model');
 const Product = require('../models/product.model');
 const ProductReview = require('../models/productReview.model');
+const CustomerDeliveryReceipt = require('../models/customerDeliveryReceipt.model');
 const ReviewCommand = require('../models/reviewCommand.model');
 const ReviewContentHistory = require('../models/reviewContentHistory.model');
 const ReviewModerationHistory = require('../models/reviewModerationHistory.model');
@@ -122,6 +123,84 @@ function createModelRepository() {
         { $unwind: '$ownedDeliveredOrder' },
         { $set: { order: '$ownedDeliveredOrder' } },
         { $unset: 'ownedDeliveredOrder' },
+        { $sort: { 'order.deliveredAt': -1, _id: -1 } },
+        { $limit: 1 },
+      ]);
+      const rows = await withOptionalAggregateSession(aggregate, session);
+      return rows[0] || null;
+    },
+
+    async findOwnedReceivedOrderDetail(customerId, productId, session) {
+      if (
+        !mongoose.isObjectIdOrHexString(String(customerId))
+        || !mongoose.isObjectIdOrHexString(String(productId))
+      ) {
+        return null;
+      }
+      const customerObjectId = new mongoose.Types.ObjectId(String(customerId));
+      const productObjectId = new mongoose.Types.ObjectId(String(productId));
+      const aggregate = OrderDetail.aggregate([
+        { $match: { productId: productObjectId } },
+        {
+          $lookup: {
+            from: Order.collection.name,
+            let: { orderId: '$orderId' },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ['$_id', '$$orderId'] },
+                      { $eq: ['$customerId', customerObjectId] },
+                      { $ne: ['$deliveredAt', null] },
+                    ],
+                  },
+                },
+              },
+              {
+                $project: {
+                  _id: 1,
+                  customerId: 1,
+                  deliveredAt: 1,
+                  orderStatus: 1,
+                },
+              },
+            ],
+            as: 'ownedDeliveredOrder',
+          },
+        },
+        { $unwind: '$ownedDeliveredOrder' },
+        {
+          $lookup: {
+            from: CustomerDeliveryReceipt.collection.name,
+            let: { orderId: '$orderId' },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $eq: ['$orderId', '$$orderId'],
+                  },
+                },
+              },
+              { $sort: { createdAt: -1, _id: -1 } },
+              { $limit: 1 },
+            ],
+            as: 'latestDeliveryReceipt',
+          },
+        },
+        {
+          $match: {
+            'latestDeliveryReceipt.0.outcome': 'RECEIVED',
+            'latestDeliveryReceipt.0.customerId': customerObjectId,
+          },
+        },
+        {
+          $set: {
+            order: '$ownedDeliveredOrder',
+            deliveryReceipt: { $arrayElemAt: ['$latestDeliveryReceipt', 0] },
+          },
+        },
+        { $unset: ['ownedDeliveredOrder', 'latestDeliveryReceipt'] },
         { $sort: { 'order.deliveredAt': -1, _id: -1 } },
         { $limit: 1 },
       ]);

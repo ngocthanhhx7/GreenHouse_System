@@ -37,6 +37,9 @@ const {
   createActiveAfterSalesConflict,
 } = require('./afterSalesConflict.service');
 const { resolveBank } = require('../config/refundBankCatalog');
+const {
+  createCustomerDeliveryReceiptPolicy,
+} = require('./customerDeliveryReceiptPolicy');
 
 const OPEN_STATUSES = [
   'New', 'Pending', 'AwaitingCODReconciliation', 'Approved',
@@ -67,7 +70,6 @@ const DECIDABLE_STATUSES = ['New', 'Pending', 'AwaitingCODReconciliation'];
 const RECEIVABLE_STATUSES = ['Approved', 'AwaitingInspection'];
 const HANDOFF_RECORDABLE_STATUSES = [...RECEIVABLE_STATUSES, 'Expired'];
 const RECEIVED_STATUSES = ['Received', 'ReadyForRefund'];
-const RETURN_WINDOW_MS = 5 * 24 * 60 * 60 * 1000;
 
 function computeMoneyObligationsSettled(obligations = []) {
   return obligations.every((obligation) => (
@@ -944,6 +946,7 @@ function createReturnRefundService({
   payosGateway = createPayOSGateway(),
   clock = () => new Date(),
   assignmentCoordinator = defaultAssignmentCoordinator,
+  deliveryReceiptPolicy = createCustomerDeliveryReceiptPolicy({ repository }),
 } = {}) {
   async function loadRequest(id, session) {
     const request = await repository.findRequestById(id, session);
@@ -1415,19 +1418,17 @@ function createReturnRefundService({
       const submittedEvidence = Array.isArray(input.evidenceImages) ? input.evidenceImages : [];
       if (!submittedEvidence.length) throw new ApiError(400, 'At least one return/refund evidence attachment is required');
 
-      let order = await repository.findOrderById(input.orderId);
+      const order = await repository.findOrderById(input.orderId);
       if (!order || String(order.customerId) !== String(customerId)) throw new ApiError(404, 'Order not found');
       if (order.orderStatus !== 'Delivered') throw new ApiError(409, 'Only Delivered orders can be returned');
-      if (!order.deliveredAt && !order.returnDeadlineAt) throw new ApiError(409, 'DeliveredAt is required to determine the five-day return window');
-
-      const deadlineAt = order.returnDeadlineAt
-        ? new Date(order.returnDeadlineAt)
-        : new Date(new Date(order.deliveredAt).getTime() + RETURN_WINDOW_MS);
+      const receiptEligibility = await deliveryReceiptPolicy.requireReceived({
+        order,
+        customerId,
+        deadlineField: 'returnDeadlineAt',
+      });
+      const deadlineAt = receiptEligibility.deadlineAt;
       if (Number.isNaN(deadlineAt.getTime())) throw new ApiError(409, 'The stored return deadline is invalid');
       if (new Date(clock()).getTime() > deadlineAt.getTime()) throw new ApiError(409, 'The five-day return window has expired');
-      if (!order.returnDeadlineAt && repository.ensureReturnDeadline) {
-        order = await repository.ensureReturnDeadline(order._id, deadlineAt);
-      }
 
       const preexistingConflict = await resolveConflict(order._id, customerId);
       if (preexistingConflict.hasActiveLock) {

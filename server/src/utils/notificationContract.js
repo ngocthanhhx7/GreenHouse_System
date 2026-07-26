@@ -11,6 +11,8 @@ const NOTIFICATION_TYPES = Object.freeze([
   'ORDER_CONFIRMED',
   'ORDER_SHIPPED',
   'ORDER_DELIVERED',
+  'ORDER_COMPLETED_BY_CUSTOMER',
+  'CUSTOMER_DELIVERY_DISPUTED',
   'ORDER_CANCELLED',
   'ORDER_RETURNED',
   'ORDER_PAYMENT_EXPIRED',
@@ -90,7 +92,9 @@ const DISPLAY_VALUE_KEYS = Object.freeze([
 
 const TYPE_DISPLAY_VALUES = Object.freeze(Object.fromEntries(
   NOTIFICATION_TYPES.map((type) => {
-    if (type.startsWith('ORDER_') || type.startsWith('DELIVERY_')) return [type, ['orderCode']];
+    if (type.startsWith('ORDER_') || type.startsWith('DELIVERY_') || type === 'CUSTOMER_DELIVERY_DISPUTED') {
+      return [type, ['orderCode']];
+    }
     if (type.startsWith('PAYMENT_')) return [type, ['orderCode', 'paymentStatus']];
     if (type.startsWith('RETURN_') || type.startsWith('REFUND_')) return [type, ['requestCode']];
     if (type.startsWith('EXCHANGE_')) return [type, ['caseCode']];
@@ -109,6 +113,8 @@ const TYPE_DISPLAY_VALUES = Object.freeze(Object.fromEntries(
 ));
 
 const COPY = Object.freeze({
+  ORDER_COMPLETED_BY_CUSTOMER: ['Đơn hàng {orderCode} đã hoàn tất', 'Bạn đã xác nhận đã nhận đơn hàng {orderCode}. Cảm ơn bạn đã mua sắm tại GreenHome.'],
+  CUSTOMER_DELIVERY_DISPUTED: ['Đơn hàng {orderCode} cần hỗ trợ giao hàng', 'Bạn đã báo chưa nhận được đơn hàng {orderCode}. Nhân viên GreenHome sẽ hỗ trợ bạn.'],
   ORDER_RECEIVED: ['Đã nhận đơn hàng {orderCode}', 'GreenHome đã nhận đơn hàng {orderCode}.'],
   ORDER_CONFIRMED: ['Đơn hàng {orderCode} đã được xác nhận', 'Đơn hàng {orderCode} đã được xác nhận.'],
   ORDER_SHIPPED: ['Đơn hàng {orderCode} đang được giao', 'Đơn hàng {orderCode} đã được bàn giao cho đơn vị vận chuyển.'],

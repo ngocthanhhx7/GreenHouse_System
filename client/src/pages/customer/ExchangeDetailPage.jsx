@@ -13,6 +13,7 @@ import {
   getExchangeWorkflowActions,
   getExchangeWorkflowMessage,
 } from '../../utils/exchangeUiState.js';
+import { translateApiError } from '../../utils/errorMessages.js';
 
 function key(prefix) {
   return `${prefix}:${globalThis.crypto?.randomUUID?.() || Date.now()}`;
@@ -33,7 +34,7 @@ export default function ExchangeDetailPage() {
   const disputeKey = useRef(key('exchange-dispute'));
 
   function load() {
-    exchangeService.getCustomerRequest(id).then(setRequest).catch((err) => setError(err.message));
+    exchangeService.getCustomerRequest(id).then(setRequest).catch((err) => setError(translateApiError(err)));
   }
 
   useEffect(load, [id]);
@@ -48,7 +49,7 @@ export default function ExchangeDetailPage() {
       });
       setRequest(result);
       setMessage(result.idempotentReplay ? 'Bằng chứng bàn giao đã được ghi nhận trước đó.' : 'Đã ghi nhận bàn giao hàng.');
-    } catch (err) { setError(err.message); }
+    } catch (err) { setError(translateApiError(err)); }
   }
 
   async function cancel() {
@@ -57,7 +58,7 @@ export default function ExchangeDetailPage() {
       const result = await exchangeService.cancelRequest(id, { idempotencyKey: cancelKey.current });
       setRequest(result);
       setMessage('Đã hủy yêu cầu đổi hàng trước khi bàn giao.');
-    } catch (err) { setError(err.message); }
+    } catch (err) { setError(translateApiError(err)); }
   }
 
   async function choose(choice) {
@@ -70,7 +71,7 @@ export default function ExchangeDetailPage() {
       setRequest(result);
       choiceKey.current = key('exchange-choice');
       setMessage(choice === 'WAIT' ? 'Đã chọn chờ đúng sản phẩm.' : 'Đã chuyển sang quy trình trả hàng/hoàn tiền.');
-    } catch (err) { setError(err.message); }
+    } catch (err) { setError(translateApiError(err)); }
   }
 
   async function reportDispute(event) {
@@ -90,7 +91,7 @@ export default function ExchangeDetailPage() {
       setRequest(result.request);
       disputeKey.current = key('exchange-dispute');
       setMessage('Đã ghi nhận khiếu nại thời điểm giao hàng, không xóa bằng chứng gốc.');
-    } catch (err) { setError(err.message); }
+    } catch (err) { setError(translateApiError(err)); }
   }
 
   if (!request && !error) return <div className="page-center">Đang tải yêu cầu đổi hàng...</div>;
