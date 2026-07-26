@@ -23,11 +23,16 @@ const User = require('../models/user.model');
 const { createReturnRefundService } = require('../services/returnRefund.service');
 const { returnEvidenceClaim } = require('../utils/returnEvidenceClaim');
 
-function assertSafeTarget(uri) {
-  if (process.env.NODE_ENV === 'production') throw new Error('SL-001 verification cannot run in production');
+function assertSafeTarget(uri, { nodeEnv = process.env.NODE_ENV } = {}) {
+  if (nodeEnv === 'production') throw new Error('SL-001 verification cannot run in production');
   if (!/^mongodb:\/\/(127\.0\.0\.1|localhost)(:\d+)?\/greenhome_kitchen(?:\?|$)/i.test(String(uri || ''))) {
     throw new Error('SL-001 verification is restricted to the local greenhome_kitchen database');
   }
+}
+
+async function deleteRefundPayoutEvidenceFixture(requestId) {
+  assertSafeTarget(process.env.MONGODB_URI);
+  return RefundPayoutEvidence.collection.deleteMany({ returnRefundRequestId: requestId });
 }
 
 async function loadActor(email) {
@@ -41,7 +46,7 @@ async function cleanup(ids) {
     await AuditLog.deleteMany({ targetEntity: 'ReturnRefundRequest', targetId: String(ids.requestId) });
     await InventoryTransaction.deleteMany({ relatedCollection: 'ReturnRefundRequest', relatedId: ids.requestId });
     await RefundPayoutIncident.deleteMany({ returnRefundRequestId: ids.requestId });
-    await RefundPayoutEvidence.deleteMany({ returnRefundRequestId: ids.requestId });
+    await deleteRefundPayoutEvidenceFixture(ids.requestId);
     await RefundDestination.deleteMany({ returnRefundRequestId: ids.requestId });
     await RefundPending.deleteMany({ returnRefundRequestId: ids.requestId });
     await ReturnItem.deleteMany({ returnRefundRequestId: ids.requestId });
@@ -172,8 +177,7 @@ async function verifySl001ReturnRefund() {
     assert.equal(new Date(approved.shipByAt).getTime() - new Date(approved.approvedAt).getTime(), 3 * 24 * 60 * 60 * 1000);
     await service.recordHandoffProof(customer._id, request.id, { proofReference: `HANDOFF-${marker}`, handoffAt: now });
     const destination = await service.submitDestination(customer._id, request.id, {
-      bankName: 'LOCAL TEST BANK',
-      bankBin: '970422',
+      bankCode: 'MB',
       accountNumber: '0123456789',
       accountHolderName: 'LOCAL TEST CUSTOMER',
       confirmed: true,
@@ -196,11 +200,10 @@ async function verifySl001ReturnRefund() {
     });
     const payout = await service.recordPayoutEvidence(staff._id, request.id, {
       idempotencyKey: `payout:${marker}`,
-      method: 'MANUAL',
-      providerReference: `LOCAL-BANK-${marker}`,
-      status: 'Succeeded',
-      occurredAt: now,
-      reconciliationNote: 'Local verified payout evidence',
+      transferReference: `LOCAL-BANK-${marker}`,
+      transferredAt: new Date(now).toISOString(),
+      note: 'Local verified payout evidence.',
+      confirmed: true,
     });
     assert.equal(payout.request.status, 'Completed');
 
@@ -236,36 +239,35 @@ async function verifySl001ReturnRefund() {
       cause: 'STAFF_SYSTEM_PROVIDER_MISMATCH',
       reason: 'Local verification of false-completion correction',
     });
-    const [correctedRequest, correctedOrder, correctedRefund] = await Promise.all([
+    const [terminalRequest, terminalOrder, terminalRefund] = await Promise.all([
       ReturnRefundRequest.findById(request.id).lean(),
       Order.findById(order._id).lean(),
       RefundPending.findOne({ returnRefundRequestId: request.id }).lean(),
     ]);
     assert.equal(incident.responsibility, 'ShopOrProvider');
-    assert.equal(correctedRequest.status, 'Received');
-    assert.equal(correctedOrder.orderStatus, 'Delivered');
-    assert.equal(correctedRefund.status, 'HandedOff');
-    assert.equal(correctedRefund.payoutStatus, 'Unknown');
+    assert.equal(terminalRequest.status, 'Completed');
+    assert.equal(terminalOrder.orderStatus, 'Returned');
+    assert.equal(terminalRefund.status, 'Refunded');
+    assert.equal(terminalRefund.payoutStatus, 'Succeeded');
 
-    const correctivePayout = await service.recordPayoutEvidence(staff._id, request.id, {
-      idempotencyKey: `corrective-payout:${marker}`,
-      method: 'MANUAL',
-      providerReference: `LOCAL-CORRECTIVE-BANK-${marker}`,
-      status: 'Succeeded',
-      occurredAt: now,
-      reconciliationNote: 'Local verified corrective payout evidence',
-      previousAttemptReconciled: true,
-      recoveryIncidentId: incident.id,
-    });
-    const [resolvedIncident, finalOrder, evidenceCount] = await Promise.all([
+    await assert.rejects(
+      () => service.recordPayoutEvidence(staff._id, request.id, {
+        idempotencyKey: `corrective-payout:${marker}`,
+        transferReference: `LOCAL-CORRECTIVE-BANK-${marker}`,
+        transferredAt: new Date(now).toISOString(),
+        note: 'A terminal successful payout must never be paid twice.',
+        confirmed: true,
+      }),
+      (error) => error?.errorCode === 'PAYOUT_TERMINAL_NO_RETRY',
+    );
+    const [openIncident, finalOrder, evidenceCount] = await Promise.all([
       RefundPayoutIncident.findById(incident.id).lean(),
       Order.findById(order._id).lean(),
       RefundPayoutEvidence.countDocuments({ returnRefundRequestId: request.id }),
     ]);
-    assert.equal(correctivePayout.request.status, 'Completed');
-    assert.equal(resolvedIncident.status, 'Resolved');
+    assert.equal(openIncident.status, 'Open');
     assert.equal(finalOrder.orderStatus, 'Returned');
-    assert.equal(evidenceCount, 2);
+    assert.equal(evidenceCount, 1);
 
     return {
       lifecycle: ['New', 'Approved', 'Received', 'Completed'],
@@ -297,4 +299,8 @@ if (require.main === module) {
     });
 }
 
-module.exports = { assertSafeTarget, verifySl001ReturnRefund };
+module.exports = {
+  assertSafeTarget,
+  deleteRefundPayoutEvidenceFixture,
+  verifySl001ReturnRefund,
+};

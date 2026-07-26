@@ -19,6 +19,8 @@ const refundPendingSchema = new mongoose.Schema(
     reason: { type: String, required: true, trim: true },
     status: { type: String, enum: ['RefundPending', 'HandedOff', 'Refunded'], default: 'RefundPending' },
     payoutStatus: { type: String, enum: ['NotStarted', 'Processing', 'Succeeded', 'Failed', 'Unknown'], default: 'NotStarted' },
+    payoutMethod: { type: String, enum: ['PayOS', 'Manual'], default: null },
+    payoutStartedAt: { type: Date, default: null },
     destinationId: { type: mongoose.Schema.Types.ObjectId, ref: 'RefundDestination', default: null },
     payoutEvidenceId: { type: mongoose.Schema.Types.ObjectId, ref: 'RefundPayoutEvidence', default: null },
     payoutOperationKey: { type: String, default: '', trim: true, maxlength: 160 },

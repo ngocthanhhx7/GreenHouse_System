@@ -105,11 +105,38 @@ describe('client return/refund service', () => {
       },
     });
     await service.recordHandoffProof('refund-1', { proofReference: 'proof-1' });
-    await service.submitDestination('refund-1', { bankName: 'Bank' });
+    await service.submitDestination('refund-1', {
+      bankCode: 'MB',
+      accountNumber: '0123456789',
+      accountHolderName: 'NGUYEN VAN A',
+      confirmed: true,
+      idempotencyKey: 'destination-001',
+      bankName: 'must-not-cross-boundary',
+      bankBin: '000000',
+      pin: 'never-send',
+    });
     await service.verifyDestination('refund-1', { destinationId: 'destination-1', status: 'Verified' });
-    await service.recordPayoutEvidence('refund-1', { idempotencyKey: 'payout-001' });
+    await service.recordPayoutEvidence('refund-1', {
+      idempotencyKey: 'payout-001',
+      transferReference: 'BANK-001',
+      transferredAt: '2026-07-26T10:00',
+      note: 'Đã kiểm tra chứng từ chuyển khoản thủ công.',
+      confirmed: true,
+    });
     await service.startPayOSPayout('refund-1', { idempotencyKey: 'payos-payout-001' });
     await service.reconcilePayOSPayout('refund-1');
+    await service.reconcilePayout('refund-1', {
+      idempotencyKey: 'reconcile-001',
+      operationKey: 'operation-1',
+      outcome: 'Unknown',
+      transferReference: 'BANK-001',
+      transferredAt: '2026-07-26T10:00',
+      note: 'Chưa đủ chứng từ để kết luận giao dịch.',
+      confirmed: true,
+      providerReference: 'must-not-cross-boundary',
+      occurredAt: 'must-not-cross-boundary',
+      reconciliationNote: 'must-not-cross-boundary',
+    });
     await service.reportPayoutIncident('refund-1', { cause: 'CUSTOMER_CONFIRMED_DESTINATION' });
 
     assert.deepEqual(calls.map((call) => call.url), [
@@ -119,8 +146,41 @@ describe('client return/refund service', () => {
       'http://api.test/api/staff/return-refunds/refund-1/payout-evidence',
       'http://api.test/api/staff/return-refunds/refund-1/payos-payout',
       'http://api.test/api/staff/return-refunds/refund-1/payos-reconcile',
+      'http://api.test/api/staff/return-refunds/refund-1/payout-reconciliation',
       'http://api.test/api/staff/return-refunds/refund-1/payout-incident',
     ]);
+    assert.deepEqual(JSON.parse(calls[1].options.body), {
+      bankCode: 'MB',
+      accountNumber: '0123456789',
+      accountHolderName: 'NGUYEN VAN A',
+      confirmed: true,
+      idempotencyKey: 'destination-001',
+    });
+    assert.deepEqual(JSON.parse(calls[6].options.body), {
+      idempotencyKey: 'reconcile-001',
+      operationKey: 'operation-1',
+      outcome: 'Unknown',
+      transferReference: 'BANK-001',
+      transferredAt: '2026-07-26T10:00',
+      note: 'Chưa đủ chứng từ để kết luận giao dịch.',
+      confirmed: true,
+    });
+  });
+
+  it('loads the Customer-safe bank catalog without exposing internal BIN data', async () => {
+    const service = createReturnRefundService({
+      baseUrl: 'http://api.test/api',
+      fetcher: async (url, options) => {
+        assert.equal(url, 'http://api.test/api/return-refunds/banks');
+        assert.deepEqual(options, {});
+        return {
+          ok: true,
+          json: async () => ({ success: true, data: [{ code: 'MB', name: 'MBBank' }] }),
+        };
+      },
+    });
+
+    assert.deepEqual(await service.listBanks(), [{ code: 'MB', name: 'MBBank' }]);
   });
 
   it('uploads Customer evidence as multipart data', async () => {
