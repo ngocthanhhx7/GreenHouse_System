@@ -182,3 +182,18 @@ The final combined tree passed server `1075/1075` across 172 suites, client
 `281/281` across 69 suites, and the 162-module production build. The only build
 notice is the existing non-blocking 714.34 kB Vite chunk warning. No production
 carrier, migration, or deployment claim is made.
+
+## Addendum 2026-07-26 - Warehouse exact-export compatibility
+
+| Finding | Closure evidence |
+|---|---|
+| Newly created Orders could fail export even with complete reservation lineage when their Product still referenced a legacy Inventory without `sellableQuantity` | Atomic capture now uses the same guarded `stockQuantity` fallback as export preflight and materializes all decremented dimensions together; real-repository tests reject inconsistent, fractional, and non-finite legacy counters |
+| Retrying a known Failed command displayed a false Completed success banner | Warehouse UI now evaluates an authoritative reload before choosing success or failure feedback |
+| A corrected Failed request could remain pinned to its durable failed command identity | The UI rotates the key only after authoritative Failed reload; reload failures remain stable and concurrent Completed state wins |
+
+Gates: targeted server `15/15`; targeted client `17/17`; full server
+`1238/1238` (189 suites); full client `380/380` (82 suites); production build
+PASS (172 modules). Aborted Mongoose repository transactions covered all three
+lines across both reported Orders; every legacy Inventory matched and retained
+persisted before/after equality. No local migration or business-data mutation is claimed.
+The existing 766.11 kB Vite chunk warning remains non-blocking.

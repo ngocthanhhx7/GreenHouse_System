@@ -215,3 +215,17 @@ event-key reuse were each observed RED before their privacy/idempotency guards.
 Current local GREEN: focused server `41/41`, focused client `16/16`, full server
 `1066/1066`, full client `262/262`, and production
 client build PASS (158 modules).
+
+## 9. Exact export legacy-Inventory compatibility (2026-07-26)
+
+| Requirement | Code boundary | Test/evidence |
+|---|---|---|
+| A reservation that passed checkout remains exportable when its legacy Inventory has `stockQuantity` but no materialized `sellableQuantity` | `inventoryExport.service.js` builds one atomic pipeline using `$ifNull(sellableQuantity, stockQuantity)` while decrementing physical, sellable, and reserved quantities together | `sl004Export.behavior.test.js` legacy capture regression; live local legacy document exercised through the Mongoose repository inside an aborted transaction |
+| Reconciliation and non-negative stock remain fail-closed | The mutation requires finite integer physical/sellable/reserved values, derived sellable stock at least equal to reserved stock, and sufficient stock before any decrement | `inventoryExport.persistence.test.js` exercises coherent, inconsistent, fractional, and positive-infinity legacy documents through the real Mongoose repository; existing AT-061 underflow/reconciliation/rollback/concurrency coverage |
+| Failed replay is distinct from Completed replay | `resolveStockExportFeedback` uses the authoritative reloaded export status; only Completed receives success copy | `inventoryService.test.js` Failed/Completed/reload-failure behavior plus `sl004UiContract.test.js` wiring contract |
+| A known Failed command can be retried without weakening ambiguous retry identity | UI rotates the command key only after reloading authoritative `Failed`; reload failure and uncertain responses keep it stable, while concurrent Completed wins | `inventoryService.test.js` behavior regression and `sl004UiContract.test.js` command rotation assertion |
+
+Verification: targeted server `15/15`; targeted client `17/17`; full server
+`1238/1238` across 189 suites; full client `380/380` across 82 suites; Vite
+production build PASS with 172 modules. Existing 766.11 kB chunk warning is
+non-blocking.

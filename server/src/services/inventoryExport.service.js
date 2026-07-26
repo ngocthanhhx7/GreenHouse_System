@@ -20,6 +20,65 @@ function withOptionalSession(query, session) {
   return session ? query.session(session) : query;
 }
 
+function createCaptureReservationMutation(productId, quantity, userId) {
+  const exactQuantity = Number(quantity);
+  const actorId = mongoose.isValidObjectId(userId)
+    ? new mongoose.Types.ObjectId(userId)
+    : userId;
+  const numericOrNull = (input) => ({
+    $convert: {
+      input,
+      to: 'double',
+      onError: null,
+      onNull: null,
+    },
+  });
+  return {
+    filter: {
+      productId,
+      inventoryHealth: { $in: ['Normal', null] },
+      $expr: {
+        $let: {
+          vars: {
+            stock: numericOrNull('$stockQuantity'),
+            sellable: numericOrNull({ $ifNull: ['$sellableQuantity', '$stockQuantity'] }),
+            reserved: numericOrNull('$reservedQuantity'),
+          },
+          in: {
+            $and: [
+              { $ne: ['$$stock', null] },
+              { $ne: ['$$sellable', null] },
+              { $ne: ['$$reserved', null] },
+              { $eq: ['$$stock', { $trunc: '$$stock' }] },
+              { $eq: ['$$sellable', { $trunc: '$$sellable' }] },
+              { $eq: ['$$reserved', { $trunc: '$$reserved' }] },
+              { $lt: ['$$stock', Number.POSITIVE_INFINITY] },
+              { $lt: ['$$sellable', Number.POSITIVE_INFINITY] },
+              { $lt: ['$$reserved', Number.POSITIVE_INFINITY] },
+              { $gte: ['$$stock', exactQuantity] },
+              { $gte: ['$$sellable', exactQuantity] },
+              { $gte: ['$$reserved', exactQuantity] },
+              { $gte: ['$$sellable', '$$reserved'] },
+            ],
+          },
+        },
+      },
+    },
+    update: [{
+      $set: {
+        stockQuantity: { $subtract: ['$stockQuantity', exactQuantity] },
+        sellableQuantity: {
+          $subtract: [{ $ifNull: ['$sellableQuantity', '$stockQuantity'] }, exactQuantity],
+        },
+        reservedQuantity: { $subtract: ['$reservedQuantity', exactQuantity] },
+        inventoryHealth: { $ifNull: ['$inventoryHealth', 'Normal'] },
+        lastUpdatedBy: { $literal: actorId },
+        updatedAt: '$$NOW',
+      },
+    }],
+  };
+}
+
 function createModelTransactionManager() {
   return {
     async withTransaction(work) {
@@ -145,23 +204,11 @@ function createModelRepository() {
       ), session).lean();
     },
     async captureReservation(productId, quantity, userId, session) {
+      const mutation = createCaptureReservationMutation(productId, quantity, userId);
       return withOptionalSession(Inventory.findOneAndUpdate(
-        {
-          productId,
-          inventoryHealth: { $ne: 'ReconciliationRequired' },
-          stockQuantity: { $gte: quantity },
-          sellableQuantity: { $gte: quantity },
-          reservedQuantity: { $gte: quantity },
-        },
-        {
-          $inc: {
-            stockQuantity: -quantity,
-            sellableQuantity: -quantity,
-            reservedQuantity: -quantity,
-          },
-          $set: { lastUpdatedBy: userId },
-        },
-        { new: true, runValidators: true },
+        mutation.filter,
+        mutation.update,
+        { new: true, updatePipeline: true },
       ), session).lean();
     },
     async createTransaction(data, session) {
@@ -510,4 +557,5 @@ function createInventoryExportService({
 module.exports = {
   createInventoryExportService,
   createModelRepository,
+  createCaptureReservationMutation,
 };
