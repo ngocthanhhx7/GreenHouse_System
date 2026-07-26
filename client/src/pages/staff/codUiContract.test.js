@@ -50,6 +50,13 @@ describe('Staff COD and refund UI contract', () => {
     assert.match(refundDetailSource, /hệ thống tự tính|Hệ thống tự tính/);
   });
 
+  it('never exposes a bank BIN to Staff HTTP/UI and uses a server-derived payout capability', () => {
+    assert.doesNotMatch(refundDetailSource, /bankBin|Mã BIN/i);
+    assert.match(refundDetailSource, /payoutDestinationReady/);
+    assert.match(refundDetailSource, /payoutDestinationIssueCode/);
+    assert.match(refundDetailSource, /startPayOSPayout/);
+  });
+
   it('locks Staff confirm/cancel commands and supplies a stable idempotency key', () => {
     assert.match(staffOrderSource, /idempotencyKey/);
     assert.match(staffOrderSource, /disabled=\{.*submitting/s);

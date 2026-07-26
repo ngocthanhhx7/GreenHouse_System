@@ -16,6 +16,7 @@ const staffRouteContracts = [
       "router.post('/staff/return-refunds/:id/payout-evidence', authenticate, authorizeRoles('Staff'), validateObjectIdParam(),",
       "router.post('/staff/return-refunds/:id/payos-payout', authenticate, authorizeRoles('Staff'), validateObjectIdParam(),",
       "router.post('/staff/return-refunds/:id/payos-reconcile', authenticate, authorizeRoles('Staff'), validateObjectIdParam(),",
+      "router.post('/staff/return-refunds/:id/payout-reconciliation', authenticate, authorizeRoles('Staff'), validateObjectIdParam(),",
       "router.post('/staff/return-refunds/:id/payout-incident', authenticate, authorizeRoles('Staff'), validateObjectIdParam(),",
       "router.post('/staff/return-refunds/:id/complete-refund', authenticate, authorizeRoles('Staff'), validateObjectIdParam(),",
     ],
@@ -80,7 +81,9 @@ const staffRouteContracts = [
 describe('Staff route identifier validation contracts', () => {
   for (const contract of staffRouteContracts) {
     it(`${contract.file} validates every Staff route identifier before the controller`, () => {
-      const source = fs.readFileSync(path.join(routesDirectory, contract.file), 'utf8');
+      const source = fs
+        .readFileSync(path.join(routesDirectory, contract.file), 'utf8')
+        .replace(/\r\n/g, '\n');
 
       for (const routeContract of contract.routes) {
         assert.ok(

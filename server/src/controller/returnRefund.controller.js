@@ -1,5 +1,6 @@
 const { returnRefundService } = require('../services/returnRefund.service');
 const { sendSuccess } = require('../utils/apiResponse');
+const { listPublicBanks: listPublicRefundBanks } = require('../config/refundBankCatalog');
 
 function preventSensitiveCaching(res) {
   res.set('Cache-Control', 'no-store');
@@ -15,7 +16,17 @@ async function createCustomerRequest(req, res, next) {
 
 async function listMyRequests(req, res, next) {
   try {
+    preventSensitiveCaching(res);
     return sendSuccess(res, await returnRefundService.listMyRequests(req.user.id));
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function listPublicBanks(_req, res, next) {
+  try {
+    preventSensitiveCaching(res);
+    return sendSuccess(res, listPublicRefundBanks());
   } catch (error) {
     return next(error);
   }
@@ -91,6 +102,7 @@ async function recordHandoffProof(req, res, next) {
 
 async function submitDestination(req, res, next) {
   try {
+    preventSensitiveCaching(res);
     return sendSuccess(res, await returnRefundService.submitDestination(req.user.id, req.params.id, req.body), 'Refund destination submitted', 201);
   } catch (error) {
     return next(error);
@@ -142,6 +154,19 @@ async function reconcilePayOSPayout(req, res, next) {
   }
 }
 
+async function reconcilePayoutOperation(req, res, next) {
+  try {
+    preventSensitiveCaching(res);
+    return sendSuccess(
+      res,
+      await returnRefundService.reconcilePayoutOperation(req.user.id, req.params.id, req.body),
+      'Refund payout operation reconciled'
+    );
+  } catch (error) {
+    return next(error);
+  }
+}
+
 async function reportPayoutIncident(req, res, next) {
   try {
     preventSensitiveCaching(res);
@@ -154,6 +179,7 @@ async function reportPayoutIncident(req, res, next) {
 module.exports = {
   createCustomerRequest,
   listMyRequests,
+  listPublicBanks,
   listStaffRequests,
   listWarehouseRequests,
   getStaffRequest,
@@ -168,5 +194,6 @@ module.exports = {
   recordPayoutEvidence,
   startPayOSPayout,
   reconcilePayOSPayout,
+  reconcilePayoutOperation,
   reportPayoutIncident,
 };
