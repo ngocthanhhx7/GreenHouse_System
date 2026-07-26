@@ -182,5 +182,41 @@ or production Carrier walkthrough is claimed.
 - [x] Full local server/client regression is green.
 - [x] Installed Vite production build is green.
 - [x] Migration command, unit contract, and disposable double-run are recorded.
-- [ ] Independent reviewer signs off on the uncommitted diff.
+- [x] Independent reviewer signs off with no remaining P0/P1.
 - [ ] Deployment owner executes and records target-environment migration and actor walkthroughs.
+
+## Addendum 2026-07-26 - Exact export retry closure
+
+- Root cause was confirmed against two newly created local Orders: their
+  `OrderReservation` rows and reserved counts were intact, but the referenced
+  legacy Inventory documents lacked materialized `sellableQuantity` and
+  `inventoryHealth`. The preflight accepted the documented stock fallback,
+  while the atomic capture filter did not.
+- The capture mutation now materializes the fallback and decrements physical,
+  sellable, and reserved quantities in one guarded MongoDB update pipeline.
+  It fails closed for fractional/non-finite counters and legacy documents
+  whose derived sellable stock is below their reserved stock.
+  No migration or local business-data write was performed for verification.
+- The second symptom was a client feedback defect: replaying the same known
+  Failed command returned the durable Failed outcome, but the UI labeled every
+  replay as Completed. Feedback is now status-aware; only an authoritatively
+  reloaded Failed state receives a fresh retry key. Reload failure keeps the
+  prior key, and concurrent completion is displayed as Completed.
+- Every line of both reported Orders was exercised through the Mongoose
+  repository in explicitly aborted transactions; all three mutations matched,
+  produced the expected derived sellable values inside the transactions, and
+  every before/after persisted Inventory document was identical.
+
+Verification:
+
+```text
+targeted server exact export: 15/15
+targeted client SL-004 UI/service: 17/17
+full server: 1238/1238, 189 suites
+full client: 380/380, 82 suites
+client production build: PASS, 172 modules
+```
+
+The build reports only the existing non-blocking 766.11 kB JavaScript chunk
+warning. Restarting the local Node server is required after integration because
+the currently running process predates this code.

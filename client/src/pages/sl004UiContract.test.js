@@ -192,4 +192,12 @@ describe('SL-004 fulfillment and delivery UI contract', () => {
     assert.match(combined, /idempotentReplay|AlreadyProcessed|replay/i);
     assert.doesNotMatch(combined, /đã xuất kho.*(email|thông báo)|Packed.*(email|thông báo)/i);
   });
+
+  it('shows Completed replay feedback only for a Completed export and rotates a confirmed Failed command for retry', () => {
+    assert.match(exportDetail, /resolveStockExportFeedback/);
+    assert.match(exportDetail, /applyFeedback\(resolveStockExportFeedback\(\{ result, latest \}\)\)/);
+    assert.match(exportDetail, /applyFeedback\(resolveStockExportFeedback\(\{ latest, requestError: err \}\)\)/);
+    assert.match(exportDetail, /if \(feedback\.rotateKey\) commandKey\.current = key\(\)/);
+    assert.doesNotMatch(exportDetail, /result\.stockExport\?\.status === 'Failed'[\s\S]*commandKey\.current = key\(\)/);
+  });
 });
