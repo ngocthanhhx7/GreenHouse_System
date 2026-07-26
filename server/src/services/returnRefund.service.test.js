@@ -215,6 +215,18 @@ function createRepository() {
       Object.assign(refund, data);
       return refund;
     },
+    async claimPayOSProviderResult(id, operationKey, data) {
+      const refund = state.refunds.find((entry) => (
+        entry._id === id
+        && entry.status !== 'Refunded'
+        && entry.payoutMethod === 'PayOS'
+        && ['Processing', 'Unknown'].includes(entry.payoutStatus)
+        && entry.payoutOperationKey === operationKey
+      ));
+      if (!refund) return null;
+      Object.assign(refund, data);
+      return refund;
+    },
     async claimManualPayoutStart(
       id,
       operationKey,
@@ -490,6 +502,17 @@ describe('return/refund service', () => {
     return requestId;
   }
 
+  function manualPayout(overrides = {}) {
+    return {
+      idempotencyKey: 'manual-payout-default-001',
+      transferReference: 'BANK-DEFAULT-001',
+      transferredAt: new Date(now).toISOString(),
+      note: 'Staff verified the manual bank transfer evidence.',
+      confirmed: true,
+      ...overrides,
+    };
+  }
+
   it('projects authoritative RefundPending payout state when evidence is missing or stale', async () => {
     const requestId = await prepareReceivedRequest({ verifyDestination: true });
     Object.assign(repository.refunds[0], {
@@ -636,20 +659,13 @@ describe('return/refund service', () => {
 
   it('rejects caller-controlled reconciliation metadata on generic payout evidence', async () => {
     const requestId = await prepareReceivedRequest({ verifyDestination: true });
-    const baseInput = {
-      idempotencyKey: 'payout-boundary-001',
-      method: 'MANUAL',
-      providerReference: 'bank-boundary-001',
-      status: 'Succeeded',
-      occurredAt: now,
-      reconciliationNote: 'Verified transfer receipt',
-    };
+    const baseInput = manualPayout({ idempotencyKey: 'payout-boundary-001' });
     await assert.rejects(
       () => service.recordPayoutEvidence('staff-1', requestId, {
         ...baseInput,
         evidenceKind: 'OPERATION_RECONCILIATION',
       }),
-      (error) => error.statusCode === 400 && /reconciliation metadata/i.test(error.message),
+      (error) => error.statusCode === 400 && /unexpected.*evidenceKind/i.test(error.message),
     );
     await assert.rejects(
       () => service.recordPayoutEvidence('staff-1', requestId, {
@@ -657,7 +673,7 @@ describe('return/refund service', () => {
         idempotencyKey: 'payout-boundary-002',
         reconcilesOperationKey: 'different-operation',
       }),
-      (error) => error.statusCode === 400 && /reconciliation metadata/i.test(error.message),
+      (error) => error.statusCode === 400 && /unexpected.*reconcilesOperationKey/i.test(error.message),
     );
     assert.equal(repository.payoutEvidence.length, 0);
   });
@@ -1250,47 +1266,46 @@ describe('return/refund service', () => {
     const requestId = await approveRequest();
     await submitAndVerifyDestination(requestId);
     await assert.rejects(
-      () => service.recordPayoutEvidence('staff-1', requestId, {
-        idempotencyKey: 'payout-request-001', method: 'MANUAL', providerReference: 'bank-001',
-        status: 'Succeeded', occurredAt: now, reconciliationNote: 'Verified bank receipt',
-      }),
+      () => service.recordPayoutEvidence(
+        'staff-1',
+        requestId,
+        manualPayout({ idempotencyKey: 'payout-request-001' })
+      ),
       /received or ready for refund/i,
     );
     await recordHandoff(requestId);
     await inspectRequest(requestId);
     await assert.rejects(
       () => service.recordPayoutEvidence('staff-1', requestId, {
-        idempotencyKey: 'payout-request-001', method: 'MANUAL', providerReference: 'bank-001',
-        status: 'Succeeded', amount: 119, occurredAt: now, reconciliationNote: 'Wrong amount',
+        ...manualPayout({ idempotencyKey: 'payout-request-001' }),
+        amount: 119,
       }),
-      /server-derived.*must not be supplied by Staff/i,
+      /unexpected.*amount/i,
     );
 
     repository.requests[0].verifiedDestinationId = null;
     await assert.rejects(
-      () => service.recordPayoutEvidence('staff-1', requestId, {
-        idempotencyKey: 'payout-receipt-only-001', method: 'MANUAL', providerReference: 'bank-002',
-        status: 'Succeeded', occurredAt: now, reconciliationNote: 'Missing destination',
-      }),
+      () => service.recordPayoutEvidence(
+        'staff-1',
+        requestId,
+        manualPayout({ idempotencyKey: 'payout-receipt-only-001' })
+      ),
       /verified refund destination/i,
     );
     assert.equal(repository.requests[0].status, 'Received');
   });
 
-  it('keeps Processing/Unknown payout evidence non-terminal and blocks blind duplicate payout', async () => {
+  it('keeps Processing payout evidence non-terminal and blocks a blind second provider operation', async () => {
     const requestId = await prepareReceivedRequest({ verifyDestination: true });
-    const result = await service.recordPayoutEvidence('staff-1', requestId, {
-      idempotencyKey: 'payout-processing-001', method: 'MANUAL', providerReference: 'bank-ref-unknown-001',
-      status: 'Unknown', occurredAt: now, reconciliationNote: 'Ngân hàng chưa xác nhận kết quả',
+    const result = await service.startPayOSPayout('staff-1', requestId, {
+      idempotencyKey: 'payout-processing-001',
     });
-    assert.equal(result.status, 'Unknown');
+    assert.equal(result.status, 'Processing');
     assert.equal(repository.requests[0].status, 'Received');
     assert.equal(repository.orders[0].orderStatus, 'Delivered');
     await assert.rejects(
-      () => service.recordPayoutEvidence('staff-1', requestId, {
-        idempotencyKey: 'payout-processing-002', method: 'MANUAL', providerReference: 'bank-ref-002',
-        status: 'Succeeded', occurredAt: now, reconciliationNote: 'Blind retry',
-        previousAttemptReconciled: true,
+      () => service.startPayOSPayout('staff-1', requestId, {
+        idempotencyKey: 'payout-processing-002',
       }),
       /previous payout attempt.*reconciled/i,
     );
@@ -1406,14 +1421,11 @@ describe('return/refund service', () => {
     assert.equal(repository.refunds[0].payoutStatus, 'Failed');
     assert.equal(repository.payoutIncidents[0].status, 'Resolved');
 
-    const manual = await service.recordPayoutEvidence('staff-1', requestId, {
+    const manual = await service.recordPayoutEvidence('staff-1', requestId, manualPayout({
       idempotencyKey: 'manual-after-lost-failed-001',
-      method: 'MANUAL',
-      providerReference: 'BANK-MANUAL-AFTER-LOST-001',
-      status: 'Succeeded',
-      occurredAt: now,
-      reconciliationNote: 'Manual transfer verified after the lost PayOS attempt was released.',
-    });
+      transferReference: 'BANK-MANUAL-AFTER-LOST-001',
+      note: 'Manual transfer verified after the lost PayOS attempt was released.',
+    }));
     assert.equal(manual.request.status, 'Completed');
     assert.equal(payosGateway.calls.length, 2);
   });
@@ -1436,6 +1448,12 @@ describe('return/refund service', () => {
     });
     assert.equal(unknown.status, 'Unknown');
     assert.equal(repository.refunds[0].payoutStatus, 'Unknown');
+    assert.equal(notifications.at(-1).userId, 'staff-1');
+    assert.equal(notifications.at(-1).type, 'REFUND_PAYOUT_OPERATION_RECONCILED');
+    assert.doesNotMatch(
+      JSON.stringify(notifications.at(-1)),
+      /payos-payout-1|bank statement|account|bin/i,
+    );
 
     const failed = await service.reconcilePayoutOperation('staff-1', requestId, {
       operationKey: 'payos-reconcile-manual-001',
@@ -1450,14 +1468,11 @@ describe('return/refund service', () => {
     assert.equal(repository.refunds[0].payoutStatus, 'Failed');
     assert.equal(repository.requests[0].status, 'Received');
 
-    const manual = await service.recordPayoutEvidence('staff-1', requestId, {
+    const manual = await service.recordPayoutEvidence('staff-1', requestId, manualPayout({
       idempotencyKey: 'manual-after-failed-001',
-      method: 'MANUAL',
-      providerReference: 'BANK-MANUAL-001',
-      status: 'Succeeded',
-      occurredAt: '2026-07-23T10:00:00Z',
-      reconciliationNote: 'Manual transfer verified against the bank statement.',
-    });
+      transferReference: 'BANK-MANUAL-001',
+      note: 'Manual transfer verified against the bank statement.',
+    }));
     assert.equal(manual.request.status, 'Completed');
     assert.equal(payosGateway.calls.length, providerCalls);
   });
@@ -1606,17 +1621,109 @@ describe('return/refund service', () => {
 
     await assert.rejects(
       () => service.recordPayoutEvidence('staff-1', requestId, {
-        idempotencyKey: 'manual-cas-loser-001',
-        method: 'MANUAL',
-        providerReference: 'BANK-MANUAL-CAS-001',
-        status: 'Succeeded',
-        occurredAt: now,
-        reconciliationNote: 'Manual transfer was verified against the bank statement.',
+        ...manualPayout({
+          idempotencyKey: 'manual-cas-loser-001',
+          transferReference: 'BANK-MANUAL-CAS-001',
+          note: 'Manual transfer was verified against the bank statement.',
+        }),
       }),
       /another payout attempt|changed/i,
     );
     assert.equal(repository.payoutEvidence.length, 0);
     assert.equal(repository.requests[0].status, 'Received');
+  });
+
+  it('accepts only the exact attested manual-success contract and compares every replay fact', async () => {
+    const requestId = await prepareReceivedRequest({ verifyDestination: true });
+    const input = {
+      idempotencyKey: 'manual-exact-contract-001',
+      transferReference: 'BANK-MANUAL-EXACT-001',
+      transferredAt: '2026-07-23T10:00:00.000Z',
+      note: 'Bank statement verifies this exact manual transfer.',
+      confirmed: true,
+    };
+
+    const first = await service.recordPayoutEvidence('staff-1', requestId, input);
+    assert.equal(first.status, 'Succeeded');
+    const replay = await service.recordPayoutEvidence('staff-1', requestId, input);
+    assert.equal(replay.replay, true);
+
+    for (const changed of [
+      { transferReference: 'BANK-MANUAL-EXACT-CHANGED' },
+      { transferredAt: '2026-07-23T09:59:59.000Z' },
+      { note: 'A different note must never replay the original transfer.' },
+    ]) {
+      await assert.rejects(
+        () => service.recordPayoutEvidence('staff-1', requestId, { ...input, ...changed }),
+        /idempotency key.*different/i,
+      );
+    }
+  });
+
+  it('rejects unknown, credential-shaped, unconfirmed, malformed and unreasonable manual evidence before writes', async () => {
+    const requestId = await prepareReceivedRequest({ verifyDestination: true });
+    const input = {
+      idempotencyKey: 'manual-input-boundary-001',
+      transferReference: 'BANK-MANUAL-BOUNDARY-001',
+      transferredAt: '2026-07-23T10:00:00.000Z',
+      note: 'Bank statement verifies this exact manual transfer.',
+      confirmed: true,
+    };
+    const before = repository.payoutEvidence.length;
+    const rejectedInputs = [
+      [{ ...input, amount: 120 }, /unexpected.*amount/i],
+      [{ ...input, bankBin: '970422' }, /unexpected.*bankBin/i],
+      [{ ...input, metadata: { otp: '123456' } }, /credentials.*never accepted/i],
+      [{ ...input, confirmed: false }, /confirm/i],
+      [{ ...input, transferReference: 'bad ref with spaces' }, /transferReference/i],
+      [{ ...input, transferredAt: '2026-07-23T10:00:00.001Z' }, /future/i],
+      [{ ...input, note: 'short' }, /20-1000/i],
+    ];
+    for (const [payload, expectation] of rejectedInputs) {
+      await assert.rejects(
+        () => service.recordPayoutEvidence('staff-1', requestId, payload),
+        expectation,
+      );
+    }
+    assert.equal(repository.payoutEvidence.length, before);
+  });
+
+  it('rejects a late provider result after exact-operation reconciliation without overwriting the new state', async () => {
+    const requestId = await prepareReceivedRequest({ verifyDestination: true });
+    await service.startPayOSPayout('staff-1', requestId, {
+      idempotencyKey: 'payos-late-result-001',
+    });
+    await service.reconcilePayoutOperation('staff-1', requestId, {
+      operationKey: 'payos-late-result-001',
+      outcome: 'Failed',
+      transferReference: 'payos-payout-1',
+      transferredAt: '2026-07-23T10:00:00.000Z',
+      note: 'Bank statement confirms the original provider operation did not pay.',
+      confirmed: true,
+      idempotencyKey: 'manual-reconcile-late-result-001',
+    });
+    const before = structuredClone(repository.state);
+    payosGateway.payout = {
+      id: 'payos-payout-1',
+      referenceId: repository.requests[0].requestCode,
+      approvalState: 'SUCCEEDED',
+      transactions: [{
+        id: 'late-provider-success',
+        state: 'SUCCEEDED',
+        amount: 120,
+        toBin: '970422',
+        toAccountNumber: '0123456789',
+        reference: 'BANK-LATE-001',
+      }],
+    };
+
+    await assert.rejects(
+      () => service.reconcilePayOSPayout('staff-1', requestId),
+      (error) => error.statusCode === 409 && error.errorCode === 'PAYOUT_OPERATION_STALE',
+    );
+    assert.deepEqual(repository.state.refunds, before.refunds);
+    assert.deepEqual(repository.state.requests, before.requests);
+    assert.equal(repository.payoutEvidence.length, before.payoutEvidence.length);
   });
 
   it('preserves the original payOS operation identity across repeated Unknown reconciliation evidence', async () => {
@@ -1686,7 +1793,7 @@ describe('return/refund service', () => {
         idempotencyKey: 'fake-payos-result-001', method: 'PAYOS', providerReference: 'fake-provider-ref',
         status: 'Succeeded', amount: 120, occurredAt: now,
       }),
-      /manual transfer evidence/i,
+      /unexpected.*method/i,
     );
     assert.equal(repository.payoutEvidence.length, 0);
     assert.equal(repository.requests[0].status, 'Received');
@@ -1696,36 +1803,43 @@ describe('return/refund service', () => {
     const requestId = await prepareReceivedRequest({ verifyDestination: true });
     await assert.rejects(
       () => service.recordPayoutEvidence('staff-1', requestId, {
-        idempotencyKey: 'payout-request-001', method: 'MANUAL', providerReference: 'bank-001',
-        status: 'Succeeded', occurredAt: now,
+        ...manualPayout({ idempotencyKey: 'payout-request-001' }),
+        note: undefined,
       }),
-      /reconciliation note/i,
+      /note must be a string/i,
     );
   });
 
   it('atomically completes only from verified successful payout evidence and preserves primary Paid facts', async () => {
     const requestId = await prepareReceivedRequest({ verifyDestination: true });
-    const result = await service.recordPayoutEvidence('staff-1', requestId, {
-      idempotencyKey: 'payout-request-001', method: 'MANUAL', providerReference: 'bank-001',
-      status: 'Succeeded', occurredAt: now, reconciliationNote: 'Verified bank receipt',
-    });
+    const result = await service.recordPayoutEvidence(
+      'staff-1',
+      requestId,
+      manualPayout({ idempotencyKey: 'payout-request-001', transferReference: 'bank-001' })
+    );
     assert.equal(result.request.status, 'Completed');
     assert.equal(repository.refunds[0].status, 'Refunded');
     assert.equal(repository.orders[0].orderStatus, 'Returned');
     assert.equal(repository.orders[0].paymentStatus, 'Paid');
     assert.equal(repository.payments[0].paymentStatus, 'Paid');
     assert.equal(repository.attempts[0].paymentStatus, 'Paid');
-    const replay = await service.recordPayoutEvidence('staff-1', requestId, {
-      idempotencyKey: 'payout-request-001', method: 'MANUAL', providerReference: 'bank-001',
-      status: 'Succeeded', occurredAt: now, reconciliationNote: 'Verified bank receipt',
-    });
+    const replay = await service.recordPayoutEvidence(
+      'staff-1',
+      requestId,
+      manualPayout({ idempotencyKey: 'payout-request-001', transferReference: 'bank-001' })
+    );
     assert.equal(replay.replay, true);
     assert.equal(repository.payoutEvidence.length, 1);
     await assert.rejects(
-      () => service.recordPayoutEvidence('staff-1', requestId, {
-        idempotencyKey: 'payout-request-001', method: 'MANUAL', providerReference: 'different-bank-ref',
-        status: 'Succeeded', occurredAt: now, reconciliationNote: 'Different evidence',
-      }),
+      () => service.recordPayoutEvidence(
+        'staff-1',
+        requestId,
+        manualPayout({
+          idempotencyKey: 'payout-request-001',
+          transferReference: 'different-bank-ref',
+          note: 'Different manual bank transfer evidence.',
+        })
+      ),
       /idempotency key.*different/i,
     );
   });
@@ -1782,14 +1896,11 @@ describe('return/refund service', () => {
     });
 
     await submitAndVerifyDestination('request-cancelled');
-    const result = await service.recordPayoutEvidence('staff-1', 'request-cancelled', {
+    const result = await service.recordPayoutEvidence('staff-1', 'request-cancelled', manualPayout({
       idempotencyKey: 'cancel-refund-payout-001',
-      method: 'MANUAL',
-      providerReference: 'bank-cancel-refund-001',
-      status: 'Succeeded',
-      occurredAt: now,
-      reconciliationNote: 'Verified cancellation refund receipt',
-    });
+      transferReference: 'bank-cancel-refund-001',
+      note: 'Verified cancellation refund receipt.',
+    }));
 
     assert.equal(result.request.status, 'Completed');
     assert.equal(repository.refunds.at(-1).status, 'Refunded');
@@ -1854,14 +1965,11 @@ describe('return/refund service', () => {
     };
 
     await submitAndVerifyDestination('request-delivery-failed');
-    const result = await service.recordPayoutEvidence('staff-1', 'request-delivery-failed', {
+    const result = await service.recordPayoutEvidence('staff-1', 'request-delivery-failed', manualPayout({
       idempotencyKey: 'failed-delivery-payout-001',
-      method: 'MANUAL',
-      providerReference: 'bank-failed-delivery-001',
-      status: 'Succeeded',
-      occurredAt: now,
-      reconciliationNote: 'Verified failed-delivery refund receipt',
-    });
+      transferReference: 'bank-failed-delivery-001',
+      note: 'Verified failed-delivery refund receipt.',
+    }));
 
     assert.equal(result.request.status, 'Completed');
     assert.equal(repository.refunds.at(-1).status, 'Refunded');
@@ -1872,10 +1980,11 @@ describe('return/refund service', () => {
 
   it('opens Customer-responsibility recovery without creating an automatic second payout for the exact confirmed destination', async () => {
     const requestId = await prepareReceivedRequest({ verifyDestination: true });
-    await service.recordPayoutEvidence('staff-1', requestId, {
-      idempotencyKey: 'payout-customer-destination-001', method: 'MANUAL', providerReference: 'bank-customer-001',
-      status: 'Succeeded', occurredAt: now, reconciliationNote: 'Transfer receipt verified',
-    });
+    await service.recordPayoutEvidence('staff-1', requestId, manualPayout({
+      idempotencyKey: 'payout-customer-destination-001',
+      transferReference: 'bank-customer-001',
+      note: 'Transfer receipt was verified against the bank statement.',
+    }));
     const incident = await service.reportPayoutIncident('staff-1', requestId, {
       idempotencyKey: 'incident-customer-destination-001',
       cause: 'CUSTOMER_CONFIRMED_DESTINATION',
@@ -1889,60 +1998,55 @@ describe('return/refund service', () => {
     assert.equal(repository.payoutEvidence.length, 1);
     await assert.rejects(
       () => service.startPayOSPayout('staff-1', requestId, { idempotencyKey: 'payos-second-payout-001' }),
-      /already completed|recovery/i,
+      (error) => error.statusCode === 409 && error.errorCode === 'PAYOUT_TERMINAL_NO_RETRY',
     );
     assert.equal(payosGateway.calls.length, 0);
   });
 
-  it('corrects false completion for a Shop/provider mismatch and resolves recovery only with new successful evidence', async () => {
+  it('keeps a successful payout terminal when a Shop/provider mismatch incident is reported', async () => {
     const requestId = await prepareReceivedRequest({ verifyDestination: true });
     await service.recordPayoutEvidence('staff-1', requestId, {
-      idempotencyKey: 'payout-misroute-original-001', method: 'MANUAL', providerReference: 'bank-misroute-001',
-      status: 'Succeeded', occurredAt: now, reconciliationNote: 'Initial receipt later disputed',
+      idempotencyKey: 'payout-misroute-original-001',
+      transferReference: 'BANK-MISROUTE-001',
+      transferredAt: '2026-07-23T10:00:00.000Z',
+      note: 'Initial transfer receipt was later disputed by reconciliation.',
+      confirmed: true,
     });
-    let lockStatus = 'ClosedPermanently';
-    repository.reopenOrderLock = async (orderId, caseId) => {
-      assert.equal(orderId, 'order-1');
-      assert.equal(caseId, requestId);
-      if (lockStatus !== 'ClosedPermanently') return null;
-      lockStatus = 'Active';
-      return { orderId, caseId, status: lockStatus };
-    };
-    repository.releaseOrderLock = async (orderId, caseId, terminalStatus, closePermanently) => {
-      assert.equal(orderId, 'order-1');
-      assert.equal(caseId, requestId);
-      assert.equal(terminalStatus, 'Completed');
-      assert.equal(closePermanently, true);
-      if (lockStatus !== 'Active') return null;
-      lockStatus = 'ClosedPermanently';
-      return { orderId, caseId, status: lockStatus };
-    };
+    const terminal = structuredClone(repository.state);
+    const providerCalls = payosGateway.calls.length;
     const incident = await service.reportPayoutIncident('staff-1', requestId, {
       idempotencyKey: 'incident-system-mismatch-001',
       cause: 'STAFF_SYSTEM_PROVIDER_MISMATCH',
       reason: 'Bank reconciliation proved that the transfer was routed to a different account',
     });
     assert.equal(incident.responsibility, 'ShopOrProvider');
-    assert.equal(repository.requests[0].status, 'Received');
-    assert.ok(repository.requests[0].completionVoidedAt);
-    assert.equal(repository.refunds[0].status, 'HandedOff');
-    assert.equal(repository.refunds[0].payoutStatus, 'Unknown');
-    assert.equal(repository.orders[0].orderStatus, 'Delivered');
-    assert.equal(lockStatus, 'Active');
-
-    const recovered = await service.recordPayoutEvidence('staff-1', requestId, {
-      idempotencyKey: 'payout-misroute-recovery-001', method: 'MANUAL', providerReference: 'bank-recovery-001',
-      status: 'Succeeded', occurredAt: now, reconciliationNote: 'Corrective transfer verified',
-      previousAttemptReconciled: true, recoveryIncidentId: incident.id,
-    });
-    assert.equal(recovered.request.status, 'Completed');
-    assert.equal(repository.payoutIncidents[0].status, 'Resolved');
-    assert.equal(repository.payoutIncidents[0].resolutionEvidenceId, repository.payoutEvidence[1]._id);
+    assert.equal(repository.requests[0].status, 'Completed');
+    assert.equal(repository.requests[0].completionEvidenceId, terminal.requests[0].completionEvidenceId);
+    assert.equal(repository.refunds[0].status, 'Refunded');
+    assert.equal(repository.refunds[0].payoutStatus, 'Succeeded');
+    assert.equal(repository.refunds[0].payoutOperationKey, terminal.refunds[0].payoutOperationKey);
     assert.equal(repository.orders[0].orderStatus, 'Returned');
-    assert.equal(lockStatus, 'ClosedPermanently');
-    const completionNotifications = notifications.filter((entry) => entry.type === 'RETURN_REFUND_COMPLETED');
-    assert.equal(completionNotifications.length, 2);
-    assert.equal(new Set(completionNotifications.map((entry) => entry.eventId)).size, 2);
+    assert.equal(repository.payoutEvidence.length, 1);
+
+    await assert.rejects(
+      () => service.startPayOSPayout('staff-1', requestId, {
+        idempotencyKey: 'payos-corrective-forbidden-001',
+        recoveryIncidentId: incident.id,
+      }),
+      (error) => error.statusCode === 409 && error.errorCode === 'PAYOUT_TERMINAL_NO_RETRY',
+    );
+    await assert.rejects(
+      () => service.recordPayoutEvidence('staff-1', requestId, {
+        idempotencyKey: 'manual-corrective-forbidden-001',
+        transferReference: 'BANK-CORRECTIVE-FORBIDDEN-001',
+        transferredAt: '2026-07-23T10:00:00.000Z',
+        note: 'A terminal successful obligation must never be paid twice.',
+        confirmed: true,
+      }),
+      (error) => error.statusCode === 409 && error.errorCode === 'PAYOUT_TERMINAL_NO_RETRY',
+    );
+    assert.equal(repository.payoutEvidence.length, 1);
+    assert.equal(payosGateway.calls.length, providerCalls);
   });
 
   it('never permits note-only completion without successful payout evidence', async () => {
