@@ -114,7 +114,55 @@ function isPayoutCorrelationInvalid(document) {
   if (['Processing', 'Unknown', 'Succeeded'].includes(status)) {
     return !PAYOUT_METHODS.includes(method) || !hasValidOperationKey(operationKey);
   }
+  if (status === 'Failed') {
+    return Boolean(method || operationKey)
+      && (!PAYOUT_METHODS.includes(method) || !hasValidOperationKey(operationKey));
+  }
   return Boolean(method || operationKey);
+}
+
+function validPayoutCorrelationExpression() {
+  const method = { $ifNull: ['$payoutMethod', ''] };
+  const operationKey = { $ifNull: ['$payoutOperationKey', ''] };
+  const hasValidMethodAndKey = {
+    $and: [
+      { $in: [method, PAYOUT_METHODS] },
+      { $regexMatch: { input: operationKey, regex: '^[A-Za-z0-9._:-]{8,160}$' } },
+    ],
+  };
+  return {
+    $or: [
+      {
+        $and: [
+          { $eq: ['$payoutStatus', 'NotStarted'] },
+          { $eq: [method, ''] },
+          { $eq: [operationKey, ''] },
+        ],
+      },
+      {
+        $and: [
+          { $eq: ['$payoutStatus', 'Failed'] },
+          {
+            $or: [
+              {
+                $and: [
+                  { $eq: [method, ''] },
+                  { $eq: [operationKey, ''] },
+                ],
+              },
+              hasValidMethodAndKey,
+            ],
+          },
+        ],
+      },
+      {
+        $and: [
+          { $in: ['$payoutStatus', ['Processing', 'Unknown', 'Succeeded']] },
+          hasValidMethodAndKey,
+        ],
+      },
+    ],
+  };
 }
 
 function isNonCanonicalBank(document) {
@@ -142,6 +190,7 @@ async function buildPreflightDiagnostics(collections) {
       { $sort: { _id: 1 } },
     ]),
     boundedAggregate(collections.refunds, [
+      { $match: { $expr: { $not: [validPayoutCorrelationExpression()] } } },
       { $project: { _id: 1, payoutStatus: 1, payoutMethod: 1, payoutOperationKey: 1 } },
       { $sort: { _id: 1 } },
     ]),

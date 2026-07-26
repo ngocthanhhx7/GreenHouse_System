@@ -102,6 +102,20 @@ describe('refund payout reconciliation migration', () => {
     assert.equal(collections.refunds.operations.some((operation) => operation.type === 'find'), false, 'preflight must use bounded aggregate queries');
   });
 
+  it('accepts a reconciled Failed operation with retained method and operation identity', async () => {
+    const collections = fixture();
+    collections.refunds.documents = [{
+      _id: 'refund-failed',
+      payoutStatus: 'Failed',
+      payoutMethod: 'Manual',
+      payoutOperationKey: 'manual-operation-0001',
+      payoutStartedAt: new Date('2026-07-25T08:00:00.000Z'),
+    }];
+
+    const result = await migration.runMigration({ collections, mode: 'dry-run' });
+    assert.deepEqual(result.diagnostics.invalidPayoutCorrelations, []);
+  });
+
   it('applies indexes only, preserves business documents, and a second apply is write-free', async () => {
     const collections = fixture();
     const before = clone({
@@ -172,6 +186,46 @@ describe('refund payout reconciliation migration', () => {
     } finally {
       process.env.MONGODB_URI = previousUri;
       await mongoose.disconnect();
+      await cleanupDisposableMongo(instance);
+    }
+  });
+
+  it('finds an invalid correlation after more than fifty valid rows before applying the diagnostic limit', {
+    skip: !resolveMongodBinary(),
+    timeout: 30_000,
+  }, async () => {
+    const instance = await startDisposableMongo({ binary: resolveMongodBinary() });
+    const connection = await mongoose.createConnection(
+      `mongodb://127.0.0.1:${instance.port}/refund-payout-invalid-correlation-test`
+    ).asPromise();
+    try {
+      const refunds = connection.collection('refundpendings');
+      await refunds.insertMany([
+        ...Array.from({ length: 51 }, (_, index) => ({
+          _id: index + 1,
+          payoutStatus: 'NotStarted',
+          payoutMethod: null,
+          payoutOperationKey: '',
+        })),
+        {
+          _id: 52,
+          payoutStatus: 'Processing',
+          payoutMethod: null,
+          payoutOperationKey: '',
+        },
+      ]);
+      const diagnostics = await migration.buildPreflightDiagnostics({
+        refunds,
+        evidence: connection.collection('refundpayoutevidences'),
+        destinations: connection.collection('refunddestinations'),
+      });
+      assert.deepEqual(diagnostics.invalidPayoutCorrelations, [{
+        id: '52',
+        status: 'Processing',
+        method: '',
+      }]);
+    } finally {
+      await connection.close();
       await cleanupDisposableMongo(instance);
     }
   });
