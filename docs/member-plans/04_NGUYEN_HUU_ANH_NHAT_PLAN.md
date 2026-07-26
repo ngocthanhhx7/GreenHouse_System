@@ -267,11 +267,15 @@ local PayOS webhook blocks manual payout.
 - `RefundPending` is the authoritative payout state. Staff must reconcile the exact
   Processing/Unknown operation before a new payout; a new manual payout is allowed only
   after verified `Failed` reconciliation.
+- A successful payout is terminal. A later incident is append-only evidence and cannot
+  reopen the completed request or authorize a second/corrective payout.
 - The migration is index-only and provides preflight/dry-run/apply/verify. It reports
   bounded safe diagnostics and does not mutate payout outcomes, evidence, or historical
   bank destinations.
-- Final Task 4/5 integration, full regression, client build, and target-database runbook
-  evidence remain pending the combined release gate; no deployment claim is made here.
+- Combined local gate after current-main integration: server `1236/1236`, client
+  `378/378`, focused PayOS/migration/real-Mongo persistence `13/13`, and production
+  client build PASS (172 modules). Migration was verified only against disposable local
+  Mongo; no production migration or live PayOS payout was run.
 
 - [ ] Staff queue complete.
 - [ ] Staff detail complete.

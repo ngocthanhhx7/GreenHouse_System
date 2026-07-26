@@ -196,7 +196,12 @@ Document the Staff recovery sequence: inspect current operation, reconcile Succe
   invents evidence, or rewrites customer bank destinations.
 - [x] Runbook documents exact unresolved-operation recovery and manual payout only after
   verified `Failed` reconciliation.
-- [ ] Task 4/Task 5 integration and full server/client/build gates remain pending until
-  their implementation work is available for one combined factual verification run.
+- [x] Task 4/Task 5 integration uses the exact
+  `transferReference/transferredAt/note/confirmed` boundary and makes Completed read-only.
+- [x] A later incident cannot reopen or repay a terminal successful obligation; a late
+  PayOS result is rejected by exact-operation CAS.
+- [x] Combined local verification after integrating current `origin/main`: server
+  `1236/1236`, client `378/378`, focused PayOS/migration/real-Mongo persistence `13/13`,
+  and production client build PASS (172 modules). The known chunk-size warning remains.
 
 Run all changed test files, payOS config tests, `git diff --check`, forbidden-file scan, and secret scan. Expected: PASS with no `.env`, credential, upload, output, or prohibited documentation path.

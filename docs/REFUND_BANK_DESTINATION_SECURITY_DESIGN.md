@@ -216,6 +216,9 @@ Tests must prove:
 19. A provider exception after a claimed PayOS attempt yields a visible durable Unknown projection rather than an evidence-less Processing lock.
 20. Payout action booleans come from `RefundPending`, and PayOS/manual are never simultaneously actionable.
 21. Concurrent PayOS/manual attempts have one claim winner and at most one Succeeded evidence record.
+22. A completed Succeeded obligation is immutable: an incident may be recorded, but no
+    corrective PayOS/manual payout is available and no provider result may overwrite a
+    later exact-operation reconciliation.
 
 ## 9. Documentation
 

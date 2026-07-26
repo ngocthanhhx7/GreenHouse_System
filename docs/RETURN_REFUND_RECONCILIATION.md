@@ -27,6 +27,11 @@ reference/time/note/acknowledgement; and create a new manual payout only after a
 `Failed` reconciliation. `Succeeded` completes from existing-operation evidence;
 `Unknown` retains the lock. Reconciliation never sends a new payout.
 
+A `Succeeded` payout is terminal. Reporting a later Customer or Shop/provider incident
+appends incident/audit evidence only; it does not reopen the completed request, rewrite
+the refunded obligation, or authorize a corrective second transfer. Any separate recovery
+obligation requires a future approved business rule and is outside this release.
+
 ### Migration/runbook
 
 Use the explicit command modes below against the target database only after reviewing
@@ -47,6 +52,10 @@ successful payout evidence, or a mismatched named index. Historical noncanonical
 snapshots and unresolved obligations are reported with bounded safe identifiers/statuses
 only; account data, holder, BIN, and reason are not emitted. Apply a second time to prove
 there are no business writes, then finish with `verify`.
+
+A reconciled `Failed` record may retain its payout method and operation key for audit
+lineage. The invalid-correlation filter runs before the 50-row diagnostic limit, so a bad
+record cannot be hidden behind earlier valid rows.
 
 `Pending` -> `AwaitingInspection` -> `ReadyForRefund` -> `Completed`
 

@@ -2,11 +2,13 @@
 
 | Requirement | Code boundary | Verification evidence |
 | --- | --- | --- |
-| Customer never enters BIN or banking credentials | Reviewed bank-code contract and Customer DTO boundary | Catalog/service/UI tests in Tasks 1–2 (combined gate pending) |
-| Manual refund can operate without webhook | Staff payout method/reconciliation contract | Task 4–5 targeted tests (combined gate pending) |
-| No second payout while PayOS is unresolved | `RefundPending` authoritative operation claim and immutable evidence | Task 3–4 race/reconciliation tests (combined gate pending) |
-| Migration makes no financial business mutation | `server/src/scripts/migrateRefundPayoutReconciliation.js` | Migration unit tests: dry-run/apply/second-apply/verify |
-| Migration diagnostics protect privacy | bounded projections in `buildPreflightDiagnostics` | Migration unit test asserts account/holder/BIN/reason absent |
+| Customer never enters BIN or banking credentials | Reviewed bank-code contract and Customer DTO boundary | Full server/client gates plus destination service/UI contracts |
+| Manual refund can operate without webhook | Strict `transferReference/transferredAt/note/confirmed` Staff contract | Staff controller/service/UI tests; full client `378/378` |
+| No second payout while PayOS is unresolved or terminal | Exact `RefundPending` CAS, one-success index, terminal guard | Service races and real-Mongo CAS/unique-index integration |
+| Reconciliation notification is privacy-safe | Direct Staff InApp event; `requestCode` is the only display value | Notification contract/policy/DomainOutbox consumer tests |
+| Migration makes no financial business mutation | `server/src/scripts/migrateRefundPayoutReconciliation.js` | 8 migration tests: dry-run/apply/second-apply/verify and disposable Mongo |
+| Migration diagnostics protect privacy and cannot hide a late invalid row | invalid `$match` before bounded `$limit` | Disposable Mongo test with 51 valid rows before one invalid row |
 
-This addendum records only the migration boundary that has been locally verified. It does
-not claim Task 4/5 integration, full regression, production payout, or deployment.
+Combined local evidence after integrating current main is server `1236/1236`, client
+`378/378`, focused PayOS/migration/real-Mongo persistence `13/13`, and production build
+PASS. It does not claim a production payout, webhook, migration, or deployment.

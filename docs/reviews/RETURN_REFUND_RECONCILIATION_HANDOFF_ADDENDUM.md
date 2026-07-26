@@ -8,6 +8,10 @@ that exact operation as Succeeded/Failed/Unknown with required proof, and create
 manual payout only after verified Failed. Do not retry with a new operation key and do not
 switch methods silently.
 
+Succeeded/Completed is terminal and read-only. An incident can preserve an investigation
+trail, but operators must not reopen the request or perform a corrective second payout.
+Escalate any proposed separate recovery obligation for a future business approval.
+
 ## Migration handoff
 
 Run preflight/dry-run first, review only safe bounded IDs/statuses, apply once, apply a
@@ -16,8 +20,9 @@ duplicate successful evidence, or index mismatch. The migration never repairs cu
 bank data or creates/reforges payout proof; route ambiguous historical records to the
 normal Staff reconciliation flow.
 
-## Open release dependencies
+## Release evidence
 
-Task 4 provider/reconciliation service and Task 5 Staff UI must be integrated before the
-combined server/client/build release gate. No live PayOS transaction is authorized by this
-handoff.
+Current-main integrated local results: server `1236/1236`, client `378/378`, focused
+PayOS/migration/real-Mongo persistence `13/13`, and production build PASS (172 modules).
+The build retains the known >500 kB chunk warning. No live PayOS transaction, webhook, or
+production migration is authorized or claimed by this handoff.
