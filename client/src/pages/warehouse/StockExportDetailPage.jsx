@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 
-import { inventoryService } from '../../services/inventoryService.js';
+import {
+  inventoryService,
+  resolveStockExportFeedback,
+} from '../../services/inventoryService.js';
 import { formatCurrency, translateOrderStatus, translateRequestStatus } from '../../utils/formatters.js';
 
 function key() {
@@ -21,13 +24,22 @@ export default function StockExportDetailPage() {
   async function loadItem() {
     setError('');
     try {
-      setItem(await inventoryService.getStockExport(id));
+      const loaded = await inventoryService.getStockExport(id);
+      setItem(loaded);
+      return loaded;
     } catch (err) {
       setError(err.message);
+      return null;
     }
   }
 
   useEffect(() => { loadItem(); }, [id]);
+
+  function applyFeedback(feedback) {
+    setMessage(feedback.message);
+    setError(feedback.error);
+    if (feedback.rotateKey) commandKey.current = key();
+  }
 
   async function processExactExport() {
     if (processingRef.current) return;
@@ -39,14 +51,11 @@ export default function StockExportDetailPage() {
       const result = await inventoryService.processStockExport(id, {
         idempotencyKey: commandKey.current,
       });
-      const replay = result.idempotentReplay || result.replay;
-      setMessage(replay
-        ? 'AlreadyProcessed: kết quả Completed đã tồn tại, không trừ kho lần nữa.'
-        : 'Đã xuất chính xác toàn bộ đơn. Staff sẽ xác nhận packing riêng.');
-      await loadItem();
+      const latest = await loadItem();
+      applyFeedback(resolveStockExportFeedback({ result, latest }));
     } catch (err) {
-      setError(err.message);
-      await loadItem();
+      const latest = await loadItem();
+      applyFeedback(resolveStockExportFeedback({ latest, requestError: err }));
     } finally {
       processingRef.current = false;
       setProcessing(false);

@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { createInventoryService } from './inventoryService.js';
+import * as inventoryModule from './inventoryService.js';
+
+const { createInventoryService, resolveStockExportFeedback } = inventoryModule;
 
 describe('client inventory service', () => {
   it('returns the inventory envelope from the inventory endpoint', async () => {
@@ -81,5 +83,48 @@ describe('client inventory service', () => {
     });
 
     assert.equal(result.stockExport.status, 'Completed');
+  });
+
+  it('rotates only after an authoritative Failed reload and honors a concurrent Completed reload', () => {
+    assert.equal(typeof resolveStockExportFeedback, 'function');
+    const failedResult = {
+      idempotentReplay: true,
+      stockExport: {
+        status: 'Failed',
+        failureCode: 'EXPORT_RESERVATION_MISSING',
+        failureReason: 'Stock export requires a full reservation',
+      },
+    };
+
+    const unknown = resolveStockExportFeedback({
+      result: failedResult,
+      latest: null,
+      requestError: new Error('Reload failed'),
+    });
+    assert.equal(unknown.rotateKey, false);
+    assert.equal(unknown.status, 'Unknown');
+    assert.equal(unknown.message, '');
+
+    const completed = resolveStockExportFeedback({
+      result: failedResult,
+      latest: { status: 'Completed' },
+    });
+    assert.equal(completed.rotateKey, false);
+    assert.equal(completed.status, 'Completed');
+    assert.match(completed.message, /Completed/);
+    assert.equal(completed.error, '');
+
+    const failed = resolveStockExportFeedback({
+      result: failedResult,
+      latest: {
+        status: 'Failed',
+        failureCode: 'EXPORT_RESERVATION_MISSING',
+        failureReason: 'Stock export requires a full reservation',
+      },
+    });
+    assert.equal(failed.rotateKey, true);
+    assert.equal(failed.status, 'Failed');
+    assert.match(failed.error, /EXPORT_RESERVATION_MISSING/);
+    assert.equal(failed.message, '');
   });
 });

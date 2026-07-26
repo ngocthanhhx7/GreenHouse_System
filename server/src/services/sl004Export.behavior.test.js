@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const { describe, it } = require('node:test');
 
 const { createInventoryService } = require('./inventory.service');
+const { createCaptureReservationMutation } = require('./inventoryExport.service');
 
 function createHarness({
   reconciliationRequired = false,
@@ -227,6 +228,27 @@ function createHarness({
 }
 
 describe('SL-004 exact stock export behavior', () => {
+  it('captures a reserved legacy Inventory without sellableQuantity using the stockQuantity fallback atomically', () => {
+    assert.equal(typeof createCaptureReservationMutation, 'function');
+
+    const mutation = createCaptureReservationMutation('product-1', 2, 'warehouse-1');
+
+    const guard = JSON.stringify(mutation.filter.$expr);
+    assert.match(guard, /sellableQuantity/);
+    assert.match(guard, /reserved/);
+    assert.match(guard, /\$trunc/);
+    assert.match(guard, /\$gte/);
+    assert.deepEqual(mutation.update[0].$set.sellableQuantity, {
+      $subtract: [{ $ifNull: ['$sellableQuantity', '$stockQuantity'] }, 2],
+    });
+    assert.deepEqual(mutation.update[0].$set.stockQuantity, {
+      $subtract: ['$stockQuantity', 2],
+    });
+    assert.deepEqual(mutation.update[0].$set.reservedQuantity, {
+      $subtract: ['$reservedQuantity', 2],
+    });
+  });
+
   it('AT-059 consumes every exact reservation and emits one movement per line while Order stays Confirmed', async () => {
     const { service, state } = createHarness();
     assert.equal(typeof service.processStockExport, 'function');

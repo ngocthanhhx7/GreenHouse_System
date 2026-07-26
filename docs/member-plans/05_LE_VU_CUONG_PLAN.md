@@ -466,3 +466,23 @@ Lê Vũ Cường hoàn tất phần mở rộng SL-005 trên
 - Xác minh cục bộ: server `1058/1058` (171 suites), client `260/260` (65
   suites), production build đạt; `git diff --check` sạch. Cảnh báo Vite về
   chunk lớn hơn 500 kB vẫn là cảnh báo không chặn.
+
+## Addendum 2026-07-26 - Exact export compatibility and retry feedback
+
+- Owner: Lê Vũ Cường, Warehouse exact-export seam.
+- Exact export now applies the same `stockQuantity` fallback used by its
+  preflight when a legacy Inventory has not materialized `sellableQuantity`.
+  The atomic update derives and decrements sellable stock, physical stock, and
+  reserved stock together. The repository rejects fractional or non-finite
+  quantities and legacy rows whose derived sellable stock is lower than reserved stock, so
+  reconciliation, non-negative, transaction, and exactly-once movement guards
+  remain fail-closed.
+- A confirmed `Failed` replay is no longer presented as a completed export.
+  The Warehouse UI renders its exact failure code/reason and rotates the
+  command identity only after the failed state is reloaded. A reload failure
+  keeps the key stable, and a concurrent Completed reload wins over the stale
+  Failed response.
+- Evidence: targeted server `15/15`, targeted client `17/17`, full server
+  `1238/1238` across 189 suites, full client `380/380` across 82 suites, and
+  Vite production build PASS with 172 modules. The existing 766.11 kB
+  JavaScript chunk warning remains non-blocking.
